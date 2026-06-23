@@ -65,12 +65,12 @@ export function RadarChart({ data, title = "BSAS 语义资产审计" }: RadarCha
   const gridLevels = [25, 50, 75, 100];
 
   return (
-    <div ref={ref} className="bg-slate-900 p-5 w-full">
-      <div className="flex items-center gap-2 mb-3">
+    <div ref={ref} className="mx-auto w-full max-w-[560px] bg-slate-900 p-4 md:p-5">
+      <div className="flex items-center gap-2 mb-2">
         <div className="w-2 h-2 rounded-full bg-green-400 animate-pulse" />
         <span className="text-green-400 text-xs font-mono">{title}</span>
       </div>
-      <svg viewBox="0 0 300 300" className="w-full max-w-[300px] mx-auto">
+      <svg viewBox="0 0 300 300" className="w-full max-w-[240px] mx-auto md:max-w-[260px]">
         {/* 网格线 */}
         {gridLevels.map((level) => (
           <polygon
@@ -139,7 +139,7 @@ export function RadarChart({ data, title = "BSAS 语义资产审计" }: RadarCha
         })}
       </svg>
       {/* 图例 */}
-      <div className="mt-4 flex items-center justify-center gap-6 text-xs">
+      <div className="mt-2 flex items-center justify-center gap-6 text-xs">
         <div className="flex items-center gap-2">
           <div className="w-4 h-0.5 bg-red-500" style={{ borderTop: '1.5px dashed #EF4444' }} />
           <span className="text-slate-400">优化前</span>

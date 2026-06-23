@@ -6,28 +6,29 @@ const topics = ['企业 AI 战略', '品牌语义资产', '智能体增长系统
 const emails = ['fanzengxia@link.cuhk.edu.cn', 'litongxin@cuhk.edu.cn'];
 const mailSubject = 'FrontMind 商务沟通｜公司名称';
 const mailBody = [
-  '公司名称：',
-  '您的姓名与职务：',
-  '公司官网：',
-  '公司介绍材料：',
-  '希望讨论的方向：',
-  '当前业务背景：',
-  '期待的下一步：',
+  '公司名称：{公司名称}',
+  '您的姓名与职务：{姓名 / 职务}',
+  '公司官网：{官网链接}',
+  '公司介绍材料：{附件说明或公开链接}',
+  '希望讨论的方向：{GEO / AI 品牌可见度 / 智能体增长 / 企业级 AI 工作流 / FDE 入驻}',
+  '当前业务背景：{简要说明公司现状、目标市场、当前 AI 使用或增长挑战}',
+  '期待的下一步：{初步沟通 / 专题诊断 / 方案讨论 / 管理层会议}',
 ].join('\n');
 const mailtoHref = (email: string) => `mailto:${email}?subject=${encodeURIComponent(mailSubject)}&body=${encodeURIComponent(mailBody)}`;
-const briefingItems = ['公司背景', '沟通身份', '讨论目标'];
 const sampleLines = [
-  '邮件标题：FrontMind 商务沟通｜公司名称',
+  '邮件标题：FrontMind 商务沟通｜{公司名称}',
   '',
   '您好，FrontMind 团队：',
   '',
-  '我们来自公司名称，官网为公司官网。我是姓名，负责相关职能。',
+  '我们来自 {公司名称}，官网为 {官网链接}。我是 {姓名}，担任 {职务}。',
   '',
-  '随信附上公司介绍材料，供团队了解业务背景。',
+  '随信附上 {公司介绍材料 / 公司宣传册 / 可访问链接}，供团队了解业务背景。',
   '',
-  '本次希望重点讨论：品牌在生成式答案中的可见度、智能体增长机会，或企业内部 AI 工作流部署。',
+  '本次希望重点讨论 {沟通目的}，例如品牌在生成式答案中的可见度、智能体增长机会，或企业内部 AI 工作流部署。',
   '',
-  '如方向匹配，期待安排一次初步沟通。',
+  '目前我们的业务背景是：{简要说明公司现状、目标市场、当前 AI 使用或增长挑战}。',
+  '',
+  '如方向匹配，期待安排 {初步沟通 / 专题诊断 / 方案讨论 / 管理层会议}。',
   '',
   '谢谢。',
 ].join('\n');
@@ -63,16 +64,15 @@ const sampleLines = [
         </div>
       </div>
 
-      <div class="mt-12 grid grid-cols-1 gap-8 lg:grid-cols-12">
-        <div class="fm-card p-7 lg:col-span-5">
-          <h2 class="mb-5 text-3xl font-bold leading-tight text-[#1A1A2E]" style="font-family: 'DM Serif Display', serif;">来信建议</h2>
-          <ul class="space-y-3">
-            {briefingItems.map((item) => <li class="text-sm leading-relaxed text-[#4B5563]" style="font-family: 'DM Sans', sans-serif;">• {item}</li>)}
-          </ul>
-        </div>
-        <div class="fm-emphasis-card p-7 lg:col-span-7">
-          <h2 class="mb-5 text-3xl font-bold leading-tight text-[#1A1A2E]" style="font-family: 'DM Serif Display', serif;">来信示例</h2>
-          <pre class="whitespace-pre-wrap border-l-2 border-[#C5A24D] bg-white px-5 py-4 text-sm leading-relaxed text-[#4B5563]" style="font-family: 'DM Sans', sans-serif;">{sampleLines}</pre>
+      <div class="mx-auto mt-12 max-w-4xl">
+        <div class="fm-emphasis-card overflow-hidden p-0">
+          <div class="border-b border-[#E5E7EB] bg-white px-8 py-5">
+            <h2 class="text-3xl font-bold leading-tight text-[#1A1A2E]" style="font-family: 'DM Serif Display', serif;">来信示例</h2>
+            <p class="mt-2 text-sm leading-relaxed text-[#6B7280]" style="font-family: 'DM Sans', sans-serif;">请将花括号中的内容替换为贵司实际信息。</p>
+          </div>
+          <div class="bg-[#FBFAFC] px-8 py-6">
+            <pre class="whitespace-pre-wrap border-l-2 border-[#C5A24D] bg-white px-6 py-5 text-sm leading-relaxed text-[#374151] shadow-[0_18px_45px_rgba(26,26,46,0.06)]" style="font-family: 'DM Sans', sans-serif;">{sampleLines}</pre>
+          </div>
         </div>
       </div>
     </div>

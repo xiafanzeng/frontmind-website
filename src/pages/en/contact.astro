@@ -6,28 +6,29 @@ const topics = ['Enterprise AI strategy', 'Brand semantics', 'Agentic growth', '
 const emails = ['fanzengxia@link.cuhk.edu.cn', 'litongxin@cuhk.edu.cn'];
 const mailSubject = 'FrontMind Business Conversation | Company Name';
 const mailBody = [
-  'Company name:',
-  'Your name and title:',
-  'Company website:',
-  'Company introduction material:',
-  'Topic you would like to discuss:',
-  'Current business context:',
-  'Preferred next step:',
+  'Company name: {Company name}',
+  'Your name and title: {Name / Title}',
+  'Company website: {Website URL}',
+  'Company introduction material: {Attachment note or public link}',
+  'Topic you would like to discuss: {GEO / AI brand visibility / agentic growth / enterprise AI workflow / FDE embedding}',
+  'Current business context: {Briefly describe current situation, target market, AI usage, or growth challenge}',
+  'Preferred next step: {Initial conversation / diagnosis / solution discussion / leadership meeting}',
 ].join('\n');
 const mailtoHref = (email: string) => `mailto:${email}?subject=${encodeURIComponent(mailSubject)}&body=${encodeURIComponent(mailBody)}`;
-const briefingItems = ['Company context', 'Your role', 'Conversation goal'];
 const sampleLines = [
-  'Subject: FrontMind Business Conversation | Company Name',
+  'Subject: FrontMind Business Conversation | {Company Name}',
   '',
   'Hello FrontMind team,',
   '',
-  'We are from Company Name. Our website is Company Website. My name is Name, and I lead the relevant function.',
+  'We are from {Company Name}. Our website is {Website URL}. My name is {Name}, and I serve as {Title}.',
   '',
-  'I have attached our company introduction material for your reference.',
+  'I have attached {company introduction material / brochure / accessible link} for your reference.',
   '',
-  'We would like to discuss brand visibility in generative answers, agentic growth opportunities, or enterprise AI workflow deployment.',
+  'We would like to discuss {conversation purpose}, such as brand visibility in generative answers, agentic growth opportunities, or enterprise AI workflow deployment.',
   '',
-  'If the direction is aligned, we would appreciate an initial conversation.',
+  'Our current business context is: {briefly describe current situation, target market, AI usage, or growth challenge}.',
+  '',
+  'If the direction is aligned, we would appreciate {initial conversation / diagnosis / solution discussion / leadership meeting}.',
   '',
   'Thank you.',
 ].join('\n');
@@ -63,16 +64,15 @@ const sampleLines = [
         </div>
       </div>
 
-      <div class="mt-12 grid grid-cols-1 gap-8 lg:grid-cols-12">
-        <div class="fm-card p-7 lg:col-span-5">
-          <h2 class="mb-5 text-3xl font-bold leading-tight text-[#1A1A2E]" style="font-family: 'DM Serif Display', serif;">Suggested Context</h2>
-          <ul class="space-y-3">
-            {briefingItems.map((item) => <li class="text-sm leading-relaxed text-[#4B5563]" style="font-family: 'DM Sans', sans-serif;">• {item}</li>)}
-          </ul>
-        </div>
-        <div class="fm-emphasis-card p-7 lg:col-span-7">
-          <h2 class="mb-5 text-3xl font-bold leading-tight text-[#1A1A2E]" style="font-family: 'DM Serif Display', serif;">Sample Note</h2>
-          <pre class="whitespace-pre-wrap border-l-2 border-[#C5A24D] bg-white px-5 py-4 text-sm leading-relaxed text-[#4B5563]" style="font-family: 'DM Sans', sans-serif;">{sampleLines}</pre>
+      <div class="mx-auto mt-12 max-w-4xl">
+        <div class="fm-emphasis-card overflow-hidden p-0">
+          <div class="border-b border-[#E5E7EB] bg-white px-8 py-5">
+            <h2 class="text-3xl font-bold leading-tight text-[#1A1A2E]" style="font-family: 'DM Serif Display', serif;">Sample Note</h2>
+            <p class="mt-2 text-sm leading-relaxed text-[#6B7280]" style="font-family: 'DM Sans', sans-serif;">Replace the content in braces with your organization's details.</p>
+          </div>
+          <div class="bg-[#FBFAFC] px-8 py-6">
+            <pre class="whitespace-pre-wrap border-l-2 border-[#C5A24D] bg-white px-6 py-5 text-sm leading-relaxed text-[#374151] shadow-[0_18px_45px_rgba(26,26,46,0.06)]" style="font-family: 'DM Sans', sans-serif;">{sampleLines}</pre>
+          </div>
         </div>
       </div>
     </div>

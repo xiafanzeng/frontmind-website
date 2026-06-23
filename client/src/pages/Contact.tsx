@@ -7,10 +7,8 @@ import Footer from "@/components/Footer";
 import { useLang } from "@/contexts/LanguageContext";
 import {
   ArrowRight,
-  Building2,
   FileText,
   Mail,
-  MessageSquareText,
 } from "lucide-react";
 
 const CTA_IMG =
@@ -36,71 +34,58 @@ export default function Contact({ includeChrome = true }: ContactProps) {
   );
   const mailBody = t(
     [
-      "公司名称：",
-      "您的姓名与职务：",
-      "公司官网：",
-      "公司介绍材料：",
-      "希望讨论的方向：",
-      "当前业务背景：",
-      "期待的下一步：",
+      "公司名称：{公司名称}",
+      "您的姓名与职务：{姓名 / 职务}",
+      "公司官网：{官网链接}",
+      "公司介绍材料：{附件说明或公开链接}",
+      "希望讨论的方向：{GEO / AI 品牌可见度 / 智能体增长 / 企业级 AI 工作流 / FDE 入驻}",
+      "当前业务背景：{简要说明公司现状、目标市场、当前 AI 使用或增长挑战}",
+      "期待的下一步：{初步沟通 / 专题诊断 / 方案讨论 / 管理层会议}",
     ].join("\n"),
     [
-      "Company name:",
-      "Your name and title:",
-      "Company website:",
-      "Company introduction material:",
-      "Topic you would like to discuss:",
-      "Current business context:",
-      "Preferred next step:",
+      "Company name: {Company name}",
+      "Your name and title: {Name / Title}",
+      "Company website: {Website URL}",
+      "Company introduction material: {Attachment note or public link}",
+      "Topic you would like to discuss: {GEO / AI brand visibility / agentic growth / enterprise AI workflow / FDE embedding}",
+      "Current business context: {Briefly describe current situation, target market, AI usage, or growth challenge}",
+      "Preferred next step: {Initial conversation / diagnosis / solution discussion / leadership meeting}",
     ].join("\n"),
   );
   const mailtoHref = (email: string) =>
     `mailto:${email}?subject=${encodeURIComponent(mailSubject)}&body=${encodeURIComponent(mailBody)}`;
-  const briefingItems = [
-    {
-      icon: <Building2 size={18} />,
-      title: t("公司背景", "Company Context"),
-      desc: t("公司名称、官网、所在行业，以及可公开分享的介绍材料。", "Company name, website, industry, and shareable introduction material."),
-    },
-    {
-      icon: <FileText size={18} />,
-      title: t("沟通身份", "Your Role"),
-      desc: t("您的姓名、职务，以及在本次项目或决策中的角色。", "Your name, title, and role in the project or decision process."),
-    },
-    {
-      icon: <MessageSquareText size={18} />,
-      title: t("讨论目标", "Conversation Goal"),
-      desc: t("希望讨论 GEO、AI 品牌可见度、智能体增长、企业级 AI 工作流或 FDE 入驻中的哪一类问题。", "The topic you would like to discuss: GEO, AI brand visibility, agentic growth, enterprise AI workflows, or FDE embedding."),
-    },
-  ];
   const sampleLetterLines = t(
     [
-      "邮件标题：FrontMind 商务沟通｜公司名称",
+      "邮件标题：FrontMind 商务沟通｜{公司名称}",
       "",
       "您好，FrontMind 团队：",
       "",
-      "我们来自公司名称，官网为公司官网。我是姓名，负责相关职能。",
+      "我们来自 {公司名称}，官网为 {官网链接}。我是 {姓名}，担任 {职务}。",
       "",
-      "随信附上公司介绍材料，供团队了解业务背景。",
+      "随信附上 {公司介绍材料 / 公司宣传册 / 可访问链接}，供团队了解业务背景。",
       "",
-      "本次希望重点讨论：品牌在生成式答案中的可见度、智能体增长机会，或企业内部 AI 工作流部署。",
+      "本次希望重点讨论 {沟通目的}，例如品牌在生成式答案中的可见度、智能体增长机会，或企业内部 AI 工作流部署。",
       "",
-      "如方向匹配，期待安排一次初步沟通。",
+      "目前我们的业务背景是：{简要说明公司现状、目标市场、当前 AI 使用或增长挑战}。",
+      "",
+      "如方向匹配，期待安排 {初步沟通 / 专题诊断 / 方案讨论 / 管理层会议}。",
       "",
       "谢谢。",
     ],
     [
-      "Subject: FrontMind Business Conversation | Company Name",
+      "Subject: FrontMind Business Conversation | {Company Name}",
       "",
       "Hello FrontMind team,",
       "",
-      "We are from Company Name. Our website is Company Website. My name is Name, and I lead the relevant function.",
+      "We are from {Company Name}. Our website is {Website URL}. My name is {Name}, and I serve as {Title}.",
       "",
-      "I have attached our company introduction material for your reference.",
+      "I have attached {company introduction material / brochure / accessible link} for your reference.",
       "",
-      "We would like to discuss brand visibility in generative answers, agentic growth opportunities, or enterprise AI workflow deployment.",
+      "We would like to discuss {conversation purpose}, such as brand visibility in generative answers, agentic growth opportunities, or enterprise AI workflow deployment.",
       "",
-      "If the direction is aligned, we would appreciate an initial conversation.",
+      "Our current business context is: {briefly describe current situation, target market, AI usage, or growth challenge}.",
+      "",
+      "If the direction is aligned, we would appreciate {initial conversation / diagnosis / solution discussion / leadership meeting}.",
       "",
       "Thank you.",
     ],
@@ -272,70 +257,42 @@ export default function Contact({ includeChrome = true }: ContactProps) {
                 </a>
               ))}
 
-              <div className="fm-emphasis-card p-5 md:p-6">
-                <p className="text-xs font-bold uppercase tracking-[0.18em] text-[#C5A24D]" style={{ fontFamily: "'DM Sans', sans-serif" }}>
-                  {t("FrontMind Advisory", "FrontMind Advisory")}
-                </p>
-                <p className="mt-3 text-sm leading-relaxed text-[#4B5563]" style={{ fontFamily: "'DM Sans', sans-serif" }}>
-                  {t(
-                    "我们通常从业务目标、AI 对企业的当前理解、增长链路和内部流程四个角度阅读材料，再判断最适合的合作入口。",
-                    "We typically review material through four lenses: business goals, how AI currently understands the organization, growth loops, and internal workflows.",
-                  )}
-                </p>
-              </div>
             </div>
           </div>
 
-          <div className="mt-10 grid grid-cols-1 gap-5 lg:grid-cols-3">
-            {briefingItems.map((item) => (
-              <div key={String(item.title)} className="fm-card p-5 md:p-6">
-                <div className="mb-4 flex h-10 w-10 items-center justify-center border border-[#E5E7EB] bg-white text-[#3D1560]">
-                  {item.icon}
+          <div className="mx-auto mt-10 max-w-4xl">
+            <div className="fm-emphasis-card overflow-hidden p-0">
+              <div className="flex flex-col gap-4 border-b border-[#E5E7EB] bg-white px-6 py-5 md:flex-row md:items-center md:justify-between md:px-8">
+                <div className="flex items-center gap-3">
+                  <span className="flex h-10 w-10 shrink-0 items-center justify-center border border-[#E5E7EB] bg-[#FAFAFA] text-[#3D1560]">
+                    <FileText size={18} />
+                  </span>
+                  <div>
+                    <h3 className="text-xl font-bold text-[#1A1A2E]" style={{ fontFamily: "'DM Serif Display', serif" }}>
+                      {t("来信示例", "Sample Note")}
+                    </h3>
+                    <p className="mt-1 text-sm text-[#6B7280]" style={{ fontFamily: "'DM Sans', sans-serif" }}>
+                      {t("请将花括号中的内容替换为贵司实际信息。", "Replace the content in braces with your organization's details.")}
+                    </p>
+                  </div>
                 </div>
-                <h3 className="mb-2 text-lg font-bold text-[#1A1A2E]" style={{ fontFamily: "'DM Serif Display', serif" }}>
-                  {item.title}
-                </h3>
-                <p className="text-sm leading-relaxed text-[#6B7280]" style={{ fontFamily: "'DM Sans', sans-serif" }}>
-                  {item.desc}
-                </p>
-              </div>
-            ))}
-          </div>
-
-          <div className="mt-8 grid grid-cols-1 gap-8 lg:grid-cols-[0.8fr_1.2fr]">
-            <div className="fm-card p-5 md:p-6">
-              <h3 className="mb-4 text-xl font-bold text-[#1A1A2E]" style={{ fontFamily: "'DM Serif Display', serif" }}>
-                {t("来信建议", "Suggested Context")}
-              </h3>
-              <ul className="space-y-3">
-                {briefingItems.map((item) => (
-                  <li key={String(item.title)} className="flex gap-3 text-sm leading-relaxed text-[#4B5563]" style={{ fontFamily: "'DM Sans', sans-serif" }}>
-                    <span className="mt-2 h-1.5 w-1.5 shrink-0 rounded-full bg-[#3D1560]" />
-                    <span>{item.title}</span>
-                  </li>
-                ))}
-              </ul>
-            </div>
-
-            <div className="fm-emphasis-card p-5 md:p-6">
-              <div className="mb-4 flex items-center justify-between gap-4">
-                <h3 className="text-xl font-bold text-[#1A1A2E]" style={{ fontFamily: "'DM Serif Display', serif" }}>
-                  {t("来信示例", "Sample Note")}
-                </h3>
-                <span className="hidden text-xs font-bold uppercase tracking-[0.18em] text-[#C5A24D] md:inline" style={{ fontFamily: "'DM Sans', sans-serif" }}>
-                  {t("Reference", "Reference")}
+                <span className="w-fit text-xs font-bold uppercase tracking-[0.18em] text-[#C5A24D]" style={{ fontFamily: "'DM Sans', sans-serif" }}>
+                  {t("Business Reference", "Business Reference")}
                 </span>
               </div>
-              <div className="border-l-2 border-[#C5A24D] bg-white px-5 py-4">
+
+              <div className="bg-[#FBFAFC] px-6 py-6 md:px-8">
+                <div className="border-l-2 border-[#C5A24D] bg-white px-5 py-5 shadow-[0_18px_45px_rgba(26,26,46,0.06)] md:px-6">
                 {sampleLetterLines.map((line, index) => (
                   <p
                     key={`${line}-${index}`}
-                    className={`${line ? "mb-2" : "mb-3"} text-sm leading-relaxed text-[#4B5563] last:mb-0`}
+                    className={`${line ? "mb-2" : "mb-3"} text-sm leading-relaxed text-[#374151] last:mb-0`}
                     style={{ fontFamily: "'DM Sans', sans-serif" }}
                   >
                     {line || "\u00A0"}
                   </p>
                 ))}
+                </div>
               </div>
             </div>
           </div>

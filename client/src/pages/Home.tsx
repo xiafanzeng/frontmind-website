@@ -32,16 +32,12 @@ function StatsBar() {
       alt: "香港中文大学（深圳） The Chinese University of Hong Kong, Shenzhen",
       maxWidth: "max-w-[460px]",
       imageClassName: "scale-x-[1.04]",
-      width: 1956,
-      height: 378,
     },
     {
       image: INCUBATOR_LOGO_IMG,
       alt: "深港创新创业孵化中心 Shenzhen-Hong Kong Innovation & Entrepreneurship Incubator",
       maxWidth: "max-w-[400px]",
       imageClassName: "",
-      width: 2168,
-      height: 290,
     },
   ];
 
@@ -54,9 +50,7 @@ function StatsBar() {
               <img
                 src={partner.image}
                 alt={partner.alt}
-                width={partner.width}
-                height={partner.height}
-                className={`block h-auto w-full origin-center ${partner.maxWidth} ${partner.imageClassName} object-contain`}
+                className={`h-auto max-h-[64px] w-full origin-center ${partner.maxWidth} ${partner.imageClassName} object-contain md:max-h-[72px]`}
                 loading="lazy"
               />
             </div>
