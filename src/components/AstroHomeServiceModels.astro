@@ -1,0 +1,34 @@
+---
+import AstroSectionLabel from './AstroSectionLabel.astro';
+
+interface Props {
+  lang?: 'zh' | 'en';
+}
+const { lang = 'zh' } = Astro.props;
+const isEn = lang === 'en';
+
+const principles = isEn
+  ? ['Strategic clarity', 'Semantic authority', 'Agentic precision']
+  : ['战略清晰', '语义权威', '智能体精度'];
+---
+
+<section class="bg-white py-20 md:py-28">
+  <div class="container">
+    <div class="mx-auto mb-12 max-w-3xl text-center">
+      <AstroSectionLabel text={isEn ? 'Principles' : '原则'} color="purple" />
+      <h2 class="mb-5 text-4xl font-bold leading-tight text-[#1A1A2E] md:text-6xl" style="font-family: 'DM Serif Display', serif;">
+        {isEn ? 'Enterprise AI should feel precise, not excessive' : '企业 AI 应当精准，而非冗余'}
+      </h2>
+      <p class="mx-auto max-w-2xl text-[#6B7280]" style="font-family: 'DM Sans', sans-serif;">
+        {isEn ? 'FrontMind presents capability through disciplined architecture, clear semantic order, and durable operating intelligence.' : 'FrontMind 以有秩序的架构表达、清晰的语义系统与长期可持续的运营能力呈现企业 AI 价值。'}
+      </p>
+    </div>
+    <div class="grid grid-cols-1 gap-5 md:grid-cols-3">
+      {principles.map((item) => (
+        <article class="fm-card-soft p-8 text-center">
+          <h3 class="text-2xl font-bold text-[#1A1A2E]" style="font-family: 'DM Serif Display', serif;">{item}</h3>
+        </article>
+      ))}
+    </div>
+  </div>
+</section>

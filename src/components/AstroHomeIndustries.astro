@@ -1,0 +1,33 @@
+---
+import AstroSectionLabel from './AstroSectionLabel.astro';
+export interface Props { lang?: 'zh' | 'en'; }
+const { lang = 'zh' } = Astro.props;
+const isEn = lang === 'en';
+const industries = isEn
+  ? ['Professional Services', 'Healthcare & Life Sciences', 'Education & Research', 'Finance & Technology', 'Advanced Manufacturing', 'Consumer Brands']
+  : ['专业服务', '医疗与生命科学', '教育与科研', '金融与科技', '先进制造', '消费品牌'];
+---
+<section class="bg-[#FBFAFC] py-20 md:py-28">
+  <div class="container">
+    <div class="grid grid-cols-1 gap-12 lg:grid-cols-12">
+      <div class="lg:col-span-5">
+        <AstroSectionLabel text={isEn ? 'For High-Trust Industries' : '面向高信任行业'} color="purple" />
+        <h2 class="mb-5 text-4xl font-bold leading-tight text-[#1A1A2E] md:text-6xl" style="font-family: 'DM Serif Display', serif;">
+          {isEn ? 'Where credibility defines growth' : '在信任决定增长的行业中建立优势'}
+        </h2>
+        <p class="text-base leading-relaxed text-[#6B7280]" style="font-family: 'DM Sans', sans-serif;">
+          {isEn ? 'FrontMind is designed for organizations whose expertise, credibility, and long-term reputation matter more than short-term attention.' : 'FrontMind 面向专业门槛高、决策链路长、声誉资产重要的企业，帮助其在 AI 时代建立更清晰、更可信的市场表达。'}
+        </p>
+      </div>
+      <div class="lg:col-span-7">
+        <div class="grid grid-cols-2 gap-4 md:grid-cols-3">
+          {industries.map((item) => (
+            <div class="fm-card p-6 text-center">
+              <div class="text-lg font-bold text-[#1A1A2E]" style="font-family: 'DM Serif Display', serif;">{item}</div>
+            </div>
+          ))}
+        </div>
+      </div>
+    </div>
+  </div>
+</section>

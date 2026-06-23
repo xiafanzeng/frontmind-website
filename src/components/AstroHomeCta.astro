@@ -1,0 +1,26 @@
+---
+export interface Props { lang?: 'zh' | 'en'; ctaImage: string; }
+const { lang = 'zh', ctaImage } = Astro.props;
+const isEn = lang === 'en';
+const base = isEn ? '/en' : '';
+---
+<section class="relative overflow-hidden bg-[#1A1A2E] py-20 text-white md:py-28">
+  <div class="absolute inset-0 opacity-[0.08]" style="background-image: radial-gradient(circle at 20% 20%, #C5A24D 0, transparent 24%), radial-gradient(circle at 80% 10%, #ffffff 0, transparent 18%);"></div>
+  <div class="container relative z-10">
+    <div class="grid grid-cols-1 items-center gap-12 lg:grid-cols-2">
+      <div>
+        <div class="mb-5 text-xs font-bold uppercase tracking-[0.24em] text-[#C5A24D]" style="font-family: 'DM Sans', sans-serif;">{isEn ? 'Strategic Conversation' : '战略对话'}</div>
+        <h2 class="mb-6 text-4xl font-bold leading-tight md:text-6xl" style="font-family: 'DM Serif Display', serif;">
+          {isEn ? 'Shape the brand advantage your enterprise should own in the AI era' : '定义企业在 AI 时代应拥有的品牌优势'}
+        </h2>
+        <p class="mb-8 max-w-xl text-base leading-relaxed text-white/70" style="font-family: 'DM Sans', sans-serif;">
+          {isEn ? 'FrontMind works with leadership teams to clarify the brand position, semantic assets, and intelligent growth system that matter most.' : 'FrontMind 与企业管理团队共同澄清品牌位置、语义资产与智能增长能力，让 AI 时代的优势从表达开始形成系统。'}
+        </p>
+        <a href={`${base}/contact`} class="inline-flex rounded-md bg-[#C5A24D] px-7 py-4 text-sm font-bold text-[#1A1A2E] no-underline transition-all hover:bg-white" style="font-family: 'DM Sans', sans-serif;">{isEn ? 'Start a conversation' : '开启战略对话'}</a>
+      </div>
+      <div class="hidden lg:block">
+        <img src={ctaImage} alt="FrontMind strategic conversation" class="ml-auto w-full max-w-md rounded-3xl opacity-90" />
+      </div>
+    </div>
+  </div>
+</section>

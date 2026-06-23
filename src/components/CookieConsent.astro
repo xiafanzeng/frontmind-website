@@ -1,0 +1,125 @@
+---
+export interface Props {
+  lang?: 'zh' | 'en';
+}
+
+const { lang = 'zh' } = Astro.props;
+const isEn = lang === 'en';
+const privacyHref = isEn ? '/en/privacy-policy' : '/privacy-policy';
+---
+
+<div id="cookie-consent-banner" class="cookie-consent-banner" role="dialog" aria-modal="false" aria-labelledby="cookie-consent-title">
+  <div class="cookie-consent-copy">
+    <p class="cookie-consent-kicker">{isEn ? 'Privacy & Consent' : '隐私与同意设置'}</p>
+    <h2 id="cookie-consent-title" class="cookie-consent-title">{isEn ? 'Manage your cookie choices' : '管理您的 Cookie 选择'}</h2>
+    <p class="cookie-consent-body">
+      {isEn
+        ? 'Essential cookies remain enabled for site security, language, and core functionality. Analytics and marketing categories are disabled until you explicitly opt in.'
+        : '必要 Cookie 将始终启用，用于站点安全、语言与基础功能。分析与营销类别在您明确同意前不会启用。'}
+    </p>
+    <p class="cookie-consent-note">
+      {isEn ? 'Please review our ' : '详细说明请查看我们的 '}
+      <a href={privacyHref} class="cookie-inline-link">{isEn ? 'Privacy Policy' : '隐私政策'}</a>
+      {isEn ? '.' : '。'}
+    </p>
+  </div>
+
+  <div class="cookie-consent-actions">
+    <button id="cookie-reject" type="button" class="cookie-btn cookie-btn-ghost">{isEn ? 'Reject Optional' : '仅保留必要项'}</button>
+    <button id="cookie-settings" type="button" class="cookie-btn cookie-btn-secondary">{isEn ? 'Cookie Settings' : 'Cookie 设置'}</button>
+    <button id="cookie-accept" type="button" class="cookie-btn cookie-btn-primary">{isEn ? 'Accept All' : '接受全部'}</button>
+  </div>
+</div>
+
+<button id="cookie-preferences-trigger" type="button" class="cookie-pref-trigger">{isEn ? 'Cookie Preferences' : 'Cookie 偏好'}</button>
+
+<dialog id="cookie-settings-modal" class="cookie-settings-modal" aria-labelledby="cookie-settings-title">
+  <form method="dialog" class="cookie-settings-panel">
+    <div class="cookie-settings-head">
+      <p class="cookie-consent-kicker">{isEn ? 'Granular Consent' : '分级同意'}</p>
+      <h2 id="cookie-settings-title" class="cookie-consent-title">{isEn ? 'Cookie settings' : 'Cookie 设置'}</h2>
+    </div>
+
+    <div class="cookie-settings-grid" aria-label={isEn ? 'Cookie categories' : 'Cookie 类别'}>
+      <label class="cookie-option cookie-option-locked">
+        <span>
+          <strong>{isEn ? 'Essential cookies' : '必要 Cookie'}</strong>
+          <small>{isEn ? 'Always active for security, language, and core functionality.' : '始终启用，用于站点安全、语言与基础功能。'}</small>
+        </span>
+        <span class="cookie-option-status">{isEn ? 'Always on' : '始终开启'}</span>
+      </label>
+
+      <label class="cookie-option">
+        <span>
+          <strong>{isEn ? 'Analytics cookies' : '分析 Cookie'}</strong>
+          <small>{isEn ? 'Help us understand visits so we can improve site structure and content quality.' : '帮助我们理解访问行为，以改进站点结构和内容质量。'}</small>
+        </span>
+        <input id="cookie-analytics" name="analytics_consent" type="checkbox" />
+      </label>
+
+      <label class="cookie-option">
+        <span>
+          <strong>{isEn ? 'Marketing cookies' : '营销 Cookie'}</strong>
+          <small>{isEn ? 'Used only when future campaign attribution or remarketing is explicitly enabled.' : '仅在未来启用营销归因或再营销时使用。'}</small>
+        </span>
+        <input id="cookie-marketing" name="marketing_consent" type="checkbox" />
+      </label>
+    </div>
+
+    <div class="cookie-consent-actions">
+      <button value="cancel" type="submit" class="cookie-btn cookie-btn-ghost">{isEn ? 'Cancel' : '取消'}</button>
+      <button id="cookie-save-preferences" value="default" type="submit" class="cookie-btn cookie-btn-secondary">{isEn ? 'Save Preferences' : '保存偏好'}</button>
+    </div>
+  </form>
+</dialog>
+
+<script is:inline>
+  const STORAGE_KEY = 'frontmind-cookie-preferences';
+  const banner = document.getElementById('cookie-consent-banner');
+  const settingsModal = document.getElementById('cookie-settings-modal');
+  const analyticsInput = document.getElementById('cookie-analytics');
+  const marketingInput = document.getElementById('cookie-marketing');
+  const prefTrigger = document.getElementById('cookie-preferences-trigger');
+  const acceptBtn = document.getElementById('cookie-accept');
+  const rejectBtn = document.getElementById('cookie-reject');
+  const settingsBtn = document.getElementById('cookie-settings');
+  const saveBtn = document.getElementById('cookie-save-preferences');
+
+  const readConsent = () => {
+    try {
+      return JSON.parse(localStorage.getItem(STORAGE_KEY) || 'null');
+    } catch {
+      return null;
+    }
+  };
+
+  const applyVisibility = (hasConsent) => {
+    if (banner) banner.hidden = hasConsent;
+    if (prefTrigger) prefTrigger.hidden = false;
+  };
+
+  const writeConsent = (analytics, marketing) => {
+    localStorage.setItem(STORAGE_KEY, JSON.stringify({
+      essential: true,
+      analytics,
+      marketing,
+      updatedAt: new Date().toISOString(),
+    }));
+    applyVisibility(true);
+    if (settingsModal && typeof settingsModal.close === 'function') settingsModal.close();
+  };
+
+  const currentConsent = readConsent();
+  if (analyticsInput && currentConsent) analyticsInput.checked = !!currentConsent.analytics;
+  if (marketingInput && currentConsent) marketingInput.checked = !!currentConsent.marketing;
+  applyVisibility(!!currentConsent);
+
+  acceptBtn?.addEventListener('click', () => writeConsent(true, true));
+  rejectBtn?.addEventListener('click', () => writeConsent(false, false));
+  settingsBtn?.addEventListener('click', () => settingsModal?.showModal());
+  prefTrigger?.addEventListener('click', () => settingsModal?.showModal());
+  saveBtn?.addEventListener('click', (event) => {
+    event.preventDefault();
+    writeConsent(!!analyticsInput?.checked, !!marketingInput?.checked);
+  });
+</script>

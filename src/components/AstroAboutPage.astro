@@ -1,0 +1,301 @@
+---
+import SectionLabel from '../../client/src/components/SectionLabel';
+import { localizePath, type SiteLang } from '../../shared/langRouting';
+import {
+  ArrowRight,
+  Award,
+  BookOpen,
+  Building2,
+  GraduationCap,
+  Heart,
+  Lightbulb,
+  MapPin,
+  Target,
+  Users,
+  Zap,
+} from 'lucide-react';
+
+export interface Props {
+  lang?: SiteLang;
+}
+
+const { lang = 'zh' } = Astro.props;
+const isEn = lang === 'en';
+
+const ABOUT_IMG =
+  'https://d2xsxph8kpxj0f.cloudfront.net/310519663550747472/N9P7CTPQUeD653F54XuJ9x/frontmind-about-scene-geoDR5iANzqrXY2L43RNcm.webp';
+const CTA_IMG =
+  'https://d2xsxph8kpxj0f.cloudfront.net/310519663550747472/N9P7CTPQUeD653F54XuJ9x/frontmind-cta-scene-gDxNyDFFp4eygiFDZnhDYq.webp';
+
+const credibilityPillars = isEn
+  ? [
+      {
+        label: 'Research Origin',
+        title: 'From Research Lab to Brand Intelligence',
+        desc: 'FrontMind grows out of the research context of intelligent decision-making and AI, translating NLP, multi-agent systems, and strategic brand questions into a new methodology for generative search and intelligent answers.',
+      },
+      {
+        label: 'Market Validation',
+        title: 'Serving High-Trust, High-Competition Industries',
+        desc: 'We focus on complex decision contexts across enterprise SaaS, healthcare, legal and financial services, education, retail, and local services, helping brands turn scattered content into authority assets that AI can understand, cite, and recommend.',
+      },
+      {
+        label: 'Method Trust',
+        title: 'Building Long-Term Advantage with Disciplined Expression',
+        desc: 'We do not reduce brand growth to short-term campaigns or tool stacking. We build durable brand intelligence around semantic clarity, credible evidence, AI visibility, and growth connection capability.',
+      },
+    ]
+  : [
+      {
+        label: '研究来源',
+        title: '从高校实验室到品牌智能系统',
+        desc: 'FrontMind 源于港中深智能决策与 AI 研究语境，将自然语言处理、多智能体系统与品牌战略问题结合，形成面向生成式搜索和智能问答的新一代品牌方法。',
+      },
+      {
+        label: '产业验证',
+        title: '服务高信任、高竞争行业',
+        desc: '我们关注企业 SaaS、医疗健康、法律金融、教育、零售与本地服务等复杂决策场景，帮助品牌把分散内容转化为可被 AI 理解、引用和推荐的权威资产。',
+      },
+      {
+        label: '方法信任',
+        title: '以克制的表达建立长期优势',
+        desc: '我们不把品牌增长简化为短期投放或工具堆叠，而是围绕语义清晰度、证据可信度、AI 可见度与增长连接能力，建立可持续演进的品牌智能底座。',
+      },
+    ];
+
+const values = isEn
+  ? [
+      { Icon: BookOpen, title: 'Research-First', desc: 'Every product decision is grounded in rigorous academic research and data analysis.' },
+      { Icon: Zap, title: 'Innovation', desc: "We push the boundaries of what's possible with AI-powered brand management." },
+      { Icon: Heart, title: 'Client Success', desc: "Our clients' growth is our north star. We measure success by their outcomes." },
+      { Icon: Users, title: 'Collaboration', desc: 'We believe the best solutions emerge from diverse perspectives working together.' },
+    ]
+  : [
+      { Icon: BookOpen, title: '研究优先', desc: '每个产品决策都基于严谨的学术研究和数据分析。' },
+      { Icon: Zap, title: '创新', desc: '我们不断突破 AI 驱动品牌管理的可能性边界。' },
+      { Icon: Heart, title: '客户成功', desc: '客户的增长是我们的北极星，我们以客户成果衡量成功。' },
+      { Icon: Users, title: '协作', desc: '我们相信最佳解决方案源于多元视角的协同合作。' },
+    ];
+
+const teamStats = isEn
+  ? [
+      { value: '80%', label: 'Advanced Degrees' },
+      { value: '10+', label: 'Avg. Years Experience' },
+      { value: '30+', label: 'Published Papers' },
+      { value: '5+', label: 'Core Patents' },
+    ]
+  : [
+      { value: '80%', label: '硕博学历占比' },
+      { value: '10+', label: '平均行业经验' },
+      { value: '30+', label: '发表学术论文' },
+      { value: '5+', label: '核心技术专利' },
+    ];
+
+const academicBullets = isEn
+  ? [
+      { Icon: GraduationCap, text: 'Born from CUHK-Shenzhen Unicorn Incubation Program' },
+      { Icon: Award, text: 'Backed by Intelligent Decision-Making Lab resources' },
+      { Icon: Building2, text: 'Team from Caltech, HKU, Tsinghua, NYU and more' },
+      { Icon: MapPin, text: 'Headquarters in Shenzhen, China' },
+    ]
+  : [
+      { Icon: GraduationCap, text: '诞生于港中深独角兽孵化计划' },
+      { Icon: Award, text: '依托智能决策实验室科研能力与算力支持' },
+      { Icon: Building2, text: '团队来自加州理工、港大、清华、纽约大学等名校' },
+      { Icon: MapPin, text: '总部位于中国深圳' },
+    ];
+
+const contactHref = localizePath('/contact', lang);
+const researchHref = localizePath('/research', lang);
+---
+
+<div class="min-h-screen bg-[#f5f5f7]">
+  <section aria-label="Page Section" class="relative overflow-hidden bg-white pb-16 pt-28 md:pb-20 md:pt-36">
+    <div
+      class="absolute inset-0 opacity-[0.02]"
+      style="background-image: linear-gradient(#3D1560 1px, transparent 1px), linear-gradient(90deg, #3D1560 1px, transparent 1px); background-size: 60px 60px;"
+    ></div>
+    <div class="container relative z-10 reveal visible">
+      <div class="grid grid-cols-1 items-center gap-12 lg:grid-cols-2">
+        <div>
+          <SectionLabel text={isEn ? 'About FrontMind' : '关于 FrontMind'} color="purple" />
+          <h1 class="mb-6 text-4xl font-bold leading-tight text-[#1A1A2E] md:text-5xl" style="font-family: 'DM Serif Display', serif;">
+            {isEn ? (
+              <>
+                Born from Research<br />Built for Brands
+              </>
+            ) : (
+              <>
+                源于研究<br />为品牌而生
+              </>
+            )}
+          </h1>
+          <p class="text-lg leading-relaxed text-[#6B7280]" style="font-family: 'DM Sans', sans-serif;">
+            {isEn
+              ? 'As generative AI reshapes how people access information, FrontMind was created as a strategic brand and intelligent growth partner for the AI era. We combine AI Agent capabilities with brand methodology to help enterprise brand information be understood more accurately, trusted more consistently, and recommended more confidently by AI systems.'
+              : '随着生成式 AI 的兴起，人类获取信息的方式正经历根本性转移。FrontMind 超前智能应运而生，致力于成为 AI 时代的品牌战略与智能增长伙伴。我们将 AI Agent 能力与品牌方法论结合，帮助企业的品牌信息被 AI 更准确地理解、信任并推荐给用户。'}
+          </p>
+        </div>
+        <div class="relative">
+          <img src={ABOUT_IMG} alt="FrontMind Team Abstract" class="h-auto w-full" />
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <section aria-label="Page Section" class="py-20 md:py-28">
+    <div class="container reveal visible">
+      <div class="grid grid-cols-1 gap-px bg-[#e5e7eb] md:grid-cols-2">
+        <div class="bg-white p-8 md:p-10">
+          <div class="mb-5 flex items-center gap-3">
+            <Target size={20} className="text-[#3D1560]" />
+            <div class="h-px w-8 bg-[#C5A24D]"></div>
+          </div>
+          <h2 id="about-mission" class="mb-3 text-xl font-bold text-[#1A1A2E]" style="font-family: 'DM Serif Display', serif;">{isEn ? 'Our Mission' : '我们的使命'}</h2>
+          <p class="text-sm leading-relaxed text-[#6B7280]" style="font-family: 'DM Sans', sans-serif;">
+            {isEn
+              ? 'To make AI-powered brand management systematic, enabling enterprises to continuously build, protect, and grow brand assets in the AI era. We believe meaningful brands should be accurately understood, steadily represented, and confidently recommended by AI systems.'
+              : '让 AI 驱动的品牌管理系统化，使企业能够在 AI 时代持续构建、保护和发展品牌资产。我们相信，真正有价值的品牌应当被 AI 准确理解、稳健呈现并值得推荐。'}
+          </p>
+        </div>
+        <div class="bg-[#fafafa] p-8 md:p-10">
+          <div class="mb-5 flex items-center gap-3">
+            <Lightbulb size={20} className="text-[#C5A24D]" />
+            <div class="h-px w-8 bg-[#C5A24D]"></div>
+          </div>
+          <h2 id="about-vision" class="mb-3 text-xl font-bold text-[#1A1A2E]" style="font-family: 'DM Serif Display', serif;">{isEn ? 'Our Vision' : '我们的愿景'}</h2>
+          <p class="text-sm leading-relaxed text-[#6B7280]" style="font-family: 'DM Sans', sans-serif;">
+            {isEn
+              ? 'To become a trusted partner for enterprise AI-era brand strategy and intelligent growth, helping brands be accurately understood and meaningfully represented by AI systems.'
+              : '成为 AI 时代品牌战略与智能增长的重要方法论伙伴，让品牌在新的信息生态中被准确理解、持续信任，并形成长期价值。'}
+          </p>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <section aria-label="Page Section" class="bg-white py-20 md:py-28">
+    <div class="container reveal visible">
+      <div class="mb-14">
+        <SectionLabel text={isEn ? 'Core Values' : '核心价值观'} color="gold" />
+        <h2 class="text-3xl font-bold leading-tight text-[#1A1A2E] md:text-4xl" style="font-family: 'DM Serif Display', serif;">{isEn ? 'What Drives Us' : '驱动我们前行的力量'}</h2>
+      </div>
+
+      <div class="grid grid-cols-1 gap-6 md:grid-cols-2 lg:grid-cols-4">
+        {values.map((value) => (
+          <div class="fm-card group p-6 md:p-7">
+            <div class="mb-3 flex items-center gap-3">
+              <div class="fm-icon-panel flex h-10 w-10 items-center justify-center text-[#3D1560]">
+                <value.Icon size={18} />
+              </div>
+              <div class="h-px w-6 bg-[#C5A24D]/40 transition-all group-hover:w-10 group-hover:bg-[#C5A24D]"></div>
+            </div>
+            <h3 class="mb-2 text-base font-bold text-[#1A1A2E]" style="font-family: 'DM Serif Display', serif;">{value.title}</h3>
+            <p class="text-sm leading-relaxed text-[#6B7280]" style="font-family: 'DM Sans', sans-serif;">{value.desc}</p>
+          </div>
+        ))}
+      </div>
+    </div>
+  </section>
+
+  <section aria-label="Page Section" class="py-20 md:py-28">
+    <div class="container reveal visible">
+      <div class="grid grid-cols-1 items-start gap-12 lg:grid-cols-12">
+        <div class="lg:col-span-4">
+          <SectionLabel text={isEn ? 'Our Team' : '我们的团队'} color="purple" />
+          <h2 class="text-3xl font-bold leading-tight text-[#1A1A2E] md:text-4xl whitespace-pre-line" style="font-family: 'DM Serif Display', serif;">{isEn ? 'A Multidisciplinary\nElite Team' : '跨学科的\n精英团队'}</h2>
+        </div>
+        <div class="lg:col-span-8">
+          <div class="space-y-6">
+            <p class="text-base leading-relaxed text-[#4B5563]" style="font-family: 'DM Sans', sans-serif;">
+              {isEn
+                ? "FrontMind's core team brings together top talent from world-class institutions including CUHK-Shenzhen, Caltech, HKU, Tsinghua, and NYU, with deep technical backgrounds from Amazon, ByteDance, and other industry leaders. Our members hold extensive academic and engineering expertise in NLP, multi-agent systems, and reinforcement learning."
+                : 'FrontMind 的核心团队汇聚了来自香港中文大学（深圳）、加州理工、香港大学、清华大学、纽约大学等世界名校的顶尖人才，并拥有亚马逊、字节跳动等头部大厂的深厚技术背景和众多资深产业领袖。团队成员在自然语言处理、多智能体系统、强化学习等前沿领域拥有丰富的学术积累与工程实践经验。'}
+            </p>
+            <p class="text-base leading-relaxed text-[#4B5563]" style="font-family: 'DM Sans', sans-serif;">
+              {isEn
+                ? "Backed by the deep research capabilities and computing resources of CUHK-Shenzhen's Intelligent Decision-Making Laboratory, our team consistently applies data-driven decision-making and research-guided innovation, translating cutting-edge methodologies into practical brand optimization tools that have successfully served over 100 leading clients across vertical industries."
+                : '依托香港中文大学（深圳）智能决策实验室的深层科研能力与算力支持，团队在产品研发中始终坚持以数据驱动决策、以研究指导创新，将前沿论文中的方法论转化为可落地的品牌优化工具，已成功服务超过 100 家垂直行业头部客户。'}
+            </p>
+            <div class="grid grid-cols-2 gap-4 border-t border-[#e8e4ec] pt-6 md:grid-cols-4">
+              {teamStats.map((stat) => (
+                <div class="fm-card-soft p-4">
+                  <div class="text-2xl font-bold italic text-[#3D1560]" style="font-family: 'DM Serif Display', serif;">{stat.value}</div>
+                  <div class="mt-1 text-xs text-[#9CA3AF]" style="font-family: 'DM Sans', sans-serif;">{stat.label}</div>
+                </div>
+              ))}
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <section aria-label="Page Section" class="bg-white py-20 md:py-28">
+    <div class="container reveal visible">
+      <div class="grid grid-cols-1 items-center gap-16 lg:grid-cols-2">
+        <div>
+          <SectionLabel text={isEn ? 'Academic Foundation' : '学术基础'} color="gold" />
+          <h2 class="mb-4 text-3xl font-bold leading-tight text-[#1A1A2E] md:text-4xl" style="font-family: 'DM Serif Display', serif;">{isEn ? 'Rooted in World-Class Research' : '根植于世界级研究'}</h2>
+          <p class="mb-8 text-sm leading-relaxed text-[#6B7280]" style="font-family: 'DM Sans', sans-serif;">
+            {isEn
+              ? "Born from CUHK-Shenzhen's Unicorn Incubation Program, we leverage the deep research capabilities and computing resources of the Intelligent Decision-Making Laboratory, fusing academic rigor with commercial acumen."
+              : '作为诞生于香港中文大学（深圳）独角兽孵化计划的创新型科技企业，我们依托智能决策实验室的深层科研能力与算力支持，将学术严谨性与商业敏锐度深度融合。'}
+          </p>
+          <div class="space-y-4">
+            {academicBullets.map((item) => (
+              <div class="fm-card-soft flex items-center gap-3 p-4">
+                <div class="text-[#C5A24D]"><item.Icon size={18} /></div>
+                <span class="text-sm font-medium text-[#1A1A2E]" style="font-family: 'DM Sans', sans-serif;">{item.text}</span>
+              </div>
+            ))}
+          </div>
+        </div>
+
+        <div class="reveal visible">
+          <div class="bg-[#f5f5f7] p-8">
+            <h3 class="mb-6 text-lg font-bold text-[#1A1A2E]" style="font-family: 'DM Serif Display', serif;">{isEn ? 'Credibility Foundations' : '可信基础'}</h3>
+            <div class="space-y-5">
+              {credibilityPillars.map((item) => (
+                <div class="border-t border-[#e5e7eb] pt-5 first:border-t-0 first:pt-0">
+                  <div class="mb-2 text-xs font-bold uppercase tracking-[0.18em] text-[#C5A24D]" style="font-family: 'DM Sans', sans-serif;">{item.label}</div>
+                  <h4 class="mb-2 text-base font-bold text-[#1A1A2E]" style="font-family: 'DM Serif Display', serif;">{item.title}</h4>
+                  <p class="text-sm leading-relaxed text-[#6B7280]" style="font-family: 'DM Sans', sans-serif;">{item.desc}</p>
+                </div>
+              ))}
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <section aria-label="Page Section" class="relative overflow-hidden">
+    <div class="absolute inset-0 bg-cover bg-center" style={`background-image: url(${CTA_IMG})`}></div>
+    <div class="absolute inset-0 bg-[#1A0A2E]/80"></div>
+    <div class="animate-float absolute right-10 top-10 h-64 w-64 rounded-full border border-white/5"></div>
+    <div class="animate-float absolute bottom-10 right-40 h-40 w-40 rounded-full border border-[#C5A24D]/10" style="animation-delay: 2s;"></div>
+    <div class="container relative z-10 py-20 md:py-28">
+      <div class="max-w-2xl">
+        <h2 class="mb-4 text-3xl font-bold leading-tight text-white md:text-4xl lg:text-5xl" style="font-family: 'DM Serif Display', serif;">{isEn ? 'Define the Next Era of Brand Growth' : '共同定义下一代品牌增长'}</h2>
+        <p class="mb-8 text-lg text-white/70" style="font-family: 'DM Sans', sans-serif;">{isEn ? 'If you are considering how a brand can build lasting advantage across generative search, intelligent Q&A, and AI decision entry points, FrontMind can help define a future-facing order of growth with you.' : '如果你正在思考品牌如何在生成式搜索、智能问答与 AI 决策入口中建立长期优势，FrontMind 可以与你共同定义面向未来的增长秩序。'}</p>
+        <div class="flex flex-wrap gap-4">
+          <a
+            href={contactHref}
+            class="inline-flex items-center gap-2 bg-[#C5A24D] px-7 py-3.5 text-sm font-bold text-[#1A1A2E] no-underline transition-colors hover:bg-[#D4B76A]"
+            style="font-family: 'DM Sans', sans-serif;"
+          >
+            {isEn ? 'Get in Touch' : '联系我们'} <ArrowRight size={16} />
+          </a>
+          <a
+            href={researchHref}
+            class="inline-flex items-center gap-2 border-2 border-white/30 px-7 py-3.5 text-sm font-semibold text-white no-underline transition-all hover:bg-white/10"
+            style="font-family: 'DM Sans', sans-serif;"
+          >
+            {isEn ? 'View Research' : '查看研究'}
+          </a>
+        </div>
+      </div>
+    </div>
+  </section>
+</div>

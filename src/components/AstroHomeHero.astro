@@ -1,0 +1,63 @@
+---
+import AstroSectionLabel from './AstroSectionLabel.astro';
+
+export interface Props {
+  lang?: 'zh' | 'en';
+  heroImage: string;
+}
+
+const { lang = 'zh', heroImage } = Astro.props;
+const isEn = lang === 'en';
+const base = isEn ? '/en' : '';
+
+const signals = isEn
+  ? ['Brand Semantics', 'AI Trust', 'Agentic Growth', 'Enterprise Intelligence']
+  : ['品牌语义', 'AI 信任', '智能增长', '企业智能'];
+---
+
+<section aria-label="Hero" class="relative overflow-hidden pt-28 pb-16 md:pt-36 md:pb-24">
+  <div class="absolute inset-0 opacity-[0.04]" style="background-image: radial-gradient(circle at 25% 20%, #3D1560 0, transparent 26%), radial-gradient(circle at 78% 5%, #C5A24D 0, transparent 22%);"></div>
+  <div class="absolute inset-0 opacity-[0.03]" style="background-image: linear-gradient(#3D1560 1px, transparent 1px), linear-gradient(90deg, #3D1560 1px, transparent 1px); background-size: 60px 60px;"></div>
+  <div class="container relative z-10">
+    <div class="grid grid-cols-1 items-center gap-12 lg:grid-cols-2">
+      <div>
+        <AstroSectionLabel text={isEn ? 'Strategic Brand Intelligence for the AI Era' : 'AI 时代品牌战略与智能增长伙伴'} color="purple" />
+        <h1 class="mb-6 text-4xl font-bold leading-[1.12] text-[#1A1A2E] md:text-5xl lg:text-[3.65rem]" style="font-family: 'DM Serif Display', serif;">
+          {isEn ? <Fragment set:html={'Redefine How Brands<br />Win in the AI Era'} /> : <Fragment set:html={'重新定义品牌<br />在 AI 时代的制胜之道'} />}
+        </h1>
+        <p class="mb-8 max-w-2xl text-lg leading-relaxed text-[#6B7280]" style="font-family: 'DM Sans', sans-serif;">
+          {isEn
+            ? 'As generative AI becomes the new interface for discovery and decision-making, FrontMind helps enterprises turn positioning, expertise, proof, and growth intent into intelligent systems that can be understood, trusted, and selected.'
+            : '当生成式 AI 成为信息发现与决策入口，品牌竞争不再只发生在搜索排名，而发生在 AI 是否理解、信任并推荐你。FrontMind 将企业定位、专业能力、证据体系与增长意图，转化为可被智能系统识别的品牌资产。'}
+        </p>
+        <div class="mb-8 flex flex-wrap gap-4">
+          <a href={`${base}/solutions`} class="inline-flex items-center gap-2 rounded-md bg-[#3D1560] px-6 py-3 text-sm font-semibold text-white no-underline transition-colors hover:bg-[#2D1050]" style="font-family: 'DM Sans', sans-serif;">
+            {isEn ? 'Explore Solutions' : '探索解决方案'}
+            <span aria-hidden="true">→</span>
+          </a>
+          <a href={`${base}/about`} class="inline-flex items-center gap-2 rounded-md border-2 border-[#3D1560] px-6 py-3 text-sm font-semibold text-[#3D1560] no-underline transition-all hover:bg-[#3D1560] hover:text-white" style="font-family: 'DM Sans', sans-serif;">
+            {isEn ? 'About FrontMind' : '了解 FrontMind'}
+          </a>
+        </div>
+        <div class="flex flex-wrap gap-2">
+          {signals.map((item) => (
+            <span class="fm-chip px-3 py-1.5 text-[11px] font-semibold" style="font-family: 'DM Sans', sans-serif;">{item}</span>
+          ))}
+        </div>
+      </div>
+
+      <div class="relative hidden lg:block">
+        <div class="animate-float absolute -top-8 -right-8 h-48 w-48 rounded-full border border-[#3D1560]/10"></div>
+        <div class="animate-float absolute -bottom-4 -left-4 h-32 w-32 rounded-full border border-[#C5A24D]/15" style="animation-delay: 2s;"></div>
+        <div class="fm-emphasis-card p-5">
+          <img src={heroImage} alt="FrontMind AI brand intelligence" class="w-full rounded-2xl" />
+          <div class="mt-5 grid grid-cols-3 gap-3">
+            <div class="fm-card-soft p-3 text-center"><div class="text-xl font-bold text-[#3D1560]" style="font-family: 'DM Serif Display', serif;">01</div><div class="text-[11px] text-[#6B7280]">Semantic</div></div>
+            <div class="fm-card-soft p-3 text-center"><div class="text-xl font-bold text-[#C5A24D]" style="font-family: 'DM Serif Display', serif;">02</div><div class="text-[11px] text-[#6B7280]">Trust</div></div>
+            <div class="fm-card-soft p-3 text-center"><div class="text-xl font-bold text-[#3D1560]" style="font-family: 'DM Serif Display', serif;">03</div><div class="text-[11px] text-[#6B7280]">Growth</div></div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+</section>

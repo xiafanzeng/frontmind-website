@@ -1,0 +1,51 @@
+---
+import AstroSectionLabel from './AstroSectionLabel.astro';
+export interface Props { lang?: 'zh' | 'en'; }
+const { lang = 'zh' } = Astro.props;
+const isEn = lang === 'en';
+const base = isEn ? '/en' : '';
+const solutions = isEn
+  ? [
+      { name: 'MindPromise', tag: 'Brand Intelligence', title: 'Build the semantic foundation AI can trust', desc: 'MindPromise organizes positioning, claims, expertise, content assets, and evidence into a coherent brand knowledge system, improving how AI engines, search interfaces, and industry conversations understand the enterprise.', points: ['Brand positioning and semantic architecture', 'Authority content and evidence structure', 'AI answer consistency and monitoring'] },
+      { name: 'MindReach', tag: 'Agentic Growth', title: 'Turn market signals into intelligent growth', desc: 'MindReach connects demand discovery, account understanding, message generation, and opportunity routing through AI agents, giving enterprise growth teams a more intelligent way to identify and engage high-intent opportunities.', points: ['Demand signal discovery', 'Agent-assisted outreach intelligence', 'Qualified opportunity routing'] },
+    ]
+  : [
+      { name: 'MindPromise 智诺', tag: '品牌智能', title: '建立 AI 能理解与信任的语义底座', desc: 'MindPromise 将企业定位、价值主张、专业内容、案例证据与标准表达组织成一致的品牌知识系统，让大模型、AI 搜索与行业问答更准确地理解企业。', points: ['品牌定位与语义架构', '权威内容与证据体系', 'AI 问答一致性监测'] },
+      { name: 'MindReach 智达', tag: '智能增长', title: '让需求信号转化为智能增长能力', desc: 'MindReach 以 AI Agent 连接需求发现、客户理解、表达生成与机会承接，让企业增长团队以更智能的方式识别高意向机会并建立持续连接。', points: ['需求信号识别', '智能体触达策略', '高意向机会承接'] },
+    ];
+---
+<section class="bg-[#FBFAFC] py-20 md:py-28">
+  <div class="container">
+    <div class="mx-auto mb-14 max-w-3xl text-center">
+      <AstroSectionLabel text={isEn ? 'Core Systems' : '核心系统'} color="purple" />
+      <h2 class="mb-5 text-4xl font-bold leading-tight text-[#1A1A2E] md:text-6xl" style="font-family: 'DM Serif Display', serif;">
+        {isEn ? 'Two systems for brand growth in the AI era' : '两套系统，构成 AI 时代的品牌增长架构'}
+      </h2>
+      <p class="mx-auto max-w-2xl text-base leading-relaxed text-[#6B7280]" style="font-family: 'DM Sans', sans-serif;">
+        {isEn ? 'One system shapes how the brand is understood and trusted. The other connects market intent with intelligent growth action.' : '一套系统建立品牌如何被理解与信任，另一套系统连接市场需求与增长行动。'}
+      </p>
+    </div>
+    <div class="grid grid-cols-1 gap-8 lg:grid-cols-2">
+      {solutions.map((item, index) => (
+        <article class={index === 1 ? 'fm-emphasis-card p-9 md:p-12' : 'fm-card p-9 md:p-12'}>
+          <div class="mb-7 inline-flex rounded-full bg-white/80 px-4 py-2 text-xs font-bold uppercase tracking-[0.2em] text-[#C5A24D]" style="font-family: 'DM Sans', sans-serif;">{item.tag}</div>
+          <h3 class="mb-3 text-xl font-bold text-[#3D1560]" style="font-family: 'DM Sans', sans-serif;">{item.name}</h3>
+          <h4 class="mb-5 text-3xl font-bold leading-tight text-[#1A1A2E] md:text-4xl" style="font-family: 'DM Serif Display', serif;">{item.title}</h4>
+          <p class="mb-7 max-w-xl text-sm leading-relaxed text-[#6B7280]" style="font-family: 'DM Sans', sans-serif;">{item.desc}</p>
+          <div class="space-y-3">
+            {item.points.map((point) => (
+              <div class="flex items-center gap-3 border-t border-[#e8e4ec] pt-3 text-sm font-medium text-[#1A1A2E]" style="font-family: 'DM Sans', sans-serif;">
+                <span class="h-1.5 w-1.5 rounded-full bg-[#C5A24D]"></span>{point}
+              </div>
+            ))}
+          </div>
+        </article>
+      ))}
+    </div>
+    <div class="mt-12 text-center">
+      <a href={`${base}/solutions`} class="inline-flex rounded-md border border-[#3D1560] px-7 py-4 text-sm font-bold text-[#3D1560] no-underline transition-all hover:bg-[#3D1560] hover:text-white" style="font-family: 'DM Sans', sans-serif;">
+        {isEn ? 'View solutions' : '查看解决方案'}
+      </a>
+    </div>
+  </div>
+</section>

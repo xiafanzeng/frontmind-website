@@ -1,0 +1,84 @@
+---
+import BaseLayout from '../layouts/BaseLayout.astro';
+import AstroSectionLabel from '../components/AstroSectionLabel.astro';
+
+const systems = [
+  { id: 'mindpromise', name: 'MindPromise 智诺', tag: 'Brand Intelligence', title: '让 AI 正确理解品牌的真实价值', desc: '围绕企业定位、能力边界、行业语境、内容资产与信任证据，建立一套可被生成式引擎识别、引用与持续校准的品牌语义系统。', points: ['品牌语义架构', '权威内容资产', 'AI 引用与回答一致性', '品牌信任证据体系'] },
+  { id: 'mindreach', name: 'MindReach 智达', tag: 'Agentic Growth', title: '让增长从被动等待走向智能连接', desc: '通过 AI Agent 识别需求信号、理解目标客户、生成高质量沟通线索，并将机会沉淀到企业增长系统中。', points: ['需求信号发现', '客户语境理解', '智能表达生成', '高意向机会连接'] },
+];
+const principles = [
+  { title: '以品牌定位为中心', desc: '所有智能能力都服务于企业希望被市场如何理解，而不是追逐技术展示' },
+  { title: '以证据体系建立信任', desc: '让案例、观点、资质与专业内容成为 AI 判断品牌可信度的基础' },
+  { title: '以智能体连接增长', desc: '从市场信号到客户沟通形成更高质量、更可持续的增长闭环' },
+  { title: '以治理保持一致', desc: '在内容、回答、触达和市场变化之间维持品牌表达的一致性' },
+];
+---
+
+<BaseLayout title="FrontMind 解决方案 - AI 时代的品牌增长架构" description="FrontMind 通过 MindPromise 智诺与 MindReach 智达，帮助高信任企业建立品牌语义、AI 信任与智能增长系统。" lang="zh" includeChrome={true} currentPath="/solutions">
+  <section class="relative overflow-hidden pt-32 pb-24">
+    <div class="absolute inset-0 opacity-[0.05]" style="background-image: radial-gradient(circle at 18% 14%, #3D1560 0, transparent 30%), radial-gradient(circle at 88% 0%, #C5A24D 0, transparent 24%);"></div>
+    <div class="container relative z-10">
+      <div class="max-w-4xl">
+        <AstroSectionLabel text="Solutions" color="gold" />
+        <h1 class="mb-7 text-5xl font-bold leading-tight text-[#1A1A2E] md:text-7xl" style="font-family: 'DM Serif Display', serif;">AI 时代的品牌增长架构</h1>
+        <p class="max-w-3xl text-lg leading-relaxed text-[#6B7280]" style="font-family: 'DM Sans', sans-serif;">FrontMind 将品牌战略、语义资产与智能体能力连接起来，帮助企业在生成式引擎、AI 搜索与智能商业界面中被正确理解、被持续信任，并形成面向未来的增长优势。</p>
+      </div>
+    </div>
+  </section>
+
+  <section class="bg-[#FBFAFC] py-20 md:py-28">
+    <div class="container">
+      <div class="mx-auto mb-14 max-w-3xl text-center">
+        <AstroSectionLabel text="Core Systems" color="purple" />
+        <h2 class="mb-5 text-4xl font-bold leading-tight text-[#1A1A2E] md:text-6xl" style="font-family: 'DM Serif Display', serif;">从被理解，到被选择</h2>
+        <p class="mx-auto max-w-2xl text-base leading-relaxed text-[#6B7280]" style="font-family: 'DM Sans', sans-serif;">MindPromise 解决品牌如何被 AI 理解与信任，MindReach 解决需求如何被识别与连接。两者共同构成企业在 AI 时代的品牌增长系统。</p>
+      </div>
+      <div class="grid grid-cols-1 gap-8 lg:grid-cols-2">
+        {systems.map((item, index) => (
+          <article id={item.id} class={index === 1 ? 'fm-emphasis-card p-9 md:p-12' : 'fm-card p-9 md:p-12'}>
+            <div class="mb-7 rounded-2xl bg-[#1A1A2E] px-6 py-5 text-white">
+              <div class="text-xs uppercase tracking-[0.24em] text-[#C5A24D]" style="font-family: 'DM Sans', sans-serif;">{item.tag}</div>
+              <h2 class="mt-3 text-4xl font-bold leading-tight" style="font-family: 'DM Serif Display', serif;">{item.name}</h2>
+            </div>
+            <h3 class="mb-5 text-3xl font-bold leading-tight text-[#1A1A2E] md:text-4xl" style="font-family: 'DM Serif Display', serif;">{item.title}</h3>
+            <p class="mb-7 max-w-xl leading-relaxed text-[#6B7280]" style="font-family: 'DM Sans', sans-serif;">{item.desc}</p>
+            <div class="grid grid-cols-1 gap-3 md:grid-cols-2">
+              {item.points.map((point) => (
+                <div class="fm-card-soft px-4 py-3 text-sm font-medium text-[#1A1A2E]" style="font-family: 'DM Sans', sans-serif;">{point}</div>
+              ))}
+            </div>
+          </article>
+        ))}
+      </div>
+    </div>
+  </section>
+
+  <section class="bg-white py-20 md:py-28">
+    <div class="container">
+      <div class="mx-auto mb-12 max-w-3xl text-center">
+        <AstroSectionLabel text="Principles" color="gold" />
+        <h2 class="mb-5 text-4xl font-bold leading-tight text-[#1A1A2E] md:text-6xl" style="font-family: 'DM Serif Display', serif;">让技术服务于品牌秩序</h2>
+        <p class="mx-auto max-w-2xl text-[#6B7280]" style="font-family: 'DM Sans', sans-serif;">真正有价值的企业 AI 能力，不是把更多信息推向市场，而是让品牌的核心价值在不同智能界面中保持清晰、可信与一致。</p>
+      </div>
+      <div class="grid grid-cols-1 gap-5 md:grid-cols-4">
+        {principles.map((item, index) => (
+          <article class="fm-card-soft p-7">
+            <div class="mb-5 text-xs font-bold uppercase tracking-[0.22em] text-[#C5A24D]">0{index + 1}</div>
+            <h3 class="mb-3 text-xl font-bold text-[#1A1A2E]" style="font-family: 'DM Serif Display', serif;">{item.title}</h3>
+            <p class="text-sm leading-relaxed text-[#6B7280]" style="font-family: 'DM Sans', sans-serif;">{item.desc}</p>
+          </article>
+        ))}
+      </div>
+    </div>
+  </section>
+
+  <section class="bg-[#FBFAFC] py-20">
+    <div class="container">
+      <div class="fm-emphasis-card p-9 text-center md:p-14">
+        <h2 class="mb-5 text-4xl font-bold leading-tight text-[#1A1A2E] md:text-6xl" style="font-family: 'DM Serif Display', serif;">让企业在 AI 界面中被正确选择</h2>
+        <p class="mx-auto mb-8 max-w-2xl text-[#6B7280]" style="font-family: 'DM Sans', sans-serif;">FrontMind 与管理团队共同定义企业应拥有的品牌位置、语义资产与智能增长能力，让企业价值在新一代商业入口中形成长期优势。</p>
+        <a href="/contact" class="inline-flex rounded-md bg-[#3D1560] px-7 py-4 text-sm font-bold text-white no-underline">开启战略对话</a>
+      </div>
+    </div>
+  </section>
+</BaseLayout>

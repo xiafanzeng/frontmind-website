@@ -1,0 +1,29 @@
+---
+import AstroSectionLabel from './AstroSectionLabel.astro';
+export interface Props { lang?: 'zh' | 'en'; }
+const { lang = 'zh' } = Astro.props;
+const isEn = lang === 'en';
+const recognitions = isEn
+  ? ['Future Hong Kong, China InnoTech Grand Champion', 'China Innovation & Entrepreneurship Award', 'Shanghai Haiju Yingcai Global Innovation Award', 'Shenzhen CMG Overseas C-Star Program']
+  : ['2024“未来中国香港”创科大赛冠军', '第十四届中国创新创业大赛大奖', '上海“海聚英才”全球创新创业大奖', '深圳招商局海外 C-Star 计划'];
+---
+<section class="bg-white py-20 md:py-28">
+  <div class="container">
+    <div class="mx-auto mb-12 max-w-3xl text-center">
+      <AstroSectionLabel text={isEn ? 'Recognition' : '创新认可'} color="gold" />
+      <h2 class="mb-5 text-4xl font-bold leading-tight text-[#1A1A2E] md:text-6xl" style="font-family: 'DM Serif Display', serif;">
+        {isEn ? 'Research depth with market validation' : '来自研究深度与市场验证的双重认可'}
+      </h2>
+      <p class="mx-auto max-w-2xl text-base leading-relaxed text-[#6B7280]" style="font-family: 'DM Sans', sans-serif;">
+        {isEn ? 'FrontMind was built within a research-driven innovation ecosystem and has been recognized across entrepreneurship, technology, and international expansion programs.' : 'FrontMind 源自研究驱动的创新生态，并在科技创新、创业竞赛与国际化发展计划中获得持续认可。'}
+      </p>
+    </div>
+    <div class="grid grid-cols-1 gap-4 md:grid-cols-4">
+      {recognitions.map((item) => (
+        <div class="fm-card-soft p-6 text-center">
+          <div class="text-base font-bold leading-relaxed text-[#1A1A2E]" style="font-family: 'DM Serif Display', serif;">{item}</div>
+        </div>
+      ))}
+    </div>
+  </div>
+</section>

@@ -1,0 +1,198 @@
+---
+import { alternateLang, localizePath } from '../../shared/langRouting';
+import { primaryNavLinks, productIntroLinks } from '../../shared/siteNavigation';
+
+export interface Props {
+  lang?: 'zh' | 'en';
+  currentPath?: string;
+}
+
+const { lang = 'zh', currentPath = '/' } = Astro.props;
+const text = <T,>(value: { zh: T; en: T }) => (lang === 'zh' ? value.zh : value.en);
+const homeHref = localizePath('/', lang);
+const contactHref = localizePath('/contact', lang);
+const languageToggleHref = localizePath(currentPath, alternateLang(lang));
+const productActive = currentPath === '/mindpromise' || currentPath === '/mindreach' || currentPath === '/products/mindpromise' || currentPath === '/products/mindreach';
+const frontmindLogo = '/brand/frontmind-logo.svg';
+---
+
+<header>
+  <nav id="site-header" class="fixed left-0 top-0 z-50 w-full border-b border-transparent bg-transparent transition-all duration-300">
+    <div class="container flex items-center justify-between py-4">
+      <a href={homeHref} class="flex h-12 items-center no-underline" aria-label="FrontMind Home">
+        <img src={frontmindLogo} alt="FrontMind" class="h-10 w-auto max-w-[188px] object-contain md:h-11 md:max-w-[210px]" />
+      </a>
+
+      <div class="hidden items-center gap-1 md:flex">
+        <div class="group relative">
+          <a
+            href={localizePath('/mindpromise', lang)}
+            class={`inline-flex items-center gap-1 rounded-md px-4 py-2 text-sm font-medium no-underline transition-colors ${
+              productActive
+                ? 'bg-[#3D1560]/5 text-[#3D1560]'
+                : 'text-[#6B7280] hover:bg-[#3D1560]/5 hover:text-[#3D1560]'
+            }`}
+            style="font-family: 'DM Sans', sans-serif;"
+          >
+            {lang === 'zh' ? '产品介绍' : 'Products'}
+            <span class="text-[10px] text-[#C5A24D]">▾</span>
+          </a>
+          <div class="invisible absolute left-0 top-full w-[360px] translate-y-3 rounded-2xl border border-[#3D1560]/10 bg-white/95 p-3 opacity-0 shadow-2xl backdrop-blur-md transition-all duration-200 group-hover:visible group-hover:translate-y-2 group-hover:opacity-100">
+            {productIntroLinks.map((link) => (
+              <a href={localizePath(link.href, lang)} class="block rounded-xl px-4 py-3 no-underline transition-colors hover:bg-[#3D1560]/5">
+                <span class="block text-sm font-bold text-[#1A1A2E]" style="font-family: 'DM Sans', sans-serif;">{text(link.label)}</span>
+                {link.description && <span class="mt-1 block text-xs leading-relaxed text-[#6B7280]" style="font-family: 'DM Sans', sans-serif;">{text(link.description)}</span>}
+              </a>
+            ))}
+          </div>
+        </div>
+
+        {primaryNavLinks.map((link) => {
+          const isActive = currentPath === link.href;
+          return (
+            <a
+              href={localizePath(link.href, lang)}
+              class={`rounded-md px-4 py-2 text-sm font-medium no-underline transition-colors ${
+                isActive
+                  ? 'bg-[#3D1560]/5 text-[#3D1560]'
+                  : 'text-[#6B7280] hover:bg-[#3D1560]/5 hover:text-[#3D1560]'
+              }`}
+              style="font-family: 'DM Sans', sans-serif;"
+            >
+              {text(link.label)}
+            </a>
+          );
+        })}
+
+        <a
+          href={languageToggleHref}
+          class="ml-2 flex items-center gap-1.5 rounded-md px-3 py-2 text-xs font-medium text-[#6B7280] no-underline transition-colors hover:bg-[#3D1560]/5 hover:text-[#3D1560]"
+          style="font-family: 'DM Sans', sans-serif;"
+          title={lang === 'zh' ? 'Switch to English' : '切换到中文'}
+          aria-label={lang === 'zh' ? 'Switch to English' : '切换到中文'}
+        >
+          <svg aria-hidden="true" viewBox="0 0 24 24" class="h-[14px] w-[14px] shrink-0" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <circle cx="12" cy="12" r="10"></circle>
+            <path d="M12 2a14.5 14.5 0 0 1 0 20"></path>
+            <path d="M12 2a14.5 14.5 0 0 0 0 20"></path>
+            <path d="M2 12h20"></path>
+          </svg>
+          <span>{lang === 'zh' ? 'EN' : '中文'}</span>
+        </a>
+
+        <a
+          href={contactHref}
+          class="ml-3 rounded-md border-2 border-[#3D1560] px-5 py-2 text-sm font-semibold text-[#3D1560] no-underline transition-all duration-300 hover:bg-[#3D1560] hover:text-white"
+          style="font-family: 'DM Sans', sans-serif;"
+        >
+          {lang === 'zh' ? '战略对话' : 'Strategic Conversation'}
+        </a>
+      </div>
+
+      <button
+        id="site-header-mobile-toggle"
+        type="button"
+        class="rounded-md p-2 text-[#3D1560] transition-colors hover:bg-[#3D1560]/5 md:hidden"
+        aria-label="Toggle navigation menu"
+        aria-expanded="false"
+        aria-controls="site-header-mobile-panel"
+      >
+        <span class="block text-2xl leading-none" data-menu-icon>☰</span>
+      </button>
+    </div>
+
+    <div
+      id="site-header-mobile-panel"
+      class="max-h-0 overflow-hidden border-t border-[#e5e7eb] bg-white opacity-0 shadow-lg transition-all duration-300 ease-in-out md:hidden"
+      hidden
+    >
+      <div class="container flex flex-col gap-1 py-4">
+        <div class="px-4 pb-2 pt-1 text-xs font-bold uppercase tracking-[0.22em] text-[#C5A24D]" style="font-family: 'DM Sans', sans-serif;">
+          {lang === 'zh' ? '产品介绍' : 'Products'}
+        </div>
+        {productIntroLinks.map((link) => (
+          <a
+            href={localizePath(link.href, lang)}
+            class="rounded-md px-4 py-3 text-sm font-medium text-[#6B7280] no-underline transition-colors hover:text-[#3D1560]"
+            style="font-family: 'DM Sans', sans-serif;"
+          >
+            {text(link.label)}
+          </a>
+        ))}
+        <div class="my-2 h-px bg-[#3D1560]/10"></div>
+        {primaryNavLinks.map((link) => {
+          const isActive = currentPath === link.href;
+          return (
+            <a
+              href={localizePath(link.href, lang)}
+              class={`rounded-md px-4 py-3 text-sm font-medium no-underline transition-colors ${
+                isActive ? 'bg-[#3D1560]/5 text-[#3D1560]' : 'text-[#6B7280] hover:text-[#3D1560]'
+              }`}
+              style="font-family: 'DM Sans', sans-serif;"
+            >
+              {text(link.label)}
+            </a>
+          );
+        })}
+
+        <a
+          href={languageToggleHref}
+          class="flex items-center gap-2 rounded-md px-4 py-3 text-left text-sm font-medium text-[#6B7280] no-underline transition-colors hover:text-[#3D1560]"
+          style="font-family: 'DM Sans', sans-serif;"
+          title={lang === 'zh' ? 'Switch to English' : '切换到中文'}
+          aria-label={lang === 'zh' ? 'Switch to English' : '切换到中文'}
+        >
+          {lang === 'zh' ? 'Switch to English' : '切换到中文'}
+        </a>
+
+        <a
+          href={contactHref}
+          class="mt-2 rounded-md bg-[#3D1560] px-4 py-3 text-center text-sm font-semibold text-white no-underline"
+          style="font-family: 'DM Sans', sans-serif;"
+        >
+          {lang === 'zh' ? '战略对话' : 'Strategic Conversation'}
+        </a>
+      </div>
+    </div>
+  </nav>
+</header>
+
+<script>
+  const header = document.getElementById('site-header');
+  const mobileToggle = document.getElementById('site-header-mobile-toggle');
+  const mobilePanel = document.getElementById('site-header-mobile-panel');
+  const menuIcon = mobileToggle?.querySelector('[data-menu-icon]');
+
+  const syncHeaderState = () => {
+    if (!header) return;
+    const scrolled = window.scrollY > 20;
+    header.classList.toggle('bg-white/95', scrolled);
+    header.classList.toggle('backdrop-blur-md', scrolled);
+    header.classList.toggle('shadow-sm', scrolled);
+    header.classList.toggle('border-[#e5e7eb]', scrolled);
+    header.classList.toggle('bg-transparent', !scrolled);
+    header.classList.toggle('border-transparent', !scrolled);
+  };
+
+  const setMobileMenuOpen = (open) => {
+    if (!mobileToggle || !mobilePanel) return;
+    mobileToggle.setAttribute('aria-expanded', open ? 'true' : 'false');
+    mobilePanel.hidden = !open;
+    mobilePanel.classList.toggle('max-h-[640px]', open);
+    mobilePanel.classList.toggle('opacity-100', open);
+    mobilePanel.classList.toggle('max-h-0', !open);
+    mobilePanel.classList.toggle('opacity-0', !open);
+    if (menuIcon) menuIcon.textContent = open ? '✕' : '☰';
+  };
+
+  syncHeaderState();
+  setMobileMenuOpen(false);
+  window.addEventListener('scroll', syncHeaderState, { passive: true });
+  mobileToggle?.addEventListener('click', () => {
+    const isOpen = mobileToggle.getAttribute('aria-expanded') === 'true';
+    setMobileMenuOpen(!isOpen);
+  });
+  mobilePanel?.querySelectorAll('a').forEach((link) => {
+    link.addEventListener('click', () => setMobileMenuOpen(false));
+  });
+</script>

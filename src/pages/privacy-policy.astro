@@ -1,0 +1,52 @@
+---
+import BaseLayout from '../layouts/BaseLayout.astro';
+import AstroLegalPage from '../components/AstroLegalPage.astro';
+
+const sections = [
+  {
+    id: 'privacy-controller',
+    title: '1. 我们处理哪些信息',
+    body: '当您浏览本网站时，我们可能处理基础技术信息，例如浏览器类型、语言偏好、访问时间与页面访问行为。当您主动提交表单时，我们还会处理您填写的姓名、邮箱、公司、行业、需求说明以及 Cookie 偏好设置。',
+  },
+  {
+    id: 'privacy-purpose',
+    title: '2. 处理目的',
+    body: '这些信息仅用于回应业务咨询、安排沟通、改进网站内容结构、维护网站安全与记录您的同意偏好。除非获得您的额外许可，我们不会将联系表单中的信息用于无关营销用途。',
+  },
+  {
+    id: 'privacy-cookies',
+    title: '3. Cookie 与同意管理',
+    body: '网站默认仅保留必要 Cookie。分析与营销类别在您明确选择同意前不会启用。您可以随时通过页面底部的 Cookie 偏好按钮重新打开设置并修改选择。',
+  },
+  {
+    id: 'privacy-retention',
+    title: '4. 保存期限',
+    body: '业务咨询信息仅在实现沟通目的所必需的期限内保存；Cookie 偏好会保存在您的浏览器本地，以便在后续访问中继续应用您的选择。',
+  },
+  {
+    id: 'privacy-rights',
+    title: '5. 您的权利',
+    body: '您可以请求访问、更正或删除您主动提交的信息，也可以撤回对可选 Cookie 的同意。如果您希望行使这些权利，请通过联系页面与我们沟通。',
+  },
+  {
+    id: 'privacy-contact',
+    title: '6. 联系方式',
+    body: '如您对本隐私政策有任何疑问，或希望就数据处理事宜与我们联系，请使用 Contact 页面提交请求。',
+  },
+];
+---
+
+<BaseLayout
+  title="FrontMind 隐私政策"
+  description="查看 FrontMind 关于信息处理、Cookie 同意和联系数据使用方式的隐私政策。"
+  lang="zh"
+  includeChrome={true}
+  currentPath="/privacy"
+>
+  <AstroLegalPage
+    label="法律与合规"
+    title="FrontMind 隐私政策"
+    intro="本页面说明 FrontMind 如何收集、使用、保护和保存您在访问网站、提交联系表单以及设置 Cookie 偏好时提供的信息。"
+    sections={sections}
+  />
+</BaseLayout>

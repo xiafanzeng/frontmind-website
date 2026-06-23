@@ -1,0 +1,21 @@
+---
+export interface Props {
+  text: string;
+  color?: 'gold' | 'purple';
+}
+
+const { text, color = 'gold' } = Astro.props;
+const borderColor = color === 'gold' ? 'border-[#C5A24D]' : 'border-[#3D1560]';
+const textColor = color === 'gold' ? 'text-[#C5A24D]' : 'text-[#3D1560]';
+const currentColor = color === 'gold' ? '#C5A24D' : '#3D1560';
+---
+
+<div class="flex items-center gap-0 mb-6">
+  <div class={`w-1 h-5 ${borderColor} bg-current rounded-full mr-3`} style={`color: ${currentColor};`}></div>
+  <span
+    class={`text-xs font-semibold tracking-[0.2em] uppercase ${textColor}`}
+    style="font-family: 'DM Sans', sans-serif;"
+  >
+    {text}
+  </span>
+</div>

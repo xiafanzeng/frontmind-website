@@ -1,0 +1,111 @@
+/* Style Note: Corporate Editorial Precision — terms page should preserve the existing FrontMind legal-page visual language with concise hierarchy and quiet trust. */
+import type { ReactNode } from "react";
+import { usePageMeta } from "@/hooks/usePageMeta";
+import Navbar from "@/components/Navbar";
+import Footer from "@/components/Footer";
+import SectionLabel from "@/components/SectionLabel";
+import { useLang } from "@/contexts/LanguageContext";
+
+function TermsSection({
+  id,
+  title,
+  children,
+}: {
+  id: string;
+  title: string;
+  children: ReactNode;
+}) {
+  return (
+    <section aria-labelledby={id} className="fm-legal-section">
+      <h2 id={id} className="fm-legal-heading">
+        {title}
+      </h2>
+      <div className="fm-legal-prose">{children}</div>
+    </section>
+  );
+}
+
+type TermsProps = {
+  includeChrome?: boolean;
+};
+
+export default function Terms({ includeChrome = true }: TermsProps) {
+  const { t, lang } = useLang();
+
+  usePageMeta({
+    title: t("FrontMind 服务条款", "FrontMind Terms of Service"),
+    description: t(
+      "查看 FrontMind 网站访问、内容使用和业务咨询相关的基础服务条款。",
+      "Review the basic terms governing access, content use, and business enquiries on the FrontMind website.",
+    ),
+    lang,
+  });
+
+  return (
+    <div className="min-h-screen bg-[#f5f5f7]">
+      {includeChrome && <Navbar />}
+      <main id="main-content" className="pt-28 md:pt-36 pb-20">
+        <div className="container max-w-5xl">
+          <header className="fm-legal-hero">
+            <SectionLabel text={t("法律与合规", "Legal & Compliance")} color="gold" />
+            <h1 className="fm-legal-title">{t("FrontMind 服务条款", "FrontMind Terms of Service")}</h1>
+            <p className="fm-legal-intro">
+              {t(
+                "本页面概述您访问 FrontMind 网站、阅读公开内容以及通过联系页面提交业务咨询时适用的基础条款。",
+                "This page outlines the basic terms applicable when you access the FrontMind website, review public content, and submit business enquiries through the contact page.",
+              )}
+            </p>
+          </header>
+
+          <div className="fm-legal-shell">
+            <TermsSection id="terms-use" title={t("1. 网站使用", "1. Website Use")}>
+              <p>
+                {t(
+                  "您可以基于合法、正当的商业或研究目的浏览本网站内容。未经许可，不得以误导、攻击、抓取滥用或损害站点稳定性的方式使用本网站。",
+                  "You may browse this website for lawful and legitimate business or research purposes. You must not use the site in ways that are misleading, abusive, harmful to stability, or intended for unauthorised scraping or attacks.",
+                )}
+              </p>
+            </TermsSection>
+
+            <TermsSection id="terms-content" title={t("2. 内容与知识产权", "2. Content and Intellectual Property")}>
+              <p>
+                {t(
+                  "除非另有说明，网站上的品牌标识、文案、图形、方法论表达和页面结构均归 FrontMind 或其合法授权方所有。未经书面许可，不得复制、重售或用于误导性再发布。",
+                  "Unless otherwise stated, the brand marks, copy, graphics, methodology expressions, and page structures on this website belong to FrontMind or its lawful licensors. They may not be copied, resold, or republished in a misleading manner without written permission.",
+                )}
+              </p>
+            </TermsSection>
+
+            <TermsSection id="terms-enquiries" title={t("3. 业务咨询", "3. Business Enquiries")}>
+              <p>
+                {t(
+                  "通过 Contact 页面提交的信息仅用于沟通潜在合作需求。提交咨询并不自动构成服务承诺、签约关系或任何结果保证。",
+                  "Information submitted through the Contact page is used only to discuss potential collaboration needs. Sending an enquiry does not automatically create a service commitment, contractual relationship, or guarantee of results.",
+                )}
+              </p>
+            </TermsSection>
+
+            <TermsSection id="terms-liability" title={t("4. 责任限制", "4. Limitation of Liability")}>
+              <p>
+                {t(
+                  "我们会合理维护网站可用性与信息准确性，但不对因第三方网络环境、浏览器兼容性、外部链接变化或不可抗力导致的临时不可用承担绝对责任。",
+                  "We make reasonable efforts to maintain site availability and information accuracy, but we do not assume absolute liability for temporary unavailability caused by third-party networks, browser compatibility issues, external link changes, or force majeure events.",
+                )}
+              </p>
+            </TermsSection>
+
+            <TermsSection id="terms-updates" title={t("5. 条款更新", "5. Updates to These Terms")}>
+              <p>
+                {t(
+                  "随着网站内容、服务方式和合规要求变化，本条款可能被更新。继续访问本网站即表示您接受更新后的版本。",
+                  "These terms may be updated as the website, service model, and compliance requirements evolve. Continued access to the website indicates acceptance of the updated version.",
+                )}
+              </p>
+            </TermsSection>
+          </div>
+        </div>
+      </main>
+      {includeChrome && <Footer />}
+    </div>
+  );
+}

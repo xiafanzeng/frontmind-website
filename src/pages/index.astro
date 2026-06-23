@@ -1,0 +1,29 @@
+---
+import BaseLayout from '../layouts/BaseLayout.astro';
+import AstroHomeHero from '../components/AstroHomeHero.astro';
+import AstroHomeCta from '../components/AstroHomeCta.astro';
+import AstroHomeStatsBar from '../components/AstroHomeStatsBar.astro';
+import AstroHomeCoreSolutions from '../components/AstroHomeCoreSolutions.astro';
+import AstroHomeWhyGeo from '../components/AstroHomeWhyGeo.astro';
+import AstroHomeHowItWorks from '../components/AstroHomeHowItWorks.astro';
+import AstroHomeIndustries from '../components/AstroHomeIndustries.astro';
+import AstroHomeAwards from '../components/AstroHomeAwards.astro';
+const heroImage = 'https://d2xsxph8kpxj0f.cloudfront.net/310519663567004319/FRgjGX8Da7KscfHcwTaFCq/hero-geometric-6q4QKmJrXWqeMSPSrk3r9T.webp';
+const ctaImage = 'https://d2xsxph8kpxj0f.cloudfront.net/310519663567004319/FRgjGX8Da7KscfHcwTaFCq/cta-geometric-a34vAZt6eBGYhkxnp6tcD8.webp';
+---
+<BaseLayout
+  title="FrontMind - AI 时代的企业增长系统"
+  description="FrontMind 为高信任企业构建战略判断、品牌语义与智能体增长系统，让企业在 AI 驱动的市场中被理解、被信任、被选择。"
+  lang="zh"
+  includeChrome={true}
+  currentPath="/"
+>
+  <AstroHomeHero lang="zh" heroImage={heroImage} />
+  <AstroHomeStatsBar lang="zh" />
+  <AstroHomeWhyGeo lang="zh" />
+  <AstroHomeCoreSolutions lang="zh" />
+  <AstroHomeHowItWorks lang="zh" />
+  <AstroHomeIndustries lang="zh" />
+  <AstroHomeAwards lang="zh" />
+  <AstroHomeCta lang="zh" ctaImage={ctaImage} />
+</BaseLayout>

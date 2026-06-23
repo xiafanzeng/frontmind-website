@@ -1,0 +1,44 @@
+---
+export interface LegalSectionItem {
+  id: string;
+  title: string;
+  body: string;
+}
+
+export interface Props {
+  label: string;
+  title: string;
+  intro: string;
+  sections: LegalSectionItem[];
+}
+
+const { label, title, intro, sections } = Astro.props;
+---
+
+<main id="main-content" class="pt-28 pb-20 md:pt-36">
+  <div class="container max-w-5xl">
+    <header class="fm-legal-hero">
+      <div class="mb-4 inline-flex items-center gap-3 text-[11px] font-bold uppercase tracking-[0.24em] text-[#C5A24D]" style="font-family: 'DM Sans', sans-serif;">
+        <span class="inline-block h-4 w-px bg-[#C5A24D]"></span>
+        <span>{label}</span>
+      </div>
+      <h1 class="fm-legal-title">{title}</h1>
+      <p class="fm-legal-intro">{intro}</p>
+    </header>
+
+    <div class="fm-legal-shell">
+      {
+        sections.map((section) => (
+          <section aria-labelledby={section.id} class="fm-legal-section">
+            <h2 id={section.id} class="fm-legal-heading">
+              {section.title}
+            </h2>
+            <div class="fm-legal-prose">
+              <p>{section.body}</p>
+            </div>
+          </section>
+        ))
+      }
+    </div>
+  </div>
+</main>

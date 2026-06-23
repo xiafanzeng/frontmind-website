@@ -1,0 +1,47 @@
+---
+import BaseLayout from '../../layouts/BaseLayout.astro';
+import AstroLegalPage from '../../components/AstroLegalPage.astro';
+
+const sections = [
+  {
+    id: 'terms-use',
+    title: '1. Website Use',
+    body: 'You may browse this website for lawful and legitimate business or research purposes. You must not use the site in ways that are misleading, abusive, harmful to stability, or intended for unauthorised scraping or attacks.',
+  },
+  {
+    id: 'terms-content',
+    title: '2. Content and Intellectual Property',
+    body: 'Unless otherwise stated, the brand marks, copy, graphics, methodology expressions, and page structures on this website belong to FrontMind or its lawful licensors. They may not be copied, resold, or republished in a misleading manner without written permission.',
+  },
+  {
+    id: 'terms-enquiries',
+    title: '3. Business Enquiries',
+    body: 'Information submitted through the Contact page is used only to discuss potential collaboration needs. Sending an enquiry does not automatically create a service commitment, contractual relationship, or guarantee of results.',
+  },
+  {
+    id: 'terms-liability',
+    title: '4. Limitation of Liability',
+    body: 'We make reasonable efforts to maintain site availability and information accuracy, but we do not assume absolute liability for temporary unavailability caused by third-party networks, browser compatibility issues, external link changes, or force majeure events.',
+  },
+  {
+    id: 'terms-updates',
+    title: '5. Updates to These Terms',
+    body: 'These terms may be updated as the website, public content, and compliance requirements evolve. Continued access to the website indicates acceptance of the updated version.',
+  },
+];
+---
+
+<BaseLayout
+  title="FrontMind Terms of Service"
+  description="Review the basic terms governing access to the FrontMind website, content usage, and consulting engagements."
+  lang="en"
+  includeChrome={true}
+  currentPath="/terms"
+>
+  <AstroLegalPage
+    label="Legal & Compliance"
+    title="FrontMind Terms of Service"
+    intro="This page outlines the basic terms applicable when you access the FrontMind website, review public content, and submit business enquiries through the contact page."
+    sections={sections}
+  />
+</BaseLayout>

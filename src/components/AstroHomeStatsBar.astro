@@ -1,0 +1,30 @@
+---
+export interface Props { lang?: 'zh' | 'en'; }
+const { lang = 'zh' } = Astro.props;
+const isEn = lang === 'en';
+const stats = isEn
+  ? [
+      { value: 'CUHK-Shenzhen', label: 'Innovation ecosystem origin' },
+      { value: '100+', label: 'Industry clients and brand cases' },
+      { value: 'AI Agent', label: 'Brand methodology architecture' },
+      { value: 'GEO', label: 'Generative engine optimization focus' },
+    ]
+  : [
+      { value: '港中大（深圳）', label: '创新生态与研究背景' },
+      { value: '100+', label: '行业客户与品牌样本' },
+      { value: 'AI Agent', label: '品牌方法论架构' },
+      { value: 'GEO', label: '生成式引擎优化方向' },
+    ];
+---
+<section class="bg-[#1A1A2E] py-10 text-white">
+  <div class="container">
+    <div class="grid grid-cols-2 gap-px bg-white/10 md:grid-cols-4">
+      {stats.map((item) => (
+        <div class="bg-[#1A1A2E] px-5 py-6 text-center">
+          <div class="mb-2 text-2xl font-bold text-[#C5A24D] md:text-3xl" style="font-family: 'DM Serif Display', serif;">{item.value}</div>
+          <div class="text-xs leading-relaxed text-white/60" style="font-family: 'DM Sans', sans-serif;">{item.label}</div>
+        </div>
+      ))}
+    </div>
+  </div>
+</section>

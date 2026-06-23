@@ -1,0 +1,68 @@
+---
+import BaseLayout from '../../layouts/BaseLayout.astro';
+import AstroSectionLabel from '../../components/AstroSectionLabel.astro';
+
+const capabilities = [
+  { title: 'Positioning and semantic clarity', desc: 'Clarify positioning, capability boundaries, industry context, and differentiated language so AI systems can understand what the brand truly represents.' },
+  { title: 'Authoritative content architecture', desc: 'Organize research, cases, opinions, and professional content into structured assets with citation value, not short-lived campaign material.' },
+  { title: 'Trust evidence system', desc: 'Build reliable sources, factual support, professional proof, and consistent statements that reduce ambiguity in AI-generated answers.' },
+  { title: 'AI visibility calibration', desc: 'Observe how the brand appears across AI engines and content ecosystems, then refine the clarity of its semantic footprint over time.' },
+];
+const architecture = [
+  { num: '01', title: 'Brand semantic foundation', desc: 'Define positioning, core capabilities, target audiences, and industry context as a consistent base layer.' },
+  { num: '02', title: 'Authority and evidence', desc: 'Build the content assets, expert perspectives, and proof points that support both AI citation and human judgment.' },
+  { num: '03', title: 'Answer consistency governance', desc: 'Keep brand representation stable, accurate, and traceable across AI answers, search contexts, and content touchpoints.' },
+];
+---
+
+<BaseLayout title="MindPromise - FrontMind Product Introduction" description="Learn how MindPromise builds brand semantics, authoritative content, AI answer consistency, and trust evidence systems." lang="en" includeChrome={true} currentPath="/mindpromise">
+  <section class="relative overflow-hidden pt-32 pb-24">
+    <div class="absolute inset-0 opacity-[0.05]" style="background-image: radial-gradient(circle at 18% 14%, #3D1560 0, transparent 30%), radial-gradient(circle at 88% 0%, #C5A24D 0, transparent 24%);"></div>
+    <div class="container relative z-10">
+      <div class="max-w-4xl">
+        <AstroSectionLabel text="Products" color="gold" />
+        <p class="mb-4 text-sm font-bold uppercase tracking-[0.2em] text-[#C5A24D]" style="font-family: 'DM Sans', sans-serif;">MindPromise</p>
+        <h1 class="mb-7 text-5xl font-bold leading-tight text-[#1A1A2E] md:text-7xl" style="font-family: 'DM Serif Display', serif;">Helping AI understand<br />the true value of your brand</h1>
+        <p class="max-w-3xl text-lg leading-relaxed text-[#6B7280]" style="font-family: 'DM Sans', sans-serif;">MindPromise addresses brand semantics, authority signals, and answer consistency in the generative AI ecosystem, helping brands move from being searched to being understood, cited, and trusted.</p>
+      </div>
+    </div>
+  </section>
+
+  <section class="bg-white py-20 md:py-28">
+    <div class="container">
+      <div class="grid grid-cols-1 gap-10 lg:grid-cols-12">
+        <div class="lg:col-span-5">
+          <AstroSectionLabel text="Thesis" color="purple" />
+          <h2 class="mb-6 text-4xl font-bold leading-tight text-[#1A1A2E] md:text-5xl" style="font-family: 'DM Serif Display', serif;">From brand expression to AI trust assets</h2>
+          <p class="text-base leading-relaxed text-[#6B7280]" style="font-family: 'DM Sans', sans-serif;">In an era of AI-generated answers, brand competition happens not only in search rankings, but also in how models understand your positioning, evidence, and credibility.</p>
+        </div>
+        <div class="grid gap-4 lg:col-span-7 md:grid-cols-2">
+          {capabilities.map((item) => (
+            <article class="fm-card p-7">
+              <h3 class="mb-3 text-2xl font-bold text-[#1A1A2E]" style="font-family: 'DM Serif Display', serif;">{item.title}</h3>
+              <p class="text-sm leading-relaxed text-[#6B7280]" style="font-family: 'DM Sans', sans-serif;">{item.desc}</p>
+            </article>
+          ))}
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <section class="bg-[#1A1A2E] py-20 text-white md:py-28">
+    <div class="container">
+      <div class="mb-12 max-w-3xl">
+        <AstroSectionLabel text="Architecture" color="gold" />
+        <h2 class="mb-5 text-4xl font-bold leading-tight md:text-6xl" style="font-family: 'DM Serif Display', serif;">Treat the brand as a semantic system that machines can understand and people can trust.</h2>
+      </div>
+      <div class="grid grid-cols-1 gap-5 md:grid-cols-3">
+        {architecture.map((item) => (
+          <article class="rounded-3xl border border-white/10 bg-white/5 p-8">
+            <div class="mb-5 text-sm font-bold tracking-[0.18em] text-[#C5A24D]">{item.num}</div>
+            <h3 class="mb-4 text-2xl font-bold" style="font-family: 'DM Serif Display', serif;">{item.title}</h3>
+            <p class="text-sm leading-relaxed text-white/70" style="font-family: 'DM Sans', sans-serif;">{item.desc}</p>
+          </article>
+        ))}
+      </div>
+    </div>
+  </section>
+</BaseLayout>

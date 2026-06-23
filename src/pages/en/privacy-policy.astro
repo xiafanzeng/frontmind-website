@@ -1,0 +1,52 @@
+---
+import BaseLayout from '../../layouts/BaseLayout.astro';
+import AstroLegalPage from '../../components/AstroLegalPage.astro';
+
+const sections = [
+  {
+    id: 'privacy-controller',
+    title: '1. What Information We Process',
+    body: 'When you browse this site, we may process basic technical information such as browser type, language preference, visit time, and page interaction data. When you voluntarily submit a form, we also process the name, email, company, industry, request details, and cookie preferences you provide.',
+  },
+  {
+    id: 'privacy-purpose',
+    title: '2. Purposes of Processing',
+    body: 'This information is used only to respond to business enquiries, arrange communications, improve site structure, maintain site security, and record your consent preferences. Unless you provide additional permission, we do not use contact-form data for unrelated marketing activities.',
+  },
+  {
+    id: 'privacy-cookies',
+    title: '3. Cookies and Consent Management',
+    body: 'The website defaults to essential cookies only. Analytics and marketing categories are not enabled until you explicitly opt in. You may reopen the preference panel at any time through the cookie preferences button and change your selection.',
+  },
+  {
+    id: 'privacy-retention',
+    title: '4. Retention Period',
+    body: 'Business enquiry data is retained only for as long as necessary to fulfil the communication purpose. Cookie preferences are stored locally in your browser so your choices can be respected on subsequent visits.',
+  },
+  {
+    id: 'privacy-rights',
+    title: '5. Your Rights',
+    body: 'You may request access to, correction of, or deletion of the information you voluntarily submitted. You may also withdraw consent for optional cookies. Please contact us through the contact page if you wish to exercise these rights.',
+  },
+  {
+    id: 'privacy-contact',
+    title: '6. Contact',
+    body: 'If you have questions about this policy or want to contact us regarding data processing, please use the Contact page to submit your request.',
+  },
+];
+---
+
+<BaseLayout
+  title="FrontMind Privacy Policy"
+  description="Review FrontMind's privacy policy covering information processing, cookie consent, and contact data usage."
+  lang="en"
+  includeChrome={true}
+  currentPath="/privacy"
+>
+  <AstroLegalPage
+    label="Legal & Compliance"
+    title="FrontMind Privacy Policy"
+    intro="This page explains how FrontMind collects, uses, protects, and stores information when you browse the website, submit a contact form, or manage cookie preferences."
+    sections={sections}
+  />
+</BaseLayout>

@@ -1,0 +1,68 @@
+---
+import BaseLayout from '../../layouts/BaseLayout.astro';
+import AstroSectionLabel from '../../components/AstroSectionLabel.astro';
+
+const capabilities = [
+  { title: 'Demand signal recognition', desc: 'Identify real demand signals from AI search, content interaction, industry discussions, and customer contexts.' },
+  { title: 'Agentic reach design', desc: 'Translate brand capabilities into interaction paths that agents can call, recommend, and connect.' },
+  { title: 'Growth path orchestration', desc: 'Design more natural connection paths around awareness, comparison, consultation, and conversion for high-intent audiences.' },
+  { title: 'Long-term feedback loop', desc: 'Turn reach, conversations, content, and sales feedback into signals for continuously improving the brand growth system.' },
+];
+const architecture = [
+  { num: '01', title: 'Intent understanding', desc: 'Interpret real user questions and industry semantics to identify demand types, decision barriers, and conversion opportunities.' },
+  { num: '02', title: 'Proactive connection', desc: 'Use agents, content paths, and high-value touchpoints to make the brand recommended in the right contexts.' },
+  { num: '03', title: 'Growth coordination', desc: 'Connect brand, content, sales, and customer success so growth becomes a system capability, not a single traffic tactic.' },
+];
+---
+
+<BaseLayout title="MindReach - FrontMind Product Introduction" description="Learn how MindReach uses agents, demand recognition, and proactive connection systems to support brand growth." lang="en" includeChrome={true} currentPath="/mindreach">
+  <section class="relative overflow-hidden pt-32 pb-24">
+    <div class="absolute inset-0 opacity-[0.05]" style="background-image: radial-gradient(circle at 18% 14%, #3D1560 0, transparent 30%), radial-gradient(circle at 88% 0%, #C5A24D 0, transparent 24%);"></div>
+    <div class="container relative z-10">
+      <div class="max-w-4xl">
+        <AstroSectionLabel text="Products" color="gold" />
+        <p class="mb-4 text-sm font-bold uppercase tracking-[0.2em] text-[#C5A24D]" style="font-family: 'DM Sans', sans-serif;">MindReach</p>
+        <h1 class="mb-7 text-5xl font-bold leading-tight text-[#1A1A2E] md:text-7xl" style="font-family: 'DM Serif Display', serif;">Helping brands reach demand<br />more proactively in the AI era</h1>
+        <p class="max-w-3xl text-lg leading-relaxed text-[#6B7280]" style="font-family: 'DM Sans', sans-serif;">MindReach focuses on demand recognition, proactive connection, and growth coordination for the agentic era, helping brands move from waiting to be found to being recommended, understood, and chosen in the right context.</p>
+      </div>
+    </div>
+  </section>
+
+  <section class="bg-white py-20 md:py-28">
+    <div class="container">
+      <div class="grid grid-cols-1 gap-10 lg:grid-cols-12">
+        <div class="lg:col-span-5">
+          <AstroSectionLabel text="Thesis" color="purple" />
+          <h2 class="mb-6 text-4xl font-bold leading-tight text-[#1A1A2E] md:text-5xl" style="font-family: 'DM Serif Display', serif;">From content exposure to intelligent connection</h2>
+          <p class="text-base leading-relaxed text-[#6B7280]" style="font-family: 'DM Sans', sans-serif;">As AI and agents participate in user decisions, growth is no longer only about media buying, ranking, or isolated conversion. MindReach organizes brand capability, user intent, and intelligent connection paths into a more durable growth system.</p>
+        </div>
+        <div class="grid gap-4 lg:col-span-7 md:grid-cols-2">
+          {capabilities.map((item) => (
+            <article class="fm-card p-7">
+              <h3 class="mb-3 text-2xl font-bold text-[#1A1A2E]" style="font-family: 'DM Serif Display', serif;">{item.title}</h3>
+              <p class="text-sm leading-relaxed text-[#6B7280]" style="font-family: 'DM Sans', sans-serif;">{item.desc}</p>
+            </article>
+          ))}
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <section class="bg-[#1A1A2E] py-20 text-white md:py-28">
+    <div class="container">
+      <div class="mb-12 max-w-3xl">
+        <AstroSectionLabel text="Architecture" color="gold" />
+        <h2 class="mb-5 text-4xl font-bold leading-tight md:text-6xl" style="font-family: 'DM Serif Display', serif;">Upgrade growth from isolated reach to a long-term connection capability for the agentic era.</h2>
+      </div>
+      <div class="grid grid-cols-1 gap-5 md:grid-cols-3">
+        {architecture.map((item) => (
+          <article class="rounded-3xl border border-white/10 bg-white/5 p-8">
+            <div class="mb-5 text-sm font-bold tracking-[0.18em] text-[#C5A24D]">{item.num}</div>
+            <h3 class="mb-4 text-2xl font-bold" style="font-family: 'DM Serif Display', serif;">{item.title}</h3>
+            <p class="text-sm leading-relaxed text-white/70" style="font-family: 'DM Sans', sans-serif;">{item.desc}</p>
+          </article>
+        ))}
+      </div>
+    </div>
+  </section>
+</BaseLayout>

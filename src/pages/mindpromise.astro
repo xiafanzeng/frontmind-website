@@ -1,0 +1,78 @@
+---
+import BaseLayout from '../layouts/BaseLayout.astro';
+import AstroSectionLabel from '../components/AstroSectionLabel.astro';
+
+const capabilities = [
+  { title: '定位与语义澄清', desc: '梳理品牌定位、能力边界、行业语境与差异化表达，让 AI 能够理解品牌真正代表什么。' },
+  { title: '权威内容组织', desc: '将研究、案例、观点与专业内容整理为具备引用价值的结构化资产，而不是短期传播素材。' },
+  { title: '信任证据体系', desc: '围绕可信来源、事实依据、专业背书与一致性表达，降低 AI 回答中的模糊和偏差。' },
+  { title: 'AI 可见性校准', desc: '观察品牌在主流 AI 引擎与内容生态中的出现方式，并持续调整品牌语义的清晰度。' },
+];
+const architecture = [
+  { num: '01', title: '品牌语义底座', desc: '定义品牌定位、核心能力、目标受众和行业语境，形成一致的基础表达。' },
+  { num: '02', title: '权威内容与证据', desc: '建立能支撑 AI 引用和人工判断的内容资产、专业观点与可信依据。' },
+  { num: '03', title: '回答一致性治理', desc: '让品牌在不同 AI 回答、搜索场景和内容触点中保持稳定、准确、可追溯。' },
+];
+---
+
+<BaseLayout title="MindPromise 智诺 - FrontMind 产品介绍" description="了解 MindPromise 智诺如何构建品牌语义、权威内容、AI 引用一致性与信任证据体系。" lang="zh" includeChrome={true} currentPath="/mindpromise">
+  <section class="relative overflow-hidden pt-32 pb-24">
+    <div class="absolute inset-0 opacity-[0.05]" style="background-image: radial-gradient(circle at 18% 14%, #3D1560 0, transparent 30%), radial-gradient(circle at 88% 0%, #C5A24D 0, transparent 24%);"></div>
+    <div class="container relative z-10">
+      <div class="max-w-4xl">
+        <AstroSectionLabel text="产品介绍" color="gold" />
+        <p class="mb-4 text-sm font-bold uppercase tracking-[0.2em] text-[#C5A24D]" style="font-family: 'DM Sans', sans-serif;">MindPromise 智诺</p>
+        <h1 class="mb-7 text-5xl font-bold leading-tight text-[#1A1A2E] md:text-7xl" style="font-family: 'DM Serif Display', serif;">让 AI 正确理解<br />品牌的真实价值</h1>
+        <p class="max-w-3xl text-lg leading-relaxed text-[#6B7280]" style="font-family: 'DM Sans', sans-serif;">MindPromise 智诺面向企业在生成式 AI 生态中的品牌语义、权威证据与回答一致性，帮助品牌从“被搜索”走向“被理解、被引用、被信任”。</p>
+      </div>
+    </div>
+  </section>
+
+  <section class="bg-white py-20 md:py-28">
+    <div class="container">
+      <div class="grid grid-cols-1 gap-10 lg:grid-cols-12">
+        <div class="lg:col-span-5">
+          <AstroSectionLabel text="Thesis" color="purple" />
+          <h2 class="mb-6 text-4xl font-bold leading-tight text-[#1A1A2E] md:text-5xl" style="font-family: 'DM Serif Display', serif;">从品牌表达到 AI 信任资产</h2>
+          <p class="text-base leading-relaxed text-[#6B7280]" style="font-family: 'DM Sans', sans-serif;">在 AI 生成答案的时代，品牌竞争不只发生在搜索排名里，也发生在模型如何理解你的定位、证据与可信度。MindPromise 的价值，是把分散的品牌表达整理为可被 AI 识别和持续校准的语义资产。</p>
+        </div>
+        <div class="grid gap-4 lg:col-span-7 md:grid-cols-2">
+          {capabilities.map((item) => (
+            <article class="fm-card p-7">
+              <h3 class="mb-3 text-2xl font-bold text-[#1A1A2E]" style="font-family: 'DM Serif Display', serif;">{item.title}</h3>
+              <p class="text-sm leading-relaxed text-[#6B7280]" style="font-family: 'DM Sans', sans-serif;">{item.desc}</p>
+            </article>
+          ))}
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <section class="bg-[#1A1A2E] py-20 text-white md:py-28">
+    <div class="container">
+      <div class="mb-12 max-w-3xl">
+        <AstroSectionLabel text="Architecture" color="gold" />
+        <h2 class="mb-5 text-4xl font-bold leading-tight md:text-6xl" style="font-family: 'DM Serif Display', serif;">把品牌当成可被机器理解、被人类信任、被长期治理的语义系统</h2>
+      </div>
+      <div class="grid grid-cols-1 gap-5 md:grid-cols-3">
+        {architecture.map((item) => (
+          <article class="rounded-3xl border border-white/10 bg-white/5 p-8">
+            <div class="mb-5 text-sm font-bold tracking-[0.18em] text-[#C5A24D]">{item.num}</div>
+            <h3 class="mb-4 text-2xl font-bold" style="font-family: 'DM Serif Display', serif;">{item.title}</h3>
+            <p class="text-sm leading-relaxed text-white/70" style="font-family: 'DM Sans', sans-serif;">{item.desc}</p>
+          </article>
+        ))}
+      </div>
+    </div>
+  </section>
+
+  <section class="bg-[#FBFAFC] py-20">
+    <div class="container">
+      <div class="fm-emphasis-card p-9 text-center md:p-14">
+        <h2 class="mb-5 text-4xl font-bold leading-tight text-[#1A1A2E] md:text-6xl" style="font-family: 'DM Serif Display', serif;">继续了解 MindReach 智达</h2>
+        <p class="mx-auto mb-8 max-w-2xl text-[#6B7280]" style="font-family: 'DM Sans', sans-serif;">从被 AI 理解，进一步走向需求识别与智能连接。</p>
+        <a href="/mindreach" class="inline-flex rounded-md bg-[#3D1560] px-7 py-4 text-sm font-bold text-white no-underline">查看 MindReach</a>
+      </div>
+    </div>
+  </section>
+</BaseLayout>

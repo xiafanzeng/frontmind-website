@@ -1,0 +1,43 @@
+---
+import AstroSectionLabel from './AstroSectionLabel.astro';
+
+export interface Props {
+  lang?: 'zh' | 'en';
+}
+const { lang = 'zh' } = Astro.props;
+const isEn = lang === 'en';
+
+const systems = isEn
+  ? [
+      { name: 'MindPromise', title: 'Brand intelligence for AI understanding', desc: 'A semantic foundation that allows the organization to be understood with accuracy, authority, and trust inside AI interfaces.' },
+      { name: 'MindReach', title: 'Agentic growth for intelligent connection', desc: 'An agentic system that identifies meaningful demand signals and turns them into disciplined growth motion.' },
+    ]
+  : [
+      { name: 'MindPromise 智诺', title: '面向 AI 理解的品牌智能', desc: '将企业定位、专业能力与信任证据沉淀为可被 AI 准确理解的语义基础。' },
+      { name: 'MindReach 智达', title: '面向智能连接的增长系统', desc: '以智能体识别高价值需求信号，并形成更精准、更有分寸的增长动作。' },
+    ];
+---
+
+<section class="bg-white py-20 md:py-28">
+  <div class="container">
+    <div class="mx-auto mb-14 max-w-3xl text-center">
+      <AstroSectionLabel text="FrontMind Systems" color="gold" />
+      <h2 class="mb-5 text-4xl font-bold leading-tight text-[#1A1A2E] md:text-6xl" style="font-family: 'DM Serif Display', serif;">
+        {isEn ? 'Two systems, one enterprise AI advantage' : '两条系统能力，形成一个企业 AI 优势'}
+      </h2>
+      <p class="mx-auto max-w-2xl text-base leading-relaxed text-[#6B7280]" style="font-family: 'DM Sans', sans-serif;">
+        {isEn ? 'MindPromise and MindReach connect how the brand is understood with how growth is intelligently initiated.' : 'MindPromise 与 MindReach 分别回应品牌如何被理解，以及增长如何被智能触发。'}
+      </p>
+    </div>
+
+    <div class="grid grid-cols-1 gap-8 lg:grid-cols-2">
+      {systems.map((item) => (
+        <article class="fm-card p-9 md:p-12">
+          <div class="mb-6 text-xs font-bold uppercase tracking-[0.22em] text-[#C5A24D]" style="font-family: 'DM Sans', sans-serif;">{item.name}</div>
+          <h3 class="mb-5 text-3xl font-bold leading-tight text-[#1A1A2E] md:text-4xl" style="font-family: 'DM Serif Display', serif;">{item.title}</h3>
+          <p class="leading-relaxed text-[#6B7280]" style="font-family: 'DM Sans', sans-serif;">{item.desc}</p>
+        </article>
+      ))}
+    </div>
+  </div>
+</section>

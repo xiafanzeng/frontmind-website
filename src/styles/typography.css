@@ -1,0 +1,76 @@
+.text-hero {
+  font-family: var(--font-serif);
+  font-size: clamp(2.75rem, 5vw, 3.5rem);
+  line-height: 1.05;
+  letter-spacing: -0.03em;
+}
+
+.text-heading {
+  font-family: var(--font-serif);
+  font-size: clamp(2rem, 4vw, 2.75rem);
+  line-height: 1.1;
+  letter-spacing: -0.025em;
+}
+
+.text-subheading {
+  font-family: var(--font-serif);
+  font-size: clamp(1.375rem, 2vw, 1.75rem);
+  line-height: 1.2;
+}
+
+.text-body-lg {
+  font-family: var(--font-sans);
+  font-size: 1.125rem;
+  line-height: 1.7;
+}
+
+.text-body {
+  font-family: var(--font-sans);
+  font-size: 1rem;
+  line-height: 1.7;
+}
+
+.text-caption {
+  font-family: var(--font-sans);
+  font-size: 0.875rem;
+  line-height: 1.6;
+  color: var(--color-text-secondary);
+}
+
+.text-eyebrow {
+  font-family: var(--font-sans);
+  font-size: 0.75rem;
+  font-weight: 700;
+  line-height: 1.2;
+  letter-spacing: 0.18em;
+  text-transform: uppercase;
+  color: var(--color-accent-secondary);
+}
+
+.rich-text {
+  color: var(--color-text-primary);
+  font-family: var(--font-sans);
+}
+
+.rich-text > :first-child {
+  margin-block-start: 0;
+}
+
+.rich-text > :last-child {
+  margin-block-end: 0;
+}
+
+.rich-text p,
+.rich-text ul,
+.rich-text ol {
+  margin-block: 0 1rem;
+  line-height: 1.7;
+}
+
+.rich-text h2,
+.rich-text h3,
+.rich-text h4 {
+  margin-block: 1.5rem 0.75rem;
+  font-family: var(--font-serif);
+  color: var(--color-text-primary);
+}

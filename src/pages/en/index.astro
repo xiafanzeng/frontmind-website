@@ -1,0 +1,29 @@
+---
+import BaseLayout from '../../layouts/BaseLayout.astro';
+import AstroHomeHero from '../../components/AstroHomeHero.astro';
+import AstroHomeCta from '../../components/AstroHomeCta.astro';
+import AstroHomeStatsBar from '../../components/AstroHomeStatsBar.astro';
+import AstroHomeCoreSolutions from '../../components/AstroHomeCoreSolutions.astro';
+import AstroHomeWhyGeo from '../../components/AstroHomeWhyGeo.astro';
+import AstroHomeHowItWorks from '../../components/AstroHomeHowItWorks.astro';
+import AstroHomeIndustries from '../../components/AstroHomeIndustries.astro';
+import AstroHomeAwards from '../../components/AstroHomeAwards.astro';
+const heroImage = 'https://d2xsxph8kpxj0f.cloudfront.net/310519663567004319/FRgjGX8Da7KscfHcwTaFCq/hero-geometric-6q4QKmJrXWqeMSPSrk3r9T.webp';
+const ctaImage = 'https://d2xsxph8kpxj0f.cloudfront.net/310519663567004319/FRgjGX8Da7KscfHcwTaFCq/cta-geometric-a34vAZt6eBGYhkxnp6tcD8.webp';
+---
+<BaseLayout
+  title="FrontMind - Enterprise Growth Systems for the AI Era"
+  description="FrontMind builds strategic, semantic, and agentic growth systems for premium organizations in AI-driven markets."
+  lang="en"
+  includeChrome={true}
+  currentPath="/en"
+>
+  <AstroHomeHero lang="en" heroImage={heroImage} />
+  <AstroHomeStatsBar lang="en" />
+  <AstroHomeWhyGeo lang="en" />
+  <AstroHomeCoreSolutions lang="en" />
+  <AstroHomeHowItWorks lang="en" />
+  <AstroHomeIndustries lang="en" />
+  <AstroHomeAwards lang="en" />
+  <AstroHomeCta lang="en" ctaImage={ctaImage} />
+</BaseLayout>

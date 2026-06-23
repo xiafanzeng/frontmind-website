@@ -1,0 +1,7 @@
+---
+import BaseLayout from '../../layouts/BaseLayout.astro';
+import AstroResearchEntry from '../../components/AstroResearchEntry';
+---
+<BaseLayout title="FrontMind Research & Community" description="FrontMind Research & Community brings together GEO research progress, learning paths, tools, and community content." lang="en" includeChrome={false} currentPath="/en/research">
+  <AstroResearchEntry client:only="react" lang="en" includeChrome={true} />
+</BaseLayout>

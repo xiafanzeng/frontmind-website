@@ -1,0 +1,64 @@
+---
+import BaseHead from '../components/BaseHead.astro';
+import AstroHeader from '../components/AstroHeader.astro';
+import AstroFooter from '../components/AstroFooter.astro';
+import CookieConsent from '../components/CookieConsent.astro';
+import '../styles/design_tokens.css';
+import '../styles/typography.css';
+import '../styles/grid.css';
+import '../styles/animations.css';
+import animationFallbackUrl from '../scripts/animation-fallback.js?url';
+import '../../client/src/index.css';
+
+export interface Props {
+  title: string;
+  description: string;
+  lang?: 'zh' | 'en';
+  structuredData?: Record<string, unknown> | null;
+  includeChrome?: boolean;
+  currentPath?: string;
+}
+
+const {
+  title,
+  description,
+  lang = 'zh',
+  structuredData = null,
+  includeChrome = false,
+  currentPath = '/',
+} = Astro.props;
+
+const htmlLang = lang === 'zh' ? 'zh-CN' : 'en';
+---
+
+<!doctype html>
+<html lang={htmlLang} class="no-js">
+  <head>
+    <BaseHead
+      title={title}
+      description={description}
+      lang={lang}
+      structuredData={structuredData}
+    />
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;700;800&family=DM+Serif+Display:ital@0;1&display=swap" rel="stylesheet" />
+    <style is:global>
+      @media (prefers-reduced-motion: reduce) {
+        html {
+          scroll-behavior: auto;
+        }
+      }
+    </style>
+  </head>
+  <body>
+    <a href="#main-content" class="skip-link">{lang === 'zh' ? '跳转到主要内容' : 'Skip to main content'}</a>
+    {includeChrome && <AstroHeader lang={lang} currentPath={currentPath} />}
+    <main id="main-content">
+      <slot />
+    </main>
+    <CookieConsent lang={lang} />
+    {includeChrome && <AstroFooter lang={lang} />}
+    <script type="module" src={animationFallbackUrl}></script>
+  </body>
+</html>

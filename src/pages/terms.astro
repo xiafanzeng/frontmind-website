@@ -1,0 +1,47 @@
+---
+import BaseLayout from '../layouts/BaseLayout.astro';
+import AstroLegalPage from '../components/AstroLegalPage.astro';
+
+const sections = [
+  {
+    id: 'terms-use',
+    title: '1. 网站使用',
+    body: '您可以基于合法、正当的商业或研究目的浏览本网站内容。未经许可，不得以误导、攻击、抓取滥用或损害站点稳定性的方式使用本网站。',
+  },
+  {
+    id: 'terms-content',
+    title: '2. 内容与知识产权',
+    body: '除非另有说明，网站上的品牌标识、文案、图形、方法论表达和页面结构均归 FrontMind 或其合法授权方所有。未经书面许可，不得复制、重售或用于误导性再发布。',
+  },
+  {
+    id: 'terms-enquiries',
+    title: '3. 业务咨询',
+    body: '通过 Contact 页面提交的信息仅用于沟通潜在合作需求。提交咨询并不自动构成服务承诺、签约关系或任何结果保证。',
+  },
+  {
+    id: 'terms-liability',
+    title: '4. 责任限制',
+    body: '我们会合理维护网站可用性与信息准确性，但不对因第三方网络环境、浏览器兼容性、外部链接变化或不可抗力导致的临时不可用承担绝对责任。',
+  },
+  {
+    id: 'terms-updates',
+    title: '5. 条款更新',
+    body: '随着网站内容、服务方式和合规要求变化，本条款可能被更新。继续访问本网站即表示您接受更新后的版本。',
+  },
+];
+---
+
+<BaseLayout
+  title="FrontMind 服务条款"
+  description="查看 FrontMind 网站访问、内容使用和业务咨询相关的基础服务条款。"
+  lang="zh"
+  includeChrome={true}
+  currentPath="/terms"
+>
+  <AstroLegalPage
+    label="法律与合规"
+    title="FrontMind 服务条款"
+    intro="本页面概述您访问 FrontMind 网站、阅读公开内容以及通过联系页面提交业务咨询时适用的基础条款。"
+    sections={sections}
+  />
+</BaseLayout>

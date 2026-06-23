@@ -1,0 +1,97 @@
+---
+export interface Props {
+  title: string;
+  description: string;
+  lang?: 'zh' | 'en';
+  structuredData?: Record<string, unknown> | null;
+}
+
+const {
+  title,
+  description,
+  lang = 'zh',
+  structuredData = null,
+} = Astro.props;
+
+const htmlLang = lang === 'zh' ? 'zh-CN' : 'en';
+const locale = lang === 'zh' ? 'zh_CN' : 'en_US';
+const canonical = Astro.url.href;
+const pathname = Astro.url.pathname;
+const siteUrl = Astro.site?.toString().replace(/\/$/, '') || 'https://www.frontmind.net';
+const normalizedPath = pathname === '/' ? '' : pathname;
+const alternateZh = normalizedPath.startsWith('/en/') ? `${siteUrl}${normalizedPath.replace(/^\/en/, '') || '/'}` : `${siteUrl}${normalizedPath || '/'}`;
+const alternateEn = normalizedPath.startsWith('/en/') ? `${siteUrl}${normalizedPath || '/'}` : `${siteUrl}/en${normalizedPath || '/'}`;
+const ogImage = 'https://d2xsxph8kpxj0f.cloudfront.net/310519663567004319/FRgjGX8Da7KscfHcwTaFCq/hero-geometric-6q4QKmJrXWqeMSPSrk3r9T.webp';
+const organizationId = `${siteUrl}/#organization`;
+const websiteId = `${siteUrl}/#website`;
+const webpageId = `${canonical}#webpage`;
+const defaultStructuredData = {
+  '@context': 'https://schema.org',
+  '@graph': [
+    {
+      '@type': 'Organization',
+      '@id': organizationId,
+      name: 'FrontMind',
+      url: siteUrl,
+      logo: ogImage,
+      sameAs: [],
+    },
+    {
+      '@type': 'WebSite',
+      '@id': websiteId,
+      name: 'FrontMind',
+      url: siteUrl,
+      inLanguage: htmlLang,
+      publisher: {
+        '@id': organizationId,
+      },
+      potentialAction: {
+        '@type': 'SearchAction',
+        target: `${siteUrl}/research`,
+        'query-input': 'required name=search_term_string',
+      },
+    },
+    {
+      '@type': 'WebPage',
+      '@id': webpageId,
+      name: title,
+      description,
+      url: canonical,
+      inLanguage: htmlLang,
+      isPartOf: {
+        '@id': websiteId,
+      },
+      about: {
+        '@id': organizationId,
+      },
+    },
+  ],
+};
+const resolvedStructuredData = structuredData || defaultStructuredData;
+---
+
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1" />
+<title>{title}</title>
+<meta name="description" content={description} />
+<link rel="icon" href="/icon.svg" type="image/svg+xml" />
+<link rel="canonical" href={canonical} />
+<link rel="alternate" hreflang="zh-CN" href={alternateZh} />
+<link rel="alternate" hreflang="en" href={alternateEn} />
+<link rel="alternate" hreflang="x-default" href={alternateZh} />
+<meta property="og:type" content="website" />
+<meta property="og:site_name" content="FrontMind" />
+<meta property="og:locale" content={locale} />
+<meta property="og:title" content={title} />
+<meta property="og:description" content={description} />
+<meta property="og:url" content={canonical} />
+<meta property="og:image" content={ogImage} />
+<meta property="og:image:alt" content="FrontMind website preview" />
+<meta name="twitter:card" content="summary_large_image" />
+<meta name="twitter:title" content={title} />
+<meta name="twitter:description" content={description} />
+<meta name="twitter:image" content={ogImage} />
+<meta name="generator" content={Astro.generator} />
+<meta name="robots" content="index,follow" />
+<meta name="frontmind:lang" content={htmlLang} />
+<script id="frontmind-structured-data" type="application/ld+json" set:html={JSON.stringify(resolvedStructuredData)} />

@@ -1,0 +1,21 @@
+---
+import BaseLayout from '../layouts/BaseLayout.astro';
+---
+
+<BaseLayout
+  title="FrontMind Astro Preview"
+  description="Internal preview placeholder for the FrontMind Astro rebuild."
+  lang="en"
+  includeChrome={true}
+  currentPath="/"
+>
+  <section aria-label="Preview Notice" class="py-20 md:py-28">
+    <div class="container max-w-3xl">
+      <p class="text-eyebrow">Internal Preview</p>
+      <h1 id="preview-notice-title" class="text-heading mt-4">Astro preview page has been disabled for validation.</h1>
+      <p class="text-body mt-6 text-[color:var(--color-text-secondary)]">
+        This route is retained as a static placeholder so that the main multilingual marketing pages can be built and validated without browser-only routing dependencies.
+      </p>
+    </div>
+  </section>
+</BaseLayout>

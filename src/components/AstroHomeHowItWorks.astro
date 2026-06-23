@@ -1,0 +1,41 @@
+---
+import AstroSectionLabel from './AstroSectionLabel.astro';
+export interface Props { lang?: 'zh' | 'en'; }
+const { lang = 'zh' } = Astro.props;
+const isEn = lang === 'en';
+const layers = isEn
+  ? [
+      { title: 'Strategic Clarity', desc: 'Define the position the enterprise should occupy in AI-mediated decisions.' },
+      { title: 'Semantic Assets', desc: 'Transform expertise, claims, and proof into structured brand knowledge.' },
+      { title: 'Agentic Intelligence', desc: 'Use agents to sense demand, shape responses, and connect qualified intent.' },
+      { title: 'Governance Rhythm', desc: 'Keep brand expression, AI answers, and growth signals consistent over time.' },
+    ]
+  : [
+      { title: '战略清晰度', desc: '明确企业在 AI 介导的决策场景中应占据的位置与差异化心智。' },
+      { title: '语义资产化', desc: '将专业能力、核心主张与证据体系沉淀为结构化品牌知识。' },
+      { title: '智能体能力', desc: '以智能体感知需求、生成表达、连接高意向机会与增长场景。' },
+      { title: '长期治理', desc: '让品牌表达、AI 回答与增长信号在持续变化的市场中保持一致。' },
+    ];
+---
+<section class="bg-white py-20 md:py-28">
+  <div class="container">
+    <div class="mx-auto mb-14 max-w-3xl text-center">
+      <AstroSectionLabel text={isEn ? 'Method' : '方法论'} color="gold" />
+      <h2 class="mb-5 text-4xl font-bold leading-tight text-[#1A1A2E] md:text-6xl" style="font-family: 'DM Serif Display', serif;">
+        {isEn ? 'From brand intention to intelligent presence' : '从品牌意图，到智能时代的存在感'}
+      </h2>
+      <p class="mx-auto max-w-2xl text-base leading-relaxed text-[#6B7280]" style="font-family: 'DM Sans', sans-serif;">
+        {isEn ? 'FrontMind does not treat AI as a collection of tools. We treat it as a new environment where brand, trust, and growth must be redesigned together.' : 'FrontMind 不把 AI 视为工具堆叠，而把它视为品牌、信任与增长需要被重新设计的新环境。'}
+      </p>
+    </div>
+    <div class="grid grid-cols-1 gap-5 md:grid-cols-2 lg:grid-cols-4">
+      {layers.map((item, index) => (
+        <article class="fm-card-soft p-7">
+          <div class="mb-5 text-xs font-bold uppercase tracking-[0.22em] text-[#C5A24D]" style="font-family: 'DM Sans', sans-serif;">0{index + 1}</div>
+          <h3 class="mb-3 text-2xl font-bold text-[#1A1A2E]" style="font-family: 'DM Serif Display', serif;">{item.title}</h3>
+          <p class="text-sm leading-relaxed text-[#6B7280]" style="font-family: 'DM Sans', sans-serif;">{item.desc}</p>
+        </article>
+      ))}
+    </div>
+  </div>
+</section>

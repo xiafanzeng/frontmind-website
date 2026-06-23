@@ -1,0 +1,78 @@
+---
+import BaseLayout from '../layouts/BaseLayout.astro';
+import AstroSectionLabel from '../components/AstroSectionLabel.astro';
+
+const capabilities = [
+  { title: '需求信号识别', desc: '识别来自 AI 搜索、内容互动、行业讨论与客户语境中的真实需求信号。' },
+  { title: '智能体触达设计', desc: '将品牌能力转化为可被智能体调用、推荐与连接的互动路径。' },
+  { title: '增长路径编排', desc: '围绕高意向用户的认知、比较、咨询与转化，设计更自然的连接方式。' },
+  { title: '长期反馈闭环', desc: '把触达、咨询、内容与销售反馈沉淀为持续优化品牌增长系统的依据。' },
+];
+const architecture = [
+  { num: '01', title: '意图理解', desc: '从用户真实问题和行业语义中判断需求类型、决策阻力与转化机会。' },
+  { num: '02', title: '主动连接', desc: '通过智能体、内容路径和高价值触点，让品牌在合适场景中被主动推荐。' },
+  { num: '03', title: '增长协同', desc: '连接品牌、内容、销售与客户成功，让增长不只是流量动作，而是系统能力。' },
+];
+---
+
+<BaseLayout title="MindReach 智达 - FrontMind 产品介绍" description="了解 MindReach 智达如何通过智能体、需求识别与主动连接系统推动品牌增长。" lang="zh" includeChrome={true} currentPath="/mindreach">
+  <section class="relative overflow-hidden pt-32 pb-24">
+    <div class="absolute inset-0 opacity-[0.05]" style="background-image: radial-gradient(circle at 18% 14%, #3D1560 0, transparent 30%), radial-gradient(circle at 88% 0%, #C5A24D 0, transparent 24%);"></div>
+    <div class="container relative z-10">
+      <div class="max-w-4xl">
+        <AstroSectionLabel text="产品介绍" color="gold" />
+        <p class="mb-4 text-sm font-bold uppercase tracking-[0.2em] text-[#C5A24D]" style="font-family: 'DM Sans', sans-serif;">MindReach 智达</p>
+        <h1 class="mb-7 text-5xl font-bold leading-tight text-[#1A1A2E] md:text-7xl" style="font-family: 'DM Serif Display', serif;">让品牌在 AI 时代<br />更主动地抵达需求</h1>
+        <p class="max-w-3xl text-lg leading-relaxed text-[#6B7280]" style="font-family: 'DM Sans', sans-serif;">MindReach 智达面向智能体时代的需求识别、主动连接与增长协同，帮助品牌从“等待用户寻找”走向“在正确语境中被推荐、被理解、被选择”。</p>
+      </div>
+    </div>
+  </section>
+
+  <section class="bg-white py-20 md:py-28">
+    <div class="container">
+      <div class="grid grid-cols-1 gap-10 lg:grid-cols-12">
+        <div class="lg:col-span-5">
+          <AstroSectionLabel text="Thesis" color="purple" />
+          <h2 class="mb-6 text-4xl font-bold leading-tight text-[#1A1A2E] md:text-5xl" style="font-family: 'DM Serif Display', serif;">从内容曝光到智能连接</h2>
+          <p class="text-base leading-relaxed text-[#6B7280]" style="font-family: 'DM Sans', sans-serif;">当 AI 与智能体开始参与用户决策，增长不再只是投放、排名或单点转化。MindReach 的价值，是把品牌能力、用户意图和智能连接路径组织成更可持续的增长系统。</p>
+        </div>
+        <div class="grid gap-4 lg:col-span-7 md:grid-cols-2">
+          {capabilities.map((item) => (
+            <article class="fm-card p-7">
+              <h3 class="mb-3 text-2xl font-bold text-[#1A1A2E]" style="font-family: 'DM Serif Display', serif;">{item.title}</h3>
+              <p class="text-sm leading-relaxed text-[#6B7280]" style="font-family: 'DM Sans', sans-serif;">{item.desc}</p>
+            </article>
+          ))}
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <section class="bg-[#1A1A2E] py-20 text-white md:py-28">
+    <div class="container">
+      <div class="mb-12 max-w-3xl">
+        <AstroSectionLabel text="Architecture" color="gold" />
+        <h2 class="mb-5 text-4xl font-bold leading-tight md:text-6xl" style="font-family: 'DM Serif Display', serif;">把增长从单次触达，升级为智能体时代的长期连接能力</h2>
+      </div>
+      <div class="grid grid-cols-1 gap-5 md:grid-cols-3">
+        {architecture.map((item) => (
+          <article class="rounded-3xl border border-white/10 bg-white/5 p-8">
+            <div class="mb-5 text-sm font-bold tracking-[0.18em] text-[#C5A24D]">{item.num}</div>
+            <h3 class="mb-4 text-2xl font-bold" style="font-family: 'DM Serif Display', serif;">{item.title}</h3>
+            <p class="text-sm leading-relaxed text-white/70" style="font-family: 'DM Sans', sans-serif;">{item.desc}</p>
+          </article>
+        ))}
+      </div>
+    </div>
+  </section>
+
+  <section class="bg-[#FBFAFC] py-20">
+    <div class="container">
+      <div class="fm-emphasis-card p-9 text-center md:p-14">
+        <h2 class="mb-5 text-4xl font-bold leading-tight text-[#1A1A2E] md:text-6xl" style="font-family: 'DM Serif Display', serif;">回到 MindPromise 智诺</h2>
+        <p class="mx-auto mb-8 max-w-2xl text-[#6B7280]" style="font-family: 'DM Sans', sans-serif;">先建立可被 AI 理解与信任的品牌语义，再进一步组织主动连接。</p>
+        <a href="/mindpromise" class="inline-flex rounded-md bg-[#3D1560] px-7 py-4 text-sm font-bold text-white no-underline">查看 MindPromise</a>
+      </div>
+    </div>
+  </section>
+</BaseLayout>

@@ -1,0 +1,1 @@
+import{j as r}from"./index-jVn51xB8.js";import{P as t}from"./ProductIntro-1npcd269.js";import"./circle-check-DzJogEhz.js";import"./radar-BgNOApXk.js";function m(){return r.jsx(t,{product:"mindreach"})}export{m as default};

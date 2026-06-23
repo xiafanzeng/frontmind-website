@@ -1,0 +1,45 @@
+---
+import AstroSectionLabel from './AstroSectionLabel.astro';
+export interface Props { lang?: 'zh' | 'en'; }
+const { lang = 'zh' } = Astro.props;
+const isEn = lang === 'en';
+const cards = isEn
+  ? [
+      { title: 'Discovery is becoming conversational', desc: 'Users increasingly ask AI systems for judgment, comparison, and recommendation. Brands must be legible within that new decision environment.' },
+      { title: 'Authority is becoming semantic', desc: 'A brand is not only evaluated by traffic or keywords, but by whether its expertise, proof, and positioning can be consistently interpreted.' },
+      { title: 'Growth is becoming agentic', desc: 'The next growth advantage belongs to organizations that connect demand signals, credible answers, and intelligent follow-up into one system.' },
+    ]
+  : [
+      { title: '发现方式正在对话化', desc: '用户越来越多地向 AI 寻求判断、比较与推荐。品牌需要在新的决策界面中被准确理解，而不只是被搜索到。' },
+      { title: '权威结构正在语义化', desc: '品牌不再只由流量和关键词定义，而由定位、专业能力与证据体系能否被持续解释、引用与信任来定义。' },
+      { title: '增长能力正在智能体化', desc: '新的增长优势来自需求信号、可信回答与主动连接之间的系统协同，而不是单点渠道动作。' },
+    ];
+---
+<section class="bg-white py-20 md:py-28">
+  <div class="container">
+    <div class="grid grid-cols-1 gap-12 lg:grid-cols-12">
+      <div class="lg:col-span-5">
+        <AstroSectionLabel text={isEn ? 'Why FrontMind' : '为什么是 FrontMind'} color="gold" />
+        <h2 class="mb-6 text-4xl font-bold leading-tight text-[#1A1A2E] md:text-6xl" style="font-family: 'DM Serif Display', serif;">
+          {isEn ? 'Brand advantage is being rebuilt by AI' : 'AI 正在重塑品牌优势的形成方式'}
+        </h2>
+        <p class="text-base leading-relaxed text-[#6B7280]" style="font-family: 'DM Sans', sans-serif;">
+          {isEn
+            ? 'FrontMind works at the intersection of brand strategy, semantic intelligence, and AI agents, helping enterprises build a durable presence in the interfaces where decisions are increasingly made.'
+            : 'FrontMind 站在品牌战略、语义智能与 AI Agent 的交汇处，帮助企业在新的智能界面中建立长期可被识别、信任与选择的能力。'}
+        </p>
+      </div>
+      <div class="lg:col-span-7">
+        <div class="grid grid-cols-1 gap-5">
+          {cards.map((item, index) => (
+            <article class="fm-card p-7 md:p-8">
+              <div class="mb-4 text-xs font-bold uppercase tracking-[0.22em] text-[#C5A24D]" style="font-family: 'DM Sans', sans-serif;">0{index + 1}</div>
+              <h3 class="mb-3 text-2xl font-bold text-[#1A1A2E]" style="font-family: 'DM Serif Display', serif;">{item.title}</h3>
+              <p class="text-sm leading-relaxed text-[#6B7280]" style="font-family: 'DM Sans', sans-serif;">{item.desc}</p>
+            </article>
+          ))}
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
