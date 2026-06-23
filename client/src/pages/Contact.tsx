@@ -7,9 +7,10 @@ import Footer from "@/components/Footer";
 import { useLang } from "@/contexts/LanguageContext";
 import {
   ArrowRight,
+  Building2,
   FileText,
   Mail,
-  ShieldCheck,
+  MessageSquareText,
 } from "lucide-react";
 
 const CTA_IMG =
@@ -30,76 +31,76 @@ export default function Contact({ includeChrome = true }: ContactProps) {
   const revealFaq = useReveal();
   const { t, lang } = useLang();
   const mailSubject = t(
-    "FrontMind 合作沟通｜请替换为公司名",
-    "FrontMind Collaboration Inquiry | Replace with Company Name",
+    "FrontMind 商务沟通｜公司名称",
+    "FrontMind Business Conversation | Company Name",
   );
   const mailBody = t(
     [
       "公司名称：",
       "您的姓名与职务：",
       "公司官网：",
-      "公司宣传册/介绍材料：请附上文件或提供可访问链接",
-      "沟通目的：请简要说明希望讨论的问题，例如 GEO、AI 品牌可见度、智能体增长、企业级 AI 工作流部署或 FDE 入驻",
-      "当前情况：请说明目前的 AI 使用、营销增长或内部流程部署状态",
-      "希望的下一步：例如初步诊断、方案沟通、管理层会议或项目评估",
+      "公司介绍材料：",
+      "希望讨论的方向：",
+      "当前业务背景：",
+      "期待的下一步：",
     ].join("\n"),
     [
       "Company name:",
       "Your name and title:",
       "Company website:",
-      "Company brochure / introduction material: attach a file or provide an accessible link",
-      "Purpose of communication: briefly describe the topic, such as GEO, AI brand visibility, agentic growth, enterprise AI workflow deployment, or FDE embedding",
-      "Current situation: describe current AI usage, marketing growth, or internal workflow deployment status",
-      "Preferred next step: initial diagnosis, solution discussion, leadership meeting, or project assessment",
+      "Company introduction material:",
+      "Topic you would like to discuss:",
+      "Current business context:",
+      "Preferred next step:",
     ].join("\n"),
   );
   const mailtoHref = (email: string) =>
     `mailto:${email}?subject=${encodeURIComponent(mailSubject)}&body=${encodeURIComponent(mailBody)}`;
   const briefingItems = [
-    t("公司名与官网", "Company name and website"),
-    t("您的姓名与职务", "Your name and title"),
-    t("公司宣传册、介绍材料或可访问链接", "Company brochure, introduction material, or accessible link"),
-    t("本次沟通目的与希望解决的问题", "Purpose of communication and problem to solve"),
-    t("当前 AI 使用、营销增长或流程部署状态", "Current AI usage, growth, or workflow deployment status"),
+    {
+      icon: <Building2 size={18} />,
+      title: t("公司背景", "Company Context"),
+      desc: t("公司名称、官网、所在行业，以及可公开分享的介绍材料。", "Company name, website, industry, and shareable introduction material."),
+    },
+    {
+      icon: <FileText size={18} />,
+      title: t("沟通身份", "Your Role"),
+      desc: t("您的姓名、职务，以及在本次项目或决策中的角色。", "Your name, title, and role in the project or decision process."),
+    },
+    {
+      icon: <MessageSquareText size={18} />,
+      title: t("讨论目标", "Conversation Goal"),
+      desc: t("希望讨论 GEO、AI 品牌可见度、智能体增长、企业级 AI 工作流或 FDE 入驻中的哪一类问题。", "The topic you would like to discuss: GEO, AI brand visibility, agentic growth, enterprise AI workflows, or FDE embedding."),
+    },
   ];
-  const templateLines = t(
+  const sampleLetterLines = t(
     [
-      "邮件标题：FrontMind 合作沟通｜公司名",
+      "邮件标题：FrontMind 商务沟通｜公司名称",
       "",
       "您好，FrontMind 团队：",
       "",
-      "我们是【公司名】，官网为【官网链接】。我是【姓名】，担任【职务】。",
+      "我们来自公司名称，官网为公司官网。我是姓名，负责相关职能。",
       "",
-      "附件/链接中包含我们的公司宣传册或介绍材料：【宣传册链接或附件说明】。",
+      "随信附上公司介绍材料，供团队了解业务背景。",
       "",
-      "本次希望沟通的目的：",
-      "1. 【例如：希望提升品牌在 ChatGPT、Perplexity、Google AI 等生成式答案中的可见度】",
-      "2. 【例如：希望评估企业内部 AI 工作流或智能体部署机会】",
-      "3. 【例如：希望了解 GEO、MindPromise、MindReach、MindNexus 或 FDE 入驻合作方式】",
+      "本次希望重点讨论：品牌在生成式答案中的可见度、智能体增长机会，或企业内部 AI 工作流部署。",
       "",
-      "目前我们的情况是：【简要说明当前 AI 使用、营销增长、客服/销售/运营流程等状态】。",
-      "",
-      "希望下一步可以安排【初步诊断 / 方案沟通 / 管理层会议 / 项目评估】。",
+      "如方向匹配，期待安排一次初步沟通。",
       "",
       "谢谢。",
     ],
     [
-      "Subject: FrontMind Collaboration Inquiry | Company Name",
+      "Subject: FrontMind Business Conversation | Company Name",
       "",
       "Hello FrontMind team,",
       "",
-      "We are [company name], and our website is [website link]. My name is [name], and I serve as [title].",
+      "We are from Company Name. Our website is Company Website. My name is Name, and I lead the relevant function.",
       "",
-      "Our company brochure or introduction material is attached or available here: [link or attachment note].",
+      "I have attached our company introduction material for your reference.",
       "",
-      "The purpose of this conversation is:",
-      "1. [For example: improving brand visibility in ChatGPT, Perplexity, Google AI, and other generative answer environments]",
-      "2. [For example: evaluating enterprise AI workflows or agent deployment opportunities]",
-      "3. [For example: understanding GEO, MindPromise, MindReach, MindNexus, or FDE collaboration models]",
+      "We would like to discuss brand visibility in generative answers, agentic growth opportunities, or enterprise AI workflow deployment.",
       "",
-      "Our current situation is: [briefly describe current AI usage, growth, customer service, sales, or operations workflow status].",
-      "",
-      "For the next step, we would like to arrange [initial diagnosis / solution discussion / leadership meeting / project assessment].",
+      "If the direction is aligned, we would appreciate an initial conversation.",
       "",
       "Thank you.",
     ],
@@ -108,8 +109,8 @@ export default function Contact({ includeChrome = true }: ContactProps) {
   usePageMeta({
     title: t("联系 FrontMind", "Contact FrontMind"),
     description: t(
-      "通过邮箱联系 FrontMind，请说明公司名、职务、公司宣传册、沟通目的，并讨论 GEO、AI 品牌可见度、智能体增长、企业级 AI 工作流部署与 FDE 入驻。",
-      "Contact FrontMind by email with your company name, title, brochure, and purpose to discuss GEO, AI brand visibility, agentic growth, enterprise AI workflow deployment, and FDE embedding.",
+      "联系 FrontMind，讨论 GEO、AI 品牌可见度、智能体增长、企业级 AI 工作流部署与 FDE 入驻。",
+      "Contact FrontMind to discuss GEO, AI brand visibility, agentic growth, enterprise AI workflow deployment, and FDE embedding.",
     ),
     lang,
     schemaType: "ContactPage",
@@ -189,8 +190,8 @@ export default function Contact({ includeChrome = true }: ContactProps) {
     {
       q: t("如何联系？", "How can we get in touch?"),
       a: t(
-        `请直接发送邮件至 ${CONTACT_EMAILS[0]} 或 ${CONTACT_EMAILS[1]}，并说明公司名、您的职务、公司宣传册或介绍材料、沟通目的与希望安排的下一步。`,
-        `Please email ${CONTACT_EMAILS[0]} or ${CONTACT_EMAILS[1]} with your company name, title, company brochure or introduction material, purpose of communication, and preferred next step.`,
+        `请发送邮件至 ${CONTACT_EMAILS[0]} 或 ${CONTACT_EMAILS[1]}。来信中可包含公司背景、您的职务、介绍材料和希望讨论的方向。`,
+        `Please email ${CONTACT_EMAILS[0]} or ${CONTACT_EMAILS[1]}. You may include company context, your title, introduction material, and the topic you would like to discuss.`,
       ),
     },
   ];
@@ -217,14 +218,14 @@ export default function Contact({ includeChrome = true }: ContactProps) {
             <SectionLabel text={t("联系我们", "Contact Us")} color="purple" />
             <h1 className="mb-6 text-4xl font-bold leading-tight text-[#1A1A2E] md:text-5xl" style={{ fontFamily: "'DM Serif Display', serif" }}>
               {t(
-                <>通过邮箱联系<br />FrontMind</>,
-                <>Contact FrontMind<br />by Email</>,
+                <>与 FrontMind<br />开启一次业务讨论</>,
+                <>Start a Business Conversation<br />with FrontMind</>,
               )}
             </h1>
             <p className="max-w-2xl text-lg leading-relaxed text-[#6B7280]" style={{ fontFamily: "'DM Sans', sans-serif" }}>
               {t(
-                "如果您希望讨论 GEO、AI 品牌可见度、智能体增长或企业级 AI 工作流部署，请通过以下两个邮箱联系。",
-                "For GEO, AI brand visibility, agentic growth, or enterprise AI workflow deployment, please contact us through the two email addresses below.",
+                "如果您的企业正在思考 AI 搜索可见度、智能体增长或内部流程 AI 化，欢迎将业务背景与合作方向发送给我们。FrontMind 团队会基于材料判断适合的交流方式。",
+                "If your organization is exploring AI search visibility, agentic growth, or enterprise AI workflows, share your business context and collaboration direction with us. The FrontMind team will review the material and suggest an appropriate next step.",
               )}
             </p>
           </div>
@@ -238,14 +239,14 @@ export default function Contact({ includeChrome = true }: ContactProps) {
         >
           <div className="grid grid-cols-1 gap-8 lg:grid-cols-[0.9fr_1.1fr] lg:items-start">
             <div>
-              <SectionLabel text={t("邮箱联系", "Email Contacts")} color="purple" />
+              <SectionLabel text={t("商务联系", "Business Contact")} color="purple" />
               <h2 className="mb-4 text-3xl font-bold leading-tight text-[#1A1A2E] md:text-4xl" style={{ fontFamily: "'DM Serif Display', serif" }}>
-                {t("只通过邮箱接收联系", "Email-Only Contact")}
+                {t("请将合作方向发送至以下邮箱", "Share Your Collaboration Direction")}
               </h2>
               <p className="max-w-xl text-base leading-relaxed text-[#6B7280]" style={{ fontFamily: "'DM Sans', sans-serif" }}>
                 {t(
-                  "当前不再开放网页表单。请直接发送邮件，并在邮件中说明公司名、您的职务、公司宣传册或介绍材料、沟通目的和希望安排的下一步。",
-                  "The website form is no longer used. Please email directly with your company name, title, company brochure or introduction material, purpose of communication, and preferred next step.",
+                  "来信可简要说明公司背景、您的职务、公司介绍材料与希望讨论的重点。我们更重视问题本身的质量，也会以此判断后续是否适合安排初步沟通、专题诊断或方案讨论。",
+                  "Your note may briefly include company context, your role, introduction material, and the topic you would like to discuss. We value the quality of the question and use it to determine whether an initial conversation, diagnosis, or solution discussion is appropriate.",
                 )}
               </p>
             </div>
@@ -272,44 +273,70 @@ export default function Contact({ includeChrome = true }: ContactProps) {
               ))}
 
               <div className="fm-emphasis-card p-5 md:p-6">
-                <div className="mb-4 flex h-11 w-11 items-center justify-center rounded-full bg-[#3D1560]/10 text-[#3D1560]">
-                  <ShieldCheck size={20} />
-                </div>
-                <p className="text-sm leading-relaxed text-[#4B5563]" style={{ fontFamily: "'DM Sans', sans-serif" }}>
+                <p className="text-xs font-bold uppercase tracking-[0.18em] text-[#C5A24D]" style={{ fontFamily: "'DM Sans', sans-serif" }}>
+                  {t("FrontMind Advisory", "FrontMind Advisory")}
+                </p>
+                <p className="mt-3 text-sm leading-relaxed text-[#4B5563]" style={{ fontFamily: "'DM Sans', sans-serif" }}>
                   {t(
-                    "建议把公司宣传册作为附件发送，或提供公开可访问链接。邮件信息越完整，团队越容易判断是否适合安排初步诊断、方案沟通或管理层会议。",
-                    "Please attach the company brochure or provide a publicly accessible link. The more complete the message, the easier it is for the team to assess whether an initial diagnosis, solution discussion, or leadership meeting is appropriate.",
+                    "我们通常从业务目标、AI 对企业的当前理解、增长链路和内部流程四个角度阅读材料，再判断最适合的合作入口。",
+                    "We typically review material through four lenses: business goals, how AI currently understands the organization, growth loops, and internal workflows.",
                   )}
                 </p>
               </div>
             </div>
           </div>
 
-          <div className="mt-8 grid grid-cols-1 gap-8 lg:grid-cols-[0.9fr_1.1fr]">
-            <div className="fm-card p-5 md:p-6">
-              <div className="mb-4 flex h-11 w-11 items-center justify-center rounded-full bg-[#C5A24D]/15 text-[#8A6F20]">
-                <FileText size={20} />
+          <div className="mt-10 grid grid-cols-1 gap-5 lg:grid-cols-3">
+            {briefingItems.map((item) => (
+              <div key={String(item.title)} className="fm-card p-5 md:p-6">
+                <div className="mb-4 flex h-10 w-10 items-center justify-center border border-[#E5E7EB] bg-white text-[#3D1560]">
+                  {item.icon}
+                </div>
+                <h3 className="mb-2 text-lg font-bold text-[#1A1A2E]" style={{ fontFamily: "'DM Serif Display', serif" }}>
+                  {item.title}
+                </h3>
+                <p className="text-sm leading-relaxed text-[#6B7280]" style={{ fontFamily: "'DM Sans', sans-serif" }}>
+                  {item.desc}
+                </p>
               </div>
+            ))}
+          </div>
+
+          <div className="mt-8 grid grid-cols-1 gap-8 lg:grid-cols-[0.8fr_1.2fr]">
+            <div className="fm-card p-5 md:p-6">
               <h3 className="mb-4 text-xl font-bold text-[#1A1A2E]" style={{ fontFamily: "'DM Serif Display', serif" }}>
-                {t("邮件中请包含", "Please Include")}
+                {t("来信建议", "Suggested Context")}
               </h3>
               <ul className="space-y-3">
                 {briefingItems.map((item) => (
-                  <li key={item} className="flex gap-3 text-sm leading-relaxed text-[#4B5563]" style={{ fontFamily: "'DM Sans', sans-serif" }}>
+                  <li key={String(item.title)} className="flex gap-3 text-sm leading-relaxed text-[#4B5563]" style={{ fontFamily: "'DM Sans', sans-serif" }}>
                     <span className="mt-2 h-1.5 w-1.5 shrink-0 rounded-full bg-[#3D1560]" />
-                    <span>{item}</span>
+                    <span>{item.title}</span>
                   </li>
                 ))}
               </ul>
             </div>
 
             <div className="fm-emphasis-card p-5 md:p-6">
-              <h3 className="mb-4 text-xl font-bold text-[#1A1A2E]" style={{ fontFamily: "'DM Serif Display', serif" }}>
-                {t("邮件模板参考", "Email Template")}
-              </h3>
-              <pre className="whitespace-pre-wrap rounded-md border border-[#E5E7EB] bg-white p-4 text-sm leading-relaxed text-[#4B5563]" style={{ fontFamily: "'DM Sans', sans-serif" }}>
-                {templateLines.join("\n")}
-              </pre>
+              <div className="mb-4 flex items-center justify-between gap-4">
+                <h3 className="text-xl font-bold text-[#1A1A2E]" style={{ fontFamily: "'DM Serif Display', serif" }}>
+                  {t("来信示例", "Sample Note")}
+                </h3>
+                <span className="hidden text-xs font-bold uppercase tracking-[0.18em] text-[#C5A24D] md:inline" style={{ fontFamily: "'DM Sans', sans-serif" }}>
+                  {t("Reference", "Reference")}
+                </span>
+              </div>
+              <div className="border-l-2 border-[#C5A24D] bg-white px-5 py-4">
+                {sampleLetterLines.map((line, index) => (
+                  <p
+                    key={`${line}-${index}`}
+                    className={`${line ? "mb-2" : "mb-3"} text-sm leading-relaxed text-[#4B5563] last:mb-0`}
+                    style={{ fontFamily: "'DM Sans', sans-serif" }}
+                  >
+                    {line || "\u00A0"}
+                  </p>
+                ))}
+              </div>
             </div>
           </div>
         </div>

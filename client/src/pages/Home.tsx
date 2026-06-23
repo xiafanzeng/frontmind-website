@@ -56,7 +56,7 @@ function StatsBar() {
                 alt={partner.alt}
                 width={partner.width}
                 height={partner.height}
-                className={`h-auto max-h-[64px] w-full origin-center ${partner.maxWidth} ${partner.imageClassName} object-contain md:max-h-[72px]`}
+                className={`block h-auto w-full origin-center ${partner.maxWidth} ${partner.imageClassName} object-contain`}
                 loading="lazy"
               />
             </div>

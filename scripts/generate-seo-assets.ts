@@ -248,7 +248,7 @@ const coreRoutes: RouteMeta[] = [
     path: "/contact",
     schemaType: "ContactPage",
     title: "联系 FrontMind",
-    description: "通过邮箱联系 FrontMind，请说明公司名、职务、公司宣传册、沟通目的，并讨论 GEO、AI 品牌可见度、智能体增长、企业级 AI 工作流部署与 FDE 入驻。",
+    description: "联系 FrontMind，讨论 GEO、AI 品牌可见度、智能体增长、企业级 AI 工作流部署与 FDE 入驻。",
     image: DEFAULT_IMAGE,
     priority: "0.8",
     changefreq: "monthly",

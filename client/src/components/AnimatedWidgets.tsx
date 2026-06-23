@@ -70,7 +70,7 @@ export function RadarChart({ data, title = "BSAS 语义资产审计" }: RadarCha
         <div className="w-2 h-2 rounded-full bg-green-400 animate-pulse" />
         <span className="text-green-400 text-xs font-mono">{title}</span>
       </div>
-      <svg viewBox="-55 -24 410 348" className="w-full max-w-[520px] mx-auto overflow-visible">
+      <svg viewBox="0 0 300 300" className="w-full max-w-[300px] mx-auto">
         {/* 网格线 */}
         {gridLevels.map((level) => (
           <polygon

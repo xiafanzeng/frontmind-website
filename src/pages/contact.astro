@@ -4,35 +4,30 @@ import AstroSectionLabel from '../components/AstroSectionLabel.astro';
 
 const topics = ['企业 AI 战略', '品牌语义资产', '智能体增长系统', '组织级落地能力'];
 const emails = ['fanzengxia@link.cuhk.edu.cn', 'litongxin@cuhk.edu.cn'];
-const mailSubject = 'FrontMind 合作沟通｜请替换为公司名';
+const mailSubject = 'FrontMind 商务沟通｜公司名称';
 const mailBody = [
   '公司名称：',
   '您的姓名与职务：',
   '公司官网：',
-  '公司宣传册/介绍材料：请附上文件或提供可访问链接',
-  '沟通目的：请简要说明希望讨论的问题，例如 GEO、AI 品牌可见度、智能体增长、企业级 AI 工作流部署或 FDE 入驻',
-  '当前情况：请说明目前的 AI 使用、营销增长或内部流程部署状态',
-  '希望的下一步：例如初步诊断、方案沟通、管理层会议或项目评估',
+  '公司介绍材料：',
+  '希望讨论的方向：',
+  '当前业务背景：',
+  '期待的下一步：',
 ].join('\n');
 const mailtoHref = (email: string) => `mailto:${email}?subject=${encodeURIComponent(mailSubject)}&body=${encodeURIComponent(mailBody)}`;
-const briefingItems = ['公司名与官网', '您的姓名与职务', '公司宣传册、介绍材料或可访问链接', '本次沟通目的与希望解决的问题', '当前 AI 使用、营销增长或流程部署状态'];
-const templateLines = [
-  '邮件标题：FrontMind 合作沟通｜公司名',
+const briefingItems = ['公司背景', '沟通身份', '讨论目标'];
+const sampleLines = [
+  '邮件标题：FrontMind 商务沟通｜公司名称',
   '',
   '您好，FrontMind 团队：',
   '',
-  '我们是【公司名】，官网为【官网链接】。我是【姓名】，担任【职务】。',
+  '我们来自公司名称，官网为公司官网。我是姓名，负责相关职能。',
   '',
-  '附件/链接中包含我们的公司宣传册或介绍材料：【宣传册链接或附件说明】。',
+  '随信附上公司介绍材料，供团队了解业务背景。',
   '',
-  '本次希望沟通的目的：',
-  '1. 【例如：希望提升品牌在 ChatGPT、Perplexity、Google AI 等生成式答案中的可见度】',
-  '2. 【例如：希望评估企业内部 AI 工作流或智能体部署机会】',
-  '3. 【例如：希望了解 GEO、MindPromise、MindReach、MindNexus 或 FDE 入驻合作方式】',
+  '本次希望重点讨论：品牌在生成式答案中的可见度、智能体增长机会，或企业内部 AI 工作流部署。',
   '',
-  '目前我们的情况是：【简要说明当前 AI 使用、营销增长、客服/销售/运营流程等状态】。',
-  '',
-  '希望下一步可以安排【初步诊断 / 方案沟通 / 管理层会议 / 项目评估】。',
+  '如方向匹配，期待安排一次初步沟通。',
   '',
   '谢谢。',
 ].join('\n');
@@ -40,7 +35,7 @@ const templateLines = [
 
 <BaseLayout
   title="联系 FrontMind - 战略咨询"
-  description="通过邮箱联系 FrontMind，请说明公司名、职务、公司宣传册、沟通目的，并讨论 GEO、AI 品牌可见度、智能体增长、企业级 AI 工作流部署与 FDE 入驻。"
+  description="联系 FrontMind，讨论 GEO、AI 品牌可见度、智能体增长、企业级 AI 工作流部署与 FDE 入驻。"
   lang="zh"
   includeChrome={true}
   currentPath="/contact"
@@ -51,8 +46,8 @@ const templateLines = [
       <div class="grid grid-cols-1 gap-12 lg:grid-cols-12">
         <div class="lg:col-span-7">
           <AstroSectionLabel text="Contact" color="gold" />
-          <h1 class="mb-7 text-5xl font-bold leading-tight text-[#1A1A2E] md:text-7xl" style="font-family: 'DM Serif Display', serif;">开启一次高质量的 AI 战略对话</h1>
-          <p class="max-w-2xl text-lg leading-relaxed text-[#6B7280]" style="font-family: 'DM Sans', sans-serif;">如果企业正在重新思考 AI 时代的品牌理解、增长秩序与组织能力，FrontMind 可以与你共同定义值得长期拥有的系统优势。</p>
+          <h1 class="mb-7 text-5xl font-bold leading-tight text-[#1A1A2E] md:text-7xl" style="font-family: 'DM Serif Display', serif;">与 FrontMind 开启一次业务讨论</h1>
+          <p class="max-w-2xl text-lg leading-relaxed text-[#6B7280]" style="font-family: 'DM Sans', sans-serif;">如果企业正在思考 AI 搜索可见度、智能体增长或内部流程 AI 化，欢迎将业务背景与合作方向发送给我们。</p>
           <div class="mt-9 flex flex-wrap gap-3">
             {topics.map((item) => <span class="rounded-full border border-[#3D1560]/10 bg-white px-4 py-2 text-xs font-bold uppercase tracking-[0.16em] text-[#3D1560]" style="font-family: 'DM Sans', sans-serif;">{item}</span>)}
           </div>
@@ -60,7 +55,7 @@ const templateLines = [
         <div class="lg:col-span-5">
           <div class="fm-emphasis-card p-9 md:p-12">
             <h2 class="mb-5 text-4xl font-bold leading-tight text-[#1A1A2E]" style="font-family: 'DM Serif Display', serif;">Strategic Conversation</h2>
-            <p class="mb-8 text-sm leading-relaxed text-[#6B7280]" style="font-family: 'DM Sans', sans-serif;">请在邮件中说明公司名、您的职务、公司宣传册或介绍材料、沟通目的和希望安排的下一步。我们会根据邮件内容判断后续沟通方式。</p>
+            <p class="mb-8 text-sm leading-relaxed text-[#6B7280]" style="font-family: 'DM Sans', sans-serif;">来信可简要说明公司背景、您的职务、公司介绍材料与希望讨论的重点。FrontMind 团队会基于材料判断适合的交流方式。</p>
             <div class="space-y-3">
               {emails.map((email) => <a href={mailtoHref(email)} class="inline-flex w-full justify-center rounded-md bg-[#3D1560] px-6 py-4 text-sm font-bold text-white no-underline">{email}</a>)}
             </div>
@@ -70,14 +65,14 @@ const templateLines = [
 
       <div class="mt-12 grid grid-cols-1 gap-8 lg:grid-cols-12">
         <div class="fm-card p-7 lg:col-span-5">
-          <h2 class="mb-5 text-3xl font-bold leading-tight text-[#1A1A2E]" style="font-family: 'DM Serif Display', serif;">邮件中请包含</h2>
+          <h2 class="mb-5 text-3xl font-bold leading-tight text-[#1A1A2E]" style="font-family: 'DM Serif Display', serif;">来信建议</h2>
           <ul class="space-y-3">
             {briefingItems.map((item) => <li class="text-sm leading-relaxed text-[#4B5563]" style="font-family: 'DM Sans', sans-serif;">• {item}</li>)}
           </ul>
         </div>
         <div class="fm-emphasis-card p-7 lg:col-span-7">
-          <h2 class="mb-5 text-3xl font-bold leading-tight text-[#1A1A2E]" style="font-family: 'DM Serif Display', serif;">邮件模板参考</h2>
-          <pre class="whitespace-pre-wrap rounded-md border border-[#E5E7EB] bg-white p-4 text-sm leading-relaxed text-[#4B5563]" style="font-family: 'DM Sans', sans-serif;">{templateLines}</pre>
+          <h2 class="mb-5 text-3xl font-bold leading-tight text-[#1A1A2E]" style="font-family: 'DM Serif Display', serif;">来信示例</h2>
+          <pre class="whitespace-pre-wrap border-l-2 border-[#C5A24D] bg-white px-5 py-4 text-sm leading-relaxed text-[#4B5563]" style="font-family: 'DM Sans', sans-serif;">{sampleLines}</pre>
         </div>
       </div>
     </div>

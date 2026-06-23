@@ -7,7 +7,7 @@ const astroDir = join(distDir, '_astro');
 
 const shortDescriptions = new Map([
   ['about/index.html', '了解 FrontMind 的研究背景、团队方法论、发展里程碑，以及我们在 AI 时代为企业提供品牌咨询与可见度战略的定位。'],
-  ['contact/index.html', '通过邮箱联系 FrontMind，请说明公司名、职务、公司宣传册、沟通目的，并讨论 GEO、AI 品牌可见度、智能体增长与企业级 AI 工作流部署。'],
+  ['contact/index.html', '联系 FrontMind，讨论 GEO、AI 品牌可见度、智能体增长、企业级 AI 工作流部署与 FDE 入驻。'],
   ['privacy/index.html', '查看 FrontMind 关于信息处理、Cookie 同意、联系数据使用方式以及用户权利说明的完整隐私政策。'],
   ['privacy-policy/index.html', '查看 FrontMind 关于信息处理、Cookie 同意、联系数据使用方式以及用户权利说明的完整隐私政策。'],
   ['research/index.html', '浏览 FrontMind 关于 GEO、AI 搜索、内容架构、品牌可见度与生成式分发策略的研究报告与案例分析。'],

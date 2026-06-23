@@ -334,8 +334,8 @@ export default function ProductIntroPage({ product, includeChrome = true }: Prod
                 </div>
               </div>
             </div>
-            <div className="max-w-5xl mx-auto">
-              <div className="overflow-visible">
+            <div className="max-w-4xl mx-auto">
+              <div className="max-h-[380px] overflow-hidden">
                 <RadarChart data={demo.data.radarData} title={demo.data.title} />
               </div>
             </div>

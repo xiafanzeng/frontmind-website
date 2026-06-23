@@ -34,7 +34,7 @@ FrontMind 不是传统 SEO 代理商。FrontMind 将生成式 AI 系统视为新
 - https://www.frontmind.net/research/community — FrontMind - GEO 学习社区: GEO 学习社区内容已整合到 FrontMind 阅读场景，帮助企业和从业者理解 AI 搜索、AEO、GEO 与 LLM 评测。
 - https://www.frontmind.net/research/community/blogs — FrontMind - GEO 研究与学习社区文章库: 119 篇中文整理后的 GEO、AI 搜索、LLM 评测、技术 SEO 与内容策略文章。
 - https://www.frontmind.net/about — 关于 FrontMind: 了解 FrontMind 的港中深科研背景、硕博 FDE 团队、企业 AI 化方法论与端到端部署能力。
-- https://www.frontmind.net/contact — 联系 FrontMind: 通过邮箱联系 FrontMind，请说明公司名、职务、公司宣传册、沟通目的，并讨论 GEO、AI 品牌可见度、智能体增长、企业级 AI 工作流部署与 FDE 入驻。
+- https://www.frontmind.net/contact — 联系 FrontMind: 联系 FrontMind，讨论 GEO、AI 品牌可见度、智能体增长、企业级 AI 工作流部署与 FDE 入驻。
 - https://www.frontmind.net/news — FrontMind 新闻动态: FrontMind 最新公司动态、行业新闻与产品更新。
 - https://www.frontmind.net/privacy — FrontMind 隐私政策: 查看 FrontMind 关于信息处理、Cookie 同意和联系数据使用方式的隐私政策。
 - https://www.frontmind.net/terms — FrontMind 服务条款: 查看 FrontMind 网站访问、内容使用和业务咨询相关的基础服务条款。

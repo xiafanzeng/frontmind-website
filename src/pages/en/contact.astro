@@ -4,35 +4,30 @@ import AstroSectionLabel from '../../components/AstroSectionLabel.astro';
 
 const topics = ['Enterprise AI strategy', 'Brand semantics', 'Agentic growth', 'Organizational capability'];
 const emails = ['fanzengxia@link.cuhk.edu.cn', 'litongxin@cuhk.edu.cn'];
-const mailSubject = 'FrontMind Collaboration Inquiry | Replace with Company Name';
+const mailSubject = 'FrontMind Business Conversation | Company Name';
 const mailBody = [
   'Company name:',
   'Your name and title:',
   'Company website:',
-  'Company brochure / introduction material: attach a file or provide an accessible link',
-  'Purpose of communication: briefly describe the topic, such as GEO, AI brand visibility, agentic growth, enterprise AI workflow deployment, or FDE embedding',
-  'Current situation: describe current AI usage, marketing growth, or internal workflow deployment status',
-  'Preferred next step: initial diagnosis, solution discussion, leadership meeting, or project assessment',
+  'Company introduction material:',
+  'Topic you would like to discuss:',
+  'Current business context:',
+  'Preferred next step:',
 ].join('\n');
 const mailtoHref = (email: string) => `mailto:${email}?subject=${encodeURIComponent(mailSubject)}&body=${encodeURIComponent(mailBody)}`;
-const briefingItems = ['Company name and website', 'Your name and title', 'Company brochure, introduction material, or accessible link', 'Purpose of communication and problem to solve', 'Current AI usage, growth, or workflow deployment status'];
-const templateLines = [
-  'Subject: FrontMind Collaboration Inquiry | Company Name',
+const briefingItems = ['Company context', 'Your role', 'Conversation goal'];
+const sampleLines = [
+  'Subject: FrontMind Business Conversation | Company Name',
   '',
   'Hello FrontMind team,',
   '',
-  'We are [company name], and our website is [website link]. My name is [name], and I serve as [title].',
+  'We are from Company Name. Our website is Company Website. My name is Name, and I lead the relevant function.',
   '',
-  'Our company brochure or introduction material is attached or available here: [link or attachment note].',
+  'I have attached our company introduction material for your reference.',
   '',
-  'The purpose of this conversation is:',
-  '1. [For example: improving brand visibility in ChatGPT, Perplexity, Google AI, and other generative answer environments]',
-  '2. [For example: evaluating enterprise AI workflows or agent deployment opportunities]',
-  '3. [For example: understanding GEO, MindPromise, MindReach, MindNexus, or FDE collaboration models]',
+  'We would like to discuss brand visibility in generative answers, agentic growth opportunities, or enterprise AI workflow deployment.',
   '',
-  'Our current situation is: [briefly describe current AI usage, growth, customer service, sales, or operations workflow status].',
-  '',
-  'For the next step, we would like to arrange [initial diagnosis / solution discussion / leadership meeting / project assessment].',
+  'If the direction is aligned, we would appreciate an initial conversation.',
   '',
   'Thank you.',
 ].join('\n');
@@ -40,7 +35,7 @@ const templateLines = [
 
 <BaseLayout
   title="Contact FrontMind - Strategic Conversation"
-  description="Contact FrontMind by email with your company name, title, brochure, and purpose to discuss GEO, AI brand visibility, agentic growth, enterprise AI workflow deployment, and FDE embedding."
+  description="Contact FrontMind to discuss GEO, AI brand visibility, agentic growth, enterprise AI workflow deployment, and FDE embedding."
   lang="en"
   includeChrome={true}
   currentPath="/en/contact"
@@ -51,8 +46,8 @@ const templateLines = [
       <div class="grid grid-cols-1 gap-12 lg:grid-cols-12">
         <div class="lg:col-span-7">
           <AstroSectionLabel text="Contact" color="gold" />
-          <h1 class="mb-7 text-5xl font-bold leading-tight text-[#1A1A2E] md:text-7xl" style="font-family: 'DM Serif Display', serif;">Begin a high-quality AI strategy conversation</h1>
-          <p class="max-w-2xl text-lg leading-relaxed text-[#6B7280]" style="font-family: 'DM Sans', sans-serif;">If your organization is rethinking brand understanding, growth order, and capability in the AI era, FrontMind can help define the advantage worth owning.</p>
+          <h1 class="mb-7 text-5xl font-bold leading-tight text-[#1A1A2E] md:text-7xl" style="font-family: 'DM Serif Display', serif;">Start a business conversation with FrontMind</h1>
+          <p class="max-w-2xl text-lg leading-relaxed text-[#6B7280]" style="font-family: 'DM Sans', sans-serif;">If your organization is exploring AI search visibility, agentic growth, or enterprise AI workflows, share your business context and collaboration direction with us.</p>
           <div class="mt-9 flex flex-wrap gap-3">
             {topics.map((item) => <span class="rounded-full border border-[#3D1560]/10 bg-white px-4 py-2 text-xs font-bold uppercase tracking-[0.16em] text-[#3D1560]" style="font-family: 'DM Sans', sans-serif;">{item}</span>)}
           </div>
@@ -60,7 +55,7 @@ const templateLines = [
         <div class="lg:col-span-5">
           <div class="fm-emphasis-card p-9 md:p-12">
             <h2 class="mb-5 text-4xl font-bold leading-tight text-[#1A1A2E]" style="font-family: 'DM Serif Display', serif;">Strategic Conversation</h2>
-            <p class="mb-8 text-sm leading-relaxed text-[#6B7280]" style="font-family: 'DM Sans', sans-serif;">Please include your company name, title, company brochure or introduction material, purpose of communication, and preferred next step. We will determine the appropriate follow-up from your message.</p>
+            <p class="mb-8 text-sm leading-relaxed text-[#6B7280]" style="font-family: 'DM Sans', sans-serif;">Your note may briefly include company context, your role, introduction material, and the topic you would like to discuss. The FrontMind team will review the material and suggest an appropriate next step.</p>
             <div class="space-y-3">
               {emails.map((email) => <a href={mailtoHref(email)} class="inline-flex w-full justify-center rounded-md bg-[#3D1560] px-6 py-4 text-sm font-bold text-white no-underline">{email}</a>)}
             </div>
@@ -70,14 +65,14 @@ const templateLines = [
 
       <div class="mt-12 grid grid-cols-1 gap-8 lg:grid-cols-12">
         <div class="fm-card p-7 lg:col-span-5">
-          <h2 class="mb-5 text-3xl font-bold leading-tight text-[#1A1A2E]" style="font-family: 'DM Serif Display', serif;">Please Include</h2>
+          <h2 class="mb-5 text-3xl font-bold leading-tight text-[#1A1A2E]" style="font-family: 'DM Serif Display', serif;">Suggested Context</h2>
           <ul class="space-y-3">
             {briefingItems.map((item) => <li class="text-sm leading-relaxed text-[#4B5563]" style="font-family: 'DM Sans', sans-serif;">• {item}</li>)}
           </ul>
         </div>
         <div class="fm-emphasis-card p-7 lg:col-span-7">
-          <h2 class="mb-5 text-3xl font-bold leading-tight text-[#1A1A2E]" style="font-family: 'DM Serif Display', serif;">Email Template</h2>
-          <pre class="whitespace-pre-wrap rounded-md border border-[#E5E7EB] bg-white p-4 text-sm leading-relaxed text-[#4B5563]" style="font-family: 'DM Sans', sans-serif;">{templateLines}</pre>
+          <h2 class="mb-5 text-3xl font-bold leading-tight text-[#1A1A2E]" style="font-family: 'DM Serif Display', serif;">Sample Note</h2>
+          <pre class="whitespace-pre-wrap border-l-2 border-[#C5A24D] bg-white px-5 py-4 text-sm leading-relaxed text-[#4B5563]" style="font-family: 'DM Sans', sans-serif;">{sampleLines}</pre>
         </div>
       </div>
     </div>
