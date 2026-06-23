@@ -51,8 +51,8 @@ export default function Terms({ includeChrome = true }: TermsProps) {
             <h1 className="fm-legal-title">{t("FrontMind 服务条款", "FrontMind Terms of Service")}</h1>
             <p className="fm-legal-intro">
               {t(
-                "本页面概述您访问 FrontMind 网站、阅读公开内容以及通过联系页面提交业务咨询时适用的基础条款。",
-                "This page outlines the basic terms applicable when you access the FrontMind website, review public content, and submit business enquiries through the contact page.",
+                "本页面概述您访问 FrontMind 网站、阅读公开内容以及通过联系页面提供的邮箱发送业务咨询时适用的基础条款。",
+                "This page outlines the basic terms applicable when you access the FrontMind website, review public content, and send business enquiries through the email addresses on the contact page.",
               )}
             </p>
           </header>
@@ -79,8 +79,8 @@ export default function Terms({ includeChrome = true }: TermsProps) {
             <TermsSection id="terms-enquiries" title={t("3. 业务咨询", "3. Business Enquiries")}>
               <p>
                 {t(
-                  "通过 Contact 页面提交的信息仅用于沟通潜在合作需求。提交咨询并不自动构成服务承诺、签约关系或任何结果保证。",
-                  "Information submitted through the Contact page is used only to discuss potential collaboration needs. Sending an enquiry does not automatically create a service commitment, contractual relationship, or guarantee of results.",
+                  "通过 Contact 页面提供的邮箱发送的信息仅用于沟通潜在合作需求。发送咨询邮件并不自动构成服务承诺、签约关系或任何结果保证。",
+                  "Information sent through the email addresses on the Contact page is used only to discuss potential collaboration needs. Sending an enquiry email does not automatically create a service commitment, contractual relationship, or guarantee of results.",
                 )}
               </p>
             </TermsSection>

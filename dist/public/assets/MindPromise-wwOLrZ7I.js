@@ -1,0 +1,1 @@
+import{j as r}from"./index-CuOqGjM8.js";import{P as o}from"./ProductIntro-D1UjJzU4.js";import"./circle-check-DFsnpl2c.js";import"./radar-C9CLZP-X.js";import"./shield-check-DIwwRU1I.js";function s(){return r.jsx(o,{product:"mindpromise"})}export{s as default};

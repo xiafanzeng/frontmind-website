@@ -57,6 +57,7 @@ function Router() {
         <Route path="/contact">{() => <Contact />}</Route>
         <Route path="/news">{() => <News />}</Route>
         <Route path="/news/:slug">{() => <News />}</Route>
+        <Route path="/news/:slug/">{() => <News />}</Route>
         <Route path="/privacy">{() => <Privacy />}</Route>
         <Route path="/terms">{() => <Terms />}</Route>
         <Route path="/404">{() => <NotFound />}</Route>

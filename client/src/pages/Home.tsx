@@ -32,12 +32,16 @@ function StatsBar() {
       alt: "香港中文大学（深圳） The Chinese University of Hong Kong, Shenzhen",
       maxWidth: "max-w-[460px]",
       imageClassName: "scale-x-[1.04]",
+      width: 1956,
+      height: 378,
     },
     {
       image: INCUBATOR_LOGO_IMG,
       alt: "深港创新创业孵化中心 Shenzhen-Hong Kong Innovation & Entrepreneurship Incubator",
       maxWidth: "max-w-[400px]",
       imageClassName: "",
+      width: 2168,
+      height: 290,
     },
   ];
 
@@ -50,6 +54,8 @@ function StatsBar() {
               <img
                 src={partner.image}
                 alt={partner.alt}
+                width={partner.width}
+                height={partner.height}
                 className={`h-auto max-h-[64px] w-full origin-center ${partner.maxWidth} ${partner.imageClassName} object-contain md:max-h-[72px]`}
                 loading="lazy"
               />
@@ -312,7 +318,7 @@ export default function Home({ includeChrome = true, includeHero = true, include
             ref={revealCta.ref}
             className={`container relative z-10 py-16 md:py-24 reveal ${revealCta.isVisible ? "visible" : ""}`}
           >
-            <div className="max-w-2xl">
+            <div className="max-w-3xl">
               <h2
                 className="text-3xl md:text-4xl lg:text-5xl font-bold text-white leading-tight mb-4"
                 style={{ fontFamily: "'DM Serif Display', serif" }}
@@ -327,8 +333,8 @@ export default function Home({ includeChrome = true, includeHero = true, include
                 style={{ fontFamily: "'DM Serif Display', serif" }}
               >
                 {t(
-                  "以专业服务回应 AI 时代公共需求",
-                  "Responding to public needs of the AI era with professional services",
+                  <>以专业服务回应 AI 时代<span className="whitespace-nowrap">公共需求</span></>,
+                  <>Responding to public needs of the AI era with professional services</>,
                 )}
               </h3>
               <p
@@ -424,7 +430,7 @@ function RecentNews() {
             {news.map((item) => (
               <Link
                 key={item.title}
-                href={`/news/${item.slug}`}
+                href={`/news/${item.slug}/`}
                 className="overflow-hidden group transition-all duration-300 no-underline flex flex-col"
                 style={{
                   backgroundColor: "#fff",

@@ -277,7 +277,7 @@ function ResearchPostCard({ post }: { post: CommunityPostCn }) {
 }
 
 function postImage(post: CommunityPostCn) {
-  const file = post.imageCn.split("/").pop() || "";
+  const file = (post.imageCn.split("/").pop() || "").replace(/\.(png|jpe?g)$/i, ".webp");
   return `${BLOG_IMAGE_BASE}/${file}`;
 }
 

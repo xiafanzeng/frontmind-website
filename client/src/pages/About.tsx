@@ -15,7 +15,7 @@ import { ArrowRight, CheckCircle2 } from "lucide-react";
 const HERO_IMG = "/about/cuhk-ai-lab-hero.webp";
 const CTA_BG_IMG =
   "https://d2xsxph8kpxj0f.cloudfront.net/310519663567004319/FRgjGX8Da7KscfHcwTaFCq/cta-geometric-a34vAZt6eBGYhkxnp6tcD8.webp";
-const LAB_URL = import.meta.env.VITE_FRONTMIND_LAB_URL || "/research";
+const LAB_URL = import.meta.env.VITE_FRONTMIND_LAB_URL || "https://www.cuhkgeo.com";
 
 type AboutProps = {
   includeChrome?: boolean;

@@ -646,7 +646,7 @@ export default function News() {
 
   // Determine if we're viewing a specific article
   const path = typeof window !== "undefined" ? window.location.pathname : "";
-  const slugMatch = path.match(/^\/news\/([^/]+)$/);
+  const slugMatch = path.match(/^\/news\/([^/]+)\/?$/);
   const currentSlug = slugMatch?.[1];
   const currentArticle = currentSlug ? newsArticles.find((a) => a.slug === currentSlug) : null;
 
@@ -786,7 +786,7 @@ export default function News() {
             {newsArticles.map((item) => (
               <Link
                 key={item.slug}
-                href={`/news/${item.slug}`}
+                href={`/news/${item.slug}/`}
                 className="overflow-hidden group transition-all duration-300 no-underline bg-white rounded-lg border border-[#E5E7EB] hover:shadow-lg"
               >
                 <div className="aspect-[16/10] overflow-hidden">

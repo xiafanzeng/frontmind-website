@@ -371,13 +371,13 @@ function postPath(slug: string) {
 }
 
 function postForPath(path: string) {
-  const slug = path.match(/^\/blogs\/generative-engine-optimization\/([^/]+)$/)?.[1];
+  const slug = path.match(/^\/blogs\/generative-engine-optimization\/([^/]+)\/?$/)?.[1];
   if (!slug) return undefined;
   return communityPostsCn.find((post) => post.slug === slug);
 }
 
 function postImage(post: CommunityPostCn) {
-  const file = post.imageCn.split("/").pop() || "";
+  const file = (post.imageCn.split("/").pop() || "").replace(/\.(png|jpe?g)$/i, ".webp");
   return `${BLOG_IMAGE_BASE}/${file}`;
 }
 

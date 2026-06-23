@@ -1,1 +1,0 @@
-import{j as r}from"./index-jVn51xB8.js";import{P as o}from"./ProductIntro-1npcd269.js";import"./circle-check-DzJogEhz.js";import"./radar-BgNOApXk.js";function p(){return r.jsx(o,{product:"mindpromise"})}export{p as default};

@@ -79,7 +79,7 @@ export default function Navbar() {
       return;
     }
 
-    setPortalError(t("客户代码不正确，请重新输入。", "Invalid customer code. Please try again."));
+    setPortalError(t("管理员代码不正确，请重新输入。", "Invalid administrator code. Please try again."));
   };
 
   return (
@@ -177,14 +177,14 @@ export default function Navbar() {
             onClick={() =>
               openProtectedPortal({
                 href: AGENT_CONSOLE_URL,
-                label: t("智能体操作台", "Agent Console"),
+                label: t("管理员操作台", "Admin Console"),
               })
             }
             className="ml-3 px-5 py-2 text-sm font-semibold border-2 border-[#3D1560] text-[#3D1560] rounded-md hover:bg-[#3D1560] hover:text-white transition-all duration-300 no-underline"
             style={{ fontFamily: "'DM Sans', sans-serif" }}
             aria-haspopup="dialog"
           >
-            {t("智能体操作台", "Agent Console")}
+            {t("管理员操作台", "Admin Console")}
           </button>
           <button
             type="button"
@@ -277,14 +277,14 @@ export default function Navbar() {
               onClick={() =>
                 openProtectedPortal({
                   href: AGENT_CONSOLE_URL,
-                  label: t("智能体操作台", "Agent Console"),
+                  label: t("管理员操作台", "Admin Console"),
                 })
               }
               className="mt-2 px-4 py-3 text-sm font-semibold border-2 border-[#3D1560] text-[#3D1560] rounded-md text-center no-underline"
               style={{ fontFamily: "'DM Sans', sans-serif" }}
               aria-haspopup="dialog"
             >
-              {t("智能体操作台", "Agent Console")}
+              {t("管理员操作台", "Admin Console")}
             </button>
             <button
               type="button"
@@ -309,15 +309,15 @@ export default function Navbar() {
           <form onSubmit={handlePortalSubmit} className="space-y-5">
             <DialogHeader>
               <DialogTitle className="text-[#1A1A2E]" style={{ fontFamily: "'DM Serif Display', serif" }}>
-                {t("客户代码验证", "Customer Code Required")}
+                {t("管理员代码验证", "Administrator Code Required")}
               </DialogTitle>
               <DialogDescription className="text-[#6B7280]" style={{ fontFamily: "'DM Sans', sans-serif" }}>
                 {portalTarget
                   ? t(
-                      `请输入客户代码以进入${portalTarget.label}。`,
-                      `Enter the customer code to continue to ${portalTarget.label}.`,
+                      `请输入管理员代码以进入${portalTarget.label}。`,
+                      `Enter the administrator code to continue to ${portalTarget.label}.`,
                     )
-                  : t("请输入客户代码。", "Enter the customer code.")}
+                  : t("请输入管理员代码。", "Enter the administrator code.")}
               </DialogDescription>
             </DialogHeader>
 
@@ -327,7 +327,7 @@ export default function Navbar() {
                 className="block text-sm font-semibold text-[#1A1A2E]"
                 style={{ fontFamily: "'DM Sans', sans-serif" }}
               >
-                {t("客户代码", "Customer Code")}
+                {t("管理员代码", "Administrator Code")}
               </label>
               <Input
                 id="frontmind-client-code"
@@ -339,7 +339,7 @@ export default function Navbar() {
                 }}
                 autoComplete="off"
                 autoFocus
-                placeholder={t("请输入客户代码", "Enter customer code")}
+                placeholder={t("请输入管理员代码", "Enter administrator code")}
                 aria-invalid={Boolean(portalError)}
                 aria-describedby={portalError ? "frontmind-client-code-error" : undefined}
                 className="h-11 border-[#D1D5DB] bg-white text-[#1A1A2E] focus-visible:border-[#3D1560] focus-visible:ring-[#3D1560]/20"
