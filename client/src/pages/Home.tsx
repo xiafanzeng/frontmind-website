@@ -30,14 +30,16 @@ function StatsBar() {
     {
       image: CUHK_SHENZHEN_LOGO_IMG,
       alt: "香港中文大学（深圳） The Chinese University of Hong Kong, Shenzhen",
-      maxWidth: "max-w-[460px]",
-      imageClassName: "scale-x-[1.04]",
+      maxWidth: "485px",
+      maxHeight: "94px",
+      scaleX: 1,
     },
     {
       image: INCUBATOR_LOGO_IMG,
       alt: "深港创新创业孵化中心 Shenzhen-Hong Kong Innovation & Entrepreneurship Incubator",
-      maxWidth: "max-w-[400px]",
-      imageClassName: "",
+      maxWidth: "420px",
+      maxHeight: "56px",
+      scaleX: 1,
     },
   ];
 
@@ -50,7 +52,12 @@ function StatsBar() {
               <img
                 src={partner.image}
                 alt={partner.alt}
-                className={`h-auto max-h-[64px] w-full origin-center ${partner.maxWidth} ${partner.imageClassName} object-contain md:max-h-[72px]`}
+                className="h-auto w-full origin-center object-contain"
+                style={{
+                  maxWidth: partner.maxWidth,
+                  maxHeight: partner.maxHeight,
+                  transform: `scaleX(${partner.scaleX})`,
+                }}
                 loading="lazy"
               />
             </div>

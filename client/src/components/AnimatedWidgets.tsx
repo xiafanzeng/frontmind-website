@@ -39,7 +39,7 @@ export function RadarChart({ data, title = "BSAS 语义资产审计" }: RadarCha
     return () => observer.disconnect();
   }, []);
 
-  const cx = 150, cy = 150, radius = 110;
+  const cx = 150, cy = 150, radius = 74;
   const n = data.length;
   const angleStep = (2 * Math.PI) / n;
 
@@ -65,12 +65,16 @@ export function RadarChart({ data, title = "BSAS 语义资产审计" }: RadarCha
   const gridLevels = [25, 50, 75, 100];
 
   return (
-    <div ref={ref} className="mx-auto w-full max-w-[560px] bg-slate-900 p-4 md:p-5">
-      <div className="flex items-center gap-2 mb-2">
+    <div ref={ref} className="mx-auto w-full max-w-[520px] bg-slate-900 px-4 py-3 md:px-5 md:py-4">
+      <div className="mb-1.5 flex items-center gap-2">
         <div className="w-2 h-2 rounded-full bg-green-400 animate-pulse" />
         <span className="text-green-400 text-xs font-mono">{title}</span>
       </div>
-      <svg viewBox="0 0 300 300" className="w-full max-w-[240px] mx-auto md:max-w-[260px]">
+      <svg
+        viewBox="34 50 232 184"
+        className="mx-auto block w-full"
+        style={{ maxWidth: "463px" }}
+      >
         {/* 网格线 */}
         {gridLevels.map((level) => (
           <polygon
@@ -82,7 +86,7 @@ export function RadarChart({ data, title = "BSAS 语义资产审计" }: RadarCha
             }).join(" ")}
             fill="none"
             stroke="#334155"
-            strokeWidth="0.5"
+            strokeWidth="0.4"
           />
         ))}
         {/* 轴线 */}
@@ -94,7 +98,7 @@ export function RadarChart({ data, title = "BSAS 语义资产审计" }: RadarCha
               x1={cx} y1={cy}
               x2={cx + radius * Math.cos(angle)}
               y2={cy + radius * Math.sin(angle)}
-              stroke="#334155" strokeWidth="0.5"
+              stroke="#334155" strokeWidth="0.4"
             />
           );
         })}
@@ -103,8 +107,8 @@ export function RadarChart({ data, title = "BSAS 语义资产审计" }: RadarCha
           points={beforePoints}
           fill="rgba(239, 68, 68, 0.18)"
           stroke="#EF4444"
-          strokeWidth="2.5"
-          strokeDasharray="5 3"
+          strokeWidth="1.7"
+          strokeDasharray="3.5 2"
           opacity={progress > 20 ? 1 : 0}
         />
         {/* 优化后 - 紫色实线区域 */}
@@ -112,34 +116,34 @@ export function RadarChart({ data, title = "BSAS 语义资产审计" }: RadarCha
           points={afterPoints}
           fill="rgba(139, 92, 246, 0.2)"
           stroke="#8B5CF6"
-          strokeWidth="2"
+          strokeWidth="1.4"
         />
         {/* 优化后的节点 */}
         {data.map((d, i) => {
           const p = getPoint(i, d.value);
-          return <circle key={i} cx={p.x} cy={p.y} r="4" fill="#8B5CF6" stroke="#fff" strokeWidth="1.5" />;
+          return <circle key={i} cx={p.x} cy={p.y} r="2.7" fill="#8B5CF6" stroke="#fff" strokeWidth="1" />;
         })}
         {/* 优化前的节点 */}
         {progress > 20 && data.map((d, i) => {
           const bv = d.beforeValue ?? Math.round(d.value * 0.4);
           const p = getPoint(i, bv);
-          return <circle key={`b-${i}`} cx={p.x} cy={p.y} r="5" fill="#EF4444" stroke="#fff" strokeWidth="1.5" opacity={0.9} />;
+          return <circle key={`b-${i}`} cx={p.x} cy={p.y} r="3.3" fill="#EF4444" stroke="#fff" strokeWidth="1" opacity={0.9} />;
         })}
         {/* 维度标签 */}
         {data.map((d, i) => {
           const angle = angleStep * i - Math.PI / 2;
-          const labelR = radius + 22;
+          const labelR = radius + 15;
           const x = cx + labelR * Math.cos(angle);
           const y = cy + labelR * Math.sin(angle);
           return (
-            <text key={i} x={x} y={y} textAnchor="middle" dominantBaseline="middle" className="fill-slate-300 text-[10px]">
+            <text key={i} x={x} y={y} textAnchor="middle" dominantBaseline="middle" className="fill-slate-300 text-[7px]">
               {d.label}
             </text>
           );
         })}
       </svg>
       {/* 图例 */}
-      <div className="mt-2 flex items-center justify-center gap-6 text-xs">
+      <div className="mt-1.5 flex items-center justify-center gap-5 text-[11px]">
         <div className="flex items-center gap-2">
           <div className="w-4 h-0.5 bg-red-500" style={{ borderTop: '1.5px dashed #EF4444' }} />
           <span className="text-slate-400">优化前</span>
