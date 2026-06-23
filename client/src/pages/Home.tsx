@@ -30,8 +30,8 @@ function StatsBar() {
     {
       image: CUHK_SHENZHEN_LOGO_IMG,
       alt: "香港中文大学（深圳） The Chinese University of Hong Kong, Shenzhen",
-      maxWidth: "485px",
-      maxHeight: "94px",
+      maxWidth: "480px",
+      maxHeight: "88px",
       scaleX: 1,
     },
     {
