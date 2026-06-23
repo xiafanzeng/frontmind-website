@@ -1,4 +1,5 @@
 node_modules/
+dist/
 .manus-logs/
 .astro/
 .vite/

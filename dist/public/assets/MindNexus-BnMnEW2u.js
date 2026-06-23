@@ -1,1 +1,0 @@
-import{j as r}from"./index-CuOqGjM8.js";import{P as t}from"./ProductIntro-D1UjJzU4.js";import"./circle-check-DFsnpl2c.js";import"./radar-C9CLZP-X.js";import"./shield-check-DIwwRU1I.js";function p(){return r.jsx(t,{product:"mindnexus"})}export{p as default};
