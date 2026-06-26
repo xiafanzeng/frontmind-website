@@ -28,7 +28,6 @@ type SummaryCountry = VisitorCountry & {
 };
 
 const STORE_PATH = process.env.FRONTMIND_VISITOR_STATS_FILE || path.resolve(process.cwd(), ".frontmind-visitor-stats.json");
-const SPECIAL_ISOS = new Set(["unknown", "other"]);
 const seedByIso = new Map(visitorCountries.map((country) => [country.iso, country]));
 const regionNames = typeof Intl.DisplayNames !== "undefined" ? new Intl.DisplayNames(["en"], { type: "region" }) : null;
 
@@ -110,21 +109,11 @@ function buildSummary() {
     });
   }
 
-  for (const visitor of Object.values(store.visitors)) {
-    const seed = seedByIso.get(visitor.iso);
-    const country = countryMap.get(visitor.iso) || {
-      country: visitor.country,
-      iso: visitor.iso,
-      reads: 0,
-      latitude: seed?.latitude || 0,
-      longitude: seed?.longitude || 0,
-      liveReads: 0,
-      baselineReads: 0,
-    };
-
-    country.liveReads += 1;
-    country.reads = country.baselineReads + country.liveReads;
-    countryMap.set(visitor.iso, country);
+  const mainlandChina = countryMap.get("cn");
+  if (mainlandChina) {
+    mainlandChina.liveReads += store.pageviews;
+    mainlandChina.reads = mainlandChina.baselineReads + mainlandChina.liveReads;
+    countryMap.set("cn", mainlandChina);
   }
 
   const countries = Array.from(countryMap.values())
@@ -135,29 +124,18 @@ function buildSummary() {
     .filter((country) => country.reads > 0)
     .sort((a, b) => b.reads - a.reads || a.country.localeCompare(b.country));
 
-  const liveUniqueVisitors = Object.keys(store.visitors).length;
-  const liveCountryCount = new Set(
-    Object.values(store.visitors)
-      .map((visitor) => visitor.iso)
-      .filter((iso) => !SPECIAL_ISOS.has(iso)),
-  ).size;
-
   return {
     ok: true,
     mode: "live",
-    totalReads: visitorStatsSummary.totalReads + liveUniqueVisitors,
-    countryCount: Math.max(visitorStatsSummary.countryCount, countBaselineCountries() + liveCountryCount),
+    totalReads: visitorStatsSummary.totalReads + store.pageviews,
+    countryCount: visitorStatsSummary.countryCount,
     baselineReads: visitorStatsSummary.totalReads,
-    liveReads: liveUniqueVisitors,
+    liveReads: store.pageviews,
     pageviews: store.pageviews,
     countries,
     updatedAt: store.updatedAt || null,
-    note: "Counts are cumulative unique browser visitors. Country comes from deployment geo headers when available; missing geo defaults to China for this China-based site.",
+    note: "Counts are cumulative page views. Live increments default to Mainland China for this China-based site.",
   };
-}
-
-function countBaselineCountries() {
-  return visitorCountries.filter((country) => !SPECIAL_ISOS.has(country.iso)).length;
 }
 
 function readStore(): VisitorStore {
@@ -202,7 +180,7 @@ function countryFromHeaders(req: IncomingMessage) {
   if (!cleanIso) {
     const defaultCountry = seedByIso.get("cn");
     return {
-      country: defaultCountry?.country || "China",
+      country: defaultCountry?.country || "Mainland China",
       iso: "cn",
     };
   }

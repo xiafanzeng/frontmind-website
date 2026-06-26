@@ -72,6 +72,7 @@ function StatsBar() {
 function HeroNewsWall() {
   const { t } = useLang();
   const [activeSlide, setActiveSlide] = useState(0);
+  const [isCarouselPaused, setIsCarouselPaused] = useState(false);
   const slides = [
     { image: HERO_CUHK_QS_WIDE_IMG, alt: t("香港中文大学深圳 QS 排名海报", "CUHK-Shenzhen QS ranking poster"), fit: "cover" },
     { image: HERO_CUHK_VISIT_IMG, alt: t("潮汕青年企业家到访港中深", "Chaozhou entrepreneurs visiting CUHK-Shenzhen"), fit: "contain" },
@@ -81,16 +82,22 @@ function HeroNewsWall() {
   const slideCount = slides.length;
 
   useEffect(() => {
+    if (isCarouselPaused || slideCount <= 1) return;
+
     const timer = window.setInterval(() => {
       setActiveSlide((c) => (c + 1) % slideCount);
     }, 5000);
     return () => window.clearInterval(timer);
-  }, [slideCount]);
+  }, [isCarouselPaused, slideCount]);
 
   return (
     <div className="relative hidden lg:block">
       <div className="relative ml-auto w-full max-w-[820px] border border-[#E5E7EB] bg-white">
-        <div className="relative aspect-[16/9] overflow-hidden border-b border-[#E5E7EB] bg-white">
+        <div
+          className="relative aspect-[16/9] overflow-hidden border-b border-[#E5E7EB] bg-white"
+          onMouseEnter={() => setIsCarouselPaused(true)}
+          onMouseLeave={() => setIsCarouselPaused(false)}
+        >
           {slides.map((slide, index) => (
             <div
               key={slide.image}
@@ -142,6 +149,7 @@ function HeroNewsWall() {
 function MobileHeroCarousel() {
   const { t } = useLang();
   const [activeSlide, setActiveSlide] = useState(0);
+  const [isCarouselPaused, setIsCarouselPaused] = useState(false);
   const slides = [
     { image: HERO_CUHK_QS_WIDE_IMG, fit: "cover" },
     { image: HERO_CUHK_VISIT_IMG, fit: "contain" },
@@ -151,15 +159,21 @@ function MobileHeroCarousel() {
   const slideCount = slides.length;
 
   useEffect(() => {
+    if (isCarouselPaused || slideCount <= 1) return;
+
     const timer = window.setInterval(() => {
       setActiveSlide((c) => (c + 1) % slideCount);
     }, 4000);
     return () => window.clearInterval(timer);
-  }, [slideCount]);
+  }, [isCarouselPaused, slideCount]);
 
   return (
     <div className="lg:hidden mt-8 border border-[#E5E7EB] bg-white">
-      <div className="relative aspect-[16/9] overflow-hidden">
+      <div
+        className="relative aspect-[16/9] overflow-hidden"
+        onMouseEnter={() => setIsCarouselPaused(true)}
+        onMouseLeave={() => setIsCarouselPaused(false)}
+      >
         {slides.map((slide, index) => (
           <div
             key={slide.image}

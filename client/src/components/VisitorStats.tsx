@@ -29,14 +29,13 @@ const fallbackStats: VisitorStatsPayload = {
   updatedAt: null,
 };
 
-const VISITOR_STATS_API_ENABLED = import.meta.env.VITE_ENABLE_VISITOR_STATS_API === "true";
+const VISITOR_STATS_API_ENABLED = import.meta.env.VITE_ENABLE_VISITOR_STATS_API !== "false";
 
 export default function VisitorStats() {
   const { t, lang } = useLang();
   const [expanded, setExpanded] = useState(true);
   const [stats, setStats] = useState<VisitorStatsPayload>(fallbackStats);
   const topCountry = stats.countries[0] || visitorCountries[0];
-  const liveReads = stats.liveReads || 0;
 
   useEffect(() => {
     if (!VISITOR_STATS_API_ENABLED) return;
@@ -88,7 +87,7 @@ export default function VisitorStats() {
   }, []);
 
   return (
-    <section className="border-t border-[#E5E7EB] bg-[#FAFAFA]" aria-label={t("累计访问分布", "Total reader distribution")}>
+    <section className="border-t border-[#E5E7EB] bg-[#FAFAFA]" aria-label={t("累计访问分布", "Total visit distribution")}>
       <div className="container py-6">
         <div className="border border-[#E5E7EB] bg-white">
           <button
@@ -102,8 +101,8 @@ export default function VisitorStats() {
               <span className="min-w-0">
                 <span className="block text-sm leading-relaxed text-[#4B5563]" style={{ fontFamily: "'DM Sans', sans-serif" }}>
                   {t(
-                    <>累计被 <strong className="font-bold text-[#1A1A2E]">{formatNumber(stats.totalReads)}</strong> 人阅读，覆盖 <strong className="font-bold text-[#1A1A2E]">{stats.countryCount}</strong> 个国家/地区</>,
-                    <>Read by <strong className="font-bold text-[#1A1A2E]">{formatNumber(stats.totalReads)}</strong> people across <strong className="font-bold text-[#1A1A2E]">{stats.countryCount}</strong> countries in total</>,
+                    <>累计访问量 <strong className="font-bold text-[#1A1A2E]">{formatNumber(stats.totalReads)}</strong> 次，覆盖 <strong className="font-bold text-[#1A1A2E]">{stats.countryCount}</strong> 个国家/地区</>,
+                    <><strong className="font-bold text-[#1A1A2E]">{formatNumber(stats.totalReads)}</strong> total visits across <strong className="font-bold text-[#1A1A2E]">{stats.countryCount}</strong> countries and regions</>,
                   )}
                 </span>
 
@@ -127,12 +126,12 @@ export default function VisitorStats() {
 
                 <div className="min-w-0">
                   <div className="mb-4 grid grid-cols-3 gap-2">
-                    <StatTile label={t("累计阅读", "Total reads")} value={formatNumber(stats.totalReads)} />
-                    <StatTile label={t("覆盖国家", "Countries")} value={formatNumber(stats.countryCount)} />
-                    <StatTile label={t("最高来源", "Top source")} value={getCountryName(topCountry.country, topCountry.iso, lang)} />
+                    <StatTile label={t("累计访问", "Total visits")} value={formatNumber(stats.totalReads)} />
+                    <StatTile label={t("覆盖地区", "Regions")} value={formatNumber(stats.countryCount)} />
+                    <StatTile label={t("最高来源", "Top region")} value={getCountryName(topCountry.country, topCountry.iso, lang)} />
                   </div>
 
-                  <ul className="grid max-h-[340px] grid-cols-1 gap-2 overflow-auto pr-1 sm:grid-cols-2" aria-label={t("国家访问列表", "Country reader list")}>
+                  <ul className="grid max-h-[340px] grid-cols-1 gap-2 overflow-auto pr-1 sm:grid-cols-2" aria-label={t("国家访问列表", "Country visit list")}>
                     {stats.countries.map((country) => (
                       <li key={country.country} className="flex items-center gap-2 border border-[#E5E7EB] bg-[#FAFAFA] px-3 py-2 text-sm">
                         <span className="shrink-0 text-base leading-none inline-flex items-center justify-center" style={{ width: '1.4em' }} aria-hidden="true">
@@ -242,7 +241,7 @@ function VisitorWorldMap({ countries }: { countries: VisitorCountry[] }) {
         >
           <span className="block text-[#3D1560]">{tooltip.country}</span>
           <span className="mt-0.5 block text-[#6B7280]">
-            {t(`${formatNumber(tooltip.reads)} 人阅读`, `${formatNumber(tooltip.reads)} readers`)}
+            {t(`${formatNumber(tooltip.reads)} 次访问`, `${formatNumber(tooltip.reads)} visits`)}
           </span>
         </div>
       )}
@@ -261,7 +260,7 @@ function tintMapSvg(svgText: string, countries: VisitorCountry[]) {
 
   svg.setAttribute("class", "fm-visitor-map-svg");
   svg.setAttribute("role", "img");
-  svg.setAttribute("aria-label", "World map of cumulative readers");
+  svg.setAttribute("aria-label", "World map of cumulative visits");
 
   const paths = svg.querySelectorAll("path[id]");
   paths.forEach((path) => {
@@ -278,7 +277,7 @@ function tintMapSvg(svgText: string, countries: VisitorCountry[]) {
     path.setAttribute("data-users", String(country.reads));
     path.setAttribute("data-country", country.country);
     path.setAttribute("tabindex", "0");
-    path.setAttribute("aria-label", `${country.country}: ${formatNumber(country.reads)} readers`);
+    path.setAttribute("aria-label", `${country.country}: ${formatNumber(country.reads)} visits`);
     const title = document.createElementNS("http://www.w3.org/2000/svg", "title");
     title.textContent = `${country.country} - ${formatNumber(country.reads)}`;
     path.prepend(title);
@@ -300,7 +299,7 @@ function normalizeStats(payload: VisitorStatsPayload): VisitorStatsPayload {
 }
 
 const countryNameZh: Record<string, string> = {
-  cn: "中国", hk: "中国香港", us: "美国", sg: "新加坡", tw: "中国台湾", jp: "日本", kr: "韩国",
+  cn: "中国大陆", hk: "中国香港", us: "美国", sg: "新加坡", tw: "中国台湾", jp: "日本", kr: "韩国",
   de: "德国", gb: "英国", ca: "加拿大", au: "澳大利亚", my: "马来西亚", vn: "越南", in: "印度",
   fr: "法国", th: "泰国", ae: "阿联酋", id: "印度尼西亚", nl: "荷兰", it: "意大利",
   es: "西班牙", ch: "瑞士", nz: "新西兰", br: "巴西", se: "瑞典", ph: "菲律宾",

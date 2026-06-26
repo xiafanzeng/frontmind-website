@@ -12,7 +12,7 @@ export const visitorStatsSummary = {
 };
 
 export const visitorCountries: VisitorCountry[] = [
-  { country: "China", iso: "cn", reads: 930, latitude: 35.8617, longitude: 104.1954 },
+  { country: "Mainland China", iso: "cn", reads: 930, latitude: 35.8617, longitude: 104.1954 },
   { country: "Hong Kong, China", iso: "hk", reads: 112, latitude: 22.3193, longitude: 114.1694 },
   { country: "United States", iso: "us", reads: 48, latitude: 39.8283, longitude: -98.5795 },
   { country: "Singapore", iso: "sg", reads: 38, latitude: 1.3521, longitude: 103.8198 },
