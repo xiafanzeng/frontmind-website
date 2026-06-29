@@ -14,10 +14,10 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
+import { isValidAgentAccessCode } from "@/data/agentAccessCodes";
 
 const FRONTMIND_LOGO_IMG = "/brand/frontmind-logo.svg";
-const CLIENT_ACCESS_CODE = "frontmind2026";
-const AGENT_CONSOLE_URL = import.meta.env.VITE_AGENT_CONSOLE_URL || "/contact?entry=agent";
+const AGENT_CONSOLE_URL = import.meta.env.VITE_AGENT_CONSOLE_URL || "https://agent.frontmind.net/";
 const CLIENT_PORTAL_URL = import.meta.env.VITE_CLIENT_PORTAL_URL || "/contact?entry=client";
 
 type PortalTarget = {
@@ -73,13 +73,13 @@ export default function Navbar() {
   const handlePortalSubmit = (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
 
-    if (portalTarget && portalCode.trim() === CLIENT_ACCESS_CODE) {
-      window.open(portalTarget.href, "_blank", "noopener,noreferrer");
+    if (portalTarget && isValidAgentAccessCode(portalCode)) {
+      window.location.assign(portalTarget.href);
       closeProtectedPortal();
       return;
     }
 
-    setPortalError(t("管理员代码不正确，请重新输入。", "Invalid administrator code. Please try again."));
+    setPortalError(t("访问权限代号不正确，请重新输入。", "Invalid access permission code. Please try again."));
   };
 
   return (
@@ -177,14 +177,14 @@ export default function Navbar() {
             onClick={() =>
               openProtectedPortal({
                 href: AGENT_CONSOLE_URL,
-                label: t("管理员操作台", "Admin Console"),
+                label: t("智能体入口", "Agent Portal"),
               })
             }
             className="ml-3 px-5 py-2 text-sm font-semibold border-2 border-[#3D1560] text-[#3D1560] rounded-md hover:bg-[#3D1560] hover:text-white transition-all duration-300 no-underline"
             style={{ fontFamily: "'DM Sans', sans-serif" }}
             aria-haspopup="dialog"
           >
-            {t("管理员操作台", "Admin Console")}
+            {t("智能体入口", "Agent Portal")}
           </button>
           <button
             type="button"
@@ -277,14 +277,14 @@ export default function Navbar() {
               onClick={() =>
                 openProtectedPortal({
                   href: AGENT_CONSOLE_URL,
-                  label: t("管理员操作台", "Admin Console"),
+                  label: t("智能体入口", "Agent Portal"),
                 })
               }
               className="mt-2 px-4 py-3 text-sm font-semibold border-2 border-[#3D1560] text-[#3D1560] rounded-md text-center no-underline"
               style={{ fontFamily: "'DM Sans', sans-serif" }}
               aria-haspopup="dialog"
             >
-              {t("管理员操作台", "Admin Console")}
+              {t("智能体入口", "Agent Portal")}
             </button>
             <button
               type="button"
@@ -309,15 +309,15 @@ export default function Navbar() {
           <form onSubmit={handlePortalSubmit} className="space-y-5">
             <DialogHeader>
               <DialogTitle className="text-[#1A1A2E]" style={{ fontFamily: "'DM Serif Display', serif" }}>
-                {t("管理员代码验证", "Administrator Code Required")}
+                {t("访问权限代号验证", "Access Permission Code Required")}
               </DialogTitle>
               <DialogDescription className="text-[#6B7280]" style={{ fontFamily: "'DM Sans', sans-serif" }}>
                 {portalTarget
                   ? t(
-                      `请输入管理员代码以进入${portalTarget.label}。`,
-                      `Enter the administrator code to continue to ${portalTarget.label}.`,
+                      `请输入访问权限代号以进入${portalTarget.label}。`,
+                      `Enter the access permission code to continue to ${portalTarget.label}.`,
                     )
-                  : t("请输入管理员代码。", "Enter the administrator code.")}
+                  : t("请输入访问权限代号。", "Enter the access permission code.")}
               </DialogDescription>
             </DialogHeader>
 
@@ -327,7 +327,7 @@ export default function Navbar() {
                 className="block text-sm font-semibold text-[#1A1A2E]"
                 style={{ fontFamily: "'DM Sans', sans-serif" }}
               >
-                {t("管理员代码", "Administrator Code")}
+                {t("访问权限代号", "Access Permission Code")}
               </label>
               <Input
                 id="frontmind-client-code"
@@ -339,7 +339,7 @@ export default function Navbar() {
                 }}
                 autoComplete="off"
                 autoFocus
-                placeholder={t("请输入管理员代码", "Enter administrator code")}
+                placeholder={t("请输入访问权限代号", "Enter access permission code")}
                 aria-invalid={Boolean(portalError)}
                 aria-describedby={portalError ? "frontmind-client-code-error" : undefined}
                 className="h-11 border-[#D1D5DB] bg-white text-[#1A1A2E] focus-visible:border-[#3D1560] focus-visible:ring-[#3D1560]/20"
