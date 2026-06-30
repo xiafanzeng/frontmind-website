@@ -1,6 +1,7 @@
 node_modules/
-dist/
 .manus-logs/
 .astro/
 .vite/
 *.log
+.frontmind-visitor-stats.json
+.frontmind-visitor-stats.json.tmp

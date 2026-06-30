@@ -1,0 +1,1 @@
+import{j as r}from"./index-DVB-6nsw.js";import{P as o}from"./ProductIntro-QjdHsyeZ.js";import"./circle-check-j9wu8-9i.js";import"./radar-C8uLL4j0.js";function p(){return r.jsx(o,{product:"mindpromise"})}export{p as default};
