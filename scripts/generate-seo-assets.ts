@@ -32,6 +32,7 @@ const SITE_URL = normalizeSiteUrl(process.env.VITE_SITE_URL || process.env.SITE_
 const BUILD_DATE = process.env.BUILD_DATE || "2026-06-23";
 const SITE_NAME = "FrontMind";
 const DEFAULT_IMAGE = "/home/agent-methodology-wide.webp";
+const HOME_LCP_IMAGE = "/home/cuhk-qs-business-analytics-wide.webp";
 const LOGO_IMAGE = "/brand/frontmind-logo.svg";
 const KEYWORDS =
   "FrontMind, 超前智能, GEO, Generative Engine Optimization, AI 搜索优化, AI 品牌可见度, 企业 AI 化, 智能体增长, FDE";
@@ -227,7 +228,7 @@ const coreRoutes: RouteMeta[] = [
     changefreq: "weekly",
   },
   {
-    path: "/research/community/blogs",
+    path: "/blog",
     schemaType: "CollectionPage",
     title: "FrontMind - GEO 研究与学习社区文章库",
     description: "119 篇中文整理后的 GEO、AI 搜索、LLM 评测、技术 SEO 与内容策略文章。",
@@ -405,7 +406,7 @@ function buildRoutes() {
 
   communityPostsCn.forEach((post) =>
     addRoute({
-      path: `/research/community/blogs/generative-engine-optimization/${post.slug}`,
+      path: `/blog/${post.slug}`,
       title: `${post.titleCn} - FrontMind GEO 社区`,
       description: post.metaCn,
       image: `/geo-community-blogs-cn/images/${basenameFromImage(post.imageCn)}`,
@@ -504,6 +505,10 @@ function structuredData(route: RouteMeta) {
 function buildHead(route: RouteMeta, assetTags: string) {
   const canonicalUrl = absoluteUrl(route.canonicalPath || route.path);
   const imageUrl = absoluteUrl(route.image || DEFAULT_IMAGE);
+  const priorityImage = route.path === "/" ? HOME_LCP_IMAGE : route.type === "article" ? route.image : undefined;
+  const priorityImagePreload = priorityImage?.startsWith("/")
+    ? `    <link rel="preload" as="image" href="${escapeHtml(priorityImage)}" type="${priorityImage.endsWith(".webp") ? "image/webp" : "image/*"}" fetchpriority="high" />\n`
+    : "";
   const title = escapeHtml(route.title);
   const description = escapeHtml(route.description);
   const ogType = route.type === "article" ? "article" : "website";
@@ -535,7 +540,7 @@ function buildHead(route: RouteMeta, assetTags: string) {
     <meta name="twitter:image" content="${imageUrl}" />
     <script id="frontmind-structured-data" type="application/ld+json">${jsonForScript(structuredData(route))}</script>
     <link rel="icon" type="image/svg+xml" href="/favicon.svg?v=20260618" />
-    <link rel="preconnect" href="https://fonts.googleapis.com" />
+${priorityImagePreload}    <link rel="preconnect" href="https://fonts.googleapis.com" />
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
     <link href="https://fonts.googleapis.com/css2?family=DM+Serif+Display:ital@0;1&family=DM+Sans:ital,opsz,wght@0,9..40,300;0,9..40,400;0,9..40,500;0,9..40,600;0,9..40,700;1,9..40,400&display=swap" rel="stylesheet" />
 ${assetTags}
@@ -613,12 +618,10 @@ Sitemap: ${SITE_URL}/sitemap.xml
 function generateLlms(routes: RouteMeta[]) {
   const visibleRoutes = routes.filter((route) => route.includeInSitemap !== false);
   const news = visibleRoutes.filter((route) => route.path.startsWith("/news/"));
-  const community = visibleRoutes.filter((route) =>
-    route.path.startsWith("/research/community/blogs/generative-engine-optimization/"),
-  );
+  const community = visibleRoutes.filter((route) => route.path.startsWith("/blog/"));
   const pages = visibleRoutes.filter(
     (route) =>
-      !route.path.startsWith("/research/community/blogs/generative-engine-optimization/") &&
+      !route.path.startsWith("/blog/") &&
       !route.path.startsWith("/news/"),
   );
 

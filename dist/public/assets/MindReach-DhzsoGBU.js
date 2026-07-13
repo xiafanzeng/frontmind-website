@@ -1,1 +1,0 @@
-import{j as r}from"./index-DVB-6nsw.js";import{P as t}from"./ProductIntro-QjdHsyeZ.js";import"./circle-check-j9wu8-9i.js";import"./radar-C8uLL4j0.js";function m(){return r.jsx(t,{product:"mindreach"})}export{m as default};

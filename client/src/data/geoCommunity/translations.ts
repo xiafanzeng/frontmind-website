@@ -81,10 +81,27 @@ export const geoImageZh: Record<string, string> = {
 
 export function communityPathToFrontMind(path: string) {
   const clean = path.startsWith("/") ? path : `/${path}`;
-  return clean === "/" ? "/research/community" : `/research/community${clean}`;
+  if (clean === "/") return "/research/community";
+  if (clean === "/blogs") return "/blog";
+  if (clean.startsWith("/blogs/generative-engine-optimization/")) {
+    const slug = clean.slice("/blogs/generative-engine-optimization/".length).replace(/\/$/, "");
+    return `/blog/${slug}`;
+  }
+  if (clean.startsWith("/blogs/")) {
+    const slug = clean.slice("/blogs/".length).replace(/\/$/, "");
+    return `/blog/${slug}`;
+  }
+  return `/research/community${clean}`;
 }
 
 export function frontMindPathToCommunity(pathname: string) {
+  const blogPrefix = "/blog";
+  if (pathname === blogPrefix || pathname === `${blogPrefix}/`) return "/blogs";
+  if (pathname.startsWith(`${blogPrefix}/`)) {
+    const slug = pathname.slice(`${blogPrefix}/`.length).replace(/\/$/, "");
+    return slug ? `/blogs/generative-engine-optimization/${slug}` : "/blogs";
+  }
+
   const prefix = "/research/community";
   const raw = pathname.startsWith(prefix) ? pathname.slice(prefix.length) : pathname;
   return raw.replace(/\/$/, "") || "/";

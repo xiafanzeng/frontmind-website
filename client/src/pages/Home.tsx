@@ -1,5 +1,5 @@
 import { Link } from "@/components/SafeLink";
-import { useEffect, useState } from "react";
+import { lazy, Suspense, useEffect, useState } from "react";
 import { useReveal } from "@/hooks/useReveal";
 import { usePageMeta } from "@/hooks/usePageMeta";
 import SectionLabel from "@/components/SectionLabel";
@@ -7,15 +7,20 @@ import Navbar from "@/components/Navbar";
 import Footer from "@/components/Footer";
 import VisitorStats from "@/components/VisitorStats";
 import { useLang } from "@/contexts/LanguageContext";
-import { SolutionsSections } from "./Solutions";
 import {
   ArrowRight,
   ChevronLeft,
   ChevronRight,
 } from "lucide-react";
 
+const LazySolutionsSections = lazy(async () => {
+  const module = await import("./Solutions");
+  return { default: module.SolutionsSections };
+});
+
 const HERO_METHOD_WIDE_IMG = "/home/agent-methodology-wide.webp";
 const HERO_CUHK_QS_WIDE_IMG = "/home/cuhk-qs-business-analytics-wide.webp";
+const HERO_ALIBABA_WUKONG_VISIT_IMG = "/home/alibaba-wukong-cuhk-shenzhen-ai-growth.webp";
 const HERO_CUHK_VISIT_IMG = "/home/chaozhou-entrepreneurs-cuhk-visit.webp";
 const HERO_CUHK_ANNIVERSARY_IMG = "/home/cuhk-innovation-10th-anniversary.webp";
 const HERO_COMPETITION_IMG = "/home/china-innovation-competition-qianhai.webp";
@@ -53,6 +58,9 @@ function StatsBar() {
                 src={partner.image}
                 alt={partner.alt}
                 className="h-auto w-full origin-center object-contain"
+                decoding="async"
+                width={partner.image === CUHK_SHENZHEN_LOGO_IMG ? 1956 : 2168}
+                height={partner.image === CUHK_SHENZHEN_LOGO_IMG ? 378 : 290}
                 style={{
                   maxWidth: partner.maxWidth,
                   maxHeight: partner.maxHeight,
@@ -74,10 +82,11 @@ function HeroNewsWall() {
   const [activeSlide, setActiveSlide] = useState(0);
   const [isCarouselPaused, setIsCarouselPaused] = useState(false);
   const slides = [
-    { image: HERO_CUHK_QS_WIDE_IMG, alt: t("香港中文大学深圳 QS 排名海报", "CUHK-Shenzhen QS ranking poster"), fit: "cover" },
-    { image: HERO_CUHK_VISIT_IMG, alt: t("潮汕青年企业家到访港中深", "Chaozhou entrepreneurs visiting CUHK-Shenzhen"), fit: "contain" },
-    { image: HERO_CUHK_ANNIVERSARY_IMG, alt: t("创新中心十周年庆典", "Innovation center 10th anniversary"), fit: "contain" },
-    { image: HERO_COMPETITION_IMG, alt: t("创新创业大赛获奖", "Innovation competition award"), fit: "contain" },
+    { image: HERO_CUHK_QS_WIDE_IMG, alt: t("香港中文大学深圳 QS 排名海报", "CUHK-Shenzhen QS ranking poster"), fit: "cover", width: 1672, height: 941 },
+    { image: HERO_ALIBABA_WUKONG_VISIT_IMG, alt: t("阿里悟空走进香港中文大学（深圳），共探 AI 增长与组织变革", "Alibaba Wukong visits CUHK-Shenzhen to explore AI-driven growth and organizational transformation"), fit: "cover", width: 1920, height: 1147 },
+    { image: HERO_CUHK_VISIT_IMG, alt: t("潮汕青年企业家到访港中深", "Chaozhou entrepreneurs visiting CUHK-Shenzhen"), fit: "contain", width: 1920, height: 1280 },
+    { image: HERO_CUHK_ANNIVERSARY_IMG, alt: t("创新中心十周年庆典", "Innovation center 10th anniversary"), fit: "contain", width: 1920, height: 1280 },
+    { image: HERO_COMPETITION_IMG, alt: t("创新创业大赛获奖", "Innovation competition award"), fit: "contain", width: 1919, height: 1279 },
   ];
   const slideCount = slides.length;
 
@@ -108,7 +117,12 @@ function HeroNewsWall() {
                 src={slide.image}
                 alt={slide.alt}
                 className={`h-full w-full ${slide.fit === "contain" ? "object-contain" : "object-cover"}`}
+                width={slide.width}
+                height={slide.height}
+                sizes="(min-width: 1280px) 820px, (min-width: 1024px) 64vw, 100vw"
                 loading={index === 0 ? "eager" : "lazy"}
+                fetchPriority={index === 0 ? "high" : "low"}
+                decoding="async"
               />
             </div>
           ))}
@@ -151,10 +165,11 @@ function MobileHeroCarousel() {
   const [activeSlide, setActiveSlide] = useState(0);
   const [isCarouselPaused, setIsCarouselPaused] = useState(false);
   const slides = [
-    { image: HERO_CUHK_QS_WIDE_IMG, fit: "cover" },
-    { image: HERO_CUHK_VISIT_IMG, fit: "contain" },
-    { image: HERO_CUHK_ANNIVERSARY_IMG, fit: "contain" },
-    { image: HERO_COMPETITION_IMG, fit: "contain" },
+    { image: HERO_CUHK_QS_WIDE_IMG, fit: "cover", width: 1672, height: 941 },
+    { image: HERO_ALIBABA_WUKONG_VISIT_IMG, fit: "cover", width: 1920, height: 1147 },
+    { image: HERO_CUHK_VISIT_IMG, fit: "contain", width: 1920, height: 1280 },
+    { image: HERO_CUHK_ANNIVERSARY_IMG, fit: "contain", width: 1920, height: 1280 },
+    { image: HERO_COMPETITION_IMG, fit: "contain", width: 1919, height: 1279 },
   ];
   const slideCount = slides.length;
 
@@ -183,7 +198,12 @@ function MobileHeroCarousel() {
               src={slide.image}
               alt=""
               className={`h-full w-full ${slide.fit === "contain" ? "object-contain" : "object-cover"}`}
-              loading="lazy"
+              width={slide.width}
+              height={slide.height}
+              sizes="100vw"
+              loading={index === 0 ? "eager" : "lazy"}
+              fetchPriority={index === 0 ? "high" : "low"}
+              decoding="async"
             />
           </div>
         ))}
@@ -287,7 +307,9 @@ export default function Home({ includeChrome = true, includeHero = true, include
       {includeStats && <StatsBar />}
 
       {/* ═══════════ SOLUTIONS SYSTEM ═══════════ */}
-      <SolutionsSections includeCta={false} embedded />
+      <Suspense fallback={<div className="min-h-[520px] bg-white" aria-hidden="true" />}>
+        <LazySolutionsSections includeCta={false} embedded />
+      </Suspense>
 
       {/* ═══════════ RECENT NEWS ═══════════ */}
       <RecentNews />
@@ -324,9 +346,12 @@ export default function Home({ includeChrome = true, includeHero = true, include
       {/* ═══════════ CTA SECTION ═══════════ */}
       {includeCta && (
         <section aria-label="Call to Action" className="relative overflow-hidden">
-          <div
-            className="absolute inset-0 bg-cover bg-center"
-            style={{ backgroundImage: `url(${CTA_IMG})` }}
+          <img
+            src={CTA_IMG}
+            alt=""
+            className="absolute inset-0 h-full w-full object-cover"
+            loading="lazy"
+            decoding="async"
           />
           <div className="absolute inset-0 bg-[#1A0A2E]/85" />
           <div
@@ -459,6 +484,7 @@ function RecentNews() {
                     alt={item.title}
                     className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-500"
                     loading="lazy"
+                    decoding="async"
                   />
                 </div>
 

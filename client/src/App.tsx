@@ -50,6 +50,9 @@ function Router() {
         <Route path="/products/mindreach">{() => <MindReach />}</Route>
         <Route path="/products/mindnexus">{() => <MindNexus />}</Route>
         <Route path="/platform">{() => <Platform />}</Route>
+        <Route path="/blog">{() => <GeoCommunity />}</Route>
+        <Route path="/blog/:slug">{() => <GeoCommunity />}</Route>
+        <Route path="/blog/:slug/">{() => <GeoCommunity />}</Route>
         <Route path="/research/community">{() => <GeoCommunity />}</Route>
         <Route path="/research/community/*">{() => <GeoCommunity />}</Route>
         <Route path="/research">{() => <Research />}</Route>

@@ -432,6 +432,7 @@ function articleHtmlFor(post: CommunityPostCn) {
     .replace(/^<h2>[\s\S]*?<\/h2>\s*/, "")
     .replace(/src="\/images\//g, `src="${BLOG_IMAGE_BASE}/`)
     .replace(/href="\/blogs\/generative-engine-optimization\/([^"/]+)\/?"/g, (_match, slug) => `href="${communityPathToFrontMind(postPath(slug))}"`)
+    .replace(/href="\/blogs\/([^"/]+)\/?"/g, (_match, slug) => `href="${communityPathToFrontMind(`/blogs/${slug}`)}"`)
     .replace(/href="\/blogs\/?"/g, `href="${communityPathToFrontMind("/blogs")}"`);
 }
 
