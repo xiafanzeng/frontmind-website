@@ -172,20 +172,13 @@ export default function Navbar() {
             <span>{lang === "zh" ? "EN" : "中文"}</span>
           </button>
 
-          <button
-            type="button"
-            onClick={() =>
-              openProtectedPortal({
-                href: AGENT_CONSOLE_URL,
-                label: t("智能体入口", "Agent Portal"),
-              })
-            }
+          <a
+            href={AGENT_CONSOLE_URL}
             className="ml-3 px-5 py-2 text-sm font-semibold border-2 border-[#3D1560] text-[#3D1560] rounded-md hover:bg-[#3D1560] hover:text-white transition-all duration-300 no-underline"
             style={{ fontFamily: "'DM Sans', sans-serif" }}
-            aria-haspopup="dialog"
           >
             {t("智能体入口", "Agent Portal")}
-          </button>
+          </a>
           <button
             type="button"
             onClick={() =>
@@ -272,20 +265,13 @@ export default function Navbar() {
               {lang === "zh" ? "Switch to English" : "切换到中文"}
             </button>
 
-            <button
-              type="button"
-              onClick={() =>
-                openProtectedPortal({
-                  href: AGENT_CONSOLE_URL,
-                  label: t("智能体入口", "Agent Portal"),
-                })
-              }
+            <a
+              href={AGENT_CONSOLE_URL}
               className="mt-2 px-4 py-3 text-sm font-semibold border-2 border-[#3D1560] text-[#3D1560] rounded-md text-center no-underline"
               style={{ fontFamily: "'DM Sans', sans-serif" }}
-              aria-haspopup="dialog"
             >
               {t("智能体入口", "Agent Portal")}
-            </button>
+            </a>
             <button
               type="button"
               onClick={() =>
