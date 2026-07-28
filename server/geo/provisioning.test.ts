@@ -133,7 +133,16 @@ describe("website to Agent project-order registry", () => {
           order: normalizedOrder,
         });
         return new Response(
-          JSON.stringify({ schemaVersion: 1, order: normalizedOrder }),
+          JSON.stringify({
+            schemaVersion: 1,
+            intent: {
+              ...normalizedOrder,
+              orderId: "intent-20260728",
+              authorizationDigest: "f".repeat(64),
+              state: "closed",
+            },
+            order: normalizedOrder,
+          }),
           { headers: { "Content-Type": "application/json" } },
         );
       }
@@ -165,6 +174,26 @@ describe("website to Agent project-order registry", () => {
       orders: [normalizedOrder],
     });
     expect(fetchImpl).toHaveBeenCalledTimes(4);
+  });
+
+  it("rejects a commit response that omits the closed checkout intent", async () => {
+    const fetchImpl = vi.fn<typeof fetch>().mockResolvedValue(
+      new Response(
+        JSON.stringify({
+          schemaVersion: 1,
+          order: normalizedOrder,
+        }),
+        { headers: { "Content-Type": "application/json" } },
+      ),
+    );
+    const registry = createGeoProjectOrderRegistry({ env, fetchImpl });
+
+    await expect(
+      registry.commitIntent("intent-20260728", order),
+    ).rejects.toMatchObject({
+      code: "INVALID_PROVISIONING_RESPONSE",
+      status: 502,
+    } satisfies Partial<GeoAccountProvisioningError>);
   });
 
   it("rejects inconsistent deletion decisions and mismatched write envelopes", async () => {

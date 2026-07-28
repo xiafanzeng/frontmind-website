@@ -5206,6 +5206,19 @@ var GeoProjectOrderEnvelopeSchema = z6.object({
   schemaVersion: z6.literal(1),
   order: GeoProjectOrderSchema
 }).strict();
+var GeoProjectOrderIntentCommitEnvelopeSchema = z6.object({
+  schemaVersion: z6.literal(1),
+  intent: GeoProjectOrderSchema,
+  order: GeoProjectOrderSchema
+}).strict().superRefine((value, context) => {
+  if (value.intent.state !== "closed" || value.intent.projectId !== value.order.projectId || value.intent.purchaseType !== value.order.purchaseType || value.intent.amountFen !== value.order.amountFen) {
+    context.addIssue({
+      code: "custom",
+      path: ["intent"],
+      message: "closed intent does not match the committed checkout"
+    });
+  }
+});
 var GeoProjectOrdersByProjectSchema = z6.object({
   schemaVersion: z6.literal(1),
   projectId: z6.string().trim().min(8).max(80),
@@ -5808,7 +5821,7 @@ function createGeoProjectOrderRegistry(options = {}) {
         endpoint,
         fetchImpl,
         timeoutMs,
-        responseSchema: GeoProjectOrderEnvelopeSchema,
+        responseSchema: GeoProjectOrderIntentCommitEnvelopeSchema,
         invalidResponseMessage: "\u9879\u76EE\u8BA2\u5355\u8D26\u672C\u8FD4\u56DE\u4E86\u65E0\u6548\u63D0\u4EA4\u7ED3\u679C",
         unavailableMessage: "\u9879\u76EE\u8BA2\u5355\u8D26\u672C\u6682\u65F6\u4E0D\u53EF\u7528\uFF0C\u8BF7\u7A0D\u540E\u91CD\u8BD5",
         timeoutMessage: "\u9879\u76EE\u8BA2\u5355\u63D0\u4EA4\u8D85\u65F6\uFF0C\u8BF7\u7A0D\u540E\u91CD\u8BD5",
@@ -5827,6 +5840,13 @@ function createGeoProjectOrderRegistry(options = {}) {
       if (!sameProjectOrder(response.order, order)) {
         throw new GeoAccountProvisioningError(
           "\u9879\u76EE\u8BA2\u5355\u8D26\u672C\u8FD4\u56DE\u4E86\u4E0E\u63D0\u4EA4\u8BF7\u6C42\u4E0D\u4E00\u81F4\u7684\u7ED3\u679C",
+          502,
+          "PROJECT_ORDER_REGISTRY_MISMATCH"
+        );
+      }
+      if (response.intent.orderId !== intentOrderId) {
+        throw new GeoAccountProvisioningError(
+          "\u9879\u76EE\u8BA2\u5355\u8D26\u672C\u8FD4\u56DE\u4E86\u4E0D\u5339\u914D\u7684\u6536\u94F6\u53F0\u610F\u5411",
           502,
           "PROJECT_ORDER_REGISTRY_MISMATCH"
         );

@@ -641,6 +641,28 @@ export const GeoProjectOrderEnvelopeSchema = z
   })
   .strict();
 
+export const GeoProjectOrderIntentCommitEnvelopeSchema = z
+  .object({
+    schemaVersion: z.literal(1),
+    intent: GeoProjectOrderSchema,
+    order: GeoProjectOrderSchema,
+  })
+  .strict()
+  .superRefine((value, context) => {
+    if (
+      value.intent.state !== "closed" ||
+      value.intent.projectId !== value.order.projectId ||
+      value.intent.purchaseType !== value.order.purchaseType ||
+      value.intent.amountFen !== value.order.amountFen
+    ) {
+      context.addIssue({
+        code: "custom",
+        path: ["intent"],
+        message: "closed intent does not match the committed checkout",
+      });
+    }
+  });
+
 export const GeoProjectOrdersByProjectSchema = z
   .object({
     schemaVersion: z.literal(1),
@@ -1390,7 +1412,7 @@ export function createGeoProjectOrderRegistry(
         endpoint,
         fetchImpl,
         timeoutMs,
-        responseSchema: GeoProjectOrderEnvelopeSchema,
+        responseSchema: GeoProjectOrderIntentCommitEnvelopeSchema,
         invalidResponseMessage: "项目订单账本返回了无效提交结果",
         unavailableMessage: "项目订单账本暂时不可用，请稍后重试",
         timeoutMessage: "项目订单提交超时，请稍后重试",
@@ -1409,6 +1431,13 @@ export function createGeoProjectOrderRegistry(
       if (!sameProjectOrder(response.order, order)) {
         throw new GeoAccountProvisioningError(
           "项目订单账本返回了与提交请求不一致的结果",
+          502,
+          "PROJECT_ORDER_REGISTRY_MISMATCH",
+        );
+      }
+      if (response.intent.orderId !== intentOrderId) {
+        throw new GeoAccountProvisioningError(
+          "项目订单账本返回了不匹配的收银台意向",
           502,
           "PROJECT_ORDER_REGISTRY_MISMATCH",
         );
