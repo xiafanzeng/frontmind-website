@@ -19,6 +19,7 @@ const MindReach = React.lazy(() => import("./pages/MindReach"));
 const MindNexus = React.lazy(() => import("./pages/MindNexus"));
 const Research = React.lazy(() => import("./pages/Research"));
 const GeoCommunity = React.lazy(() => import("./pages/GeoCommunity"));
+const GeoCommunityBlog = React.lazy(() => import("./pages/GeoCommunityBlog"));
 const About = React.lazy(() => import("./pages/About"));
 const Contact = React.lazy(() => import("./pages/Contact"));
 const Privacy = React.lazy(() => import("./pages/Privacy"));
@@ -40,32 +41,38 @@ function Router() {
   return (
     <PageTransition>
       <Suspense fallback={<PageLoader />}>
-      <Switch>
-        <Route path="/">{() => <Home />}</Route>
-        <Route path="/solutions">{() => <Solutions />}</Route>
-        <Route path="/mindpromise">{() => <MindPromise />}</Route>
-        <Route path="/mindreach">{() => <MindReach />}</Route>
-        <Route path="/mindnexus">{() => <MindNexus />}</Route>
-        <Route path="/products/mindpromise">{() => <MindPromise />}</Route>
-        <Route path="/products/mindreach">{() => <MindReach />}</Route>
-        <Route path="/products/mindnexus">{() => <MindNexus />}</Route>
-        <Route path="/platform">{() => <Platform />}</Route>
-        <Route path="/blog">{() => <GeoCommunity />}</Route>
-        <Route path="/blog/:slug">{() => <GeoCommunity />}</Route>
-        <Route path="/blog/:slug/">{() => <GeoCommunity />}</Route>
-        <Route path="/research/community">{() => <GeoCommunity />}</Route>
-        <Route path="/research/community/*">{() => <GeoCommunity />}</Route>
-        <Route path="/research">{() => <Research />}</Route>
-        <Route path="/about">{() => <About />}</Route>
-        <Route path="/contact">{() => <Contact />}</Route>
-        <Route path="/news">{() => <News />}</Route>
-        <Route path="/news/:slug">{() => <News />}</Route>
-        <Route path="/news/:slug/">{() => <News />}</Route>
-        <Route path="/privacy">{() => <Privacy />}</Route>
-        <Route path="/terms">{() => <Terms />}</Route>
-        <Route path="/404">{() => <NotFound />}</Route>
-        <Route>{() => <NotFound />}</Route>
-      </Switch>
+        <Switch>
+          <Route path="/">{() => <Home />}</Route>
+          <Route path="/solutions">{() => <Solutions />}</Route>
+          <Route path="/mindpromise">{() => <MindPromise />}</Route>
+          <Route path="/mindreach">{() => <MindReach />}</Route>
+          <Route path="/mindnexus">{() => <MindNexus />}</Route>
+          <Route path="/products/mindpromise">{() => <MindPromise />}</Route>
+          <Route path="/products/mindreach">{() => <MindReach />}</Route>
+          <Route path="/products/mindnexus">{() => <MindNexus />}</Route>
+          <Route path="/platform">{() => <Platform />}</Route>
+          <Route path="/blog">{() => <GeoCommunityBlog />}</Route>
+          <Route path="/blog/:slug">{() => <GeoCommunityBlog />}</Route>
+          <Route path="/blog/:slug/">{() => <GeoCommunityBlog />}</Route>
+          <Route path="/research/community/blogs">
+            {() => <GeoCommunityBlog />}
+          </Route>
+          <Route path="/research/community/blogs/*">
+            {() => <GeoCommunityBlog />}
+          </Route>
+          <Route path="/research/community">{() => <GeoCommunity />}</Route>
+          <Route path="/research/community/*">{() => <GeoCommunity />}</Route>
+          <Route path="/research">{() => <Research />}</Route>
+          <Route path="/about">{() => <About />}</Route>
+          <Route path="/contact">{() => <Contact />}</Route>
+          <Route path="/news">{() => <News />}</Route>
+          <Route path="/news/:slug">{() => <News />}</Route>
+          <Route path="/news/:slug/">{() => <News />}</Route>
+          <Route path="/privacy">{() => <Privacy />}</Route>
+          <Route path="/terms">{() => <Terms />}</Route>
+          <Route path="/404">{() => <NotFound />}</Route>
+          <Route>{() => <NotFound />}</Route>
+        </Switch>
       </Suspense>
     </PageTransition>
   );

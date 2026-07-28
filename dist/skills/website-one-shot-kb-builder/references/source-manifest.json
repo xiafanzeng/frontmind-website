@@ -1,0 +1,11 @@
+{
+  "source": "frontmind-dashboard/private-workflows/socratic-kb-builder.skill",
+  "sourceArchiveSha256": "18b141c03460d41d77c81b76a9d3078b123575af951e732dea96ed4c79f02a04",
+  "copiedEntries": [
+    "SKILL.md",
+    "references/knowledge-tree.md",
+    "references/questioning-strategy.md",
+    "references/output-format.md"
+  ],
+  "transformation": "Socratic intake, per-leaf confirmation/wait, interaction status, and delivery-approval mechanics are replaced by automatic one-shot completion. A machine-verifiable packaged-leaf/status consistency gate is added for the website API. Crawl, research, image, evidence, adaptive leaf expansion, and ZIP principles are preserved. Seven universal business questions are mapped explicitly into the website API's eight canonical content directories; the capability question maps to technology, manufacturing, or both."
+}

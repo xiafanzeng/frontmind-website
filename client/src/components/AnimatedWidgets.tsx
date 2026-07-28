@@ -171,7 +171,7 @@ interface ChatFlowProps {
   title?: string;
 }
 
-export function ChatFlow({ messages, title = "智能体对话实况" }: ChatFlowProps) {
+export function ChatFlow({ messages, title = "智能体对话演示" }: ChatFlowProps) {
   const [visibleCount, setVisibleCount] = useState(0);
   const ref = useRef<HTMLDivElement>(null);
   const hasAnimated = useRef(false);
@@ -210,7 +210,7 @@ export function ChatFlow({ messages, title = "智能体对话实况" }: ChatFlow
       <div className="bg-slate-50 border-b border-slate-200 px-4 py-3 flex items-center gap-2">
         <div className="w-2 h-2 rounded-full bg-green-500 animate-pulse" />
         <span className="text-sm font-medium text-slate-700">{title}</span>
-        <span className="ml-auto text-xs text-slate-400">实时</span>
+        <span className="ml-auto text-xs text-slate-400">模拟演示</span>
       </div>
       <div ref={containerRef} className="p-4 space-y-3 h-[340px] overflow-y-auto">
         {messages.slice(0, visibleCount).map((msg, i) => (
@@ -267,7 +267,7 @@ interface FlowDiagramProps {
   title?: string;
 }
 
-export function FlowDiagram({ nodes, title = "部署管线" }: FlowDiagramProps) {
+export function FlowDiagram({ nodes, title = "部署管线演示" }: FlowDiagramProps) {
   const [activeIndex, setActiveIndex] = useState(-1);
   const ref = useRef<HTMLDivElement>(null);
   const hasAnimated = useRef(false);

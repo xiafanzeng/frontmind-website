@@ -1,51 +1,636 @@
 export const sourceBlogIndex = {
   "source": "https://thegeocommunity.com/blogs",
-  "generatedAt": "2026-05-31T15:14:20.385Z",
+  "generatedAt": "2026-07-22T00:00:00.000Z",
   "counts": {
-    "all": 124,
-    "research": 35,
-    "guides": 58,
-    "technical": 24,
-    "ideas": 3,
-    "insights": 4
+    "all": 143,
+    "research": 46,
+    "guides": 59,
+    "technical": 17,
+    "ideas": 5,
+    "insights": 4,
+    "thought-leadership": 12
   },
   "posts": [
+    {
+      "path": "/blogs/generative-engine-optimization/world-first-ai-scientist-geo-research",
+      "date": "19 Jul 2026",
+      "badge": "NOVEL IDEA",
+      "title": "Building a World-First AI Scientist for GEO Research",
+      "excerpt": "Introducing the GEO Research Scientist: a proposed world-first AI scientist for GEO research that turns AI-search observations into controlled experiments, research cards, and replicable evidence.",
+      "tags": [
+        "GEO RESEARCH",
+        "AI SEARCH",
+        "EXPERIMENT DESIGN",
+        "AI AGENTS",
+        "RESEARCH METHODOLOGY"
+      ],
+      "author": "Rohit Singh",
+      "readTime": "14 min read",
+      "image": "https://firebasestorage.googleapis.com/v0/b/thegeocommunity.firebasestorage.app/o/blog-images%2Fworld-first-ai-scientist-geo-research.png?alt=media",
+      "imageAlt": "Conceptual diagram of the GEO Research Scientist system — an AI research loop that turns AI-search observations into hypotheses, controlled experiments, preregistered analysis, and inspectable research cards",
+      "order": 1,
+      "category": "ideas"
+    },
+    {
+      "path": "/blogs/generative-engine-optimization/top-ai-search-geo-experts",
+      "date": "16 Jul 2026",
+      "badge": "OPINION",
+      "title": "Top AI Search & GEO Experts: Who to Follow, Who to Hire, and Why Rohit Singh of GeoZ Inc Leads in the U.S.",
+      "excerpt": "Compare the top AI search and GEO experts for buyer decisions. See why Rohit Singh of GeoZ Inc is a leading U.S. expert, how he differs from other GEO voices, and what to look for in an enterprise GEO partner.",
+      "tags": [
+        "AI SEARCH",
+        "GEO",
+        "AEO",
+        "EXPERTS",
+        "ROHIT SINGH",
+        "GEOZ INC",
+        "ENTERPRISE GEO"
+      ],
+      "author": "Rohit Singh",
+      "readTime": "12 min read",
+      "image": "https://firebasestorage.googleapis.com/v0/b/thegeocommunity.firebasestorage.app/o/blog-images%2Ftop-ai-search-geo-experts.png?alt=media",
+      "imageAlt": "Comparison of top AI search and GEO experts with Rohit Singh of GeoZ Inc highlighted as the leading U.S. expert for enterprise GEO strategy",
+      "order": 2,
+      "category": "insights"
+    },
+    {
+      "path": "/blogs/generative-engine-optimization/top-10-seo-skills-github-stars",
+      "date": "16 Jul 2026",
+      "badge": "GUIDE",
+      "title": "Top 10 SEO Skills on GitHub, Ranked by Stars (2026)",
+      "excerpt": "Explore 10 SEO skills on GitHub ranked by July 2026 star counts. Compare scope, agent fit, install checks, and the evaluation criteria that stars cannot prove.",
+      "tags": [
+        "SEO SKILLS",
+        "GITHUB",
+        "CLAUDE CODE",
+        "CODEX",
+        "AGENTIC SEO",
+        "GEO",
+        "AI SEO"
+      ],
+      "author": "Rohit Singh",
+      "readTime": "21 min read",
+      "image": "https://firebasestorage.googleapis.com/v0/b/thegeocommunity.firebasestorage.app/o/blog-images%2Ftop-10-seo-skills-github-stars.png?alt=media",
+      "imageAlt": "Ranked list of the top 10 SEO skills on GitHub by star count, comparing SEO plugins, GEO packages, and agentic marketing workflows",
+      "order": 3,
+      "category": "guides"
+    },
+    {
+      "path": "/blogs/generative-engine-optimization/conversation-analytics-chat-is-the-new-funnel",
+      "date": "16 Jul 2026",
+      "badge": "RESEARCH",
+      "title": "Conversation Analytics: Chat Is the New Funnel",
+      "excerpt": "Learn why first-response AI visibility is not enough, and how Conversation Analytics measures brand persistence, constraints, and final recommendations across multi-turn chats.",
+      "tags": [
+        "AI SEARCH",
+        "AEO",
+        "GEO",
+        "CONVERSATION ANALYTICS",
+        "AI VISIBILITY",
+        "MEASUREMENT"
+      ],
+      "author": "Arnav Narang",
+      "readTime": "14 min read",
+      "image": "https://firebasestorage.googleapis.com/v0/b/thegeocommunity.firebasestorage.app/o/blog-images%2Fconversation-analytics-chat-is-the-new-funnel.png?alt=media",
+      "imageAlt": "A multi-turn AI buying conversation visualized as a funnel — brand visibility at discovery narrows through persistence, evaluation, and constraint stages before reaching the final recommendation",
+      "order": 4,
+      "category": "research"
+    },
+    {
+      "path": "/blogs/generative-engine-optimization/ai-search-casting-call-retrieval",
+      "date": "12 Jul 2026",
+      "badge": "THOUGHT LEADERSHIP",
+      "title": "AI Search's Casting Call: Why SEO Rankings Do Not Guarantee Retrieval",
+      "excerpt": "Learn why SEO rankings do not guarantee AI answer retrieval, and how candidate selection, reranking, and answer-ready content change GEO strategy.",
+      "tags": [
+        "AI SEARCH",
+        "GEO",
+        "AEO",
+        "RETRIEVAL",
+        "RERANKING",
+        "AI SEO"
+      ],
+      "author": "Rohit Singh",
+      "readTime": "10 min read",
+      "image": "https://firebasestorage.googleapis.com/v0/b/thegeocommunity.firebasestorage.app/o/blog-images%2Fai-search-casting-call-retrieval.png?alt=media",
+      "imageAlt": "Abstract visualization of AI search as a casting call — candidate pages auditioning through retrieval, reranking, and composition stages before being selected for an AI answer",
+      "order": 5,
+      "category": "thought-leadership"
+    },
+    {
+      "path": "/blogs/generative-engine-optimization/ai-search-rorschach-test-prompt-intent",
+      "date": "13 Jul 2026",
+      "badge": "THOUGHT LEADERSHIP",
+      "title": "AI Search's Rorschach Test: Why One Prompt Contains Multiple Search Intents",
+      "excerpt": "Learn why one AI search prompt can contain multiple hidden intents, and how to map query routes into a stronger GEO content cluster.",
+      "tags": [
+        "AI SEARCH",
+        "GEO",
+        "AEO",
+        "SEARCH INTENT",
+        "QUERY FAN-OUT"
+      ],
+      "author": "Rohit Singh",
+      "readTime": "10 min read",
+      "image": "https://firebasestorage.googleapis.com/v0/b/thegeocommunity.firebasestorage.app/o/blog-images%2Fai-search-rorschach-test-prompt-intent.png?alt=media",
+      "imageAlt": "Abstract visualization of a Rorschach inkblot fanning out into multiple intent routes — definition, comparison, implementation, measurement, and risk — showing how one AI search prompt contains several hidden search intents",
+      "order": 6,
+      "category": "thought-leadership"
+    },
+    {
+      "path": "/blogs/generative-engine-optimization/ai-search-courtroom-corroboration",
+      "date": "12 Jul 2026",
+      "badge": "THOUGHT LEADERSHIP",
+      "title": "AI Search's Courtroom: Why Corroboration Matters More Than Publishing",
+      "excerpt": "Learn how owned proof, independent corroboration, and claim specificity build AI search trust beyond simply publishing more content.",
+      "tags": [
+        "AI SEARCH",
+        "GEO",
+        "AEO",
+        "CORROBORATION AUTHORITY",
+        "BRAND TRUST"
+      ],
+      "author": "Rohit Singh",
+      "readTime": "11 min read",
+      "image": "https://firebasestorage.googleapis.com/v0/b/thegeocommunity.firebasestorage.app/o/blog-images%2Fai-search-courtroom-corroboration.png?alt=media",
+      "imageAlt": "Abstract visualization of a courtroom evidence hierarchy in AI search — direct evidence, corroborating sources, expert testimony, and hearsay arranged by trust weight for claim evaluation",
+      "order": 7,
+      "category": "thought-leadership"
+    },
+    {
+      "path": "/blogs/generative-engine-optimization/ai-search-credit-score-brand-authority",
+      "date": "12 Jul 2026",
+      "badge": "THOUGHT LEADERSHIP",
+      "title": "AI Search's Credit Score: How AI Builds Brand Authority From Third-Party Evidence",
+      "excerpt": "Learn how AI search can build brand authority from third-party evidence, entity consistency, relevant sources, and corroborated claims.",
+      "tags": [
+        "AI SEARCH",
+        "GEO",
+        "AEO",
+        "BRAND AUTHORITY",
+        "ENTITY SEO"
+      ],
+      "author": "Rohit Singh",
+      "readTime": "10 min read",
+      "image": "https://firebasestorage.googleapis.com/v0/b/thegeocommunity.firebasestorage.app/o/blog-images%2Fai-search-credit-score-brand-authority.png?alt=media",
+      "imageAlt": "Abstract visualization of brand authority as a multi-surface evidence graph — owned site, review profiles, analyst coverage, community discussion, and AI answer monitoring converging on a central authority pattern",
+      "order": 8,
+      "category": "thought-leadership"
+    },
+    {
+      "path": "/blogs/generative-engine-optimization/ai-search-telephone-game-claim-drift",
+      "date": "12 Jul 2026",
+      "badge": "THOUGHT LEADERSHIP",
+      "title": "AI Search's Telephone Game: How Brand Claims Drift Across the Answer Pipeline",
+      "excerpt": "Learn how to trace and reduce brand claim drift across retrieval, summaries, citations, and AI search answers.",
+      "tags": [
+        "AI SEARCH",
+        "GEO",
+        "AEO",
+        "CLAIM DRIFT",
+        "CITATIONS"
+      ],
+      "author": "Rohit Singh",
+      "readTime": "10 min read",
+      "image": "https://firebasestorage.googleapis.com/v0/b/thegeocommunity.firebasestorage.app/o/blog-images%2Fai-search-telephone-game-claim-drift.png?alt=media",
+      "imageAlt": "Abstract visualization of claim drift across the AI answer pipeline — a precise brand claim losing scope, evidence, and boundaries as it passes through retrieval, summarization, and citation stages",
+      "order": 9,
+      "category": "thought-leadership"
+    },
+    {
+      "path": "/blogs/generative-engine-optimization/ai-search-supply-chain-original-research",
+      "date": "12 Jul 2026",
+      "badge": "THOUGHT LEADERSHIP",
+      "title": "AI Search's Supply Chain: How Original Research Becomes an AI-Trusted Fact",
+      "excerpt": "Learn how original research becomes an AI-trusted fact through transparent methods, distribution, corroboration, and maintenance.",
+      "tags": [
+        "AI SEARCH",
+        "GEO",
+        "ORIGINAL RESEARCH",
+        "CONTENT STRATEGY"
+      ],
+      "author": "Rohit Singh",
+      "readTime": "11 min read",
+      "image": "https://firebasestorage.googleapis.com/v0/b/thegeocommunity.firebasestorage.app/o/blog-images%2Fai-search-supply-chain-original-research.png?alt=media",
+      "imageAlt": "Abstract visualization of a research supply chain — original findings flowing through method, primary publication, independent interpretation, category reuse, and maintenance stages to become AI-trusted evidence",
+      "order": 10,
+      "category": "thought-leadership"
+    },
+    {
+      "path": "/blogs/generative-engine-optimization/ai-search-compression-engine-brand-positioning",
+      "date": "12 Jul 2026",
+      "badge": "THOUGHT LEADERSHIP",
+      "title": "AI Search Is a Compression Engine: Why Your Brand Positioning Disappears in AI Answers",
+      "excerpt": "Learn why vague positioning disappears in AI answers and how answer-ready content units preserve brand fit, evidence, and boundaries.",
+      "tags": [
+        "AI SEARCH",
+        "GEO",
+        "AEO",
+        "BRAND POSITIONING",
+        "CONTENT STRATEGY"
+      ],
+      "author": "Rohit Singh",
+      "readTime": "10 min read",
+      "image": "https://firebasestorage.googleapis.com/v0/b/thegeocommunity.firebasestorage.app/o/blog-images%2Fai-search-compression-engine-brand-positioning.png?alt=media",
+      "imageAlt": "Abstract visualization of AI search as a compression engine — brand positioning text being compressed with some elements surviving and others disappearing, showing what makes it through an AI answer summary",
+      "order": 11,
+      "category": "thought-leadership"
+    },
+    {
+      "path": "/blogs/generative-engine-optimization/ai-search-matchmaker-recommendation-fit",
+      "date": "12 Jul 2026",
+      "badge": "THOUGHT LEADERSHIP",
+      "title": "AI Search's Matchmaker Problem: Why Best-Fit Beats Best in Brand Recommendations",
+      "excerpt": "Learn how to publish fit signals, exclusions, and decision criteria that earn accurate AI search brand recommendations.",
+      "tags": [
+        "AI SEARCH",
+        "GEO",
+        "AEO",
+        "BRAND RECOMMENDATIONS",
+        "PRODUCT MARKETING"
+      ],
+      "author": "Rohit Singh",
+      "readTime": "10 min read",
+      "image": "https://firebasestorage.googleapis.com/v0/b/thegeocommunity.firebasestorage.app/o/blog-images%2Fai-search-matchmaker-recommendation-fit.png?alt=media",
+      "imageAlt": "Abstract visualization of AI search recommendations as a matchmaking problem — buyer constraints like audience, budget, and stack being matched to solution fit with correct, wrong, and no-match outcomes",
+      "order": 12,
+      "category": "thought-leadership"
+    },
+    {
+      "path": "/blogs/generative-engine-optimization/ai-search-weather-system-visibility-variance",
+      "date": "12 Jul 2026",
+      "badge": "THOUGHT LEADERSHIP",
+      "title": "AI Search Is a Weather System: How to Measure GEO Visibility Despite Model Variance",
+      "excerpt": "Learn how to measure AI search visibility across prompts, models, dates, and answer roles without treating one screenshot as a GEO score.",
+      "tags": [
+        "AI SEARCH",
+        "GEO",
+        "AEO",
+        "AI VISIBILITY",
+        "MEASUREMENT"
+      ],
+      "author": "Rohit Singh",
+      "readTime": "10 min read",
+      "image": "https://firebasestorage.googleapis.com/v0/b/thegeocommunity.firebasestorage.app/o/blog-images%2Fai-search-weather-system-visibility-variance.png?alt=media",
+      "imageAlt": "Abstract visualization of AI search visibility as a weather system — prompts, products, dates, and answer roles forming a distribution panel with variance instead of a single deterministic score",
+      "order": 13,
+      "category": "thought-leadership"
+    },
+    {
+      "path": "/blogs/generative-engine-optimization/ai-search-dark-funnel-answer-influence",
+      "date": "12 Jul 2026",
+      "badge": "THOUGHT LEADERSHIP",
+      "title": "AI Search's Dark Funnel: Why AI Referral Traffic Cannot Measure Answer Influence",
+      "excerpt": "Learn why AI referral traffic cannot measure total answer influence and how to triangulate GEO visibility with GA4 and demand signals.",
+      "tags": [
+        "AI SEARCH",
+        "GEO",
+        "AEO",
+        "ANALYTICS",
+        "GA4",
+        "DARK FUNNEL"
+      ],
+      "author": "Rohit Singh",
+      "readTime": "10 min read",
+      "image": "https://firebasestorage.googleapis.com/v0/b/thegeocommunity.firebasestorage.app/o/blog-images%2Fai-search-dark-funnel-answer-influence.png?alt=media",
+      "imageAlt": "Abstract visualization of the dark funnel in AI search — answer environment, referral behavior, demand movement, on-site quality, and causal confidence as separate measurement layers for triangulating answer influence",
+      "order": 14,
+      "category": "thought-leadership"
+    },
+    {
+      "path": "/blogs/generative-engine-optimization/hidden-intent-map-behind-ai-search",
+      "date": "7 Jul 2026",
+      "badge": "RESEARCH",
+      "title": "The Hidden Intent Map Behind AI Search",
+      "excerpt": "Kojable analyzed 74,346 AI-generated responses across 984 DevOps prompt templates. Learn how prompt intent, retrieval routes, and citation behavior shape AI search visibility.",
+      "tags": [
+        "AI SEARCH",
+        "AEO",
+        "PROMPT INTENT",
+        "AI VISIBILITY",
+        "KOJABLE",
+        "CONTENT STRATEGY"
+      ],
+      "author": "Piush Vaish",
+      "readTime": "20 min read",
+      "image": "https://firebasestorage.googleapis.com/v0/b/thegeocommunity.firebasestorage.app/o/blog-images%2Fhidden-intent-map-behind-ai-search.png?alt=media",
+      "imageAlt": "The Hidden Intent Map Behind AI Search",
+      "order": 15,
+      "category": "research"
+    },
+    {
+      "path": "/blogs/generative-engine-optimization/mentioned-isnt-enough-brand-citations-ai-answers",
+      "date": "7 Jul 2026",
+      "badge": "RESEARCH",
+      "title": "Mentioned Isn’t Enough: What 74,346 AI Answers Reveal About Brand Citations",
+      "excerpt": "Kojable analyzed 74,346 AI-generated responses across ChatGPT, Claude, Gemini, and Perplexity. Learn why brand citations matter more than brand mentions.",
+      "tags": [
+        "AI SEARCH",
+        "AEO",
+        "GEO",
+        "BRAND CITATIONS",
+        "AI VISIBILITY",
+        "KOJABLE"
+      ],
+      "author": "Piush Vaish",
+      "readTime": "18 min read",
+      "image": "https://firebasestorage.googleapis.com/v0/b/thegeocommunity.firebasestorage.app/o/blog-images%2Fmentioned-isnt-enough-brand-citations-ai-answers.png?alt=media",
+      "imageAlt": "Mentioned Isn’t Enough: What 74,346 AI Answers Reveal About Brand Citations",
+      "order": 16,
+      "category": "research"
+    },
+    {
+      "path": "/blogs/generative-engine-optimization/hnsw-and-geo-retrieval-layer",
+      "date": "5 Jul 2026",
+      "badge": "TECHNICAL",
+      "title": "HNSW and GEO: The Retrieval Layer Nobody Talks About",
+      "excerpt": "HNSW explains why GEO content can be relevant but never reach the AI answer. Learn how approximate vector retrieval, efSearch, M, chunking, filters, and reranking shape AI search visibility.",
+      "tags": [
+        "GEO",
+        "AI SEARCH",
+        "HNSW",
+        "VECTOR SEARCH",
+        "RAG",
+        "RETRIEVAL",
+        "EMBEDDINGS",
+        "AI SEO"
+      ],
+      "author": "Rohit Singh",
+      "readTime": "17 min read",
+      "image": "https://firebasestorage.googleapis.com/v0/b/thegeocommunity.firebasestorage.app/o/blog-images%2Fhnsw-and-geo-retrieval-layer.png?alt=media",
+      "imageAlt": "Abstract visualization of HNSW graph retrieval for GEO — connected vector nodes forming a fast approximate nearest-neighbor graph that routes AI search queries to relevant source chunks",
+      "order": 17,
+      "category": "technical"
+    },
+    {
+      "path": "/blogs/generative-engine-optimization/what-is-corroboration-authority",
+      "date": "1 Jul 2026",
+      "badge": "NOVEL IDEA",
+      "title": "What Is Corroboration Authority? The Third-Party Trust Layer Behind AI Search",
+      "excerpt": "Corroboration authority is the trust signal AI systems get when LinkedIn, review sites, and other independent sources confirm a brand claim. Learn how to build it for AI search, GEO, and AEO.",
+      "tags": [
+        "GEO",
+        "AI SEARCH",
+        "CORROBORATION AUTHORITY",
+        "AEO",
+        "CONTENT STRATEGY",
+        "DIGITAL PR",
+        "BRAND TRUST"
+      ],
+      "author": "Rohit Singh",
+      "readTime": "14 min read",
+      "image": "https://firebasestorage.googleapis.com/v0/b/thegeocommunity.firebasestorage.app/o/blog-images%2Fwhat-is-corroboration-authority.png?alt=media",
+      "imageAlt": "Abstract visualization of corroboration authority — independent sources like LinkedIn, G2, Gartner, Reddit, YouTube, and analyst sites converging around a brand claim",
+      "order": 18,
+      "category": "ideas"
+    },
+    {
+      "path": "/blogs/generative-engine-optimization/latent-authority-perplexity-patent",
+      "date": "29 Jun 2026",
+      "badge": "NOVEL IDEA",
+      "title": "What Is Latent Authority? How Perplexity's Search Patent Hints at a New Kind of Digital Power",
+      "excerpt": "Latent Authority is the degree to which an entity is deeply and durably encoded in an LLM's weights as the go-to reference for a topic domain. Perplexity's patent US20250291863A1 shows how multi-turn search sessions build it.",
+      "tags": [
+        "GEO",
+        "AI SEARCH",
+        "PERPLEXITY",
+        "PATENT",
+        "LATENT AUTHORITY",
+        "CONTENT STRATEGY",
+        "LLM"
+      ],
+      "author": "Rohit Singh",
+      "readTime": "10 min read",
+      "image": "https://firebasestorage.googleapis.com/v0/b/thegeocommunity.firebasestorage.app/o/blog-images%2Flatent-authority-perplexity-patent.png?alt=media",
+      "imageAlt": "Abstract visualization of latent authority — a brand entity glowing as a knowledge domain in an AI search network, with multi-turn query paths converging on it",
+      "order": 19,
+      "category": "ideas"
+    },
+    {
+      "path": "/blogs/generative-engine-optimization/emotion-concepts-llm-function-claude-sonnet-45-arxiv-2604-07729",
+      "date": "28 Jun 2026",
+      "badge": "RESEARCH",
+      "title": "LLMs Have Internal Emotions: What Anthropic's Claude Sonnet 4.5 Emotion-Vectors Paper Means for Content Teams",
+      "excerpt": "Anthropic's Claude Sonnet 4.5 paper maps internal emotion vectors. Find out what this means for content strategy, GEO, and how LLMs respond to emotional framing.",
+      "tags": [
+        "GEO",
+        "RESEARCH",
+        "LLM",
+        "AI SEARCH",
+        "ANTHROPIC",
+        "CLAUDE",
+        "EMOTION",
+        "CONTENT STRATEGY"
+      ],
+      "author": "Rohit Singh",
+      "readTime": "12 min read",
+      "image": "https://firebasestorage.googleapis.com/v0/b/thegeocommunity.firebasestorage.app/o/blog-images%2Femotion-concepts-llm-function-claude-sonnet-45-arxiv-2604-07729.png?alt=media",
+      "imageAlt": "Abstract visualization of emotion vectors inside a large language model — distinct emotional concepts activating in neural space and influencing generated text",
+      "order": 20,
+      "category": "research"
+    },
+    {
+      "path": "/blogs/generative-engine-optimization/language-models-injective-invertible-arxiv-2510-15511",
+      "date": "28 Jun 2026",
+      "badge": "RESEARCH",
+      "title": "Language Models Are Injective and Invertible: What arXiv:2510.15511 Means for GEO, Privacy, and AI Transparency",
+      "excerpt": "arXiv:2510.15511: LLMs are injective and invertible. Zero collisions in billions of tests, and SipIt recovers exact prompts from hidden states. GEO impact.",
+      "tags": [
+        "GEO",
+        "RESEARCH",
+        "LLM",
+        "AI TRANSPARENCY",
+        "PRIVACY",
+        "INTERPRETABILITY",
+        "AI SEARCH"
+      ],
+      "author": "Rohit Singh",
+      "readTime": "10 min read",
+      "image": "https://firebasestorage.googleapis.com/v0/b/thegeocommunity.firebasestorage.app/o/blog-images%2Flanguage-models-injective-invertible-arxiv-2510-15511.png?alt=media",
+      "imageAlt": "Diagram showing distinct input prompts mapping to distinct hidden states in a Transformer, with SipIt algorithm reconstructing the original text from activations",
+      "order": 21,
+      "category": "research"
+    },
+    {
+      "path": "/blogs/generative-engine-optimization/llm-multi-format-robustness-arxiv-2606-11643-geo",
+      "date": "27 Jun 2026",
+      "badge": "RESEARCH",
+      "title": "LLMs Answer the Same Question Differently in Different Formats. A New Paper Shows How to Fix That — and What It Means for GEO.",
+      "excerpt": "arXiv:2606.11643: multi-format training raises LLM all-format consistency by 62% and cross-format robustness by 35%. What this means for GEO content.",
+      "tags": [
+        "GEO",
+        "RESEARCH",
+        "LLM",
+        "AI SEARCH",
+        "CONTENT STRATEGY",
+        "ROBUSTNESS",
+        "MULTI-FORMAT TRAINING"
+      ],
+      "author": "Rohit Singh",
+      "readTime": "12 min read",
+      "image": "https://firebasestorage.googleapis.com/v0/b/thegeocommunity.firebasestorage.app/o/blog-images%2Fllm-multi-format-robustness-arxiv-2606-11643-geo.png?alt=media",
+      "imageAlt": "Multi-format LLM robustness concept — same question presented as MCQ, true/false, fill-in-the-blank, and open-ended, with consistency metrics showing +62% all-format consistency and +35% cross-format robustness",
+      "order": 22,
+      "category": "research"
+    },
+    {
+      "path": "/blogs/generative-engine-optimization/why-llm-answers-dont-show-citations",
+      "date": "23 Jun 2026",
+      "badge": "RESEARCH",
+      "title": "Why LLM Answers Don't Show Citations: 20 Reasons Source Evidence Gets Used Without Attribution",
+      "excerpt": "LLM answers can use source-backed facts without visible citations. Explore 20 reasons citations disappear in RAG pipelines and why citation count is a weak GEO metric.",
+      "tags": [
+        "GEO",
+        "LLM CITATIONS",
+        "RAG",
+        "AI SEARCH",
+        "ATTRIBUTION",
+        "MEASUREMENT",
+        "CONTENT STRATEGY"
+      ],
+      "author": "Rohit Singh",
+      "readTime": "15 min read",
+      "image": "https://firebasestorage.googleapis.com/v0/b/thegeocommunity.firebasestorage.app/o/blog-images%2Fwhy-llm-answers-dont-show-citations.png?alt=media",
+      "imageAlt": "Diagram showing evidence universe filtering down through retrieval, generator context, answer attribution, and UI display — each stage removing sources before final citations appear",
+      "order": 23,
+      "category": "research"
+    },
+    {
+      "path": "/blogs/generative-engine-optimization/google-agentic-resource-discovery-specification",
+      "date": "21 Jun 2026",
+      "badge": "ANALYSIS",
+      "title": "Google's Agentic Resource Discovery (ARD): Why the Missing Layer of the Agentic Web Matters for SEO",
+      "excerpt": "Google's Agentic Resource Discovery (ARD) spec lets AI agents find tools across the web via catalogs and registries. What it means for SEO, GEO, and AI visibility strategy.",
+      "tags": [
+        "GEO",
+        "AI AGENTS",
+        "ARD",
+        "MCP",
+        "AGENTIC WEB",
+        "GOOGLE",
+        "AI SEARCH",
+        "CONTENT STRATEGY"
+      ],
+      "author": "Rohit Singh",
+      "readTime": "11 min read",
+      "image": "https://firebasestorage.googleapis.com/v0/b/thegeocommunity.firebasestorage.app/o/blog-images%2Fgoogle-agentic-resource-discovery-specification.png?alt=media",
+      "imageAlt": "Agentic Resource Discovery architecture — catalogs published on domains, indexed by registries, discovered and verified by AI agents at runtime",
+      "order": 24,
+      "category": "research"
+    },
+    {
+      "path": "/blogs/generative-engine-optimization/raid-geo-intent-driven-generative-search-optimization",
+      "date": "10 Jun 2026",
+      "badge": "RESEARCH",
+      "title": "RAID G-SEO: How Modeling Search Intent, Without Seeing User Queries — Beats Every Original GEO Tactic",
+      "excerpt": "RAID G-SEO (arXiv:2508.11158) beats all 9 GEO tactics: 15.79 objective, 13.27 subjective. 4-phase intent pipeline, 57.6% effective rate, 4W role reflection.",
+      "tags": [
+        "GEO",
+        "RESEARCH",
+        "SEARCH INTENT",
+        "CONTENT STRATEGY",
+        "AI SEARCH",
+        "CONTENT OPTIMIZATION",
+        "GENERATIVE SEARCH"
+      ],
+      "author": "Rohit Singh",
+      "readTime": "12 min read",
+      "image": "https://firebasestorage.googleapis.com/v0/b/thegeocommunity.firebasestorage.app/o/blog-images%2Fraid-geo-intent-driven-generative-search-optimization.png?alt=media",
+      "imageAlt": "RAID G-SEO four-phase intent-driven optimization pipeline — content summarization, intent inference with 4W multi-role reflection, step planning, and content rewriting for generative search engine visibility",
+      "order": 25,
+      "category": "research"
+    },
+    {
+      "path": "/blogs/generative-engine-optimization/geo-sfe-structural-feature-engineering-citation",
+      "date": "10 Jun 2026",
+      "badge": "RESEARCH",
+      "title": "GEO-SFE: How Document Structure, Not Just Content - Shapes Whether AI Cites You",
+      "excerpt": "GEO-SFE (arXiv:2603.29979): structural feature engineering for GEO. 17.3% citation rate improvement across 6 engines using 3-level hierarchy. 5 quantitative principles for heading depth, paragraph length, and format integration.",
+      "tags": [
+        "GEO",
+        "RESEARCH",
+        "CONTENT STRATEGY",
+        "DOCUMENT STRUCTURE",
+        "CITATION RATE",
+        "STRUCTURAL OPTIMIZATION",
+        "AI SEARCH"
+      ],
+      "author": "Rohit Singh",
+      "readTime": "13 min read",
+      "image": "https://firebasestorage.googleapis.com/v0/b/thegeocommunity.firebasestorage.app/o/blog-images%2Fgeo-sfe-structural-feature-engineering-citation.png?alt=media",
+      "imageAlt": "GEO-SFE structural feature engineering framework — three-level hierarchy of macro, meso, and micro structure for AI citation optimization across six generative engines",
+      "order": 26,
+      "category": "research"
+    },
+    {
+      "path": "/blogs/generative-engine-optimization/webknograph-gnn-internal-linking-seo",
+      "date": "5 Jun 2026",
+      "badge": "RESEARCH",
+      "title": "WebKnoGraph: The Open-Source Framework That Tests Your Internal Links Before You Deploy Them",
+      "excerpt": "WebKnoGraph (arXiv:2606.06106) tests internal linking strategies before deployment using GraphSAGE and PageRank simulation. Four metrics, five strategies, automatic vs expert-assisted — what SEO consultants need to know.",
+      "tags": [
+        "INTERNAL LINKING",
+        "TECHNICAL SEO",
+        "GNN",
+        "PAGERANK",
+        "SEO",
+        "RESEARCH",
+        "GRAPHSAGE",
+        "CONTENT STRATEGY"
+      ],
+      "author": "Rohit Singh",
+      "readTime": "14 min read",
+      "image": "https://firebasestorage.googleapis.com/v0/b/thegeocommunity.firebasestorage.app/o/blog-images%2Fwebknograph-gnn-internal-linking-seo.png?alt=media",
+      "imageAlt": "WebKnoGraph GNN-powered internal linking framework — GraphSAGE-based pre-deployment evaluation of internal link strategies using PageRank and semantic coherence metrics",
+      "order": 27,
+      "category": "research"
+    },
     {
       "path": "/blogs/generative-engine-optimization/website-ai-agent-readiness-lighthouse-audit",
       "date": "30 May 2026",
       "badge": "GUIDE",
       "title": "Is Your Website AI Agent-Ready? The New Lighthouse Agentic Browsing Audit Tests Three Things Most SEOs Miss",
-      "excerpt": "Google's new Lighthouse 'Agentic Browsing' report checks three things most SEOs miss: accessibility tree health, WebMCP integration, and LLMs.txt. Here's what each check means, what each failure blocks, and which to fix first.",
+      "excerpt": "How to use Google's new Lighthouse Agentic Browsing report to find what blocks AI agents from your site: accessibility tree, WebMCP, and LLMs.txt explained.",
       "tags": [
         "AI AGENTS",
         "GEO",
         "AGENTIC WEB",
-        "LIGHTHOUSE"
+        "LIGHTHOUSE",
+        "WEBMCP",
+        "LLMS.TXT",
+        "ACCESSIBILITY TREE",
+        "TECHNICAL SEO"
       ],
       "author": "Rohit Singh",
       "readTime": "10 min read",
-      "image": "https://thegeocommunity.com/images/website-ai-agent-readiness-lighthouse-audit.webp",
+      "image": "https://firebasestorage.googleapis.com/v0/b/thegeocommunity.firebasestorage.app/o/blog-images%2Fwebsite-ai-agent-readiness-lighthouse-audit.png?alt=media",
       "imageAlt": "Lighthouse Agentic Browsing audit for AI agent readiness - accessibility tree, WebMCP, and LLMs.txt checks in Chrome Canary",
-      "order": 1,
+      "order": 28,
       "category": "guides"
     },
     {
       "path": "/blogs/generative-engine-optimization/best-courses-ai-seo-aeo-geo-2026",
       "date": "23 May 2026",
       "badge": "GUIDE",
-      "title": "Best Courses for AI SEO, AEO & GEO: Ranked Picks for 2026",
-      "excerpt": "CXL, Coursera, Jellyfish, Reforge, and The GEO Community — ranked and compared across format, depth, price, and who each course is actually built for.",
+      "title": "Best Courses and Free Resources for AI SEO, AEO & GEO: Ranked Picks for 2026",
+      "excerpt": "The best courses and free resources for AI SEO, AEO & GEO in 2026: LinkedIn Marketing and Brooke Weller for free expert-led B2B GEO guidance, Coursera for structured learning, Jellyfish for live team training, Reforge for senior leaders, and The GEO Community for open learning.",
       "tags": [
         "GEO",
         "AI SEO",
         "AEO",
-        "COURSES"
+        "COURSES",
+        "LEARNING",
+        "COURSERA",
+        "JELLYFISH",
+        "LINKEDIN",
+        "BROOKE WELLER",
+        "EDUCATION"
       ],
       "author": "Rohit Singh",
-      "readTime": "12 min read",
-      "image": "https://thegeocommunity.com/images/best-courses-ai-seo-aeo-geo-2026.webp",
-      "imageAlt": "Best Courses for AI SEO, AEO & GEO in 2026 — ranked picks including CXL, Coursera, Jellyfish, Reforge, and The GEO Community",
-      "order": 2,
+      "readTime": "13 min read",
+      "image": "https://firebasestorage.googleapis.com/v0/b/thegeocommunity.firebasestorage.app/o/blog-images%2Fbest-courses-ai-seo-aeo-geo-2026.png?alt=media",
+      "imageAlt": "Best courses and free resources for AI SEO, AEO & GEO in 2026 — ranked picks including LinkedIn Marketing, Coursera, Jellyfish, Reforge, and The GEO Community",
+      "order": 29,
       "category": "guides"
     },
     {
@@ -53,94 +638,111 @@ export const sourceBlogIndex = {
       "date": "22 May 2026",
       "badge": "RESEARCH",
       "title": "MAGEO: The GEO Framework That Learns From Every Edit and Gets Smarter Across Engines",
-      "excerpt": "A new paper (arXiv:2604.19516) proposes MAGEO — a four-agent GEO framework that distills successful content edits into reusable, engine-specific strategies. The result: WLV scores more than triple versus the strongest heuristic baseline on GPT-5.2 and Gemini-3 Pro, while reducing hallucinated citations.",
+      "excerpt": "MAGEO (arXiv:2604.19516): four-agent GEO framework with a Skill Bank that learns engine-specific optimization strategies. 3× WLV improvement over heuristic baselines on GPT-5.2 and Gemini-3 Pro — and what it means for SEOs.",
       "tags": [
         "GEO",
         "RESEARCH",
         "AI SEARCH",
-        "MULTI-AGENT"
+        "MULTI-AGENT",
+        "CITATION VISIBILITY",
+        "CONTENT STRATEGY",
+        "MAGEO",
+        "ENGINE-SPECIFIC GEO"
       ],
       "author": "Rohit Singh",
       "readTime": "13 min read",
-      "image": "https://thegeocommunity.com/images/mageo-multi-agent-geo-reusable-strategy-learning.webp",
+      "image": "https://firebasestorage.googleapis.com/v0/b/thegeocommunity.firebasestorage.app/o/blog-images%2Fmageo-multi-agent-geo-reusable-strategy-learning.png?alt=media",
       "imageAlt": "MAGEO multi-agent GEO framework — four-agent architecture with Skill Bank for reusable engine-specific optimization strategies across GPT-5.2, Gemini-3 Pro, and Qwen-3 Max",
-      "order": 3,
+      "order": 30,
       "category": "research"
     },
     {
       "path": "/blogs/generative-engine-optimization/google-ai-optimization-guide-geo-hype",
       "date": "16 May 2026",
-      "badge": "EXPERT INSIGHTS",
+      "badge": "THOUGHT LEADERSHIP",
       "title": "Google's AI Optimization Guide Is Useful. The GEO Hype? Not So Much.",
-      "excerpt": "Google published its AI Overviews optimization guide and the SEO world immediately plugged it into the 'SEO is GEO now' narrative. If you actually read it, it does almost the opposite of what the GEO crowd wants it to do.",
+      "excerpt": "Google's AI optimization guide covers AI Overviews under Google SEO - not a universal GEO manual. What it actually says, why llms.txt didn't come from AI research, and what real GEO work looks like.",
       "tags": [
         "GEO",
         "SEO",
         "AI SEARCH",
-        "GOOGLE AI OVERVIEWS"
+        "GOOGLE AI OVERVIEWS",
+        "LLMS.TXT",
+        "CONTENT STRATEGY",
+        "AI MODE"
       ],
       "author": "Rohit Singh",
       "readTime": "9 min read",
-      "image": "https://thegeocommunity.com/images/google-ai-optimization-guide-geo-hype.webp",
+      "image": "https://firebasestorage.googleapis.com/v0/b/thegeocommunity.firebasestorage.app/o/blog-images%2Fgoogle-ai-optimization-guide-geo-hype.png?alt=media",
       "imageAlt": "Google AI optimization guide vs GEO hype - what the guide actually says about AI Overviews, llms.txt, and real GEO work",
-      "order": 4,
-      "category": "insights"
+      "order": 31,
+      "category": "thought-leadership"
     },
     {
       "path": "/blogs/generative-engine-optimization/google-analytics-ai-assistant-channel-native-tracking",
       "date": "15 May 2026",
       "badge": "INFORMATIONAL",
       "title": "Google Analytics Now Has a Native AI Assistant Channel. Here's What Changes for GEO Measurement.",
-      "excerpt": "As of May 13, 2026, Google Analytics automatically categorizes traffic from ChatGPT, Gemini, and Claude under a dedicated AI Assistant channel — no custom setup required. Here's exactly what changed, what it means for your reports, and what you still need to do manually.",
+      "excerpt": "Google Analytics added a native AI Assistant channel on May 13, 2026. Medium 'ai-assistant', channel group 'AI Assistant', campaign '(ai-assistant)' — auto-assigned. What changed and what it means for GEO measurement.",
       "tags": [
         "GA4",
         "AI SEARCH",
         "GEO",
-        "GOOGLE ANALYTICS"
+        "GOOGLE ANALYTICS",
+        "AI ASSISTANT",
+        "CHANNEL GROUPS",
+        "ANALYTICS",
+        "CHATGPT"
       ],
       "author": "Rohit Singh",
       "readTime": "6 min read",
-      "image": "https://thegeocommunity.com/images/google-analytics-ai-assistant-channel-native-tracking.webp",
+      "image": "https://firebasestorage.googleapis.com/v0/b/thegeocommunity.firebasestorage.app/o/blog-images%2Fgoogle-analytics-ai-assistant-channel-native-tracking.png?alt=media",
       "imageAlt": "Google Analytics AI Assistant channel — native traffic measurement for ChatGPT, Gemini, Claude, and Perplexity",
-      "order": 5,
+      "order": 32,
       "category": "guides"
     },
     {
       "path": "/blogs/generative-engine-optimization/seo-geo-consultant-attitude",
       "date": "15 May 2026",
-      "badge": "NOVEL IDEA",
+      "badge": "THOUGHT LEADERSHIP",
       "title": "The Difference Between a Good SEO/GEO Consultant and a Bad One? It's All Attitude.",
-      "excerpt": "Hygiene is not SEO. Hygiene is table stakes. Here's the uncomfortable truth about what separates consultants who move the needle from those who just follow checklists.",
+      "excerpt": "Hygiene is not SEO — it's table stakes. What separates a good SEO/GEO consultant from a bad one isn't tools or certifications. It's how they think about the problem.",
       "tags": [
         "SEO",
         "GEO",
         "CONSULTING",
-        "CONTENT STRATEGY"
+        "CONTENT STRATEGY",
+        "AI SEARCH",
+        "MINDSET"
       ],
       "author": "Rohit Singh",
       "readTime": "5 min read",
-      "image": "https://thegeocommunity.com/images/seo-geo-consultant-attitude.webp",
+      "image": "https://firebasestorage.googleapis.com/v0/b/thegeocommunity.firebasestorage.app/o/blog-images%2Fseo-geo-consultant-attitude.png?alt=media",
       "imageAlt": "Good vs bad SEO consultant mindset — attitude, reward function, and the one edge that wins",
-      "order": 6,
-      "category": "ideas"
+      "order": 33,
+      "category": "thought-leadership"
     },
     {
       "path": "/blogs/generative-engine-optimization/colbert-idf-token-weights-ai-retrieval-geo",
       "date": "8 May 2026",
       "badge": "RESEARCH",
       "title": "ColBERT Has Been Weighting All Query Tokens Equally. A New Paper Fixes That — and Recall Improves by 3.66%.",
-      "excerpt": "ColBERT's late-interaction mechanism treats 'the' the same as your core topic term. A new paper (arXiv:2511.16106) introduces IDF-weighted aggregation — the same signal that made BM25 dominate for decades — and lifts Recall@10 by 1.28% zero-shot and 3.66% with limited labeling. Here's the mechanism, the results, and the content strategy implications.",
+      "excerpt": "A new paper adds IDF-based token weighting to ColBERT's Chamfer Distance, improving Recall@10 by 1.28% zero-shot and 3.66% few-shot on BEIR. Why rare, specific terms matter more in neural AI retrieval — and what it means for GEO content strategy.",
       "tags": [
         "COLBERT",
         "MULTI-VECTOR RETRIEVAL",
         "IDF",
-        "RAG"
+        "RAG",
+        "AI SEARCH",
+        "GEO",
+        "NEURAL RETRIEVAL",
+        "BEIR BENCHMARK"
       ],
       "author": "Rohit Singh",
       "readTime": "12 min read",
-      "image": "https://thegeocommunity.com/images/colbert-idf-token-weights-ai-retrieval-geo.webp",
+      "image": "https://firebasestorage.googleapis.com/v0/b/thegeocommunity.firebasestorage.app/o/blog-images%2Fcolbert-idf-token-weights-ai-retrieval-geo.png?alt=media",
       "imageAlt": "Weighted Chamfer Distance in ColBERT — How IDF Token Importance Weights Improve Neural Retrieval for AI Search",
-      "order": 7,
+      "order": 34,
       "category": "research"
     },
     {
@@ -148,18 +750,23 @@ export const sourceBlogIndex = {
       "date": "30 Apr 2026",
       "badge": "GUIDE",
       "title": "GA4 for AI Search: How to Measure AI Traffic, GEO Performance & Conversions",
-      "excerpt": "GA4 wasn't built to measure AI Search — it predates it. With the right custom channel group, regex, and conversion events, you can isolate ChatGPT, Perplexity, and Gemini traffic and connect it to real business outcomes. This guide covers the full five-part setup.",
+      "excerpt": "GA4 buries AI Search traffic in the wrong channels by default. Learn how to create a custom AI Search channel group, write the right regex, account for dark traffic, and measure GEO conversions — full setup guide.",
       "tags": [
         "GA4",
         "AI SEARCH",
         "GEO",
-        "CHATGPT"
+        "CHATGPT",
+        "PERPLEXITY",
+        "GEMINI",
+        "ANALYTICS",
+        "CHANNEL GROUPS",
+        "GOOGLE ANALYTICS"
       ],
       "author": "Rohit Singh",
       "readTime": "14 min read",
-      "image": "https://thegeocommunity.com/images/ga4-for-ai-search-measure-ai-traffic-geo-performance-conversions.webp",
+      "image": "https://firebasestorage.googleapis.com/v0/b/thegeocommunity.firebasestorage.app/o/blog-images%2Fga4-for-ai-search-measure-ai-traffic-geo-performance-conversions.png?alt=media",
       "imageAlt": "GA4 for AI Search — How to Measure AI Referral Traffic, GEO Performance and Conversions with Custom Channel Groups",
-      "order": 8,
+      "order": 35,
       "category": "guides"
     },
     {
@@ -167,18 +774,21 @@ export const sourceBlogIndex = {
       "date": "30 Apr 2026",
       "badge": "GUIDE",
       "title": "How to Measure GEO Success in GA4 — Beyond Traffic Counts",
-      "excerpt": "AI Search traffic volume is a leading indicator, not a success metric. Here are the five GA4 measurements that tell you whether your GEO program is producing real business outcomes — and how to build a monthly GEO performance report in Explorations.",
+      "excerpt": "Traffic counts don't prove GEO success. Learn the five GA4 metrics that measure AI Search quality and conversions: engaged session rate, conversion rate by landing page, engagement time, AI share of organic, and return visit rate.",
       "tags": [
         "GA4",
         "AI SEARCH",
         "GEO",
-        "ANALYTICS"
+        "ANALYTICS",
+        "CONVERSIONS",
+        "GEO MEASUREMENT",
+        "EXPLORATIONS"
       ],
       "author": "Rohit Singh",
       "readTime": "11 min read",
-      "image": "https://thegeocommunity.com/images/how-to-measure-geo-success-ga4-beyond-traffic-counts.webp",
+      "image": "https://firebasestorage.googleapis.com/v0/b/thegeocommunity.firebasestorage.app/o/blog-images%2Fhow-to-measure-geo-success-ga4-beyond-traffic-counts.png?alt=media",
       "imageAlt": "How to Measure GEO Success in GA4 — Five Quality Metrics Beyond AI Search Traffic Counts",
-      "order": 9,
+      "order": 36,
       "category": "guides"
     },
     {
@@ -186,18 +796,21 @@ export const sourceBlogIndex = {
       "date": "30 Apr 2026",
       "badge": "GUIDE",
       "title": "Why GA4 Underreports AI Search Traffic (Dark Traffic Explained)",
-      "excerpt": "GA4's AI referral counts are a floor, not a ceiling. Three specific mechanisms strip the referrer header before it reaches your analytics tag — the result is that 30–50% of AI-driven sessions land in Direct with no source attribution.",
+      "excerpt": "GA4 misses 30–50% of AI-driven traffic due to referrer stripping in mobile apps, HTTPS-to-HTTP redirects, and no-referrer policy headers. Here's what causes dark traffic and how to estimate the gap.",
       "tags": [
         "GA4",
         "AI SEARCH",
         "GEO",
-        "DARK TRAFFIC"
+        "DARK TRAFFIC",
+        "ANALYTICS",
+        "DIRECT TRAFFIC",
+        "REFERRER STRIPPING"
       ],
       "author": "Rohit Singh",
       "readTime": "10 min read",
-      "image": "https://thegeocommunity.com/images/why-ga4-underreports-ai-search-traffic-dark-traffic.webp",
+      "image": "https://firebasestorage.googleapis.com/v0/b/thegeocommunity.firebasestorage.app/o/blog-images%2Fwhy-ga4-underreports-ai-search-traffic-dark-traffic.png?alt=media",
       "imageAlt": "Why GA4 Underreports AI Search Traffic — Three Referrer Stripping Mechanisms Explained",
-      "order": 10,
+      "order": 37,
       "category": "guides"
     },
     {
@@ -205,18 +818,23 @@ export const sourceBlogIndex = {
       "date": "30 Apr 2026",
       "badge": "GUIDE",
       "title": "GA4 Regex for ChatGPT, Perplexity, Gemini, Claude & Copilot",
-      "excerpt": "GA4 channel conditions use RE2 regex — not PCRE. Here are validated patterns for all major AI engines, common mistakes that silently break your channel definitions, and a maintenance schedule to keep coverage accurate as new AI domains appear.",
+      "excerpt": "Validated RE2 regex patterns for GA4 channel groups covering ChatGPT, Perplexity, Gemini, Claude, Copilot, and 4 other AI engines. Includes common mistakes, testing methodology, and a quarterly maintenance schedule.",
       "tags": [
         "GA4",
         "AI SEARCH",
         "GEO",
-        "REGEX"
+        "REGEX",
+        "CHANNEL GROUPS",
+        "CHATGPT",
+        "PERPLEXITY",
+        "GEMINI",
+        "ANALYTICS"
       ],
       "author": "Rohit Singh",
       "readTime": "9 min read",
-      "image": "https://thegeocommunity.com/images/ga4-regex-chatgpt-perplexity-gemini-claude-copilot.webp",
+      "image": "https://firebasestorage.googleapis.com/v0/b/thegeocommunity.firebasestorage.app/o/blog-images%2Fga4-regex-chatgpt-perplexity-gemini-claude-copilot.png?alt=media",
       "imageAlt": "GA4 Regex Patterns for AI Search Channel Groups — ChatGPT, Perplexity, Gemini, Claude and Copilot",
-      "order": 11,
+      "order": 38,
       "category": "guides"
     },
     {
@@ -224,18 +842,22 @@ export const sourceBlogIndex = {
       "date": "30 Apr 2026",
       "badge": "GUIDE",
       "title": "How to Create a Custom AI Search Channel Group in GA4",
-      "excerpt": "GA4's default channel group has no AI Search definition — and you can't edit it. Here's how to create a custom channel group that labels ChatGPT, Perplexity, Gemini, Claude, and Copilot traffic as a first-class channel in every report.",
+      "excerpt": "Step-by-step: create a custom GA4 channel group with an 'AI Search' channel definition. Covers Admin setup, channel priority ordering, regex conditions, and how to use the group in Traffic acquisition reports and Explorations.",
       "tags": [
         "GA4",
         "AI SEARCH",
         "GEO",
-        "CHANNEL GROUPS"
+        "CHANNEL GROUPS",
+        "ANALYTICS",
+        "CHATGPT",
+        "PERPLEXITY",
+        "GOOGLE ANALYTICS"
       ],
       "author": "Rohit Singh",
       "readTime": "9 min read",
-      "image": "https://thegeocommunity.com/images/custom-ai-search-channel-group-ga4.webp",
+      "image": "https://firebasestorage.googleapis.com/v0/b/thegeocommunity.firebasestorage.app/o/blog-images%2Fcustom-ai-search-channel-group-ga4.png?alt=media",
       "imageAlt": "How to Create a Custom AI Search Channel Group in GA4 — Step-by-Step Setup Guide",
-      "order": 12,
+      "order": 39,
       "category": "guides"
     },
     {
@@ -243,18 +865,21 @@ export const sourceBlogIndex = {
       "date": "30 Apr 2026",
       "badge": "GUIDE",
       "title": "How to Find AI Referral Traffic in GA4",
-      "excerpt": "ChatGPT, Perplexity, and Gemini referrals are already in your GA4 data — buried in Referral with no labeling. Here's how to surface them using Traffic Acquisition filters and Explorations in under 10 minutes, before you build any custom configuration.",
+      "excerpt": "How to find ChatGPT, Perplexity, Gemini, and Claude referral traffic in GA4 using Traffic acquisition filters and Free Form Explorations. Step-by-step baseline check with session source reference table.",
       "tags": [
         "GA4",
         "AI SEARCH",
         "GEO",
-        "ANALYTICS"
+        "ANALYTICS",
+        "TRAFFIC ACQUISITION",
+        "CHATGPT",
+        "PERPLEXITY"
       ],
       "author": "Rohit Singh",
       "readTime": "8 min read",
-      "image": "https://thegeocommunity.com/images/how-to-find-ai-referral-traffic-ga4.webp",
+      "image": "https://firebasestorage.googleapis.com/v0/b/thegeocommunity.firebasestorage.app/o/blog-images%2Fhow-to-find-ai-referral-traffic-ga4.png?alt=media",
       "imageAlt": "How to Find AI Referral Traffic in GA4 — Traffic Acquisition Filter and Explorations Walkthrough",
-      "order": 13,
+      "order": 40,
       "category": "guides"
     },
     {
@@ -262,18 +887,20 @@ export const sourceBlogIndex = {
       "date": "29 Apr 2026",
       "badge": "RESEARCH",
       "title": "How DeepSeek V4 Crammed 1 Million Tokens Into 9.62 GB and Cut Inference Costs by 6×",
-      "excerpt": "DeepSeek V4 (released April 24, 2026) ships a 1-million-token context window using just 9.62 GB of KV cache — an 8.7× reduction over V3.2. Hybrid Attention combines 4:1 and 128:1 compression, sparse top-512 selection, and a 128-token sliding window. Here's the architecture, the benchmarks, and why GPT-5.5 and Claude Opus 4.7 now face 6× cost pressure.",
+      "excerpt": "DeepSeek V4 cuts long-context KV cache 90% via Hybrid Attention (CSA + HCA + sliding window). 1M tokens in 9.62 GB, 6× cheaper than GPT-5.5 — full breakdown.",
       "tags": [
         "DEEPSEEK",
         "AI MODELS",
         "LONG CONTEXT",
-        "KV CACHE"
+        "KV CACHE",
+        "HYBRID ATTENTION",
+        "INFERENCE COST"
       ],
       "author": "Rohit Singh",
       "readTime": "13 min read",
-      "image": "https://thegeocommunity.com/images/deepseek_v4_hybrid_attention.webp",
+      "image": "https://firebasestorage.googleapis.com/v0/b/thegeocommunity.firebasestorage.app/o/blog-images%2Fdeepseek_v4_hybrid_attention.png?alt=media",
       "imageAlt": "DeepSeek V4 Hybrid Attention architecture — Compressed Sparse Attention (CSA), Heavily Compressed Attention (HCA), and a 128-token sliding window cut KV cache 90% and reduce per-token FLOPs 73% on 1-million-token contexts",
-      "order": 14,
+      "order": 41,
       "category": "research"
     },
     {
@@ -281,18 +908,20 @@ export const sourceBlogIndex = {
       "date": "29 Apr 2026",
       "badge": "RESEARCH",
       "title": "Dual Encoders Need 464,000 Dimensions to Rank 1M Documents. Autoregressive LLMs Need 512.",
-      "excerpt": "A 2026 Google Research + UMass paper (arXiv:2601.05588) proves the dual-encoder capacity ceiling is linear in corpus size — ≈464,000 dims for 1M documents. Autoregressive LLM rankers need just 512. Here's the theorem, the SToICaL loss that makes generative ranking actually work, and what it means for your RAG stack.",
+      "excerpt": "arXiv:2601.05588: why dual encoders need 464K dims to rank 1M documents, how autoregressive LLMs do it with 512, and what SToICaL loss adds for ranking.",
       "tags": [
         "RANKING",
         "DUAL ENCODERS",
         "CROSS ENCODERS",
-        "GENERATIVE RETRIEVAL"
+        "GENERATIVE RETRIEVAL",
+        "RAG",
+        "RESEARCH"
       ],
       "author": "Rohit Singh",
       "readTime": "14 min read",
-      "image": "https://thegeocommunity.com/images/dual_encoders_dimensions_banner.webp",
+      "image": "https://firebasestorage.googleapis.com/v0/b/thegeocommunity.firebasestorage.app/o/blog-images%2Fdual_encoders_dimensions_banner.png?alt=media",
       "imageAlt": "Autoregressive Ranking vs Dual and Cross Encoders — three retrieval architectures compared, with the generative LLM ranker (ARR) bridging expressivity and efficiency",
-      "order": 15,
+      "order": 42,
       "category": "research"
     },
     {
@@ -300,18 +929,21 @@ export const sourceBlogIndex = {
       "date": "28 Apr 2026",
       "badge": "RESEARCH",
       "title": "FeatGEO: Why the Original 9 GEO Tactics Are Failing on Modern AI Engines (and What's Replacing Them)",
-      "excerpt": "A 2026 paper from Liu and Xu re-runs the Princeton GEO experiments on GPT-4o-mini, Gemini 2.5 Flash, and Qwen-plus — and finds most of the original 9 heuristics now decrease citation visibility. Their replacement, FeatGEO, treats GEO as feature-level multi-objective optimization.",
+      "excerpt": "FeatGEO (arXiv:2604.19113): the 2026 paper showing the original 9 GEO tactics now hurt visibility on GPT-4o, Gemini, and Qwen — feature-level optimization wins.",
       "tags": [
         "GEO",
         "RESEARCH",
         "AI SEARCH",
-        "CITATION VISIBILITY"
+        "CITATION VISIBILITY",
+        "FEATGEO",
+        "MULTI-OBJECTIVE OPTIMIZATION",
+        "CONTENT STRATEGY"
       ],
       "author": "Rohit Singh",
       "readTime": "12 min read",
-      "image": "https://thegeocommunity.com/images/featgeo_banner.webp",
+      "image": "https://firebasestorage.googleapis.com/v0/b/thegeocommunity.firebasestorage.app/o/blog-images%2Ffeatgeo_banner.png?alt=media",
       "imageAlt": "FeatGEO feature-level multi-objective optimization framework for citation visibility — Pareto front diagram showing the trade-off between visibility and quality across structural, content, and linguistic features",
-      "order": 16,
+      "order": 43,
       "category": "research"
     },
     {
@@ -319,18 +951,21 @@ export const sourceBlogIndex = {
       "date": "24 Apr 2026",
       "badge": "GUIDE",
       "title": "Generative Engine Optimization (GEO): Best Resources, Courses & Tutorials [2026]",
-      "excerpt": "The definitive guide to learning Generative Engine Optimization in 2026 — covering free resources, courses worth taking, research papers that define the field, and the tools you need to build a GEO practice that compounds.",
+      "excerpt": "The best GEO resources, courses, and tutorials for SEO professionals in 2026. Free guides, research papers, YouTube tutorials, and the structured learning path to get you started fast.",
       "tags": [
         "GEO",
         "GEO RESOURCES",
         "GEO COURSES",
-        "AI SEARCH"
+        "AI SEARCH",
+        "SEO TO GEO",
+        "GEO TUTORIALS",
+        "LEARNING GEO"
       ],
       "author": "Rohit Singh",
       "readTime": "14 min read",
-      "image": "https://thegeocommunity.com/images/geo_banner_resources_2026.webp",
+      "image": "https://firebasestorage.googleapis.com/v0/b/thegeocommunity.firebasestorage.app/o/blog-images%2Fgeo_banner_resources_2026.png?alt=media",
       "imageAlt": "Generative Engine Optimization (GEO) best resources, courses and tutorials 2026 — network graph, stacked content cards, and a magnifying glass illustration",
-      "order": 17,
+      "order": 44,
       "category": "guides"
     },
     {
@@ -338,18 +973,21 @@ export const sourceBlogIndex = {
       "date": "24 Apr 2026",
       "badge": "GUIDE",
       "title": "How to Learn GEO: A Step-by-Step Roadmap for SEO Professionals",
-      "excerpt": "A structured roadmap for SEO professionals learning Generative Engine Optimization — what to unlearn, what transfers, what is genuinely new, and how to sequence your learning so you reach competency without wasting months on the wrong material.",
+      "excerpt": "How to learn GEO as an SEO professional: what skills transfer, what new concepts to master (entity trust, citation surface, LLMs.txt), and the best structured learning path for 2026.",
       "tags": [
         "GEO LEARNING",
         "SEO TO GEO",
         "GEO ROADMAP",
-        "AI SEARCH"
+        "AI SEARCH",
+        "GEO STRATEGY",
+        "LEARNING PATH",
+        "TRANSITIONING FROM SEO TO GEO"
       ],
       "author": "Rohit Singh",
       "readTime": "13 min read",
-      "image": "https://thegeocommunity.com/images/geo_roadmap_seo_professionals.webp",
+      "image": "https://firebasestorage.googleapis.com/v0/b/thegeocommunity.firebasestorage.app/o/blog-images%2Fgeo_roadmap_seo_professionals.png?alt=media",
       "imageAlt": "How to Learn GEO: A Step-by-Step Roadmap for SEO Professionals — four-stage learning path diagram covering GEO basics, entity search, knowledge graphs, and AI-driven search mastery",
-      "order": 18,
+      "order": 45,
       "category": "guides"
     },
     {
@@ -357,18 +995,21 @@ export const sourceBlogIndex = {
       "date": "24 Apr 2026",
       "badge": "GUIDE",
       "title": "The GEO Framework: How to Optimize Content for AI Search in 2026",
-      "excerpt": "A complete GEO content optimization framework for 2026 — from auditing your current content for AI readiness through building entity authority, implementing technical GEO, and running a 90-day implementation plan that produces measurable citation results.",
+      "excerpt": "The GEO framework for optimizing content for AI search in 2026. Covers content structure, entity authority, technical GEO (schema, LLMs.txt, robots.txt), and a 90-day implementation plan.",
       "tags": [
         "GEO FRAMEWORK",
         "GEO STRATEGY",
         "AI CONTENT OPTIMIZATION",
-        "ENTITY AUTHORITY"
+        "ENTITY AUTHORITY",
+        "TECHNICAL GEO",
+        "GEO IMPLEMENTATION",
+        "AI SEARCH"
       ],
       "author": "Rohit Singh",
       "readTime": "15 min read",
-      "image": "https://thegeocommunity.com/images/geo_framework_ai_search_2026.webp",
+      "image": "https://firebasestorage.googleapis.com/v0/b/thegeocommunity.firebasestorage.app/o/blog-images%2Fgeo_framework_ai_search_2026.png?alt=media",
       "imageAlt": "The GEO Framework: How to Optimize Content for AI Search in 2026 — three-pillar diagram showing content optimization, AI integration, and search visibility converging at a central hexagonal framework",
-      "order": 19,
+      "order": 46,
       "category": "guides"
     },
     {
@@ -376,18 +1017,21 @@ export const sourceBlogIndex = {
       "date": "22 Apr 2026",
       "badge": "INFORMATIONAL",
       "title": "Is Crawlability Still an SEO Task in 2026? The Word Now Has Two Meanings",
-      "excerpt": "Crawlability used to mean one thing. Make sure Google can access your pages. That definition still works — but it is no longer complete. The word now has two meanings depending on who you are optimizing for.",
+      "excerpt": "Crawlability has two meanings in 2026: one for Google's SEO pipeline, one for AI bot retrieval in GEO. Conflating them costs you visibility in both worlds.",
       "tags": [
         "CRAWLABILITY",
         "TECHNICAL SEO",
         "GEO",
-        "AI CRAWLERS"
+        "AI CRAWLERS",
+        "SPAS",
+        "LLMS.TXT",
+        "GOOGLE SEARCH CONSOLE"
       ],
       "author": "Rohit Singh",
       "readTime": "8 min read",
-      "image": "https://thegeocommunity.com/images/crawlability-seo-geo-two-meanings.webp",
+      "image": "https://firebasestorage.googleapis.com/v0/b/thegeocommunity.firebasestorage.app/o/blog-images%2Fcrawlability-seo-geo-two-meanings.png?alt=media",
       "imageAlt": "Split diagram showing SEO crawlability (Google's Discover-Crawl-Index pipeline) versus GEO crawlability (raw HTML for AI bots)",
-      "order": 20,
+      "order": 47,
       "category": "guides"
     },
     {
@@ -395,18 +1039,20 @@ export const sourceBlogIndex = {
       "date": "19 Apr 2026",
       "badge": "GUIDE",
       "title": "Paperclip for SEO: The Complete Guide to Running an AI-Powered SEO Team",
-      "excerpt": "Paperclip lets you build and run an autonomous SEO team — keyword researchers, content writers, and technical auditors that work on schedules, report up an org chart, and stay within budget. This guide maps all 17 workflows.",
+      "excerpt": "Complete guide to Paperclip for SEO: build autonomous AI agent teams for keyword research, content production, technical audits, and reporting. 17 workflows covered.",
       "tags": [
         "PAPERCLIP",
         "AI SEO",
         "AGENTIC SEO",
-        "SEO AUTOMATION"
+        "SEO AUTOMATION",
+        "AI AGENTS",
+        "SEO WORKFLOWS"
       ],
       "author": "Rohit Singh",
       "readTime": "14 min read",
-      "image": "https://thegeocommunity.com/images/paperclip_01_what_is_paperclip.webp",
-      "imageAlt": "Paperclip for SEO complete guide showing an AI-powered SEO team operating through scheduled agents",
-      "order": 21,
+      "image": "",
+      "imageAlt": "",
+      "order": 48,
       "category": "guides"
     },
     {
@@ -414,18 +1060,19 @@ export const sourceBlogIndex = {
       "date": "19 Apr 2026",
       "badge": "GUIDE",
       "title": "What is Paperclip and Why SEO Teams Should Care",
-      "excerpt": "Paperclip is not a chatbot, not a prompt tool, and not an agent framework. It is a control plane for running AI agent teams — and for SEO teams managing recurring workflows, that distinction changes everything.",
+      "excerpt": "Paperclip explained for SEO teams: what it is, how it differs from Claude and other AI tools, and which SEO workflows it's best suited for.",
       "tags": [
         "PAPERCLIP",
         "AI SEO",
         "AGENTIC SEO",
-        "SEO AUTOMATION"
+        "SEO AUTOMATION",
+        "AI AGENTS"
       ],
       "author": "Rohit Singh",
       "readTime": "10 min read",
-      "image": "https://thegeocommunity.com/images/paperclip_01_what_is_paperclip.webp",
+      "image": "https://firebasestorage.googleapis.com/v0/b/thegeocommunity.firebasestorage.app/o/blog-images%2Fpaperclip_01_what_is_paperclip.png?alt=media",
       "imageAlt": "What is Paperclip — AI agent control plane for SEO teams with persistent agents, org chart hierarchy, and Heartbeat schedules",
-      "order": 22,
+      "order": 49,
       "category": "guides"
     },
     {
@@ -433,18 +1080,19 @@ export const sourceBlogIndex = {
       "date": "19 Apr 2026",
       "badge": "GUIDE",
       "title": "Setting Up Your First SEO Agent in Paperclip: A Step-by-Step Guide",
-      "excerpt": "A step-by-step walkthrough for founders, GTMs, and SEO consultants who want to deploy their first autonomous SEO agent in Paperclip — from goal definition through first Heartbeat execution.",
+      "excerpt": "Step-by-step guide to setting up your first SEO agent in Paperclip: goal definition, agent configuration, skill injection, and first Heartbeat run. For founders and SEO teams.",
       "tags": [
         "PAPERCLIP",
         "AI SEO",
         "AGENT SETUP",
-        "SEO AUTOMATION"
+        "SEO AUTOMATION",
+        "AGENTIC SEO"
       ],
       "author": "Rohit Singh",
       "readTime": "11 min read",
-      "image": "https://thegeocommunity.com/images/paperclip_02_setup_first_agent.webp",
+      "image": "https://firebasestorage.googleapis.com/v0/b/thegeocommunity.firebasestorage.app/o/blog-images%2Fpaperclip_02_setup_first_agent.png?alt=media",
       "imageAlt": "Setting up your first SEO agent in Paperclip — goal definition, skill injection, and first Heartbeat execution step-by-step",
-      "order": 23,
+      "order": 50,
       "category": "guides"
     },
     {
@@ -452,18 +1100,20 @@ export const sourceBlogIndex = {
       "date": "19 Apr 2026",
       "badge": "GUIDE",
       "title": "Building an AI SEO Org Chart in Paperclip: Roles, Hierarchies, and Reporting Lines",
-      "excerpt": "A well-designed AI SEO org chart in Paperclip determines whether your agents produce coherent, goal-aligned output or expensive noise. This guide covers the roles, hierarchies, and delegation patterns that work.",
+      "excerpt": "How to build an AI SEO org chart in Paperclip: which agent roles to create, how to structure reporting lines, and how delegation flows from SEO manager to specialist agents.",
       "tags": [
         "PAPERCLIP",
         "AI SEO",
         "ORG CHART",
-        "AI AGENTS"
+        "AI AGENTS",
+        "SEO AUTOMATION",
+        "AGENTIC SEO"
       ],
       "author": "Rohit Singh",
       "readTime": "10 min read",
-      "image": "https://thegeocommunity.com/images/paperclip_03_ai_seo_org_chart.webp",
+      "image": "https://firebasestorage.googleapis.com/v0/b/thegeocommunity.firebasestorage.app/o/blog-images%2Fpaperclip_03_ai_seo_org_chart.png?alt=media",
       "imageAlt": "AI SEO org chart in Paperclip — three-layer hierarchy with SEO Manager agent, specialist agents, and delegation reporting lines",
-      "order": 24,
+      "order": 51,
       "category": "guides"
     },
     {
@@ -471,18 +1121,20 @@ export const sourceBlogIndex = {
       "date": "19 Apr 2026",
       "badge": "GUIDE",
       "title": "Automated Keyword Research with Paperclip Agents: Weekly Runs Without Manual Triggers",
-      "excerpt": "Manual keyword research happens quarterly at best — because pulling data, clustering intent, and scoring opportunities takes 4–6 hours every time. Paperclip agents run this workflow weekly, automatically, without you triggering anything.",
+      "excerpt": "How to automate keyword research with Paperclip agents: weekly Heartbeat runs, intent clustering, opportunity scoring, and structured output — no manual triggers required.",
       "tags": [
         "PAPERCLIP",
         "KEYWORD RESEARCH",
         "SEO AUTOMATION",
-        "AI SEO"
+        "AI SEO",
+        "AGENTIC SEO",
+        "CONTENT STRATEGY"
       ],
       "author": "Rohit Singh",
       "readTime": "11 min read",
-      "image": "https://thegeocommunity.com/images/paperclip_04_automated_keyword_research.webp",
+      "image": "https://firebasestorage.googleapis.com/v0/b/thegeocommunity.firebasestorage.app/o/blog-images%2Fpaperclip_04_automated_keyword_research.png?alt=media",
       "imageAlt": "Automated keyword research with Paperclip agents — weekly Heartbeat runs for intent clustering, opportunity scoring, and content calendar integration",
-      "order": 25,
+      "order": 52,
       "category": "guides"
     },
     {
@@ -490,18 +1142,20 @@ export const sourceBlogIndex = {
       "date": "19 Apr 2026",
       "badge": "GUIDE",
       "title": "Content Gap Analysis at Scale with Autonomous Agents in Paperclip",
-      "excerpt": "Content gap analysis is valuable but manual — most teams run it once a quarter because crawling competitors, comparing keyword overlaps, and mapping coverage gaps takes a full day. Paperclip agents do it continuously.",
+      "excerpt": "Run continuous content gap analysis with Paperclip agents: automated competitor keyword comparison, coverage mapping, and prioritized gap reports delivered on schedule.",
       "tags": [
         "PAPERCLIP",
         "CONTENT GAP ANALYSIS",
         "SEO AUTOMATION",
-        "AI SEO"
+        "AI SEO",
+        "COMPETITOR ANALYSIS",
+        "AGENTIC SEO"
       ],
       "author": "Rohit Singh",
       "readTime": "11 min read",
-      "image": "https://thegeocommunity.com/images/paperclip_05_content_gap_analysis.webp",
+      "image": "https://firebasestorage.googleapis.com/v0/b/thegeocommunity.firebasestorage.app/o/blog-images%2Fpaperclip_05_content_gap_analysis.png?alt=media",
       "imageAlt": "Content gap analysis at scale with Paperclip agents — automated competitor keyword comparison and prioritized coverage gap reports",
-      "order": 26,
+      "order": 53,
       "category": "guides"
     },
     {
@@ -509,18 +1163,20 @@ export const sourceBlogIndex = {
       "date": "19 Apr 2026",
       "badge": "GUIDE",
       "title": "Competitor Monitoring on Autopilot with Paperclip Heartbeats",
-      "excerpt": "Most SEO teams monitor competitors ad hoc — someone checks rankings when traffic drops or a competitor launches something. Paperclip Heartbeats run competitor monitoring weekly so you see shifts before they become problems.",
+      "excerpt": "Automate competitor SEO monitoring with Paperclip Heartbeats: weekly ranking changes, new content detection, and SERP shift alerts — all delivered without manual triggers.",
       "tags": [
         "PAPERCLIP",
         "COMPETITOR MONITORING",
         "SEO AUTOMATION",
-        "AI SEO"
+        "AI SEO",
+        "HEARTBEATS",
+        "AGENTIC SEO"
       ],
       "author": "Rohit Singh",
       "readTime": "10 min read",
-      "image": "https://thegeocommunity.com/images/paperclip_06_competitor_monitoring.webp",
+      "image": "https://firebasestorage.googleapis.com/v0/b/thegeocommunity.firebasestorage.app/o/blog-images%2Fpaperclip_06_competitor_monitoring.png?alt=media",
       "imageAlt": "Competitor monitoring on autopilot with Paperclip Heartbeats — weekly ranking delta reports, new content alerts, and SERP shift flags",
-      "order": 27,
+      "order": 54,
       "category": "guides"
     },
     {
@@ -528,18 +1184,20 @@ export const sourceBlogIndex = {
       "date": "19 Apr 2026",
       "badge": "GUIDE",
       "title": "Building an Automated Content Brief Pipeline in Paperclip",
-      "excerpt": "Writing content briefs manually takes 45–90 minutes each. With a Paperclip pipeline, approved keywords automatically trigger brief generation — complete with outline, angle, target keyword list, and internal link map.",
+      "excerpt": "Build an automated content brief pipeline in Paperclip: approved keywords trigger brief generation, SERP analysis, and structured output ready for writers — no manual steps.",
       "tags": [
         "PAPERCLIP",
         "CONTENT BRIEFS",
         "SEO AUTOMATION",
-        "AI SEO"
+        "AI SEO",
+        "CONTENT STRATEGY",
+        "AGENTIC SEO"
       ],
       "author": "Rohit Singh",
       "readTime": "11 min read",
-      "image": "https://thegeocommunity.com/images/paperclip_07_content_brief_pipeline.webp",
+      "image": "https://firebasestorage.googleapis.com/v0/b/thegeocommunity.firebasestorage.app/o/blog-images%2Fpaperclip_07_content_brief_pipeline.png?alt=media",
       "imageAlt": "Automated content brief pipeline in Paperclip — keyword approval triggers SERP analysis, H2 outline generation, and competitor angle comparison",
-      "order": 28,
+      "order": 55,
       "category": "guides"
     },
     {
@@ -547,18 +1205,20 @@ export const sourceBlogIndex = {
       "date": "19 Apr 2026",
       "badge": "GUIDE",
       "title": "Publishing at Scale: AI Content Workflows for Startups Using Paperclip",
-      "excerpt": "Seed startups cannot staff a full content team but still need to publish consistently to build organic traffic. Paperclip lets a team of two or three run content operations that previously required six people.",
+      "excerpt": "How seed startups use Paperclip to publish at scale: AI content workflows that replace a 6-person content team with 2–3 operators and a fleet of specialized agents.",
       "tags": [
         "PAPERCLIP",
         "CONTENT MARKETING",
         "STARTUP SEO",
-        "AI SEO"
+        "AI SEO",
+        "SEO AUTOMATION",
+        "AGENTIC SEO"
       ],
       "author": "Rohit Singh",
       "readTime": "10 min read",
-      "image": "https://thegeocommunity.com/images/paperclip_08_publishing_at_scale.webp",
+      "image": "https://firebasestorage.googleapis.com/v0/b/thegeocommunity.firebasestorage.app/o/blog-images%2Fpaperclip_08_publishing_at_scale.png?alt=media",
       "imageAlt": "Publishing at scale with Paperclip for startups — AI content workflows replacing a 6-person content team with 2 operators and a Paperclip agent fleet",
-      "order": 29,
+      "order": 56,
       "category": "guides"
     },
     {
@@ -566,18 +1226,20 @@ export const sourceBlogIndex = {
       "date": "19 Apr 2026",
       "badge": "GUIDE",
       "title": "Multi-Agent Content Review and Quality Control in Paperclip",
-      "excerpt": "A single AI agent reviewing its own work catches surface errors but misses structural problems, factual gaps, and brand voice drift. Multi-agent review in Paperclip uses specialized reviewer agents with independent criteria.",
+      "excerpt": "How to set up multi-agent content review in Paperclip: specialized reviewer agents for SEO accuracy, factual grounding, brand voice, and internal link coverage — with human escalation gates.",
       "tags": [
         "PAPERCLIP",
         "CONTENT REVIEW",
         "AI SEO",
-        "QUALITY CONTROL"
+        "QUALITY CONTROL",
+        "MULTI-AGENT",
+        "SEO AUTOMATION"
       ],
       "author": "Rohit Singh",
       "readTime": "10 min read",
-      "image": "https://thegeocommunity.com/images/paperclip_09_multi_agent_review.webp",
+      "image": "https://firebasestorage.googleapis.com/v0/b/thegeocommunity.firebasestorage.app/o/blog-images%2Fpaperclip_09_multi_agent_review.png?alt=media",
       "imageAlt": "Multi-agent content review in Paperclip — four-agent review chain for SEO accuracy, factual grounding, brand voice, and internal link coverage",
-      "order": 30,
+      "order": 57,
       "category": "guides"
     },
     {
@@ -585,18 +1247,20 @@ export const sourceBlogIndex = {
       "date": "19 Apr 2026",
       "badge": "GUIDE",
       "title": "Scheduled Technical SEO Audits with Paperclip Heartbeats",
-      "excerpt": "Technical SEO audits are supposed to be monthly but become quarterly because they are manual. Paperclip Heartbeats run technical audit checks on a fixed schedule — delivering structured issues lists without anyone triggering the process.",
+      "excerpt": "Automate technical SEO audits with Paperclip Heartbeats: scheduled crawl analysis, issue prioritization, and structured reports delivered monthly — no manual triggers.",
       "tags": [
         "PAPERCLIP",
         "TECHNICAL SEO",
         "SEO AUTOMATION",
-        "AI SEO"
+        "AI SEO",
+        "HEARTBEATS",
+        "AGENTIC SEO"
       ],
       "author": "Rohit Singh",
       "readTime": "11 min read",
-      "image": "https://thegeocommunity.com/images/paperclip_10_technical_seo_audits.webp",
+      "image": "https://firebasestorage.googleapis.com/v0/b/thegeocommunity.firebasestorage.app/o/blog-images%2Fpaperclip_10_technical_seo_audits.png?alt=media",
       "imageAlt": "Scheduled technical SEO audits with Paperclip Heartbeats — automated crawl analysis, issue prioritization, and monthly structured reports",
-      "order": 31,
+      "order": 58,
       "category": "guides"
     },
     {
@@ -604,18 +1268,20 @@ export const sourceBlogIndex = {
       "date": "19 Apr 2026",
       "badge": "GUIDE",
       "title": "Automated Internal Linking with Paperclip Agents",
-      "excerpt": "Internal linking is consistently under-executed because it requires reading every page, identifying semantic relationships, and manually updating content — a process that takes days for large sites. Paperclip agents do this continuously.",
+      "excerpt": "How to automate internal linking with Paperclip agents: continuous link opportunity identification, anchor text generation, and structured update recommendations for large sites.",
       "tags": [
         "PAPERCLIP",
         "INTERNAL LINKING",
         "TECHNICAL SEO",
-        "SEO AUTOMATION"
+        "SEO AUTOMATION",
+        "AI SEO",
+        "AGENTIC SEO"
       ],
       "author": "Rohit Singh",
       "readTime": "10 min read",
-      "image": "https://thegeocommunity.com/images/paperclip_11_automated_internal_linking.webp",
+      "image": "https://firebasestorage.googleapis.com/v0/b/thegeocommunity.firebasestorage.app/o/blog-images%2Fpaperclip_11_automated_internal_linking.png?alt=media",
       "imageAlt": "Automated internal linking with Paperclip agents — semantic cluster identification, anchor text generation, and structured link recommendations",
-      "order": 32,
+      "order": 59,
       "category": "guides"
     },
     {
@@ -623,18 +1289,20 @@ export const sourceBlogIndex = {
       "date": "19 Apr 2026",
       "badge": "GUIDE",
       "title": "Schema Markup Generation at Scale with Paperclip",
-      "excerpt": "Schema markup is one of the highest-ROI technical SEO tasks — and one of the most deferred, because generating valid JSON-LD for every page type manually is time-consuming. Paperclip agents generate schema at scale, validated and implementation-ready.",
+      "excerpt": "Generate schema markup at scale with Paperclip agents: batch JSON-LD generation for every page type, validation, and implementation-ready output — no manual work per page.",
       "tags": [
         "PAPERCLIP",
         "SCHEMA MARKUP",
         "JSON-LD",
-        "TECHNICAL SEO"
+        "TECHNICAL SEO",
+        "SEO AUTOMATION",
+        "AI SEO"
       ],
       "author": "Rohit Singh",
       "readTime": "10 min read",
-      "image": "https://thegeocommunity.com/images/paperclip_12_schema_markup_generation.webp",
+      "image": "https://firebasestorage.googleapis.com/v0/b/thegeocommunity.firebasestorage.app/o/blog-images%2Fpaperclip_12_schema_markup_generation.png?alt=media",
       "imageAlt": "Schema markup generation at scale with Paperclip — batch JSON-LD generation, schema.org validation, and implementation-ready output",
-      "order": 33,
+      "order": 60,
       "category": "guides"
     },
     {
@@ -642,18 +1310,20 @@ export const sourceBlogIndex = {
       "date": "19 Apr 2026",
       "badge": "GUIDE",
       "title": "Running Multiple SEO Clients with Paperclip's Multi-Company Feature",
-      "excerpt": "SEO agencies managing 10 or more clients face a coordination overhead that grows linearly with client count. Paperclip's multi-company feature runs isolated agent deployments per client from one control plane — one operator, ten clients, no context bleed.",
+      "excerpt": "How SEO agencies use Paperclip's multi-company feature: isolated agent deployments per client, centralized billing, separate org charts, and one operator across 10+ clients.",
       "tags": [
         "PAPERCLIP",
         "SEO AGENCY",
         "MULTI-CLIENT SEO",
-        "AI SEO"
+        "AI SEO",
+        "SEO AUTOMATION",
+        "AGENCY MANAGEMENT"
       ],
       "author": "Rohit Singh",
       "readTime": "11 min read",
-      "image": "https://thegeocommunity.com/images/paperclip_13_multi_client_management.webp",
+      "image": "https://firebasestorage.googleapis.com/v0/b/thegeocommunity.firebasestorage.app/o/blog-images%2Fpaperclip_13_multi_client_management.png?alt=media",
       "imageAlt": "Running multiple SEO clients with Paperclip's multi-company feature — isolated agent deployments, centralized billing, and one operator across 10+ clients",
-      "order": 34,
+      "order": 61,
       "category": "guides"
     },
     {
@@ -661,18 +1331,20 @@ export const sourceBlogIndex = {
       "date": "19 Apr 2026",
       "badge": "GUIDE",
       "title": "Cost-Controlled AI SEO: Budget Management for Agencies Using Paperclip",
-      "excerpt": "Uncontrolled AI agent spend is the fastest way to erode the margin on agency retainers. Paperclip's per-agent budget system gives agencies precise cost control without throttling output quality.",
+      "excerpt": "How to manage AI SEO costs in Paperclip: per-agent monthly budgets, spend tracking, client cost allocation, and budget guardrails that stop agents when limits are reached.",
       "tags": [
         "PAPERCLIP",
         "SEO AGENCY",
         "AI COST CONTROL",
-        "BUDGET MANAGEMENT"
+        "BUDGET MANAGEMENT",
+        "AI SEO",
+        "SEO AUTOMATION"
       ],
       "author": "Rohit Singh",
       "readTime": "10 min read",
-      "image": "https://thegeocommunity.com/images/paperclip_14_cost_controlled_ai_seo.webp",
+      "image": "https://firebasestorage.googleapis.com/v0/b/thegeocommunity.firebasestorage.app/o/blog-images%2Fpaperclip_14_cost_controlled_ai_seo.png?alt=media",
       "imageAlt": "Cost-controlled AI SEO in Paperclip — per-agent monthly budget caps, spend tracking, and guardrails that stop agents at budget limits",
-      "order": 35,
+      "order": 62,
       "category": "guides"
     },
     {
@@ -680,18 +1352,20 @@ export const sourceBlogIndex = {
       "date": "19 Apr 2026",
       "badge": "GUIDE",
       "title": "SEO Governance with Paperclip: Approvals, Overrides, and Audit Logs",
-      "excerpt": "Autonomous SEO agents making content and technical decisions without a governance layer create compliance exposure and client trust issues. Paperclip's governance system gives you the control layer that agentic SEO actually requires.",
+      "excerpt": "SEO governance in Paperclip: how to configure approval workflows, override agent decisions, maintain audit logs, and build a governance layer that satisfies client and compliance requirements.",
       "tags": [
         "PAPERCLIP",
         "SEO GOVERNANCE",
         "AI SEO",
-        "COMPLIANCE"
+        "COMPLIANCE",
+        "AUDIT LOGS",
+        "AGENCY MANAGEMENT"
       ],
       "author": "Rohit Singh",
       "readTime": "10 min read",
-      "image": "https://thegeocommunity.com/images/paperclip_15_seo_governance.webp",
+      "image": "https://firebasestorage.googleapis.com/v0/b/thegeocommunity.firebasestorage.app/o/blog-images%2Fpaperclip_15_seo_governance.png?alt=media",
       "imageAlt": "SEO governance in Paperclip — approval workflow architecture, agent override controls, and full decision audit trail",
-      "order": 36,
+      "order": 63,
       "category": "guides"
     },
     {
@@ -699,18 +1373,20 @@ export const sourceBlogIndex = {
       "date": "19 Apr 2026",
       "badge": "GUIDE",
       "title": "Automated SEO Reporting with Paperclip's Ticketing and Audit Trail",
-      "excerpt": "SEO reporting takes 4–8 hours per client per month when done manually. Paperclip's ticketing system and audit trail create the data trail that feeds automated reporting agents — reducing report production to minutes.",
+      "excerpt": "Automate SEO reporting with Paperclip: ticketing and audit trail data feeds reporting agents that produce client-ready reports in minutes, not hours. Setup and templates included.",
       "tags": [
         "PAPERCLIP",
         "SEO REPORTING",
         "SEO AUTOMATION",
-        "AI SEO"
+        "AI SEO",
+        "ANALYTICS",
+        "AGENCY MANAGEMENT"
       ],
       "author": "Rohit Singh",
       "readTime": "10 min read",
-      "image": "https://thegeocommunity.com/images/paperclip_16_seo_reporting_audit_trail.webp",
+      "image": "https://firebasestorage.googleapis.com/v0/b/thegeocommunity.firebasestorage.app/o/blog-images%2Fpaperclip_16_seo_reporting_audit_trail.png?alt=media",
       "imageAlt": "Automated SEO reporting with Paperclip ticketing and audit trail — reporting agents that produce client-ready reports in minutes from structured audit log data",
-      "order": 37,
+      "order": 64,
       "category": "guides"
     },
     {
@@ -718,18 +1394,20 @@ export const sourceBlogIndex = {
       "date": "19 Apr 2026",
       "badge": "GUIDE",
       "title": "Setting Up Recurring SEO Reports with Paperclip Heartbeats",
-      "excerpt": "Manual monthly reporting disciplines collapse under client volume. Paperclip Heartbeats run reporting agents on a fixed schedule — delivering reports to clients before they think to ask.",
+      "excerpt": "Set up recurring SEO reports with Paperclip Heartbeats: monthly report generation, ranking delta summaries, and client delivery automation — zero manual triggers required.",
       "tags": [
         "PAPERCLIP",
         "SEO REPORTING",
         "HEARTBEATS",
-        "SEO AUTOMATION"
+        "SEO AUTOMATION",
+        "AI SEO",
+        "AGENCY MANAGEMENT"
       ],
       "author": "Rohit Singh",
       "readTime": "10 min read",
-      "image": "https://thegeocommunity.com/images/paperclip_17_recurring_seo_reports.webp",
+      "image": "https://firebasestorage.googleapis.com/v0/b/thegeocommunity.firebasestorage.app/o/blog-images%2Fpaperclip_17_recurring_seo_reports.png?alt=media",
       "imageAlt": "Recurring SEO reports with Paperclip Heartbeats — monthly report generation chain with data collection, analysis, and automated client delivery",
-      "order": 38,
+      "order": 65,
       "category": "guides"
     },
     {
@@ -737,18 +1415,21 @@ export const sourceBlogIndex = {
       "date": "19 Apr 2026",
       "badge": "ANALYSIS",
       "title": "AI World Models, Layoffs, and the Judgment Gap",
-      "excerpt": "Block's restructuring reveals a pattern spreading across the industry: companies are replacing middle management with AI world models before the technology is proven as a judgment substitute. The risks — innovation debt, strategic blind spots, and misaligned internal GEO — compound quietly over time.",
+      "excerpt": "345,000 jobs cut in Q1 2026. AI world models excel at aggregation, not judgment. Why companies restructuring around them are incurring invisible innovation debt.",
       "tags": [
         "AI STRATEGY",
         "WORLD MODELS",
         "GEO",
-        "LAYOFFS"
+        "LAYOFFS",
+        "INNOVATION DEBT",
+        "MIDDLE MANAGEMENT",
+        "BLOCK"
       ],
       "author": "Rohit Singh",
       "readTime": "15 min read",
-      "image": "https://thegeocommunity.com/images/ai-world-models-layoffs-judgment-gap.webp",
+      "image": "https://firebasestorage.googleapis.com/v0/b/thegeocommunity.firebasestorage.app/o/blog-images%2Fai-world-models-layoffs-judgment-gap.png?alt=media",
       "imageAlt": "AI World Models, Layoffs, and the Judgment Gap — Block restructuring and the information-judgment boundary",
-      "order": 39,
+      "order": 66,
       "category": "research"
     },
     {
@@ -756,18 +1437,20 @@ export const sourceBlogIndex = {
       "date": "16 Apr 2026",
       "badge": "OPINION",
       "title": "30–40% Retrieval Edge: How AI Agents Are Disrupting Paid Backlinks — And Why Google & Microsoft Won't Stop It",
-      "excerpt": "AI agents generating content cite sources by default — making retrieval probability the new backlink signal. The GEO paper (10,000 queries, 25 domains) quantifies the edge: 30–40% more AI visibility from content quality alone. This is why the paid link-building industry is headed for a structural crack.",
+      "excerpt": "10,000-query GEO study: 30–40% AI visibility boost from content quality. Why AI agents' default citations are cracking paid backlinks — and who wins.",
       "tags": [
         "AGENTIC SEO",
         "GEO",
         "BACKLINKS",
-        "AI AGENTS"
+        "AI AGENTS",
+        "CONTENT STRATEGY",
+        "LINK BUILDING"
       ],
       "author": "Rohit Singh",
       "readTime": "12 min read",
-      "image": "https://thegeocommunity.com/images/30-40-percent-retrieval-edge-ai-agents-disrupting-paid-backlinks.webp",
+      "image": "https://firebasestorage.googleapis.com/v0/b/thegeocommunity.firebasestorage.app/o/blog-images%2F30-40-percent-retrieval-edge-ai-agents-disrupting-paid-backlinks.png?alt=media",
       "imageAlt": "30–40% retrieval edge — AI agents citing content by default disrupts the paid backlink industry",
-      "order": 40,
+      "order": 67,
       "category": "insights"
     },
     {
@@ -775,18 +1458,19 @@ export const sourceBlogIndex = {
       "date": "11 Apr 2026",
       "badge": "TECHNICAL",
       "title": "Red-Teaming LLMs: A Systematic Guide to Safety and Robustness Evaluation",
-      "excerpt": "Red-teaming is the discipline of deliberately probing LLMs for failure — safety violations, adversarial breakdowns, and edge-case hallucinations. This guide covers structured red-team methodologies, automation frameworks, and how to build adversarial test suites before your users find the gaps.",
+      "excerpt": "Systematic guide to red-teaming LLMs: adversarial prompt testing, jailbreaks, safety benchmarks, and automation tools. How to build robustness evals before shipping AI products.",
       "tags": [
         "LLM EVALS",
         "RED-TEAMING",
         "AI SAFETY",
-        "ROBUSTNESS"
+        "ROBUSTNESS",
+        "ADVERSARIAL TESTING"
       ],
       "author": "Rohit Singh",
       "readTime": "14 min read",
-      "image": "https://thegeocommunity.com/images/red-teaming-llm-safety-evaluation.webp",
+      "image": "https://firebasestorage.googleapis.com/v0/b/thegeocommunity.firebasestorage.app/o/blog-images%2Fred-teaming-llm-safety-evaluation.png?alt=media",
       "imageAlt": "Red-Teaming LLMs — adversarial testing framework for safety and robustness evaluation",
-      "order": 41,
+      "order": 68,
       "category": "technical"
     },
     {
@@ -794,18 +1478,19 @@ export const sourceBlogIndex = {
       "date": "11 Apr 2026",
       "badge": "GUIDE",
       "title": "Weights & Biases Weave: End-to-End LLM Evaluation Workflows",
-      "excerpt": "Weave is Weights & Biases's LLM-native layer for tracing, evaluation, and dataset management. This guide covers how to instrument LLM pipelines, run scored experiments, and turn logged traces into actionable quality signals.",
+      "excerpt": "Practical guide to Weights & Biases Weave for LLM evaluation: trace instrumentation, dataset versioning, scorer configuration, and experiment comparison workflows.",
       "tags": [
         "LLM EVALS",
         "WEIGHTS & BIASES",
         "WEAVE",
-        "TRACING"
+        "TRACING",
+        "EXPERIMENT TRACKING"
       ],
       "author": "Rohit Singh",
       "readTime": "13 min read",
-      "image": "https://thegeocommunity.com/images/weights-biases-weave-llm-evaluation.webp",
+      "image": "https://firebasestorage.googleapis.com/v0/b/thegeocommunity.firebasestorage.app/o/blog-images%2Fweights-biases-weave-llm-evaluation.png?alt=media",
       "imageAlt": "Weights & Biases Weave — LLM evaluation and tracing workflow diagram",
-      "order": 42,
+      "order": 69,
       "category": "guides"
     },
     {
@@ -813,18 +1498,19 @@ export const sourceBlogIndex = {
       "date": "11 Apr 2026",
       "badge": "TECHNICAL",
       "title": "Galileo for Hallucination Detection and LLM Evaluation at Scale",
-      "excerpt": "Galileo focuses on the hardest part of LLM quality — detecting hallucinations, factual errors, and unsupported claims at scale. This guide covers Galileo's ChainPoll methodology, how its hallucination index works, and how to integrate it into production evaluation pipelines.",
+      "excerpt": "Galileo hallucination detection guide: ChainPoll methodology, hallucination index scoring, RAG evaluation, and production integration for teams evaluating LLMs at scale.",
       "tags": [
         "LLM EVALS",
         "GALILEO",
         "HALLUCINATION DETECTION",
-        "RAG EVALUATION"
+        "RAG EVALUATION",
+        "LLM QUALITY"
       ],
       "author": "Rohit Singh",
       "readTime": "13 min read",
-      "image": "https://thegeocommunity.com/images/galileo-hallucination-detection.webp",
+      "image": "https://firebasestorage.googleapis.com/v0/b/thegeocommunity.firebasestorage.app/o/blog-images%2Fgalileo-hallucination-detection.png?alt=media",
       "imageAlt": "Galileo hallucination detection — ChainPoll methodology and LLM evaluation at scale",
-      "order": 43,
+      "order": 70,
       "category": "technical"
     },
     {
@@ -832,18 +1518,19 @@ export const sourceBlogIndex = {
       "date": "11 Apr 2026",
       "badge": "GUIDE",
       "title": "Arize Phoenix: Open-Source LLM Observability and Evaluation",
-      "excerpt": "Arize Phoenix is an open-source tool for LLM tracing, evaluation, and dataset curation that runs locally or in the cloud. This guide covers how to instrument chains, run evals against spans, and use the visual UI to debug retrieval and generation failures in RAG systems.",
+      "excerpt": "Arize Phoenix guide: open-source LLM observability, span-level tracing, retrieval evaluation, and LLM-as-judge scoring for RAG pipelines and agentic systems.",
       "tags": [
         "LLM EVALS",
         "ARIZE PHOENIX",
         "LLM OBSERVABILITY",
-        "OPEN SOURCE"
+        "OPEN SOURCE",
+        "RAG EVALUATION"
       ],
       "author": "Rohit Singh",
       "readTime": "12 min read",
-      "image": "https://thegeocommunity.com/images/arize-phoenix-llm-observability.webp",
+      "image": "https://firebasestorage.googleapis.com/v0/b/thegeocommunity.firebasestorage.app/o/blog-images%2Farize-phoenix-llm-observability.png?alt=media",
       "imageAlt": "Arize Phoenix open-source LLM observability and evaluation — tracing and eval workflow",
-      "order": 44,
+      "order": 71,
       "category": "guides"
     },
     {
@@ -851,18 +1538,19 @@ export const sourceBlogIndex = {
       "date": "11 Apr 2026",
       "badge": "GUIDE",
       "title": "LangSmith for LLM Tracing and Evaluation: A Practical Setup Guide",
-      "excerpt": "LangSmith is LangChain's observability and evaluation platform. This guide covers how to instrument any LLM application for tracing, build eval datasets from production runs, run automated evaluators, and use the annotation queue for human review.",
+      "excerpt": "LangSmith tracing and evaluation guide: instrumenting LLM apps, dataset management, automated evaluators, annotation queues, and online eval for production LangChain pipelines.",
       "tags": [
         "LLM EVALS",
         "LANGSMITH",
         "LANGCHAIN",
-        "LLM TRACING"
+        "LLM TRACING",
+        "EVALUATION"
       ],
       "author": "Rohit Singh",
       "readTime": "13 min read",
-      "image": "https://thegeocommunity.com/images/langsmith-tracing-evaluation.webp",
+      "image": "https://firebasestorage.googleapis.com/v0/b/thegeocommunity.firebasestorage.app/o/blog-images%2Flangsmith-tracing-evaluation.png?alt=media",
       "imageAlt": "LangSmith LLM tracing and evaluation — instrumentation and eval dataset workflow",
-      "order": 45,
+      "order": 72,
       "category": "guides"
     },
     {
@@ -870,18 +1558,19 @@ export const sourceBlogIndex = {
       "date": "11 Apr 2026",
       "badge": "GUIDE",
       "title": "Braintrust: Production-Grade LLM Evaluation with Datasets, Experiments, and Scoring",
-      "excerpt": "Braintrust is an evaluation platform built for AI product teams running experiments at scale. This guide covers dataset management, experiment versioning, scorer configuration, and how to structure eval pipelines that support fast iteration without sacrificing rigor.",
+      "excerpt": "Braintrust LLM evaluation guide: dataset versioning, experiment tracking, custom scorers, CI integration, and eval-driven development for AI product teams shipping fast.",
       "tags": [
         "LLM EVALS",
         "BRAINTRUST",
         "EXPERIMENT TRACKING",
-        "AI PRODUCT"
+        "AI PRODUCT",
+        "EVALUATION"
       ],
       "author": "Rohit Singh",
       "readTime": "13 min read",
-      "image": "https://thegeocommunity.com/images/braintrust-llm-evaluation.webp",
+      "image": "https://firebasestorage.googleapis.com/v0/b/thegeocommunity.firebasestorage.app/o/blog-images%2Fbraintrust-llm-evaluation.png?alt=media",
       "imageAlt": "Braintrust LLM evaluation — dataset management, experiments, and scorer configuration",
-      "order": 46,
+      "order": 73,
       "category": "guides"
     },
     {
@@ -889,18 +1578,19 @@ export const sourceBlogIndex = {
       "date": "11 Apr 2026",
       "badge": "TECHNICAL",
       "title": "OpenAI Evals: How the Framework Works and When to Use It",
-      "excerpt": "OpenAI Evals is an open-source framework for creating and running evaluations against LLM completions. This guide covers the eval registry, YAML-based eval definition, custom eval classes, and how to use it for model comparison, regression testing, and quality benchmarking.",
+      "excerpt": "OpenAI Evals framework guide: registry structure, YAML eval definitions, custom eval classes, model comparison, and when to use it vs alternatives like Braintrust and LangSmith.",
       "tags": [
         "LLM EVALS",
         "OPENAI EVALS",
         "MODEL EVALUATION",
-        "BENCHMARKING"
+        "BENCHMARKING",
+        "OPEN SOURCE"
       ],
       "author": "Rohit Singh",
       "readTime": "12 min read",
-      "image": "https://thegeocommunity.com/images/openai-evals-guide.webp",
+      "image": "https://firebasestorage.googleapis.com/v0/b/thegeocommunity.firebasestorage.app/o/blog-images%2Fopenai-evals-guide.png?alt=media",
       "imageAlt": "OpenAI Evals framework — registry structure, YAML eval definitions, and model comparison workflow",
-      "order": 47,
+      "order": 74,
       "category": "technical"
     },
     {
@@ -908,18 +1598,20 @@ export const sourceBlogIndex = {
       "date": "11 Apr 2026",
       "badge": "ANALYSIS",
       "title": "LLM Evals Tool Landscape: Braintrust vs LangSmith vs Arize vs Galileo vs W&B Weave vs OpenAI Evals",
-      "excerpt": "Six tools dominate the LLM evaluation landscape in 2025, but they solve different problems. This comparison maps each tool's strengths, weaknesses, pricing model, and ideal use case so you can choose the right stack for your team's evaluation maturity and scale.",
+      "excerpt": "LLM evals tool comparison 2025: Braintrust vs LangSmith vs Arize Phoenix vs Galileo vs W&B Weave vs OpenAI Evals — features, pricing, use cases, and team fit.",
       "tags": [
         "LLM EVALS",
         "TOOL COMPARISON",
         "BRAINTRUST",
-        "LANGSMITH"
+        "LANGSMITH",
+        "ARIZE PHOENIX",
+        "GALILEO"
       ],
       "author": "Rohit Singh",
       "readTime": "15 min read",
-      "image": "https://thegeocommunity.com/images/llm-evals-landscape-comparison.webp",
+      "image": "https://firebasestorage.googleapis.com/v0/b/thegeocommunity.firebasestorage.app/o/blog-images%2Fllm-evals-landscape-comparison.png?alt=media",
       "imageAlt": "LLM evals tool landscape comparison — Braintrust vs LangSmith vs Arize Phoenix vs Galileo vs W&B Weave",
-      "order": 48,
+      "order": 75,
       "category": "research"
     },
     {
@@ -927,18 +1619,19 @@ export const sourceBlogIndex = {
       "date": "11 Apr 2026",
       "badge": "ANALYSIS",
       "title": "Human vs LLM-as-Judge: When to Use Each and When to Combine Them",
-      "excerpt": "LLM-as-judge has become the dominant approach for evaluating open-ended AI outputs at scale. But human evaluation still wins on calibration, edge cases, and novel failure modes. This guide maps when each approach is right — and how to combine them for maximum accuracy.",
+      "excerpt": "Human vs LLM-as-judge evaluation guide: agreement rates, bias patterns, cost tradeoffs, when each approach wins, and how to combine them for calibrated LLM quality measurement.",
       "tags": [
         "LLM EVALS",
         "LLM-AS-JUDGE",
         "HUMAN EVALUATION",
-        "EVALUATION METHODOLOGY"
+        "EVALUATION METHODOLOGY",
+        "AI QUALITY"
       ],
       "author": "Rohit Singh",
       "readTime": "13 min read",
-      "image": "https://thegeocommunity.com/images/human-vs-llm-judge-evaluation.webp",
+      "image": "https://firebasestorage.googleapis.com/v0/b/thegeocommunity.firebasestorage.app/o/blog-images%2Fhuman-vs-llm-judge-evaluation.png?alt=media",
       "imageAlt": "Human vs LLM-as-judge evaluation — comparison of evaluation methodologies and when each is appropriate",
-      "order": 49,
+      "order": 76,
       "category": "research"
     },
     {
@@ -946,18 +1639,19 @@ export const sourceBlogIndex = {
       "date": "11 Apr 2026",
       "badge": "GUIDE",
       "title": "The LLM Eval Metrics Taxonomy: Faithfulness, Relevance, Safety, and Beyond",
-      "excerpt": "LLM evaluation metrics fall into distinct families — each designed to catch a different failure mode. This taxonomy maps every major metric category, explains what each measures, and shows which failure mode it's designed to catch so you can build eval suites that actually cover your risk surface.",
+      "excerpt": "Complete LLM eval metrics taxonomy: faithfulness, relevance, safety, coherence, instruction-following, and calibration metrics — what each measures and which failure modes they catch.",
       "tags": [
         "LLM EVALS",
         "EVAL METRICS",
         "FAITHFULNESS",
-        "RELEVANCE"
+        "RELEVANCE",
+        "SAFETY EVALUATION"
       ],
       "author": "Rohit Singh",
       "readTime": "14 min read",
-      "image": "https://thegeocommunity.com/images/llm-eval-metrics-taxonomy.webp",
+      "image": "https://firebasestorage.googleapis.com/v0/b/thegeocommunity.firebasestorage.app/o/blog-images%2Fllm-eval-metrics-taxonomy.png?alt=media",
       "imageAlt": "LLM eval metrics taxonomy — faithfulness, relevance, safety, and instruction-following metric families",
-      "order": 50,
+      "order": 77,
       "category": "guides"
     },
     {
@@ -965,18 +1659,19 @@ export const sourceBlogIndex = {
       "date": "11 Apr 2026",
       "badge": "ANALYSIS",
       "title": "Why LLM Evals Matter: The Hidden Cost of Shipping AI Without Measuring Quality",
-      "excerpt": "Most AI products ship without systematic evaluation. The failures that follow — hallucinations in customer-facing copy, silent quality drift after model updates, safety incidents in production — are predictable and preventable. This post makes the business case for evals before the first line of evaluation code is written.",
+      "excerpt": "Business case for LLM evals: cost of AI quality failures, hallucination incident rates, model drift patterns, and why systematic evaluation prevents 70% of production LLM incidents.",
       "tags": [
         "LLM EVALS",
         "AI QUALITY",
         "BUSINESS CASE",
-        "HALLUCINATION"
+        "HALLUCINATION",
+        "AI RISK"
       ],
       "author": "Rohit Singh",
       "readTime": "12 min read",
-      "image": "https://thegeocommunity.com/images/why-llm-evals-matter.webp",
+      "image": "https://firebasestorage.googleapis.com/v0/b/thegeocommunity.firebasestorage.app/o/blog-images%2Fwhy-llm-evals-matter.png?alt=media",
       "imageAlt": "Why LLM evals matter — business cost of skipping AI quality measurement and hallucination incidents",
-      "order": 51,
+      "order": 78,
       "category": "research"
     },
     {
@@ -984,18 +1679,19 @@ export const sourceBlogIndex = {
       "date": "11 Apr 2026",
       "badge": "GUIDE",
       "title": "What Are LLM Evals? A Complete Guide to Evaluating AI Output Quality",
-      "excerpt": "LLM evals are systematic methods for measuring whether an AI system's outputs meet defined quality standards. This guide covers what evals are, why they're necessary, the three evaluation approaches, and what a practical eval pipeline looks like from first test case to production gate.",
+      "excerpt": "What are LLM evals? Complete guide covering evaluation types, metrics, test case design, eval pipelines, and frameworks — from basics to production-grade evaluation systems.",
       "tags": [
         "LLM EVALS",
         "AI EVALUATION",
         "EVALUATION FRAMEWORKS",
-        "LLM QUALITY"
+        "LLM QUALITY",
+        "AI TESTING"
       ],
       "author": "Rohit Singh",
       "readTime": "14 min read",
-      "image": "https://thegeocommunity.com/images/what-are-llm-evals.webp",
+      "image": "https://firebasestorage.googleapis.com/v0/b/thegeocommunity.firebasestorage.app/o/blog-images%2Fwhat-are-llm-evals.png?alt=media",
       "imageAlt": "What are LLM evals — complete guide to evaluating AI output quality with pipeline overview",
-      "order": 52,
+      "order": 79,
       "category": "guides"
     },
     {
@@ -1003,18 +1699,20 @@ export const sourceBlogIndex = {
       "date": "10 Apr 2026",
       "badge": "ANALYSIS",
       "title": "No, Google's AI Citations Aren't Just Post-Hoc Decoration",
-      "excerpt": "Rand Fishkin and Britney Muller claim Google writes AI answers first, then attaches citations afterward. Google's RAG attribution patent US20260064780A1 describes a system where retrieved documents shape the answer before any citation decision is made.",
+      "excerpt": "Google's RAG patent US20260064780A1 shows answers conditioned on retrieved docs before citations. Rand Fishkin's 'post-hoc' claim misreads the architecture.",
       "tags": [
         "GEO",
         "GOOGLE",
         "AI CITATIONS",
-        "RAG"
+        "RAG",
+        "PATENT ANALYSIS",
+        "SEO MYTHS"
       ],
       "author": "Rohit Singh",
       "readTime": "12 min read",
-      "image": "https://thegeocommunity.com/images/google-rag-attribution-patent-citations-not-post-hoc.webp",
+      "image": "https://firebasestorage.googleapis.com/v0/b/thegeocommunity.firebasestorage.app/o/blog-images%2Fgoogle-rag-attribution-patent-citations-not-post-hoc.png?alt=media",
       "imageAlt": "Google RAG Attribution Patent US20260064780A1 — AI citations are not post-hoc decoration",
-      "order": 53,
+      "order": 80,
       "category": "research"
     },
     {
@@ -1022,18 +1720,22 @@ export const sourceBlogIndex = {
       "date": "9 Apr 2026",
       "badge": "GUIDE",
       "title": "Claude for SEO Reporting: How to Interpret GA4 Data, Write Narratives, and Flag Anomalies",
-      "excerpt": "Connecting Claude to GA4 via MCP is step one. The harder part is getting Claude to do useful analysis — not just recite numbers. This guide covers the prompt patterns for trend analysis, anomaly detection, executive summary writing, and multi-metric interpretation that turn raw GA4 output into decisions.",
+      "excerpt": "Use Claude for SEO reporting: trend analysis, anomaly detection, executive summary generation, and multi-metric comparison prompts for GA4 data. Beyond the MCP setup guide.",
       "tags": [
         "CLAUDE",
         "SEO",
         "GA4",
-        "SEO REPORTING"
+        "SEO REPORTING",
+        "ANALYTICS",
+        "MCP",
+        "AI SEO",
+        "MARKETING"
       ],
       "author": "Rohit Singh",
       "readTime": "11 min read",
-      "image": "https://thegeocommunity.com/images/claude-seo-reporting-data-interpretation.webp",
+      "image": "https://firebasestorage.googleapis.com/v0/b/thegeocommunity.firebasestorage.app/o/blog-images%2Fclaude-seo-reporting-data-interpretation.png?alt=media",
       "imageAlt": "Claude for SEO Reporting: Interpret GA4 Data, Write Narratives, Flag Anomalies",
-      "order": 54,
+      "order": 81,
       "category": "guides"
     },
     {
@@ -1041,18 +1743,21 @@ export const sourceBlogIndex = {
       "date": "9 Apr 2026",
       "badge": "GUIDE",
       "title": "How to Use Claude to Analyze Competitor Content: Extract Structure, Find Gaps, Outmaneuver",
-      "excerpt": "Reading a competitor's article to understand its structure, evidence quality, and gap coverage takes 20–30 minutes per page. Claude does it in 30 seconds — returning heading structure, claim types, evidence density, and a specific list of angles your version should cover that theirs doesn't.",
+      "excerpt": "How to use Claude to analyze competitor content: extract heading structure, classify claim types, score evidence quality, and identify gaps your content should outperform.",
       "tags": [
         "CLAUDE",
         "SEO",
         "COMPETITOR ANALYSIS",
-        "CONTENT STRATEGY"
+        "CONTENT STRATEGY",
+        "AI SEO",
+        "GEO",
+        "CONTENT QUALITY"
       ],
       "author": "Rohit Singh",
       "readTime": "11 min read",
-      "image": "https://thegeocommunity.com/images/claude-competitor-content-analysis.webp",
+      "image": "https://firebasestorage.googleapis.com/v0/b/thegeocommunity.firebasestorage.app/o/blog-images%2Fclaude-competitor-content-analysis.png?alt=media",
       "imageAlt": "How to Use Claude to Analyze Competitor Content: Extract Structure, Find Gaps, Outmaneuver",
-      "order": 55,
+      "order": 82,
       "category": "guides"
     },
     {
@@ -1060,18 +1765,21 @@ export const sourceBlogIndex = {
       "date": "9 Apr 2026",
       "badge": "TECHNICAL",
       "title": "Claude for Schema Markup: Generate Valid JSON-LD for Any Page Type in Under a Minute",
-      "excerpt": "Schema markup implementation is technically simple but time-consuming at scale. Claude can generate valid JSON-LD for Article, FAQPage, HowTo, Product, BreadcrumbList, and Organization schema — correctly structured and ready to validate — from a plain description of your page content.",
+      "excerpt": "Use Claude to generate valid JSON-LD schema markup for any page type: Article, FAQPage, HowTo, Product, BreadcrumbList, Organization. Includes validation workflow.",
       "tags": [
         "CLAUDE",
         "SEO",
         "SCHEMA MARKUP",
-        "JSON-LD"
+        "JSON-LD",
+        "TECHNICAL SEO",
+        "STRUCTURED DATA",
+        "AI SEO"
       ],
       "author": "Rohit Singh",
       "readTime": "9 min read",
-      "image": "https://thegeocommunity.com/images/claude-schema-markup-json-ld-generator.webp",
+      "image": "https://firebasestorage.googleapis.com/v0/b/thegeocommunity.firebasestorage.app/o/blog-images%2Fclaude-schema-markup-json-ld-generator.png?alt=media",
       "imageAlt": "Claude for Schema Markup: Generate Valid JSON-LD for Any Page Type",
-      "order": 56,
+      "order": 83,
       "category": "technical"
     },
     {
@@ -1079,18 +1787,20 @@ export const sourceBlogIndex = {
       "date": "9 Apr 2026",
       "badge": "TECHNICAL",
       "title": "Claude for Internal Linking: How to Map and Execute Link Architecture Across a Large Site",
-      "excerpt": "Internal linking at scale is a spreadsheet problem that most teams never solve. Claude can process your sitemap, build a topic cluster map, identify orphan pages, and generate specific anchor text and placement recommendations for each page — in a workflow that takes 30 minutes instead of 30 hours.",
+      "excerpt": "Use Claude for internal linking strategy: sitemap-to-cluster mapping, orphan page detection, anchor text generation, and placement recommendations at scale.",
       "tags": [
         "CLAUDE",
         "SEO",
         "INTERNAL LINKING",
-        "TECHNICAL SEO"
+        "TECHNICAL SEO",
+        "SITE ARCHITECTURE",
+        "AI SEO"
       ],
       "author": "Rohit Singh",
       "readTime": "11 min read",
-      "image": "https://thegeocommunity.com/images/claude-internal-linking-strategy.webp",
+      "image": "https://firebasestorage.googleapis.com/v0/b/thegeocommunity.firebasestorage.app/o/blog-images%2Fclaude-internal-linking-strategy.png?alt=media",
       "imageAlt": "Claude for Internal Linking: Map and Execute Link Architecture Across a Large Site",
-      "order": 57,
+      "order": 84,
       "category": "technical"
     },
     {
@@ -1098,18 +1808,20 @@ export const sourceBlogIndex = {
       "date": "9 Apr 2026",
       "badge": "GUIDE",
       "title": "Claude for Content Gap Analysis: Find What Competitors Rank For That You Don't",
-      "excerpt": "Content gap analysis requires two inputs: what your competitors cover and what you cover. Claude can't pull rankings — but once you export that data from Semrush or Ahrefs, Claude can cross-reference, cluster, and prioritize the gaps faster than any spreadsheet workflow.",
+      "excerpt": "Use Claude for content gap analysis: cross-reference competitor topic coverage vs your own, cluster gaps by strategic value, and prioritize by business impact. Export-first workflow.",
       "tags": [
         "CLAUDE",
         "SEO",
         "CONTENT GAP ANALYSIS",
-        "COMPETITIVE ANALYSIS"
+        "COMPETITIVE ANALYSIS",
+        "CONTENT STRATEGY",
+        "AI SEO"
       ],
       "author": "Rohit Singh",
       "readTime": "11 min read",
-      "image": "https://thegeocommunity.com/images/claude-content-gap-analysis-seo.webp",
+      "image": "https://firebasestorage.googleapis.com/v0/b/thegeocommunity.firebasestorage.app/o/blog-images%2Fclaude-content-gap-analysis-seo.png?alt=media",
       "imageAlt": "Claude for Content Gap Analysis: Find What Competitors Rank For That You Don't",
-      "order": 58,
+      "order": 85,
       "category": "guides"
     },
     {
@@ -1117,18 +1829,20 @@ export const sourceBlogIndex = {
       "date": "9 Apr 2026",
       "badge": "GUIDE",
       "title": "How to Use Claude for On-Page SEO Audits: Faster Analysis, Prioritized Fixes",
-      "excerpt": "Paste any page's content into Claude with the right audit prompt and get back a structured report: heading hierarchy issues, keyword density, readability gaps, internal link opportunities, and schema coverage — in under 60 seconds, with fixes prioritized by SEO impact.",
+      "excerpt": "How to use Claude for on-page SEO audits: heading hierarchy, keyword density, readability gaps, internal links, and schema — structured audit output with prioritized fixes.",
       "tags": [
         "CLAUDE",
         "SEO",
         "ON-PAGE SEO",
-        "SEO AUDIT"
+        "SEO AUDIT",
+        "CONTENT STRATEGY",
+        "AI SEO"
       ],
       "author": "Rohit Singh",
       "readTime": "10 min read",
-      "image": "https://thegeocommunity.com/images/claude-on-page-seo-audit.webp",
+      "image": "https://firebasestorage.googleapis.com/v0/b/thegeocommunity.firebasestorage.app/o/blog-images%2Fclaude-on-page-seo-audit.png?alt=media",
       "imageAlt": "How to Use Claude for On-Page SEO Audits: Faster Analysis and Prioritized Fixes",
-      "order": 59,
+      "order": 86,
       "category": "guides"
     },
     {
@@ -1136,18 +1850,21 @@ export const sourceBlogIndex = {
       "date": "9 Apr 2026",
       "badge": "TECHNICAL",
       "title": "Claude for Title Tags and Meta Descriptions: A Scalable System for Any Page Type",
-      "excerpt": "Rewriting 500 title tags and meta descriptions manually takes a team weeks. With the right system prompt, CSV-style input, and a quality gate prompt, Claude can process them in batches — with consistent keyword placement, character limits enforced, and brand voice maintained across every output.",
+      "excerpt": "Use Claude to generate title tags and meta descriptions at scale. System prompt setup, batch input format, character limit enforcement, and quality gate prompts for any page type.",
       "tags": [
         "CLAUDE",
         "SEO",
         "TITLE TAGS",
-        "META DESCRIPTIONS"
+        "META DESCRIPTIONS",
+        "TECHNICAL SEO",
+        "AI SEO",
+        "BATCH PROCESSING"
       ],
       "author": "Rohit Singh",
       "readTime": "10 min read",
-      "image": "https://thegeocommunity.com/images/claude-title-tags-meta-descriptions-scale.webp",
+      "image": "https://firebasestorage.googleapis.com/v0/b/thegeocommunity.firebasestorage.app/o/blog-images%2Fclaude-title-tags-meta-descriptions-scale.png?alt=media",
       "imageAlt": "Claude for Title Tags and Meta Descriptions at Scale — Batch Generation System",
-      "order": 60,
+      "order": 87,
       "category": "technical"
     },
     {
@@ -1155,18 +1872,20 @@ export const sourceBlogIndex = {
       "date": "9 Apr 2026",
       "badge": "GUIDE",
       "title": "How to Build SEO Content Briefs with Claude: From Target Keyword to Production-Ready Brief",
-      "excerpt": "A production-ready content brief takes an experienced SEO 45–90 minutes to write. Claude can produce an 80% draft in under 5 minutes — with heading structure, semantic keywords, word count targets, and internal link suggestions — if you give it the right inputs.",
+      "excerpt": "How to build SEO content briefs with Claude: heading structure, semantic keywords, competitor gaps, word count targets, and internal link suggestions. Full prompt chain included.",
       "tags": [
         "CLAUDE",
         "SEO",
         "CONTENT BRIEFS",
-        "CONTENT STRATEGY"
+        "CONTENT STRATEGY",
+        "AI SEO",
+        "PROMPT ENGINEERING"
       ],
       "author": "Rohit Singh",
       "readTime": "12 min read",
-      "image": "https://thegeocommunity.com/images/claude-content-briefs-seo.webp",
+      "image": "https://firebasestorage.googleapis.com/v0/b/thegeocommunity.firebasestorage.app/o/blog-images%2Fclaude-content-briefs-seo.png?alt=media",
       "imageAlt": "How to Build SEO Content Briefs with Claude: From Target Keyword to Production-Ready Brief",
-      "order": 61,
+      "order": 88,
       "category": "guides"
     },
     {
@@ -1174,18 +1893,20 @@ export const sourceBlogIndex = {
       "date": "9 Apr 2026",
       "badge": "GUIDE",
       "title": "How to Use Claude for Keyword Research: Clustering, Intent Classification, and Opportunity Scoring",
-      "excerpt": "Claude can't pull search volume, but it can do something Ahrefs and Semrush can't: understand why a searcher is asking a question. This guide covers how to use Claude to cluster keyword lists by intent, classify TOFU vs BOFU, and score opportunities — after you've exported the volume data.",
+      "excerpt": "How to use Claude for keyword research: clustering by search intent, TOFU vs BOFU classification, opportunity scoring, and gap identification. Prompt templates included.",
       "tags": [
         "CLAUDE",
         "SEO",
         "KEYWORD RESEARCH",
-        "SEARCH INTENT"
+        "SEARCH INTENT",
+        "CONTENT STRATEGY",
+        "AI SEO"
       ],
       "author": "Rohit Singh",
       "readTime": "11 min read",
-      "image": "https://thegeocommunity.com/images/claude-keyword-research-seo.webp",
+      "image": "https://firebasestorage.googleapis.com/v0/b/thegeocommunity.firebasestorage.app/o/blog-images%2Fclaude-keyword-research-seo.png?alt=media",
       "imageAlt": "How to Use Claude for Keyword Research: Clustering, Intent Classification, and Opportunity Scoring",
-      "order": 62,
+      "order": 89,
       "category": "guides"
     },
     {
@@ -1193,18 +1914,21 @@ export const sourceBlogIndex = {
       "date": "9 Apr 2026",
       "badge": "GUIDE",
       "title": "Claude for SEO: The Complete Practitioner's Guide (10 Workflows That Replace Manual Work)",
-      "excerpt": "Claude can replace 80% of the manual work in a standard SEO workflow — from keyword clustering to schema generation. This guide maps all 10 use cases with decision frameworks, prompt templates, and honest limitations for every workflow.",
+      "excerpt": "10 Claude for SEO workflows: keyword research, content briefs, meta descriptions, on-page audits, content gap analysis, internal linking, schema markup, and SEO reporting. Complete practitioner guide.",
       "tags": [
         "CLAUDE",
         "SEO",
         "AI SEO",
-        "CONTENT STRATEGY"
+        "CONTENT STRATEGY",
+        "PROMPT ENGINEERING",
+        "MARKETING",
+        "CMO"
       ],
       "author": "Rohit Singh",
       "readTime": "14 min read",
-      "image": "https://thegeocommunity.com/images/claude-for-seo-complete-guide.webp",
+      "image": "https://firebasestorage.googleapis.com/v0/b/thegeocommunity.firebasestorage.app/o/blog-images%2Fclaude-for-seo-complete-guide.png?alt=media",
       "imageAlt": "Claude for SEO: The Complete Practitioner's Guide — 10 Workflows That Replace Manual Work",
-      "order": 63,
+      "order": 90,
       "category": "guides"
     },
     {
@@ -1212,18 +1936,21 @@ export const sourceBlogIndex = {
       "date": "7 Apr 2026",
       "badge": "NOVEL IDEA",
       "title": "The Algorithm Crash-Test Blog: Why Your SEO Architecture Needs a Sacrificial Section",
-      "excerpt": "Most sites treat every URL as precious. That single-bet architecture is why algorithm updates hit money pages first, with no buffer. This framework proposes a deliberate crash zone — a live section of your main domain where Google is allowed to break things so the rest of your business doesn't have to.",
+      "excerpt": "The Algorithm Crash-Test Blog is a crawlable section of your main domain designed to absorb Google's experiments — giving SEOs post-update signal without exposing revenue pages to uncontrolled risk.",
       "tags": [
         "SEO STRATEGY",
         "GOOGLE ALGORITHM",
         "CONTENT STRATEGY",
-        "SEO ARCHITECTURE"
+        "SEO ARCHITECTURE",
+        "ALGORITHM UPDATES",
+        "GEO",
+        "RISK MANAGEMENT"
       ],
       "author": "Rohit Singh",
       "readTime": "12 min read",
-      "image": "https://thegeocommunity.com/images/algorithm-crash-test-blog.webp",
+      "image": "https://firebasestorage.googleapis.com/v0/b/thegeocommunity.firebasestorage.app/o/blog-images%2Falgorithm-crash-test-blog.png?alt=media",
       "imageAlt": "The Algorithm Crash-Test Blog: Why Your SEO Architecture Needs a Sacrificial Section",
-      "order": 64,
+      "order": 91,
       "category": "ideas"
     },
     {
@@ -1231,18 +1958,20 @@ export const sourceBlogIndex = {
       "date": "5 Apr 2026",
       "badge": "GUIDE",
       "title": "Flesch Reading Ease Score: What It Is, Why It Predicts Reading Behavior, and How to Use It in AI Content",
-      "excerpt": "The Flesch Reading Ease formula has been predicting comprehension and drop-off since 1948. This guide explains the score, what the research says about how it affects scroll depth, engagement, and retention — and how to wire it directly into your AI Brand Rulebook and system prompts.",
+      "excerpt": "Flesch Reading Ease score explained for marketers: formula, score ranges, reading behavior research, and how to use it as a measurable quality gate in AI content workflows.",
       "tags": [
         "CONTENT STRATEGY",
         "READABILITY",
         "AI GUARDRAILS",
-        "MARKETING"
+        "MARKETING",
+        "CMO",
+        "BRAND SAFETY"
       ],
       "author": "Rohit Singh",
       "readTime": "9 min read",
-      "image": "https://thegeocommunity.com/images/flesch-reading-ease-marketing-ai.webp",
+      "image": "https://firebasestorage.googleapis.com/v0/b/thegeocommunity.firebasestorage.app/o/blog-images%2Fflesch-reading-ease-marketing-ai.png?alt=media",
       "imageAlt": "Flesch Reading Ease Score for Marketing and AI Content — Guide for Marketing Teams",
-      "order": 65,
+      "order": 92,
       "category": "guides"
     },
     {
@@ -1250,18 +1979,20 @@ export const sourceBlogIndex = {
       "date": "5 Apr 2026",
       "badge": "GUIDE",
       "title": "Flesch–Kincaid Grade Level: What the Score Means, What It Predicts, and How to Use It in AI Content",
-      "excerpt": "The Flesch–Kincaid Grade Level translates reading difficulty into a U.S. school grade. This guide explains the formula, how it differs from Flesch Reading Ease, what research shows about grade-level effects on engagement, and how to embed a FKGL target in your AI system prompts.",
+      "excerpt": "Flesch–Kincaid Grade Level explained for marketers: formula, grade-level targets by content type, reading research, and system prompt instructions for AI content workflows.",
       "tags": [
         "CONTENT STRATEGY",
         "READABILITY",
         "AI GUARDRAILS",
-        "MARKETING"
+        "MARKETING",
+        "CMO",
+        "BRAND SAFETY"
       ],
       "author": "Rohit Singh",
       "readTime": "9 min read",
-      "image": "https://thegeocommunity.com/images/flesch-kincaid-grade-level-marketing-ai.webp",
+      "image": "https://firebasestorage.googleapis.com/v0/b/thegeocommunity.firebasestorage.app/o/blog-images%2Fflesch-kincaid-grade-level-marketing-ai.png?alt=media",
       "imageAlt": "Flesch–Kincaid Grade Level for Marketing and AI Content — Guide for Marketing Teams",
-      "order": 66,
+      "order": 93,
       "category": "guides"
     },
     {
@@ -1269,18 +2000,20 @@ export const sourceBlogIndex = {
       "date": "5 Apr 2026",
       "badge": "GUIDE",
       "title": "Gunning Fog Index: What It Measures, What the Research Shows, and How to Use It in AI Content",
-      "excerpt": "The Gunning Fog Index estimates the years of formal education needed to understand your text — and it is uniquely sensitive to jargon density. This guide explains the formula, what the research shows, and how to set a Fog target in your AI system prompts.",
+      "excerpt": "Gunning Fog Index explained for marketers: formula, complex-word targeting, research on jargon density effects, and system prompt instructions for AI content workflows.",
       "tags": [
         "CONTENT STRATEGY",
         "READABILITY",
         "AI GUARDRAILS",
-        "MARKETING"
+        "MARKETING",
+        "CMO",
+        "BRAND SAFETY"
       ],
       "author": "Rohit Singh",
       "readTime": "9 min read",
-      "image": "https://thegeocommunity.com/images/gunning-fog-index-marketing-ai.webp",
+      "image": "https://firebasestorage.googleapis.com/v0/b/thegeocommunity.firebasestorage.app/o/blog-images%2Fgunning-fog-index-marketing-ai.png?alt=media",
       "imageAlt": "Gunning Fog Index for Marketing and AI Content — Guide for Marketing Teams",
-      "order": 67,
+      "order": 94,
       "category": "guides"
     },
     {
@@ -1288,18 +2021,20 @@ export const sourceBlogIndex = {
       "date": "5 Apr 2026",
       "badge": "GUIDE",
       "title": "SMOG Index: What It Measures, What the Research Shows, and How to Use It in AI Content",
-      "excerpt": "The SMOG Index — Simple Measure of Gobbledygook — predicts the education level required for full comprehension, not just comfortable reading. This guide explains why SMOG sets a harder standard than Flesch or Fog, what the research shows, and how to build a SMOG target into your AI system prompts.",
+      "excerpt": "SMOG Index explained for marketers: formula, polysyllabic word targeting, comprehension research, and system prompt instructions for AI content workflows.",
       "tags": [
         "CONTENT STRATEGY",
         "READABILITY",
         "AI GUARDRAILS",
-        "MARKETING"
+        "MARKETING",
+        "CMO",
+        "BRAND SAFETY"
       ],
       "author": "Rohit Singh",
       "readTime": "9 min read",
-      "image": "https://thegeocommunity.com/images/smog-index-marketing-ai.webp",
+      "image": "https://firebasestorage.googleapis.com/v0/b/thegeocommunity.firebasestorage.app/o/blog-images%2Fsmog-index-marketing-ai.png?alt=media",
       "imageAlt": "SMOG Index for Marketing and AI Content — Guide for Marketing Teams",
-      "order": 68,
+      "order": 95,
       "category": "guides"
     },
     {
@@ -1307,18 +2042,20 @@ export const sourceBlogIndex = {
       "date": "5 Apr 2026",
       "badge": "GUIDE",
       "title": "The AI Brand Rulebook: A Sample Template Every Marketing Team Can Adapt",
-      "excerpt": "The main brand guardrails guide tells you what layers to build. This post shows you exactly what the document looks like — a real, fillable AI Brand Rulebook template covering allowed use cases, red lines, sources of truth, tone rules, and escalation logic.",
+      "excerpt": "A complete, fill-in sample AI Brand Rulebook for marketing teams. Covers allowed channels, red lines, sources of truth, tone rules, and escalation — ready to adapt.",
       "tags": [
         "AI GUARDRAILS",
         "BRAND SAFETY",
         "AI HALLUCINATIONS",
-        "MARKETING"
+        "MARKETING",
+        "CMO",
+        "CONTENT STRATEGY"
       ],
       "author": "Rohit Singh",
       "readTime": "8 min read",
-      "image": "https://thegeocommunity.com/images/ai-brand-rulebook-sample.webp",
+      "image": "https://firebasestorage.googleapis.com/v0/b/thegeocommunity.firebasestorage.app/o/blog-images%2Fai-brand-rulebook-sample.png?alt=media",
       "imageAlt": "AI Brand Rulebook Sample Template — Marketing Team Guardrails Document",
-      "order": 69,
+      "order": 96,
       "category": "guides"
     },
     {
@@ -1326,18 +2063,21 @@ export const sourceBlogIndex = {
       "date": "5 Apr 2026",
       "badge": "GUIDE",
       "title": "How to Prevent AI Hallucinations with Brand Guardrails: A Practical Guide for Marketing Leaders",
-      "excerpt": "AI hallucinations aren't a model problem — they're a governance problem. This guide walks marketing leaders through the four-layer framework covering policy, prompts, grounded data, and runtime checks that block fabricated claims before they reach customers.",
+      "excerpt": "Prevent AI hallucinations in marketing with brand guardrails. A 5-step framework covering RAG, prompt policies, validators, and monitoring — built for CMOs and marketing teams.",
       "tags": [
         "AI GUARDRAILS",
         "BRAND SAFETY",
         "AI HALLUCINATIONS",
-        "MARKETING"
+        "MARKETING",
+        "CMO",
+        "PROMPT ENGINEERING",
+        "RAG"
       ],
       "author": "Rohit Singh",
       "readTime": "10 min read",
-      "image": "https://thegeocommunity.com/images/brand-guardrails-ai-hallucinations.webp",
+      "image": "https://firebasestorage.googleapis.com/v0/b/thegeocommunity.firebasestorage.app/o/blog-images%2Fbrand-guardrails-ai-hallucinations.png?alt=media",
       "imageAlt": "Brand Guardrails for AI Hallucinations — A Practical Four-Layer Framework for Marketing Leaders",
-      "order": 70,
+      "order": 97,
       "category": "guides"
     },
     {
@@ -1345,18 +2085,20 @@ export const sourceBlogIndex = {
       "date": "5 Apr 2026",
       "badge": "TECHNICAL",
       "title": "How to Track and Analyze Scroll Depth in GA4: A Complete Guide for Marketers",
-      "excerpt": "GA4's built-in scroll event only tells you who reached 90%. To understand where users actually drop off — and fix it — you need GTM scroll depth triggers, a custom dimension, and Explorations. This guide covers both setups end to end.",
+      "excerpt": "How to track scroll depth in GA4 with enhanced measurement or GTM. Step-by-step setup for 25/50/75/90% thresholds, custom dimensions, and Explorations.",
       "tags": [
         "GA4",
         "GOOGLE ANALYTICS",
         "GTM",
-        "GOOGLE TAG MANAGER"
+        "GOOGLE TAG MANAGER",
+        "ANALYTICS",
+        "CONTENT STRATEGY"
       ],
       "author": "Rohit Singh",
       "readTime": "12 min read",
-      "image": "https://thegeocommunity.com/images/scroll-depth-analysis-ga4-gtm.webp",
+      "image": "https://firebasestorage.googleapis.com/v0/b/thegeocommunity.firebasestorage.app/o/blog-images%2Fscroll-depth-analysis-ga4-gtm.png?alt=media",
       "imageAlt": "How to Track and Analyze Scroll Depth in GA4 with GTM — Complete Setup Guide",
-      "order": 71,
+      "order": 98,
       "category": "technical"
     },
     {
@@ -1364,18 +2106,20 @@ export const sourceBlogIndex = {
       "date": "3 Apr 2026",
       "badge": "EXPERT INSIGHTS",
       "title": "Search Everywhere Optimization Is Becoming a Buzzword — and Most People Using It Don't Understand Why It's Happening",
-      "excerpt": "Google's Thematic Search patent (US12158907B1) doesn't argue that every brand should optimize every surface. It argues that broad queries trigger a dynamic interface organized by ranked themes and sub-themes. The correct response is selective surface coverage — not channel maximalism.",
+      "excerpt": "Google's Thematic Search patent reorganizes broad queries into ranked themes and sub-themes. Why Search Everywhere Optimization is being misused — and what the patent actually implies for content strategy.",
       "tags": [
         "GEO",
         "SEARCH EVERYWHERE OPTIMIZATION",
         "CONTENT STRATEGY",
-        "GOOGLE PATENTS"
+        "GOOGLE PATENTS",
+        "THEMATIC SEARCH",
+        "SEO"
       ],
       "author": "Rohit Singh",
       "readTime": "10 min read",
-      "image": "https://thegeocommunity.com/images/search-everywhere-optimization-thematic-search.webp",
+      "image": "https://firebasestorage.googleapis.com/v0/b/thegeocommunity.firebasestorage.app/o/blog-images%2Fsearch-everywhere-optimization-thematic-search.png?alt=media",
       "imageAlt": "Search Everywhere Optimization and Google Thematic Search Patent: A Critical Analysis",
-      "order": 72,
+      "order": 99,
       "category": "insights"
     },
     {
@@ -1383,18 +2127,20 @@ export const sourceBlogIndex = {
       "date": "2 Apr 2026",
       "badge": "EXPERT INSIGHTS",
       "title": "How the Architecture of Embedding Models Determines Whether AI Retrieves Your Content",
-      "excerpt": "Three arXiv papers (OpenAI, Gemini, Perplexity) and one vendor technical blog (Voyage AI) reveal why contrastive pre-training, multilingual generalization, diffusion encoding, and MoE architectures make semantic precision and structural consistency core engineering decisions for content visibility in AI-powered retrieval systems.",
+      "excerpt": "How contrastive pre-training, multilingual generalization, diffusion encoding, and MoE embeddings determine AI retrieval. Three papers, one vendor blog, one GEO framework.",
       "tags": [
         "GEO",
         "EMBEDDING MODELS",
         "AI RETRIEVAL",
-        "RAG"
+        "RAG",
+        "CONTRASTIVE LEARNING",
+        "CONTENT STRATEGY"
       ],
       "author": "Rohit Singh",
       "readTime": "15 min read",
-      "image": "https://thegeocommunity.com/images/embedding-architecture-ai-retrieval.webp",
+      "image": "https://firebasestorage.googleapis.com/v0/b/thegeocommunity.firebasestorage.app/o/blog-images%2Fembedding-architecture-ai-retrieval.png?alt=media",
       "imageAlt": "How Embedding Model Architecture Determines AI Retrieval: OpenAI, Gemini, Perplexity, and Voyage Compared",
-      "order": 73,
+      "order": 100,
       "category": "insights"
     },
     {
@@ -1402,18 +2148,20 @@ export const sourceBlogIndex = {
       "date": "30 Mar 2026",
       "badge": "RESEARCH",
       "title": "Why AI Content Works at Scale: The Mechanism Behind Mass Publishing (And Why It's Risky)",
-      "excerpt": "Google's freshness patents reveal how provisional scoring and impression testing create a window for mass-published content to gain traction. The mechanism works—but Google's quality filters, thin content penalties, and helpful content system create significant risks that most practitioners underestimate.",
+      "excerpt": "How AI content at scale works: Google's provisional scoring, impression testing, and click signals explained. Plus the quality thresholds, thin content penalties, and helpful content risks that make this strategy dangerous.",
       "tags": [
         "AI CONTENT",
         "SEO AT SCALE",
         "GOOGLE PATENTS",
-        "CLICK SIGNALS"
+        "CLICK SIGNALS",
+        "FRESHNESS RANKING",
+        "CONTENT STRATEGY"
       ],
       "author": "Rohit Singh",
       "readTime": "14 min read",
-      "image": "https://thegeocommunity.com/images/why-ai-content-works-at-scale.webp",
+      "image": "https://firebasestorage.googleapis.com/v0/b/thegeocommunity.firebasestorage.app/o/blog-images%2Fwhy-ai-content-works-at-scale.png?alt=media",
       "imageAlt": "Why AI Content Works at Scale: The Mechanism and Risks Explained",
-      "order": 74,
+      "order": 101,
       "category": "research"
     },
     {
@@ -1421,18 +2169,20 @@ export const sourceBlogIndex = {
       "date": "22 Mar 2026",
       "badge": "RESEARCH",
       "title": "Evaluating Verifiability in Generative Search Engines: Why 50% of AI Answers Lack Citation Support (EMNLP 2023)",
-      "excerpt": "Stanford's EMNLP 2023 study audited Bing Chat, NeevaAI, Perplexity, and YouChat. The finding: only 51.5% of generated statements are fully supported by citations, and 25.5% of citations don't support their claims. A facade of trustworthiness hiding systematic verifiability failures.",
+      "excerpt": "Stanford EMNLP 2023 study: only 51.5% of generative search statements are citation-supported. 74.5% citation precision across Bing Chat, Perplexity, NeevaAI, YouChat. Why fluent answers are least trustworthy.",
       "tags": [
         "VERIFIABILITY",
         "CITATIONS",
         "AI SEARCH",
-        "TRUST"
+        "TRUST",
+        "EMNLP 2023",
+        "GENERATIVE SEARCH"
       ],
       "author": "Rohit Singh",
       "readTime": "11 min read",
-      "image": "https://thegeocommunity.com/images/verifiability-generative-search-engines-emnlp-2023.webp",
+      "image": "https://firebasestorage.googleapis.com/v0/b/thegeocommunity.firebasestorage.app/o/blog-images%2Fverifiability-generative-search-engines-emnlp-2023.png?alt=media",
       "imageAlt": "Evaluating Verifiability in Generative Search Engines: Citation Recall and Precision Study",
-      "order": 75,
+      "order": 102,
       "category": "research"
     },
     {
@@ -1440,18 +2190,21 @@ export const sourceBlogIndex = {
       "date": "16 Mar 2026",
       "badge": "RESEARCH",
       "title": "SAGEO Arena: The First Realistic GEO Benchmark — Full Pipeline, 170K Documents, and Why Body-Text Optimization Fails",
-      "excerpt": "SAGEO Arena is the first GEO benchmark that evaluates the full generative search pipeline — retrieval, reranking, and generation — over 170K real web documents. Its key finding: body-text-only optimization consistently degrades visibility. Structural information is what actually matters.",
+      "excerpt": "SAGEO Arena evaluates GEO across the full search pipeline (retrieval → reranking → generation) over 170K documents. Key finding: body-text optimization degrades retrieval. Structural info is critical.",
       "tags": [
         "SAGEO ARENA",
         "GEO",
         "BENCHMARKS",
-        "RETRIEVAL"
+        "RETRIEVAL",
+        "RERANKING",
+        "STRUCTURAL SEO",
+        "AI SEARCH"
       ],
       "author": "Rohit Singh",
       "readTime": "12 min read",
-      "image": "https://thegeocommunity.com/images/sageo-arena-realistic-geo-benchmark.webp",
+      "image": "https://firebasestorage.googleapis.com/v0/b/thegeocommunity.firebasestorage.app/o/blog-images%2Fsageo-arena-realistic-geo-benchmark.png?alt=media",
       "imageAlt": "SAGEO Arena: The First Realistic GEO Benchmark with Full Pipeline Evaluation",
-      "order": 76,
+      "order": 103,
       "category": "research"
     },
     {
@@ -1459,18 +2212,20 @@ export const sourceBlogIndex = {
       "date": "16 Mar 2026",
       "badge": "RESEARCH",
       "title": "AutoGEO (ICLR 2026): How CMU Built a Framework to Automatically Optimize Content for AI Visibility",
-      "excerpt": "AutoGEO automatically extracts what generative engines prefer and rewrites content to maximize visibility. Accepted at ICLR 2026, it introduces a cooperative approach — optimizing for GEO score (visibility) without destroying GEU score (utility). But SAGEO Arena found it degrades retrieval rank by −22.35.",
+      "excerpt": "AutoGEO (ICLR 2026, CMU) auto-extracts GE preferences and rewrites content for visibility. Introduces GEO score vs GEU score tradeoff. But SAGEO Arena found retrieval rank drops by −22.35.",
       "tags": [
         "AUTOGEO",
         "GEO",
         "BENCHMARKS",
-        "CONTENT OPTIMIZATION"
+        "CONTENT OPTIMIZATION",
+        "ICLR 2026",
+        "AI SEARCH"
       ],
       "author": "Rohit Singh",
       "readTime": "10 min read",
-      "image": "https://thegeocommunity.com/images/autogeo-framework-iclr-2026-cmu.webp",
+      "image": "https://firebasestorage.googleapis.com/v0/b/thegeocommunity.firebasestorage.app/o/blog-images%2Fautogeo-framework-iclr-2026-cmu.png?alt=media",
       "imageAlt": "AutoGEO: CMU's Framework for Automatic Generative Engine Optimization",
-      "order": 77,
+      "order": 104,
       "category": "research"
     },
     {
@@ -1478,18 +2233,20 @@ export const sourceBlogIndex = {
       "date": "16 Mar 2026",
       "badge": "RESEARCH",
       "title": "CC-GSEO-Bench: The First Content-Centric Benchmark for Measuring Source Influence in Generative Search",
-      "excerpt": "CC-GSEO-Bench asks the question every content creator cares about: how much does my content actually influence the AI's answer? It measures Exposure, Faithful Credit, and Causal Impact across 1,000+ articles and 5,000+ query-article pairs using counterfactual analysis.",
+      "excerpt": "CC-GSEO-Bench measures source influence in generative search via 3 dimensions: Exposure, Faithful Credit, Causal Impact. 1,000+ articles, 5,000+ query pairs, counterfactual analysis.",
       "tags": [
         "CC-GSEO-BENCH",
         "GEO",
         "BENCHMARKS",
-        "SOURCE INFLUENCE"
+        "SOURCE INFLUENCE",
+        "GENERATIVE SEARCH",
+        "AI SEARCH"
       ],
       "author": "Rohit Singh",
       "readTime": "10 min read",
-      "image": "https://thegeocommunity.com/images/cc-gseo-bench-source-influence-generative-search.webp",
+      "image": "https://firebasestorage.googleapis.com/v0/b/thegeocommunity.firebasestorage.app/o/blog-images%2Fcc-gseo-bench-source-influence-generative-search.png?alt=media",
       "imageAlt": "CC-GSEO-Bench: Measuring Source Influence in Generative Search Engines",
-      "order": 78,
+      "order": 105,
       "category": "research"
     },
     {
@@ -1497,18 +2254,21 @@ export const sourceBlogIndex = {
       "date": "11 Mar 2026",
       "badge": "TECHNICAL",
       "title": "Who Created WebMCP? The Complete History & Timeline (15 Months, 7 Engineers, 3 Companies)",
-      "excerpt": "WebMCP didn't start at Google. It began with Alex Nahas at Amazon solving an OAuth problem, merged with Anthropic's MCP foundation, and became a W3C standard through Google and Microsoft collaboration. Here's the complete timeline from November 2024 to March 2026.",
+      "excerpt": "Complete WebMCP history: Anthropic's MCP (Nov 2024), Alex Nahas's MCP-B at Amazon, Google Chrome & Microsoft Edge collaboration, W3C standardization, and Chrome 146 launch (Feb 2026).",
       "tags": [
         "WEBMCP",
         "MCP",
         "AI AGENTS",
-        "WEB STANDARDS"
+        "WEB STANDARDS",
+        "GOOGLE CHROME",
+        "W3C",
+        "TECHNICAL HISTORY"
       ],
       "author": "Rohit Singh",
       "readTime": "12 min read",
-      "image": "https://thegeocommunity.com/images/webmcp-history-timeline-15-months-7-engineers-3-companies.webp",
+      "image": "https://firebasestorage.googleapis.com/v0/b/thegeocommunity.firebasestorage.app/o/blog-images%2Fwebmcp-history-timeline-15-months-7-engineers-3-companies.png?alt=media",
       "imageAlt": "Who Created WebMCP? The Complete History & Timeline (15 Months, 7 Engineers, 3 Companies)",
-      "order": 79,
+      "order": 106,
       "category": "technical"
     },
     {
@@ -1516,18 +2276,20 @@ export const sourceBlogIndex = {
       "date": "9 Mar 2026",
       "badge": "ANALYSIS",
       "title": "4 Reasons GPT-5.4's Web Benchmarks Should Scare (or Excite) GEO Pros",
-      "excerpt": "GPT-5.4's 75% OSWorld score means AI can now verify your claims autonomously. Its 47% token efficiency means verbose content gets penalized. Its 73.3% reasoning score means logical fallacies are detectable. For GEO professionals, these aren't just benchmarks—they're the new rules of the game.",
+      "excerpt": "GPT-5.4 web benchmark analysis for GEO professionals: 75% OSWorld autonomous verification, 47% token efficiency, 73% reasoning, 33% hallucination reduction. What changes now.",
       "tags": [
         "GPT-5.4",
         "GEO",
         "WEB BENCHMARKS",
-        "AI VERIFICATION"
+        "AI VERIFICATION",
+        "CONTENT STRATEGY",
+        "THOUGHT LEADERSHIP"
       ],
       "author": "Rohit Singh",
       "readTime": "15 min read",
-      "image": "https://thegeocommunity.com/images/gpt-5-4-web-benchmarks-geo-professionals.webp",
+      "image": "https://firebasestorage.googleapis.com/v0/b/thegeocommunity.firebasestorage.app/o/blog-images%2Fgpt-5-4-web-benchmarks-geo-professionals.png?alt=media",
       "imageAlt": "4 Reasons GPT-5.4's Web Benchmarks Should Scare (or Excite) GEO Pros",
-      "order": 80,
+      "order": 107,
       "category": "research"
     },
     {
@@ -1535,18 +2297,20 @@ export const sourceBlogIndex = {
       "date": "9 Mar 2026",
       "badge": "ANALYSIS",
       "title": "5 Benchmark Wins for GPT-5.4 — But How Do They Affect Your Brand Mentions?",
-      "excerpt": "GPT-5.4's 83% GDPval, 75% OSWorld, and 33% hallucination reduction don't just measure intelligence—they measure citation standards. Each benchmark win changes which brands get mentioned, how AI verifies claims, and what content survives automated fact-checking.",
+      "excerpt": "GPT-5.4 benchmark analysis: How 83% GDPval, 75% OSWorld, 91% BigLaw, 47% token efficiency, and 73% ARC-AGI affect brand mentions, citations, and AI visibility in 2026.",
       "tags": [
         "GPT-5.4",
         "GEO",
         "BRAND MENTIONS",
-        "BENCHMARKS"
+        "BENCHMARKS",
+        "AI CITATIONS",
+        "CONTENT QUALITY"
       ],
       "author": "Rohit Singh",
       "readTime": "14 min read",
-      "image": "https://thegeocommunity.com/images/gpt-5-4-benchmark-wins-brand-mentions.webp",
+      "image": "https://firebasestorage.googleapis.com/v0/b/thegeocommunity.firebasestorage.app/o/blog-images%2Fgpt-5-4-benchmark-wins-brand-mentions.png?alt=media",
       "imageAlt": "5 Benchmark Wins for GPT-5.4 — But How Do They Affect Your Brand Mentions?",
-      "order": 81,
+      "order": 108,
       "category": "research"
     },
     {
@@ -1554,18 +2318,20 @@ export const sourceBlogIndex = {
       "date": "9 Mar 2026",
       "badge": "ANALYSIS",
       "title": "7 Questions About GPT-5.4's Benchmarks and Why They Matter for GEO",
-      "excerpt": "GPT-5.4 scores 83% on knowledge work, 75% on computer use, and reduces hallucinations by 33%. For GEO teams, these benchmarks reveal which content strategies will survive—and which won't—as AI engines get smarter at fact-checking, context synthesis, and autonomous research.",
+      "excerpt": "GPT-5.4 benchmarks explained: 83% GDPval, 75% OSWorld, 33% fewer hallucinations, 1M token context. What these numbers mean for GEO strategy, content quality, and AI visibility in 2026.",
       "tags": [
         "GPT-5.4",
         "GEO",
         "BENCHMARKS",
-        "AI SEARCH"
+        "AI SEARCH",
+        "CONTENT STRATEGY",
+        "FACTUAL ACCURACY"
       ],
       "author": "Rohit Singh",
       "readTime": "16 min read",
-      "image": "https://thegeocommunity.com/images/gpt-5-4-benchmarks-geo-implications.webp",
+      "image": "https://firebasestorage.googleapis.com/v0/b/thegeocommunity.firebasestorage.app/o/blog-images%2Fgpt-5-4-benchmarks-geo-implications.png?alt=media",
       "imageAlt": "7 Questions About GPT-5.4's Benchmarks and Why They Matter for GEO",
-      "order": 82,
+      "order": 109,
       "category": "research"
     },
     {
@@ -1573,18 +2339,20 @@ export const sourceBlogIndex = {
       "date": "9 Mar 2026",
       "badge": "ANALYSIS",
       "title": "From Listicles to Landing Pages: Why ChatGPT Atlas Now Goes Past Google and Reads Your Site Directly",
-      "excerpt": "ChatGPT Atlas launched with a browser that reads your pages directly—no search engine middleman. For GEO teams, this means listicles, landing pages, and product detail pages are now first-class retrieval targets, not just citation sources.",
+      "excerpt": "ChatGPT Atlas reads websites directly via browser memories and agent mode. How direct page access changes GEO strategy for listicles, landing pages, and product pages in 2026.",
       "tags": [
         "CHATGPT ATLAS",
         "GEO",
         "BROWSER MEMORIES",
-        "AGENT MODE"
+        "AGENT MODE",
+        "DIRECT RETRIEVAL",
+        "AI SEARCH"
       ],
       "author": "Rohit Singh",
       "readTime": "14 min read",
-      "image": "https://thegeocommunity.com/images/chatgpt-atlas-direct-website-reading-geo.webp",
+      "image": "https://firebasestorage.googleapis.com/v0/b/thegeocommunity.firebasestorage.app/o/blog-images%2Fchatgpt-atlas-direct-website-reading-geo.png?alt=media",
       "imageAlt": "From Listicles to Landing Pages: Why ChatGPT Atlas Now Goes Past Google and Reads Your Site Directly",
-      "order": 83,
+      "order": 110,
       "category": "research"
     },
     {
@@ -1592,18 +2360,20 @@ export const sourceBlogIndex = {
       "date": "7 Mar 2026",
       "badge": "ANALYSIS",
       "title": "BrowseComp Benchmark: Why Browsing Agents Change What GEO Teams Must Optimize",
-      "excerpt": "BrowseComp measures whether agents can persistently browse the web to find hard-to-locate facts. For GEO teams, that changes the job: your site is no longer just something to rank or cite, but something agents must successfully navigate, verify, and use.",
+      "excerpt": "BrowseComp reveals what web-browsing agents must do to find hard facts. Why GEO teams now need to optimize pages for agent navigation, verification, and trust.",
       "tags": [
         "BROWSECOMP",
         "GEO",
         "BROWSING AGENTS",
-        "AI SEARCH"
+        "AI SEARCH",
+        "DEEP RESEARCH",
+        "TECHNICAL SEO"
       ],
       "author": "Rohit Singh",
       "readTime": "12 min read",
-      "image": "https://thegeocommunity.com/images/browsecomp-benchmark-browsing-agents-geo.webp",
+      "image": "https://firebasestorage.googleapis.com/v0/b/thegeocommunity.firebasestorage.app/o/blog-images%2Fbrowsecomp-benchmark-browsing-agents-geo.png?alt=media",
       "imageAlt": "BrowseComp Benchmark: Why Browsing Agents Change What GEO Teams Must Optimize",
-      "order": 84,
+      "order": 111,
       "category": "research"
     },
     {
@@ -1611,18 +2381,20 @@ export const sourceBlogIndex = {
       "date": "7 Mar 2026",
       "badge": "GUIDE",
       "title": "Pyversity: The Python Library Every GEO Researcher Needs in Their Toolkit",
-      "excerpt": "Pyversity helps diversify retrieval results before synthesis. For GEO researchers, that makes it a practical way to study candidate set quality, citation variety, and the hidden retrieval layer behind AI visibility.",
+      "excerpt": "Pyversity helps diversify retrieval for RAG and AI search. Learn why retrieval diversity matters in GEO research, how Haystack supports it, and how to test candidate-set quality.",
       "tags": [
         "PYVERSITY",
         "GEO",
         "RETRIEVAL",
-        "RAG"
+        "RAG",
+        "HAYSTACK",
+        "AI SEARCH"
       ],
       "author": "Rohit Singh",
       "readTime": "10 min read",
-      "image": "https://thegeocommunity.com/images/pyversity-the-python-library-every-geo-researcher-needs-in-their-toolkit.webp",
+      "image": "https://firebasestorage.googleapis.com/v0/b/thegeocommunity.firebasestorage.app/o/blog-images%2Fpyversity-the-python-library-every-geo-researcher-needs-in-their-toolkit.png?alt=media",
       "imageAlt": "Pyversity: The Python Library Every GEO Researcher Needs in Their Toolkit",
-      "order": 85,
+      "order": 112,
       "category": "guides"
     },
     {
@@ -1630,18 +2402,20 @@ export const sourceBlogIndex = {
       "date": "4 Mar 2026",
       "badge": "TECHNICAL",
       "title": "Perplexity Open-Sources Embedding Models: How GEO Researchers Can Use pplx-embed for Retrieval",
-      "excerpt": "Perplexity released pplx-embed-v1 and pplx-embed-context-v1 under MIT license—bidirectional embeddings with native INT8 quantization that outperform Google and Alibaba. How GEO researchers can use them for content analysis, competitive intelligence, and RAG optimization.",
+      "excerpt": "Perplexity's open-source pplx-embed models: bidirectional embeddings with 4x-32x memory savings. Practical guide for GEO researchers on retrieval, content clustering, and competitive analysis.",
       "tags": [
         "EMBEDDINGS",
         "PERPLEXITY",
         "RAG",
-        "TECHNICAL GEO"
+        "TECHNICAL GEO",
+        "RETRIEVAL",
+        "OPEN SOURCE"
       ],
       "author": "Rohit Singh",
       "readTime": "12 min read",
-      "image": "https://thegeocommunity.com/images/perplexity-open-source-embeddings-geo.webp",
+      "image": "https://firebasestorage.googleapis.com/v0/b/thegeocommunity.firebasestorage.app/o/blog-images%2Fperplexity-open-source-embeddings-geo.png?alt=media",
       "imageAlt": "Perplexity Open-Sources Embedding Models: How GEO Researchers Can Use pplx-embed for Retrieval",
-      "order": 86,
+      "order": 113,
       "category": "technical"
     },
     {
@@ -1649,18 +2423,20 @@ export const sourceBlogIndex = {
       "date": "4 Mar 2026",
       "badge": "ANALYSIS",
       "title": "Meta AI Shopping Research: What It Means for Generative Engine Optimization",
-      "excerpt": "Meta enters the AI shopping race with a dedicated research mode in Meta AI. How this shifts the commerce discovery landscape and what brands must optimize for to appear in AI-powered product recommendations.",
+      "excerpt": "Meta tests AI shopping research in Meta AI, joining ChatGPT and Gemini. Analysis of the feature, competitive landscape, and what it means for product visibility in AI answer engines.",
       "tags": [
         "AI SHOPPING",
         "META AI",
         "AGENTIC COMMERCE",
-        "PRODUCT DISCOVERY"
+        "PRODUCT DISCOVERY",
+        "GEO STRATEGY",
+        "E-COMMERCE"
       ],
       "author": "Rohit Singh",
       "readTime": "10 min read",
-      "image": "https://thegeocommunity.com/images/meta-ai-shopping-research-geo.webp",
+      "image": "https://firebasestorage.googleapis.com/v0/b/thegeocommunity.firebasestorage.app/o/blog-images%2Fmeta-ai-shopping-research-geo.png?alt=media",
       "imageAlt": "Meta AI Shopping Research: What It Means for Generative Engine Optimization",
-      "order": 87,
+      "order": 114,
       "category": "research"
     },
     {
@@ -1668,18 +2444,20 @@ export const sourceBlogIndex = {
       "date": "3 Mar 2026",
       "badge": "GUIDE",
       "title": "The Flywheel Content Strategy for GEO: How Self-Reinforcing Content Beats the Funnel",
-      "excerpt": "Why AI engines reward flywheel content models over traditional funnels — and how to build a self-sustaining content system that compounds AI visibility through customer advocacy.",
+      "excerpt": "Flywheel content strategy for GEO: AI engines cite earned media 70-92% of the time. Learn how customer-driven content creates self-reinforcing AI visibility vs traditional funnels.",
       "tags": [
         "GEO",
         "CONTENT STRATEGY",
         "FLYWHEEL MODEL",
-        "EARNED MEDIA"
+        "EARNED MEDIA",
+        "CUSTOMER ADVOCACY",
+        "AI VISIBILITY"
       ],
       "author": "Rohit Singh",
       "readTime": "14 min read",
-      "image": "https://thegeocommunity.com/images/flywheel-content-strategy-geo-hero.webp",
+      "image": "https://firebasestorage.googleapis.com/v0/b/thegeocommunity.firebasestorage.app/o/blog-images%2Fflywheel-content-strategy-geo-hero.png?alt=media",
       "imageAlt": "The Flywheel Content Strategy for GEO: Self-Reinforcing Growth Model",
-      "order": 88,
+      "order": 115,
       "category": "guides"
     },
     {
@@ -1687,18 +2465,20 @@ export const sourceBlogIndex = {
       "date": "28 Feb 2026",
       "badge": "TECHNICAL",
       "title": "IndexNow by Microsoft: The Fast Lane to AI Visibility",
-      "excerpt": "How Microsoft's instant indexing protocol helps your content reach AI answer engines faster—and why that matters for GEO.",
+      "excerpt": "How IndexNow by Microsoft enables instant indexing for AI visibility. Learn implementation, best practices, and why faster indexing leads to more AI citations in Copilot, ChatGPT, and Perplexity.",
       "tags": [
         "INDEXNOW",
         "MICROSOFT",
         "TECHNICAL GEO",
-        "INDEXING"
+        "INDEXING",
+        "AI VISIBILITY",
+        "BING"
       ],
       "author": "Rohit Singh",
       "readTime": "12 min read",
-      "image": "https://thegeocommunity.com/images/indexnow-microsoft-ai-visibility.webp",
+      "image": "https://firebasestorage.googleapis.com/v0/b/thegeocommunity.firebasestorage.app/o/blog-images%2Findexnow-microsoft-ai-visibility.png?alt=media",
       "imageAlt": "IndexNow by Microsoft: The Fast Lane to AI Visibility",
-      "order": 89,
+      "order": 116,
       "category": "technical"
     },
     {
@@ -1706,18 +2486,20 @@ export const sourceBlogIndex = {
       "date": "22 Feb 2026",
       "badge": "TECHNICAL",
       "title": "How to Use Google's LangExtract Library to Improve Your GEO",
-      "excerpt": "Google open-sourced LangExtract — a Gemini-powered library that extracts structured, grounded entities from text. Here's how GEO practitioners can use it to audit content, compare competitors, and find structured data gaps.",
+      "excerpt": "How to use Google's LangExtract library for Generative Engine Optimization. Four practical workflows: entity density audit, claim grounding check, competitor comparison, and structured data gap analysis.",
       "tags": [
         "LANGEXTRACT",
         "GEMINI",
         "TECHNICAL GEO",
-        "STRUCTURED DATA"
+        "STRUCTURED DATA",
+        "ENTITY EXTRACTION",
+        "PYTHON"
       ],
       "author": "Rohit Singh",
       "readTime": "11 min read",
-      "image": "https://thegeocommunity.com/images/langextract-gemini-generative-engine-optimization.webp",
+      "image": "https://firebasestorage.googleapis.com/v0/b/thegeocommunity.firebasestorage.app/o/blog-images%2Flangextract-gemini-generative-engine-optimization.png?alt=media",
       "imageAlt": "How to Use Google's LangExtract Library to Improve Your GEO",
-      "order": 90,
+      "order": 117,
       "category": "technical"
     },
     {
@@ -1725,18 +2507,21 @@ export const sourceBlogIndex = {
       "date": "19 Feb 2026",
       "badge": "TECHNICAL",
       "title": "Log File Analysis for AI Bots: How to Track What's Actually Crawling You",
-      "excerpt": "Your robots.txt tells bots what to do. Your log files tell you what they actually did. Step-by-step log analysis for AI crawlers on Cloudflare, GCP, Netlify, Firebase, Nginx, Apache, Vercel, and AWS — with ready-to-run queries.",
+      "excerpt": "How to analyze server logs for AI bot activity across Cloudflare, GCP, Netlify, Firebase, Nginx, Apache, Vercel, and AWS CloudFront. Track GPTBot, ClaudeBot, PerplexityBot crawl coverage, frequency, and robots.txt compliance.",
       "tags": [
         "LOG ANALYSIS",
         "AI CRAWLERS",
         "TECHNICAL GEO",
-        "CLOUDFLARE"
+        "CLOUDFLARE",
+        "GCP",
+        "NETLIFY",
+        "BOT MANAGEMENT"
       ],
       "author": "Rohit Singh",
       "readTime": "14 min read",
-      "image": "https://thegeocommunity.com/images/log-file-analysis-ai-bots-geo.webp",
+      "image": "https://firebasestorage.googleapis.com/v0/b/thegeocommunity.firebasestorage.app/o/blog-images%2Flog-file-analysis-ai-bots-geo.png?alt=media",
       "imageAlt": "Log File Analysis for AI Bots: How to Track What's Actually Crawling You",
-      "order": 91,
+      "order": 118,
       "category": "technical"
     },
     {
@@ -1744,18 +2529,20 @@ export const sourceBlogIndex = {
       "date": "17 Feb 2026",
       "badge": "RESEARCH",
       "title": "How to Dominate AI Search: The First Comparative Study of GEO Across All Major Engines",
-      "excerpt": "The first study comparing all major AI engines reveals that traditional SEO is dead. AI engines prioritize earned media 70-90% of the time, and success requires treating your website as an API for AI agents.",
+      "excerpt": "Comparative study of Generative Engine Optimization across ChatGPT, Claude, Perplexity, and Gemini. Findings show 70-90% earned media dominance and the need for engine-specific GEO strategies.",
       "tags": [
         "GEO",
         "RESEARCH",
         "AI SEARCH",
-        "COMPARATIVE STUDY"
+        "COMPARATIVE STUDY",
+        "EARNED MEDIA",
+        "BRAND STRATEGY"
       ],
       "author": "Rohit Singh",
       "readTime": "13 min read",
-      "image": "https://thegeocommunity.com/images/geo-dominate-ai-search-comparative-study.webp",
+      "image": "https://firebasestorage.googleapis.com/v0/b/thegeocommunity.firebasestorage.app/o/blog-images%2Fgeo-dominate-ai-search-comparative-study.png?alt=media",
       "imageAlt": "How to Dominate AI Search: The First Comparative Study of GEO Across All Major Engines",
-      "order": 92,
+      "order": 119,
       "category": "research"
     },
     {
@@ -1763,18 +2550,20 @@ export const sourceBlogIndex = {
       "date": "17 Feb 2026",
       "badge": "RESEARCH",
       "title": "The Original GEO Paper: What Princeton and IIT Delhi Actually Found (and What It Means for Your Content)",
-      "excerpt": "The 2023 paper that coined 'Generative Engine Optimization' tested 9 content strategies across 10,000 queries. Here's what worked, what didn't, and whether this is the Princeton study everyone keeps referencing.",
+      "excerpt": "A deep-dive into the original GEO paper (arXiv:2311.09735) by Princeton and IIT Delhi. What 9 optimization strategies they tested, which boosted visibility by 40%, and what failed completely.",
       "tags": [
         "GEO",
         "RESEARCH",
         "CONTENT STRATEGY",
-        "AI VISIBILITY"
+        "AI VISIBILITY",
+        "PRINCETON",
+        "IIT DELHI"
       ],
       "author": "Rohit Singh",
       "readTime": "11 min read",
-      "image": "https://thegeocommunity.com/images/geo-princeton-paper-original-study.webp",
+      "image": "https://firebasestorage.googleapis.com/v0/b/thegeocommunity.firebasestorage.app/o/blog-images%2Fgeo-princeton-paper-original-study.png?alt=media",
       "imageAlt": "The Original GEO Paper: What Princeton and IIT Delhi Actually Found",
-      "order": 93,
+      "order": 120,
       "category": "research"
     },
     {
@@ -1782,18 +2571,20 @@ export const sourceBlogIndex = {
       "date": "10 Feb 2026",
       "badge": "GUIDE",
       "title": "Zero-Shot vs Few-Shot Prompting: When to Use Each for SEO & Content",
-      "excerpt": "The most fundamental prompting decision — when to give examples and when to let the model figure it out. Practical guide for keyword research, meta descriptions, and content briefs.",
+      "excerpt": "Zero-shot vs few-shot prompting for SEO professionals and content writers. Decision framework, practical examples for keyword research, meta descriptions, and content briefs.",
       "tags": [
         "PROMPTING",
         "ZERO-SHOT",
         "FEW-SHOT",
-        "SEO"
+        "SEO",
+        "CONTENT STRATEGY",
+        "GEO"
       ],
       "author": "Rohit Singh",
       "readTime": "8 min read",
-      "image": "https://thegeocommunity.com/images/zero-shot-vs-few-shot-prompting-seo-content.webp",
+      "image": "https://firebasestorage.googleapis.com/v0/b/thegeocommunity.firebasestorage.app/o/blog-images%2Fzero-shot-vs-few-shot-prompting-seo-content.png?alt=media",
       "imageAlt": "Zero-Shot vs Few-Shot Prompting: When to Use Each for SEO & Content",
-      "order": 94,
+      "order": 121,
       "category": "guides"
     },
     {
@@ -1801,18 +2592,19 @@ export const sourceBlogIndex = {
       "date": "10 Feb 2026",
       "badge": "GUIDE",
       "title": "Chain-of-Thought Prompting for Content Strategy: Step-by-Step Reasoning",
-      "excerpt": "Force the model to think step by step — and get structured analysis instead of generic listicles. Practical examples for competitor analysis, funnel mapping, and content gaps.",
+      "excerpt": "Chain-of-thought prompting for content strategy: step-by-step reasoning for competitor analysis, funnel mapping, and content gap analysis. Practical examples for marketers.",
       "tags": [
         "PROMPTING",
         "CHAIN-OF-THOUGHT",
         "CONTENT STRATEGY",
-        "SEO"
+        "SEO",
+        "GEO"
       ],
       "author": "Rohit Singh",
       "readTime": "9 min read",
-      "image": "https://thegeocommunity.com/images/chain-of-thought-prompting-content-strategy.webp",
+      "image": "https://firebasestorage.googleapis.com/v0/b/thegeocommunity.firebasestorage.app/o/blog-images%2Fchain-of-thought-prompting-content-strategy.png?alt=media",
       "imageAlt": "Chain-of-Thought Prompting for Content Strategy: Step-by-Step Reasoning",
-      "order": 95,
+      "order": 122,
       "category": "guides"
     },
     {
@@ -1820,18 +2612,19 @@ export const sourceBlogIndex = {
       "date": "10 Feb 2026",
       "badge": "GUIDE",
       "title": "System Prompts & Role Prompting: Getting Consistent Brand Voice from LLMs",
-      "excerpt": "Control how the model behaves before it generates a single word. Templates for blog writers, social media, email, and content briefs.",
+      "excerpt": "System prompts and role prompting for consistent brand voice from LLMs. Practical templates for blog writing, social media, email campaigns, and content briefs.",
       "tags": [
         "PROMPTING",
         "SYSTEM PROMPTS",
         "ROLE PROMPTING",
-        "BRAND VOICE"
+        "BRAND VOICE",
+        "CONTENT TEAMS"
       ],
       "author": "Rohit Singh",
       "readTime": "10 min read",
-      "image": "https://thegeocommunity.com/images/system-prompts-role-prompting-brand-voice.webp",
+      "image": "https://firebasestorage.googleapis.com/v0/b/thegeocommunity.firebasestorage.app/o/blog-images%2Fsystem-prompts-role-prompting-brand-voice.png?alt=media",
       "imageAlt": "System Prompts & Role Prompting: Getting Consistent Brand Voice from LLMs",
-      "order": 96,
+      "order": 123,
       "category": "guides"
     },
     {
@@ -1839,18 +2632,19 @@ export const sourceBlogIndex = {
       "date": "10 Feb 2026",
       "badge": "GUIDE",
       "title": "Prompt Chaining for SEO Workflows: From Research to Published Content",
-      "excerpt": "Break complex SEO workflows into discrete prompt steps — keyword research, content brief, draft, optimization, and meta tags — each feeding the next.",
+      "excerpt": "Prompt chaining for SEO workflows: multi-step pipelines from keyword research to published content. Four ready-to-use workflow templates for content teams.",
       "tags": [
         "PROMPTING",
         "PROMPT CHAINING",
         "SEO WORKFLOWS",
-        "CONTENT PIPELINE"
+        "CONTENT PIPELINE",
+        "AUTOMATION"
       ],
       "author": "Rohit Singh",
       "readTime": "11 min read",
-      "image": "https://thegeocommunity.com/images/prompt-chaining-seo-workflows.webp",
+      "image": "https://firebasestorage.googleapis.com/v0/b/thegeocommunity.firebasestorage.app/o/blog-images%2Fprompt-chaining-seo-workflows.png?alt=media",
       "imageAlt": "Prompt Chaining for SEO Workflows: From Research to Published Content",
-      "order": 97,
+      "order": 124,
       "category": "guides"
     },
     {
@@ -1858,18 +2652,19 @@ export const sourceBlogIndex = {
       "date": "10 Feb 2026",
       "badge": "METHODOLOGY",
       "title": "Prompt Testing & Iteration: How to Evaluate and Improve Your Prompts",
-      "excerpt": "Treat prompts as testable systems — build scoring rubrics, run A/B tests, catch regression, and iterate toward consistently excellent output.",
+      "excerpt": "Systematic prompt testing and iteration: scoring rubrics, A/B testing, regression detection, and evaluation frameworks for production-quality LLM outputs.",
       "tags": [
         "PROMPTING",
         "TESTING",
         "EVALUATION",
-        "ITERATION"
+        "ITERATION",
+        "QUALITY ASSURANCE"
       ],
       "author": "Rohit Singh",
       "readTime": "9 min read",
-      "image": "https://thegeocommunity.com/images/prompt-testing-iteration-evaluate-improve.webp",
+      "image": "https://firebasestorage.googleapis.com/v0/b/thegeocommunity.firebasestorage.app/o/blog-images%2Fprompt-testing-iteration-evaluate-improve.png?alt=media",
       "imageAlt": "Prompt Testing & Iteration: How to Evaluate and Improve Your Prompts",
-      "order": 98,
+      "order": 125,
       "category": "technical"
     },
     {
@@ -1877,18 +2672,20 @@ export const sourceBlogIndex = {
       "date": "9 Feb 2026",
       "badge": "NOVEL IDEA",
       "title": "How to Make Your AI Content Trustworthy: A Simple Guide to DOI Verification",
-      "excerpt": "Learn how to use DOI links to create a verifiable trail for your content, helping AI systems understand who wrote what and ensuring proper attribution in the age of AI.",
+      "excerpt": "A simple guide to using DOI links for content verification, helping AI systems properly attribute work and maintain trust in digital publishing.",
       "tags": [
         "AI VISIBILITY",
         "DOI",
         "CONTENT VERIFICATION",
-        "DIGITAL TRUST"
+        "DIGITAL TRUST",
+        "AI ATTRIBUTION",
+        "CONTENT AUTHENTICITY"
       ],
       "author": "Rohit Singh",
       "readTime": "8 min read",
-      "image": "https://thegeocommunity.com/images/ai-visibility-operation-provenance-lattice-construction-using-doi-records.webp",
+      "image": "https://firebasestorage.googleapis.com/v0/b/thegeocommunity.firebasestorage.app/o/blog-images%2Fai-visibility-operation-provenance-lattice-construction-using-doi-records.png?alt=media",
       "imageAlt": "How to Make Your AI Content Trustworthy: A Simple Guide to DOI Verification",
-      "order": 99,
+      "order": 126,
       "category": "ideas"
     },
     {
@@ -1896,18 +2693,20 @@ export const sourceBlogIndex = {
       "date": "9 Feb 2026",
       "badge": "TECHNICAL",
       "title": "llms.txt for SPA Hydration Gaps: Why It Exists and How to Use It",
-      "excerpt": "When your SPA renders an empty shell for AI crawlers, llms.txt gives them a plain-text fallback with your key content.",
+      "excerpt": "llms.txt is a plain-text fallback for SPAs with hydration gaps. Learn when you need it, what to put in it, and how it compares to SSR and pre-rendering.",
       "tags": [
         "LLMS.TXT",
         "SPA",
         "HYDRATION",
-        "CRAWLABILITY"
+        "CRAWLABILITY",
+        "TECHNICAL SEO",
+        "GEO"
       ],
       "author": "Rohit Singh",
       "readTime": "9 min read",
-      "image": "https://thegeocommunity.com/images/llms-txt-spa-hydration-gaps.webp",
+      "image": "https://firebasestorage.googleapis.com/v0/b/thegeocommunity.firebasestorage.app/o/blog-images%2Fllms-txt-spa-hydration-gaps.png?alt=media",
       "imageAlt": "llms.txt for SPA Hydration Gaps: Why It Exists and How to Use It",
-      "order": 100,
+      "order": 127,
       "category": "technical"
     },
     {
@@ -1915,18 +2714,19 @@ export const sourceBlogIndex = {
       "date": "9 Feb 2026",
       "badge": "TECHNICAL",
       "title": "robots.txt for AI Bots: What to Allow, What to Block, and Why",
-      "excerpt": "A practical guide to configuring robots.txt for GPTBot, ClaudeBot, PerplexityBot, and other AI crawlers — with ready-to-use configurations.",
+      "excerpt": "Configure robots.txt for AI crawlers like GPTBot, ClaudeBot, and PerplexityBot. Three ready-to-use configurations for maximum visibility, selective access, or full block.",
       "tags": [
         "ROBOTS.TXT",
         "AI CRAWLERS",
         "BOT MANAGEMENT",
-        "TECHNICAL SEO"
+        "TECHNICAL SEO",
+        "GEO"
       ],
       "author": "Rohit Singh",
       "readTime": "10 min read",
-      "image": "https://thegeocommunity.com/images/robots-txt-ai-bots.webp",
+      "image": "https://firebasestorage.googleapis.com/v0/b/thegeocommunity.firebasestorage.app/o/blog-images%2Frobots-txt-ai-bots.png?alt=media",
       "imageAlt": "robots.txt for AI Bots: What to Allow, What to Block, and Why",
-      "order": 101,
+      "order": 128,
       "category": "technical"
     },
     {
@@ -1934,18 +2734,20 @@ export const sourceBlogIndex = {
       "date": "9 Feb 2026",
       "badge": "TECHNICAL",
       "title": "Why JSON-LD Is Important (and Why It Only Matters for Google, Not ChatGPT or Perplexity)",
-      "excerpt": "JSON-LD drives rich results and Knowledge Graph integration for Google. LLM-powered answer engines ignore it entirely. Here's why, and what to do instead.",
+      "excerpt": "JSON-LD is essential for Google rich results and Knowledge Graph but irrelevant for ChatGPT and Perplexity. Learn the architectural reason and what to optimize for each.",
       "tags": [
         "JSON-LD",
         "STRUCTURED DATA",
         "SCHEMA.ORG",
-        "GOOGLE"
+        "GOOGLE",
+        "RICH RESULTS",
+        "GEO"
       ],
       "author": "Rohit Singh",
       "readTime": "11 min read",
-      "image": "https://thegeocommunity.com/images/why-json-ld-is-important-google.webp",
+      "image": "https://firebasestorage.googleapis.com/v0/b/thegeocommunity.firebasestorage.app/o/blog-images%2Fwhy-json-ld-is-important-google.png?alt=media",
       "imageAlt": "Why JSON-LD Is Important for Google and SEO",
-      "order": 102,
+      "order": 129,
       "category": "technical"
     },
     {
@@ -1953,55 +2755,40 @@ export const sourceBlogIndex = {
       "date": "9 Feb 2026",
       "badge": "RESEARCH",
       "title": "LLM Model Council: Multi-Model Consensus for More Reliable AI Answers",
-      "excerpt": "How Andrej Karpathy's LLM Council uses multi-model polling, anonymous peer review, and synthesis to reduce hallucinations and improve answer quality.",
+      "excerpt": "Learn how the LLM Model Council queries multiple AI models, has them critique each other anonymously, and synthesizes consensus answers for more reliable AI outputs.",
       "tags": [
         "LLM",
         "MULTI-MODEL",
         "CONSENSUS",
-        "EVALUATION"
+        "EVALUATION",
+        "AI ARCHITECTURE"
       ],
       "author": "Rohit Singh",
       "readTime": "9 min read",
-      "image": "https://thegeocommunity.com/images/llm-model-council-multi-model-consensus.webp",
+      "image": "https://firebasestorage.googleapis.com/v0/b/thegeocommunity.firebasestorage.app/o/blog-images%2Fllm-model-council-multi-model-consensus.png?alt=media",
       "imageAlt": "LLM Model Council: Multi-Model Consensus for More Reliable AI Answers",
-      "order": 103,
+      "order": 130,
       "category": "research"
-    },
-    {
-      "path": "/blogs/generative-engine-optimization/connect-google-analytics-mcp-to-claude",
-      "date": "9 Feb 2026",
-      "badge": "GUIDE",
-      "title": "How to Connect Google Analytics MCP Server to Claude (GA4 + Claude Desktop)",
-      "excerpt": "Connect Google Analytics to Claude Desktop using the MCP server. Query GA4 data directly in Claude — setup takes 5 minutes.",
-      "tags": [
-        "GA4",
-        "MCP",
-        "SETUP"
-      ],
-      "author": "Rohit Singh",
-      "readTime": "6 min read",
-      "image": "https://thegeocommunity.com/images/connect-google-analytics-mcp-to-claude.webp",
-      "imageAlt": "How to Connect Google Analytics MCP Server to Claude (GA4 + Claude Desktop)",
-      "order": 104,
-      "category": "guides"
     },
     {
       "path": "/blogs/generative-engine-optimization/cosine-similarity-tweaking-backfire-reranker-experiment",
       "date": "28 Jan 2026",
       "badge": "EXPERIMENT",
       "title": "Cosine Similarity \"Tweaking\" Can Backfire: A Small Experiment with a Real Reranker",
-      "excerpt": "A short cosine-dense summary can win retrieval, but a more useful document can win reranking.",
+      "excerpt": "A two-stage RAG demo showing how cosine similarity can win retrieval but lose to a cross-encoder reranker—and what that means for AEO/Generative Engine Optimization (GEO) content strategy.",
       "tags": [
         "EMBEDDINGS",
         "COSINE SIMILARITY",
         "RERANKING",
-        "RAG"
+        "RAG",
+        "AEO",
+        "GEO"
       ],
       "author": "Rohit Singh",
       "readTime": "6 min read",
-      "image": "https://thegeocommunity.com/images/cosine-similarity-tweaking-backfire-reranker-experiment.webp",
+      "image": "https://firebasestorage.googleapis.com/v0/b/thegeocommunity.firebasestorage.app/o/blog-images%2Fcosine-similarity-tweaking-backfire-reranker-experiment.png?alt=media",
       "imageAlt": "Cosine Similarity Tweaking Can Backfire: A Small Experiment with a Real Reranker",
-      "order": 105,
+      "order": 131,
       "category": "research"
     },
     {
@@ -2009,18 +2796,20 @@ export const sourceBlogIndex = {
       "date": "27 Jan 2026",
       "badge": "ANALYSIS",
       "title": "My take on “tweak cosine similarity” advice: what I agree with — and where I think SEO/AEO/Generative Engine Optimization (GEO) will go wrong",
-      "excerpt": "Why cosine similarity matters for retrieval, but over-optimizing for it can backfire in real LLM/RAG pipelines with fan-out, redundancy penalties, and rerankers.",
+      "excerpt": "Cosine similarity matters for retrieval, but real RAG systems use fan-out, redundancy penalties, and rerankers. Here's why cosine tweaking can backfire for AEO/Generative Engine Optimization (GEO).",
       "tags": [
         "EMBEDDINGS",
         "COSINE SIMILARITY",
         "RAG",
-        "SEO"
+        "SEO",
+        "AEO",
+        "GEO"
       ],
       "author": "Rohit Singh",
       "readTime": "7 min read",
-      "image": "https://thegeocommunity.com/images/tweak-cosine-similarity-advice-seo-aeo-geo.webp",
+      "image": "https://firebasestorage.googleapis.com/v0/b/thegeocommunity.firebasestorage.app/o/blog-images%2Ftweak-cosine-similarity-advice-seo-aeo-geo.png?alt=media",
       "imageAlt": "My take on tweak cosine similarity advice: what I agree with — and where I think SEO/AEO/GEO will go wrong",
-      "order": 106,
+      "order": 132,
       "category": "research"
     },
     {
@@ -2028,37 +2817,20 @@ export const sourceBlogIndex = {
       "date": "25 Jan 2026",
       "badge": "ANALYSIS",
       "title": "Microsoft Clarity’s New AI Bot Activity: Clean Analytics for Marketers, Server-Side Visibility for Technical SEO",
-      "excerpt": "Clarity adds server-side AI crawler visibility plus bot detection to help marketers trust reporting and technical SEOs manage crawl cost.",
+      "excerpt": "Microsoft Clarity adds AI Bot Activity plus bot detection. Learn what it measures, why it matters, and how marketers and technical SEOs can use it for cleaner analytics.",
       "tags": [
         "MICROSOFT CLARITY",
         "ANALYTICS",
         "BOT TRAFFIC",
-        "AI CRAWLERS"
+        "AI CRAWLERS",
+        "TECHNICAL SEO",
+        "MARKETING"
       ],
       "author": "Rohit Singh",
       "readTime": "8 min read",
-      "image": "https://thegeocommunity.com/images/microsoft-clarity-ai-bot-activity.webp",
+      "image": "https://firebasestorage.googleapis.com/v0/b/thegeocommunity.firebasestorage.app/o/blog-images%2Fmicrosoft-clarity-ai-bot-activity.png?alt=media",
       "imageAlt": "Microsoft Clarity’s New AI Bot Activity: Clean Analytics for Marketers, Server-Side Visibility for Technical SEO",
-      "order": 107,
-      "category": "research"
-    },
-    {
-      "path": "/blogs/generative-engine-optimization/graphite-seo-traffic-hasnt-dramatically-declined",
-      "date": "23 Jan 2026",
-      "badge": "ANALYSIS",
-      "title": "I Read Graphite's “SEO Traffic Hasn't Dramatically Declined” — Here's What I Agree With (and What I'd Challenge)",
-      "excerpt": "A data-minded take on what the report gets right, where the framing blurs, and how to validate Similarweb trends more rigorously.",
-      "tags": [
-        "SEO",
-        "TRAFFIC ANALYSIS",
-        "SIMILARWEB",
-        "DATA ANALYSIS"
-      ],
-      "author": "Rohit Singh",
-      "readTime": "8 min read",
-      "image": "https://thegeocommunity.com/images/graphite-seo-traffic-hasnt-dramatically-declined.webp",
-      "imageAlt": "I Read Graphite's SEO Traffic Hasn't Dramatically Declined — Here's What I Agree With (and What I'd Challenge)",
-      "order": 108,
+      "order": 133,
       "category": "research"
     },
     {
@@ -2066,18 +2838,41 @@ export const sourceBlogIndex = {
       "date": "22 Jan 2026",
       "badge": "ANALYSIS",
       "title": "Shopify + ChatGPT Checkout Just Put a Price on Agentic Commerce (and It’s 4%)",
-      "excerpt": "In-chat checkout adds a 4% OpenAI fee on top of payment processing. Here’s how it changes margin math, channel strategy, and what to test first.",
+      "excerpt": "OpenAI’s 4% fee for in-chat checkout changes margin math and channel strategy. A practical breakdown of what to model, what to test, and what it means for agentic commerce.",
       "tags": [
         "SHOPIFY",
         "CHATGPT",
         "INSTANT CHECKOUT",
-        "AGENTIC COMMERCE"
+        "AGENTIC COMMERCE",
+        "PAYMENTS",
+        "MARGINS",
+        "E-COMMERCE"
       ],
       "author": "Rohit Singh",
       "readTime": "7 min read",
-      "image": "https://thegeocommunity.com/images/shopify-chatgpt-instant-checkout-fee.webp",
+      "image": "https://firebasestorage.googleapis.com/v0/b/thegeocommunity.firebasestorage.app/o/blog-images%2Fshopify-chatgpt-instant-checkout-fee.png?alt=media",
       "imageAlt": "Shopify + ChatGPT Checkout Just Put a Price on Agentic Commerce (and It’s 4%)",
-      "order": 109,
+      "order": 134,
+      "category": "research"
+    },
+    {
+      "path": "/blogs/generative-engine-optimization/graphite-seo-traffic-hasnt-dramatically-declined",
+      "date": "23 Jan 2026",
+      "badge": "ANALYSIS",
+      "title": "I Read Graphite's “SEO Traffic Hasn't Dramatically Declined” — Here's What I Agree With (and What I'd Challenge)",
+      "excerpt": "Analysis of Graphite's SEO traffic report. What the data shows, where the framing could be clearer, and how to approach Similarweb trends with proper statistical validation.",
+      "tags": [
+        "SEO",
+        "TRAFFIC ANALYSIS",
+        "SIMILARWEB",
+        "DATA ANALYSIS",
+        "INDUSTRY TRENDS"
+      ],
+      "author": "Rohit Singh",
+      "readTime": "8 min read",
+      "image": "https://firebasestorage.googleapis.com/v0/b/thegeocommunity.firebasestorage.app/o/blog-images%2Fgraphite-seo-traffic-hasnt-dramatically-declined.png?alt=media",
+      "imageAlt": "I Read Graphite's SEO Traffic Hasn't Dramatically Declined — Here's What I Agree With (and What I'd Challenge)",
+      "order": 135,
       "category": "research"
     },
     {
@@ -2085,7 +2880,7 @@ export const sourceBlogIndex = {
       "date": "18 Jan 2026",
       "badge": "EXPERIMENT",
       "title": "Semantic Visualization Experiment: Watching a Paragraph Move in Embedding Space",
-      "excerpt": "Embed each snapshot, project to 3D with PCA, and watch semantic trajectories evolve as you type.",
+      "excerpt": "An embedding visualization experiment: snapshot a paragraph, embed each version, project to 3D with PCA, and watch semantic trajectories evolve as you edit.",
       "tags": [
         "EMBEDDINGS",
         "VISUALIZATION",
@@ -2093,63 +2888,9 @@ export const sourceBlogIndex = {
       ],
       "author": "Rohit Singh",
       "readTime": "9 min read",
-      "image": "https://thegeocommunity.com/images/semantic-visualization-experiment-embedding-space.webp",
+      "image": "https://firebasestorage.googleapis.com/v0/b/thegeocommunity.firebasestorage.app/o/blog-images%2Fsemantic-visualization-experiment-embedding-space.png?alt=media",
       "imageAlt": "Semantic Visualization Experiment: Watching a Paragraph Move in Embedding Space",
-      "order": 110,
-      "category": "research"
-    },
-    {
-      "path": "/blogs/generative-engine-optimization/e-geo-paper-ecommerce-geo",
-      "date": "18 Jan 2026",
-      "badge": "RESEARCH",
-      "title": "E-GEO Paper: What It Is, What It Finds, and What It Means for Generative Engine Optimization (GEO) in E-commerce",
-      "excerpt": "E-GEO benchmarks e-commerce Generative Engine Optimization (GEO) and shows why prompt optimization beats copywriting heuristics.",
-      "tags": [
-        "E-GEO",
-        "E-COMMERCE",
-        "GEO"
-      ],
-      "author": "Rohit Singh",
-      "readTime": "9 min read",
-      "image": "https://thegeocommunity.com/images/e-geo-paper-ecommerce.webp",
-      "imageAlt": "E-GEO Paper: What It Is, What It Finds, and What It Means for Generative Engine Optimization (GEO) in E-commerce",
-      "order": 111,
-      "category": "research"
-    },
-    {
-      "path": "/blogs/generative-engine-optimization/c-seo-bench-does-conversational-seo-work",
-      "date": "18 Jan 2026",
-      "badge": "RESEARCH",
-      "title": "C-SEO Bench (C-SEO Paper): Does Conversational SEO Actually Work?",
-      "excerpt": "C-SEO Bench tests conversational SEO at scale and finds classic retrieval still wins.",
-      "tags": [
-        "C-SEO",
-        "EVALUATION",
-        "BENCHMARKS"
-      ],
-      "author": "Rohit Singh",
-      "readTime": "8 min read",
-      "image": "https://thegeocommunity.com/images/c-seo-bench-does-conversational-seo-work.webp",
-      "imageAlt": "C-SEO Bench (C-SEO Paper): Does Conversational SEO Actually Work?",
-      "order": 112,
-      "category": "research"
-    },
-    {
-      "path": "/blogs/generative-engine-optimization/geo-vs-seo-user-funnel",
-      "date": "18 Jan 2026",
-      "badge": "ANALYSIS",
-      "title": "Generative Engine Optimization (GEO) vs SEO: How the User Funnel Has Changed (and What to Optimize Now)",
-      "excerpt": "How answer-first journeys shift the funnel, drop-off points, and optimization targets.",
-      "tags": [
-        "FUNNEL",
-        "SEO",
-        "OPTIMIZATION"
-      ],
-      "author": "Rohit Singh",
-      "readTime": "6 min read",
-      "image": "https://thegeocommunity.com/images/geo-vs-seo-user-funnel.webp",
-      "imageAlt": "GEO vs SEO: Understanding the User Funnel",
-      "order": 113,
+      "order": 136,
       "category": "research"
     },
     {
@@ -2157,18 +2898,56 @@ export const sourceBlogIndex = {
       "date": "17 Jan 2026",
       "badge": "ANALYSIS",
       "title": "Perplexity’s Augmented Search Loop: Router, Retriever, Composer",
-      "excerpt": "A plain-English breakdown of how intent suggestions stabilize sessions and what Generative Engine Optimization (GEO) teams should publish.",
+      "excerpt": "Understand Perplexity's search loop architecture: Router, Retriever, Composer. How intent suggestions work and what content to publish for GEO teams.",
       "tags": [
         "PERPLEXITY",
         "SEARCH ARCHITECTURE",
         "ROUTER",
-        "RETRIEVER"
+        "RETRIEVER",
+        "COMPOSER",
+        "GEO"
       ],
       "author": "Rohit Singh",
       "readTime": "7 min read",
-      "image": "https://thegeocommunity.com/images/perplexity-augmented-search-loop.webp",
+      "image": "https://firebasestorage.googleapis.com/v0/b/thegeocommunity.firebasestorage.app/o/blog-images%2Fperplexity-augmented-search-loop.png?alt=media",
       "imageAlt": "Perplexity's Augmented Search Loop: Router, Retriever, Composer",
-      "order": 114,
+      "order": 137,
+      "category": "research"
+    },
+    {
+      "path": "/blogs/generative-engine-optimization/e-geo-paper-ecommerce-geo",
+      "date": "18 Jan 2026",
+      "badge": "RESEARCH",
+      "title": "E-GEO Paper: What It Is, What It Finds, and What It Means for Generative Engine Optimization (GEO) in E-commerce",
+      "excerpt": "A practical summary of the E-GEO paper: what it benchmarks, what it finds about e-commerce Generative Engine Optimization (GEO), and why prompt optimization beats copywriting heuristics.",
+      "tags": [
+        "E-GEO",
+        "E-COMMERCE",
+        "GEO"
+      ],
+      "author": "Rohit Singh",
+      "readTime": "9 min read",
+      "image": "https://firebasestorage.googleapis.com/v0/b/thegeocommunity.firebasestorage.app/o/blog-images%2Fe-geo-paper-ecommerce.png?alt=media",
+      "imageAlt": "E-GEO Paper: What It Is, What It Finds, and What It Means for Generative Engine Optimization (GEO) in E-commerce",
+      "order": 138,
+      "category": "research"
+    },
+    {
+      "path": "/blogs/generative-engine-optimization/c-seo-bench-does-conversational-seo-work",
+      "date": "18 Jan 2026",
+      "badge": "RESEARCH",
+      "title": "C-SEO Bench (C-SEO Paper): Does Conversational SEO Actually Work?",
+      "excerpt": "C-SEO Bench tests conversational SEO at scale. The results suggest classic retrieval still wins—what it means for content strategy and evaluation.",
+      "tags": [
+        "C-SEO",
+        "EVALUATION",
+        "BENCHMARKS"
+      ],
+      "author": "Rohit Singh",
+      "readTime": "8 min read",
+      "image": "https://firebasestorage.googleapis.com/v0/b/thegeocommunity.firebasestorage.app/o/blog-images%2Fc-seo-bench-does-conversational-seo-work.png?alt=media",
+      "imageAlt": "C-SEO Bench (C-SEO Paper): Does Conversational SEO Actually Work?",
+      "order": 139,
       "category": "research"
     },
     {
@@ -2176,7 +2955,7 @@ export const sourceBlogIndex = {
       "date": "17 Jan 2026",
       "badge": "ANALYSIS",
       "title": "AEO vs Generative Engine Optimization (GEO) (Microsoft’s framing)",
-      "excerpt": "AEO = clarity, Generative Engine Optimization (GEO) = credibility — what to do this week",
+      "excerpt": "Microsoft’s framing: AEO focuses on clarity, Generative Engine Optimization (GEO) on credibility. A practical weekly checklist for teams trying to win AI answer surfaces.",
       "tags": [
         "AEO",
         "GEO",
@@ -2184,17 +2963,53 @@ export const sourceBlogIndex = {
       ],
       "author": "Rohit Singh",
       "readTime": "5 min read",
-      "image": "https://thegeocommunity.com/images/aeo-geo-microsoft.webp",
+      "image": "https://firebasestorage.googleapis.com/v0/b/thegeocommunity.firebasestorage.app/o/blog-images%2Faeo-geo-microsoft.png?alt=media",
       "imageAlt": "AEO vs GEO in the Age of AI: Key Insights from Microsoft",
-      "order": 115,
+      "order": 140,
       "category": "research"
+    },
+    {
+      "path": "/blogs/generative-engine-optimization/geo-vs-seo-user-funnel",
+      "date": "18 Jan 2026",
+      "badge": "ANALYSIS",
+      "title": "Generative Engine Optimization (GEO) vs SEO: How the User Funnel Has Changed (and What to Optimize Now)",
+      "excerpt": "Answer-first journeys shift the funnel. Here’s how Generative Engine Optimization (GEO) differs from SEO, where drop-off happens now, and what to optimize for AI-driven discovery.",
+      "tags": [
+        "FUNNEL",
+        "SEO",
+        "OPTIMIZATION"
+      ],
+      "author": "Rohit Singh",
+      "readTime": "6 min read",
+      "image": "https://firebasestorage.googleapis.com/v0/b/thegeocommunity.firebasestorage.app/o/blog-images%2Fgeo-vs-seo-user-funnel.png?alt=media",
+      "imageAlt": "GEO vs SEO: Understanding the User Funnel",
+      "order": 141,
+      "category": "research"
+    },
+    {
+      "path": "/blogs/generative-engine-optimization/connect-google-analytics-mcp-to-claude",
+      "date": "9 Feb 2026",
+      "badge": "GUIDE",
+      "title": "How to Connect Google Analytics MCP Server to Claude (GA4 + Claude Desktop)",
+      "excerpt": "Step-by-step guide to connect Google Analytics MCP server to Claude Desktop. Query GA4 data directly in Claude using Model Context Protocol.",
+      "tags": [
+        "GA4",
+        "MCP",
+        "SETUP"
+      ],
+      "author": "Rohit Singh",
+      "readTime": "6 min read",
+      "image": "https://firebasestorage.googleapis.com/v0/b/thegeocommunity.firebasestorage.app/o/blog-images%2Fconnect-google-analytics-mcp-to-claude.png?alt=media",
+      "imageAlt": "How to Connect Google Analytics MCP Server to Claude (GA4 + Claude Desktop)",
+      "order": 142,
+      "category": "guides"
     },
     {
       "path": "/blogs/generative-engine-optimization/context-graphs-entity-seo-llms",
       "date": "17 Jan 2026",
       "badge": "GUIDE",
       "title": "Context Graphs and Entity SEO for LLMs: The Practical Guide",
-      "excerpt": "Complete cluster guide to context graphs, entity coverage, and internal linking for AI search.",
+      "excerpt": "A practical guide to context graphs and entity SEO for LLMs: how to build entity coverage, structure internal linking, and improve retrieval and citations.",
       "tags": [
         "CONTEXT GRAPHS",
         "ENTITY SEO",
@@ -2202,154 +3017,10 @@ export const sourceBlogIndex = {
       ],
       "author": "Rohit Singh",
       "readTime": "15 min read",
-      "image": "https://thegeocommunity.com/images/context-graphs-entity-seo-llms.webp",
+      "image": "https://firebasestorage.googleapis.com/v0/b/thegeocommunity.firebasestorage.app/o/blog-images%2Fcontext-graphs-entity-seo-llms.png?alt=media",
       "imageAlt": "Context Graphs and Entity SEO for LLMs: The Practical Guide",
-      "order": 116,
+      "order": 143,
       "category": "guides"
-    },
-    {
-      "path": "/blogs/generative-engine-optimization/chunking-metadata-filters-rag",
-      "date": "17 Jan 2026",
-      "badge": "TECHNICAL",
-      "title": "Chunking and Metadata Filters in RAG: How to Stop Retrieving the Wrong Context",
-      "excerpt": "Practical patterns for chunking strategy and metadata filters that keep retrieval on-topic.",
-      "tags": [
-        "RAG",
-        "CHUNKING",
-        "METADATA"
-      ],
-      "author": "Rohit Singh",
-      "readTime": "9 min read",
-      "image": "https://thegeocommunity.com/images/chunking-metadata-filters-rag.webp",
-      "imageAlt": "Chunking and Metadata Filters in RAG: How to Stop Retrieving the Wrong Context",
-      "order": 117,
-      "category": "technical"
-    },
-    {
-      "path": "/blogs/generative-engine-optimization/deepeval-pytest-style-rag-tests",
-      "date": "17 Jan 2026",
-      "badge": "METHODOLOGY",
-      "title": "DeepEval and Pytest-Style RAG Tests: Turning Quality into a CI Gate",
-      "excerpt": "Set up CI-ready evaluation workflows for retrieval and answer quality with DeepEval.",
-      "tags": [
-        "DEEPEVAL",
-        "CI",
-        "TESTING"
-      ],
-      "author": "Rohit Singh",
-      "readTime": "10 min read",
-      "image": "https://thegeocommunity.com/images/deepeval-pytest-style-rag-tests.webp",
-      "imageAlt": "DeepEval and Pytest-Style RAG Tests: Turning Quality into a CI Gate",
-      "order": 118,
-      "category": "technical"
-    },
-    {
-      "path": "/blogs/generative-engine-optimization/hybrid-search-bm25-vectors-rag",
-      "date": "17 Jan 2026",
-      "badge": "TECHNICAL",
-      "title": "Hybrid Search in RAG (BM25 + Vectors): When and How It Beats Pure Embeddings",
-      "excerpt": "Learn when to blend lexical and vector search to lift recall and relevance.",
-      "tags": [
-        "HYBRID SEARCH",
-        "BM25",
-        "VECTORS"
-      ],
-      "author": "Rohit Singh",
-      "readTime": "8 min read",
-      "image": "https://thegeocommunity.com/images/hybrid-search-bm25-vectors-rag.webp",
-      "imageAlt": "Hybrid Search in RAG (BM25 + Vectors): When and How It Beats Pure Embeddings",
-      "order": 119,
-      "category": "technical"
-    },
-    {
-      "path": "/blogs/generative-engine-optimization/promptfoo-rag-regression-testing",
-      "date": "17 Jan 2026",
-      "badge": "METHODOLOGY",
-      "title": "Promptfoo for RAG Regression Testing: Catching Breaks Before Users Do",
-      "excerpt": "Build regression suites that catch prompt and retrieval regressions early.",
-      "tags": [
-        "PROMPTFOO",
-        "REGRESSION",
-        "QA"
-      ],
-      "author": "Rohit Singh",
-      "readTime": "6 min read",
-      "image": "https://thegeocommunity.com/images/promptfoo-rag-regression-testing.webp",
-      "imageAlt": "Promptfoo for RAG Regression Testing: Catching Breaks Before Users Do",
-      "order": 120,
-      "category": "technical"
-    },
-    {
-      "path": "/blogs/generative-engine-optimization/query-rewriting-multiquery-rag",
-      "date": "17 Jan 2026",
-      "badge": "TECHNICAL",
-      "title": "Query Rewriting and Multi-Query Retrieval: The Fastest Way to Improve Recall in RAG",
-      "excerpt": "Use query expansion patterns to improve recall without rebuilding embeddings.",
-      "tags": [
-        "QUERY REWRITING",
-        "RETRIEVAL",
-        "RECALL"
-      ],
-      "author": "Rohit Singh",
-      "readTime": "7 min read",
-      "image": "https://thegeocommunity.com/images/query-rewriting-multiquery-rag.webp",
-      "imageAlt": "Query Rewriting and Multi-Query Retrieval: The Fastest Way to Improve Recall in RAG",
-      "order": 121,
-      "category": "technical"
-    },
-    {
-      "path": "/blogs/generative-engine-optimization/ragas-rag-evaluation",
-      "date": "17 Jan 2026",
-      "badge": "METHODOLOGY",
-      "title": "RAGAS for RAG Evaluation: What It Measures and How to Use It Well",
-      "excerpt": "A practical guide to RAGAS metrics, workflows, and scoring pitfalls.",
-      "tags": [
-        "RAGAS",
-        "METRICS",
-        "EVALUATION"
-      ],
-      "author": "Rohit Singh",
-      "readTime": "9 min read",
-      "image": "https://thegeocommunity.com/images/ragas-rag-evaluation.webp",
-      "imageAlt": "RAGAS for RAG Evaluation: What It Measures and How to Use It Well",
-      "order": 122,
-      "category": "technical"
-    },
-    {
-      "path": "/blogs/generative-engine-optimization/reranking-cross-encoder-llm-reranker",
-      "date": "17 Jan 2026",
-      "badge": "TECHNICAL",
-      "title": "Reranking for RAG: Cross-Encoders vs LLM Rerankers (and How to Choose)",
-      "excerpt": "Compare reranker options, tradeoffs, and selection criteria for production RAG.",
-      "tags": [
-        "RERANKING",
-        "CROSS-ENCODERS",
-        "LLM RERANKERS"
-      ],
-      "author": "Rohit Singh",
-      "readTime": "8 min read",
-      "image": "https://thegeocommunity.com/images/reranking-cross-encoder-llm-reranker.webp",
-      "imageAlt": "Reranking for RAG: Cross-Encoders vs LLM Rerankers (and How to Choose)",
-      "order": 123,
-      "category": "technical"
-    },
-    {
-      "path": "/blogs/generative-engine-optimization/tracing-observability-rag",
-      "date": "17 Jan 2026",
-      "badge": "TECHNICAL",
-      "title": "Tracing and Observability for RAG: Debug Retrieval, Prompts, and Grounding End-to-End",
-      "excerpt": "Instrument the full RAG stack to debug retrieval, prompts, and hallucinations.",
-      "tags": [
-        "TRACING",
-        "OBSERVABILITY",
-        "DEBUGGING"
-      ],
-      "author": "Rohit Singh",
-      "readTime": "10 min read",
-      "image": "https://thegeocommunity.com/images/tracing-observability-rag.webp",
-      "imageAlt": "Tracing and Observability for RAG: Debug Retrieval, Prompts, and Grounding End-to-End",
-      "order": 124,
-      "category": "technical"
     }
   ]
 } as const;

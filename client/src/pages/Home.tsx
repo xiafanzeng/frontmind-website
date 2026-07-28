@@ -6,12 +6,9 @@ import SectionLabel from "@/components/SectionLabel";
 import Navbar from "@/components/Navbar";
 import Footer from "@/components/Footer";
 import VisitorStats from "@/components/VisitorStats";
+import GeoBuildExperience from "@/features/geo/GeoBuildExperience";
 import { useLang } from "@/contexts/LanguageContext";
-import {
-  ArrowRight,
-  ChevronLeft,
-  ChevronRight,
-} from "lucide-react";
+import { ArrowRight, ChevronLeft, ChevronRight } from "lucide-react";
 
 const LazySolutionsSections = lazy(async () => {
   const module = await import("./Solutions");
@@ -20,7 +17,8 @@ const LazySolutionsSections = lazy(async () => {
 
 const HERO_METHOD_WIDE_IMG = "/home/agent-methodology-wide.webp";
 const HERO_CUHK_QS_WIDE_IMG = "/home/cuhk-qs-business-analytics-wide.webp";
-const HERO_ALIBABA_WUKONG_VISIT_IMG = "/home/alibaba-wukong-cuhk-shenzhen-ai-growth.webp";
+const HERO_ALIBABA_WUKONG_VISIT_IMG =
+  "/home/alibaba-wukong-cuhk-shenzhen-ai-growth.webp";
 const HERO_CUHK_VISIT_IMG = "/home/chaozhou-entrepreneurs-cuhk-visit.webp";
 const HERO_CUHK_ANNIVERSARY_IMG = "/home/cuhk-innovation-10th-anniversary.webp";
 const HERO_COMPETITION_IMG = "/home/china-innovation-competition-qianhai.webp";
@@ -53,7 +51,10 @@ function StatsBar() {
       <div className="container py-5 md:py-6">
         <div className="grid grid-cols-1 divide-y divide-[#E5E7EB] md:grid-cols-2 md:divide-x md:divide-y-0">
           {partners.map((partner) => (
-            <div key={partner.image} className="flex min-h-[80px] items-center justify-center px-4 py-3 md:min-h-[90px] md:px-8">
+            <div
+              key={partner.image}
+              className="flex min-h-[80px] items-center justify-center px-4 py-3 md:min-h-[90px] md:px-8"
+            >
               <img
                 src={partner.image}
                 alt={partner.alt}
@@ -82,11 +83,47 @@ function HeroNewsWall() {
   const [activeSlide, setActiveSlide] = useState(0);
   const [isCarouselPaused, setIsCarouselPaused] = useState(false);
   const slides = [
-    { image: HERO_CUHK_QS_WIDE_IMG, alt: t("香港中文大学深圳 QS 排名海报", "CUHK-Shenzhen QS ranking poster"), fit: "cover", width: 1672, height: 941 },
-    { image: HERO_ALIBABA_WUKONG_VISIT_IMG, alt: t("阿里悟空走进香港中文大学（深圳），共探 AI 增长与组织变革", "Alibaba Wukong visits CUHK-Shenzhen to explore AI-driven growth and organizational transformation"), fit: "cover", width: 1920, height: 1147 },
-    { image: HERO_CUHK_VISIT_IMG, alt: t("潮汕青年企业家到访港中深", "Chaozhou entrepreneurs visiting CUHK-Shenzhen"), fit: "contain", width: 1920, height: 1280 },
-    { image: HERO_CUHK_ANNIVERSARY_IMG, alt: t("创新中心十周年庆典", "Innovation center 10th anniversary"), fit: "contain", width: 1920, height: 1280 },
-    { image: HERO_COMPETITION_IMG, alt: t("创新创业大赛获奖", "Innovation competition award"), fit: "contain", width: 1919, height: 1279 },
+    {
+      image: HERO_CUHK_QS_WIDE_IMG,
+      alt: t("香港中文大学深圳 QS 排名海报", "CUHK-Shenzhen QS ranking poster"),
+      fit: "cover",
+      width: 1672,
+      height: 941,
+    },
+    {
+      image: HERO_ALIBABA_WUKONG_VISIT_IMG,
+      alt: t(
+        "阿里悟空走进香港中文大学（深圳），共探 AI 增长与组织变革",
+        "Alibaba Wukong visits CUHK-Shenzhen to explore AI-driven growth and organizational transformation",
+      ),
+      fit: "cover",
+      width: 1920,
+      height: 1147,
+    },
+    {
+      image: HERO_CUHK_VISIT_IMG,
+      alt: t(
+        "潮汕青年企业家到访港中深",
+        "Chaozhou entrepreneurs visiting CUHK-Shenzhen",
+      ),
+      fit: "contain",
+      width: 1920,
+      height: 1280,
+    },
+    {
+      image: HERO_CUHK_ANNIVERSARY_IMG,
+      alt: t("创新中心十周年庆典", "Innovation center 10th anniversary"),
+      fit: "contain",
+      width: 1920,
+      height: 1280,
+    },
+    {
+      image: HERO_COMPETITION_IMG,
+      alt: t("创新创业大赛获奖", "Innovation competition award"),
+      fit: "contain",
+      width: 1919,
+      height: 1279,
+    },
   ];
   const slideCount = slides.length;
 
@@ -130,7 +167,9 @@ function HeroNewsWall() {
         <button
           type="button"
           aria-label={t("上一张", "Previous")}
-          onClick={() => setActiveSlide((c) => (c + slideCount - 1) % slideCount)}
+          onClick={() =>
+            setActiveSlide((c) => (c + slideCount - 1) % slideCount)
+          }
           className="absolute -left-10 top-1/2 z-30 flex h-9 w-9 -translate-y-1/2 items-center justify-center border border-[#E5E7EB] bg-white text-[#3D1560] transition hover:border-[#3D1560]"
         >
           <ChevronLeft size={20} />
@@ -166,9 +205,19 @@ function MobileHeroCarousel() {
   const [isCarouselPaused, setIsCarouselPaused] = useState(false);
   const slides = [
     { image: HERO_CUHK_QS_WIDE_IMG, fit: "cover", width: 1672, height: 941 },
-    { image: HERO_ALIBABA_WUKONG_VISIT_IMG, fit: "cover", width: 1920, height: 1147 },
+    {
+      image: HERO_ALIBABA_WUKONG_VISIT_IMG,
+      fit: "cover",
+      width: 1920,
+      height: 1147,
+    },
     { image: HERO_CUHK_VISIT_IMG, fit: "contain", width: 1920, height: 1280 },
-    { image: HERO_CUHK_ANNIVERSARY_IMG, fit: "contain", width: 1920, height: 1280 },
+    {
+      image: HERO_CUHK_ANNIVERSARY_IMG,
+      fit: "contain",
+      width: 1920,
+      height: 1280,
+    },
     { image: HERO_COMPETITION_IMG, fit: "contain", width: 1919, height: 1279 },
   ];
   const slideCount = slides.length;
@@ -236,12 +285,21 @@ type HomeProps = {
   includeCta?: boolean;
 };
 
-export default function Home({ includeChrome = true, includeHero = true, includeStats = true, includeAwards = true, includeCta = true }: HomeProps) {
+export default function Home({
+  includeChrome = true,
+  includeHero = true,
+  includeStats = true,
+  includeAwards = true,
+  includeCta = true,
+}: HomeProps) {
   const revealCta = useReveal();
   const { t, lang } = useLang();
 
   usePageMeta({
-    title: t("FrontMind 超前智能 - 定义 AI 原生时代的企业增长", "FrontMind - Define Enterprise Growth for the AI-Native Era"),
+    title: t(
+      "FrontMind 超前智能 - 定义 AI 原生时代的企业增长",
+      "FrontMind - Define Enterprise Growth for the AI-Native Era",
+    ),
     description: t(
       "FrontMind 提供从外部理解到内部重构的完整 AI 化路径，帮助企业完成 AI 时代的客户入口、增长链路与组织流程迁移。",
       "FrontMind provides an end-to-end AI transformation path from external understanding to internal reconstruction.",
@@ -257,18 +315,31 @@ export default function Home({ includeChrome = true, includeHero = true, include
 
       {/* ═══════════ HERO ═══════════ */}
       {includeHero && (
-        <section aria-label="Hero" className="relative pt-24 pb-12 md:pt-32 md:pb-20 overflow-hidden bg-white">
+        <section
+          aria-label="Hero"
+          className="relative pt-24 pb-12 md:pt-32 md:pb-20 overflow-hidden bg-white"
+        >
           <div className="container relative z-10">
             <div className="grid grid-cols-1 items-center gap-8 lg:grid-cols-[0.78fr_1.22fr] xl:gap-10">
               <div>
-                <SectionLabel text={t("企业 AI 化增长伙伴", "Enterprise AI Growth Partner")} color="purple" />
+                <SectionLabel
+                  text={t("企业 AI 化增长伙伴", "Enterprise AI Growth Partner")}
+                  color="purple"
+                />
                 <h1
                   className="text-2xl sm:text-3xl md:text-4xl lg:text-[2.75rem] font-bold text-[#1A1A2E] leading-[1.2] mb-5"
                   style={{ fontFamily: "'DM Serif Display', serif" }}
                 >
                   {t(
-                    <>重新定义品牌<br />在 AI 时代的制胜之道</>,
-                    <>Redefining Brands<br />for the Age of AI</>
+                    <>
+                      重新定义品牌
+                      <br />在 AI 时代的制胜之道
+                    </>,
+                    <>
+                      Redefining Brands
+                      <br />
+                      for the Age of AI
+                    </>,
                   )}
                 </h1>
                 <p
@@ -289,7 +360,6 @@ export default function Home({ includeChrome = true, includeHero = true, include
                     {t("联系我们", "Contact Us")}
                     <ArrowRight size={16} />
                   </Link>
-
                 </div>
 
                 {/* Mobile carousel */}
@@ -303,11 +373,16 @@ export default function Home({ includeChrome = true, includeHero = true, include
         </section>
       )}
 
+      {/* ═══════════ GEO KNOWLEDGE BUILDER ═══════════ */}
+      <GeoBuildExperience />
+
       {/* ═══════════ STATS BAR ═══════════ */}
       {includeStats && <StatsBar />}
 
       {/* ═══════════ SOLUTIONS SYSTEM ═══════════ */}
-      <Suspense fallback={<div className="min-h-[520px] bg-white" aria-hidden="true" />}>
+      <Suspense
+        fallback={<div className="min-h-[520px] bg-white" aria-hidden="true" />}
+      >
         <LazySolutionsSections includeCta={false} embedded />
       </Suspense>
 
@@ -316,23 +391,66 @@ export default function Home({ includeChrome = true, includeHero = true, include
 
       {/* ═══════════ AWARDS & RECOGNITION ═══════════ */}
       {includeAwards && (
-        <section aria-label="Awards" className="py-14 bg-white border-t border-b border-[#E5E7EB]">
+        <section
+          aria-label="Awards"
+          className="py-14 bg-white border-t border-b border-[#E5E7EB]"
+        >
           <div className="container">
             <div className="text-center mb-8">
-              <span className="text-sm font-bold tracking-wider text-[#3D1560] uppercase" style={{ fontFamily: "'DM Sans', sans-serif" }}>
+              <span
+                className="text-sm font-bold tracking-wider text-[#3D1560] uppercase"
+                style={{ fontFamily: "'DM Sans', sans-serif" }}
+              >
                 {t("荣誉与认可", "Awards & Recognition")}
               </span>
             </div>
             <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-0 border border-[#E5E7EB] overflow-hidden">
               {[
-                { year: "2024", award: t("“未来中国香港”创科大赛冠军", "‘Future Hong Kong, China’ InnoTech Grand Champion") },
-                { year: "2024", award: t("第十四届中国创新创业大赛大奖", "14th China Innovation & Entrepreneurship Award") },
-                { year: "2025", award: t("上海“海聚英才”全球创新创业大奖", "Shanghai ‘Haiju Yingcai’ Global Innovation Award") },
-                { year: "2025", award: t("深圳招商局海外 C-Star 计划", "Shenzhen CMG Overseas C-Star Program") },
+                {
+                  year: "2024",
+                  award: t(
+                    "“未来中国香港”创科大赛冠军",
+                    "‘Future Hong Kong, China’ InnoTech Grand Champion",
+                  ),
+                },
+                {
+                  year: "2024",
+                  award: t(
+                    "第十四届中国创新创业大赛大奖",
+                    "14th China Innovation & Entrepreneurship Award",
+                  ),
+                },
+                {
+                  year: "2025",
+                  award: t(
+                    "上海“海聚英才”全球创新创业大奖",
+                    "Shanghai ‘Haiju Yingcai’ Global Innovation Award",
+                  ),
+                },
+                {
+                  year: "2025",
+                  award: t(
+                    "深圳招商局海外 C-Star 计划",
+                    "Shenzhen CMG Overseas C-Star Program",
+                  ),
+                },
               ].map((item, i) => (
-                <div key={i} className={`text-center p-5 md:p-6 ${i < 3 ? "border-b sm:border-b-0 sm:border-r border-[#E5E7EB]" : ""} hover:bg-[#FAFBFF] transition-colors`}>
-                  <div className="text-2xl font-bold text-[#3D1560] mb-2" style={{ fontFamily: "'DM Serif Display', serif" }}>{item.year}</div>
-                  <div className="text-sm text-[#4B5563] leading-snug" style={{ fontFamily: "'DM Sans', sans-serif" }}>{item.award}</div>
+                <div
+                  key={i}
+                  className={`text-center p-5 md:p-6 ${i < 3 ? "border-b sm:border-b-0 sm:border-r border-[#E5E7EB]" : ""} hover:bg-[#FAFBFF] transition-colors`}
+                >
+                  <div
+                    className="text-2xl font-bold text-[#3D1560] mb-2"
+                    style={{ fontFamily: "'DM Serif Display', serif" }}
+                  >
+                    {item.year}
+                  </div>
+                  <div
+                    className="text-sm text-[#4B5563] leading-snug"
+                    style={{ fontFamily: "'DM Sans', sans-serif" }}
+                  >
+                    {item.award}
+                  </div>
                 </div>
               ))}
             </div>
@@ -345,7 +463,10 @@ export default function Home({ includeChrome = true, includeHero = true, include
 
       {/* ═══════════ CTA SECTION ═══════════ */}
       {includeCta && (
-        <section aria-label="Call to Action" className="relative overflow-hidden">
+        <section
+          aria-label="Call to Action"
+          className="relative overflow-hidden"
+        >
           <img
             src={CTA_IMG}
             alt=""
@@ -373,8 +494,14 @@ export default function Home({ includeChrome = true, includeHero = true, include
                 style={{ fontFamily: "'DM Serif Display', serif" }}
               >
                 {t(
-                  <>以专业服务回应 AI 时代<span className="whitespace-nowrap">公共需求</span></>,
-                  <>Responding to public needs of the AI era with professional services</>,
+                  <>
+                    以专业服务回应 AI 时代
+                    <span className="whitespace-nowrap">公共需求</span>
+                  </>,
+                  <>
+                    Responding to public needs of the AI era with professional
+                    services
+                  </>,
                 )}
               </h3>
               <p
@@ -413,7 +540,10 @@ function RecentNews() {
     {
       type: t("行业趋势", "Industry Trends"),
       date: "2026.06.17",
-      title: t("GEO 正式取代传统 SEO 成为品牌可见度核心策略", "GEO Officially Replaces Traditional SEO as Core Brand Visibility Strategy"),
+      title: t(
+        "GEO 正式取代传统 SEO 成为品牌可见度核心策略",
+        "GEO Officially Replaces Traditional SEO as Core Brand Visibility Strategy",
+      ),
       desc: t(
         "研究显示 AI 搜索覆盖 15-30% 查询量，被 AI 引用的品牌点击率比未引用品牌高出 35%，企业正加速布局生成式引擎优化。",
         "Research shows AI search covers 15-30% of queries, and brands cited in AI get 35% more clicks than uncited ones. Enterprises are accelerating GEO adoption.",
@@ -424,7 +554,10 @@ function RecentNews() {
     {
       type: t("行业新闻", "Industry News"),
       date: "2026.06.10",
-      title: t("Google 发布官方 AI 搜索优化指南", "Google Releases Official AI Search Optimization Guide"),
+      title: t(
+        "Google 发布官方 AI 搜索优化指南",
+        "Google Releases Official AI Search Optimization Guide",
+      ),
       desc: t(
         "Google 首次发布面向开发者的生成式 AI 功能优化指南，明确结构化数据、实体清晰度和权威信源对 AI Overviews 引用的关键作用。",
         "Google releases its first developer guide for generative AI optimization, emphasizing structured data, entity clarity, and authoritative sources for AI Overviews.",
@@ -435,7 +568,10 @@ function RecentNews() {
     {
       type: t("市场洞察", "Market Insights"),
       date: "2026.06.04",
-      title: t("ChatGPT 周活跃用户突破 8 亿，品牌引用竞争白热化", "ChatGPT Surpasses 800M Weekly Users, Brand Citation Competition Intensifies"),
+      title: t(
+        "ChatGPT 周活跃用户突破 8 亿，品牌引用竞争白热化",
+        "ChatGPT Surpasses 800M Weekly Users, Brand Citation Competition Intensifies",
+      ),
       desc: t(
         "89% 的 ChatGPT 引用来自 Google 排名 21 位之后的页面，传统排名不再决定 AI 引用，语义资产与分布式品牌提及成为关键。",
         "89% of ChatGPT citations come from pages ranked 21+ on Google. Traditional rankings no longer determine AI citations; semantic assets and distributed mentions are key.",
@@ -446,14 +582,22 @@ function RecentNews() {
   ];
 
   return (
-    <section style={{ backgroundColor: "#f5f5f7", paddingBlock: "clamp(2.5rem, 4vw, 3.5rem)" }}>
+    <section
+      style={{
+        backgroundColor: "#f5f5f7",
+        paddingBlock: "clamp(2.5rem, 4vw, 3.5rem)",
+      }}
+    >
       <div className="container">
         <div className="grid lg:grid-cols-[1fr_3fr] gap-10 lg:gap-16">
           <div>
             <SectionLabel text={t("近期新闻", "Recent News")} color="purple" />
             <h2
               className="text-3xl md:text-4xl font-bold text-[#1A1A2E] leading-tight mb-4"
-              style={{ fontFamily: "'DM Serif Display', serif", whiteSpace: "pre-line" }}
+              style={{
+                fontFamily: "'DM Serif Display', serif",
+                whiteSpace: "pre-line",
+              }}
             >
               {t("追踪最新\n市场动向", "Track the Latest\nMarket Trends")}
             </h2>
@@ -492,14 +636,22 @@ function RecentNews() {
                   <div className="mb-2 flex flex-wrap items-center gap-x-2 gap-y-1">
                     <span
                       className="text-xs font-bold tracking-wider text-[#3D1560] uppercase"
-                      style={{ fontFamily: "'DM Sans', sans-serif", fontSize: "0.7rem" }}
+                      style={{
+                        fontFamily: "'DM Sans', sans-serif",
+                        fontSize: "0.7rem",
+                      }}
                     >
                       {item.type}
                     </span>
-                    <span aria-hidden="true" className="text-[#9CA3AF]">/</span>
+                    <span aria-hidden="true" className="text-[#9CA3AF]">
+                      /
+                    </span>
                     <span
                       className="text-xs text-[#9CA3AF]"
-                      style={{ fontFamily: "'DM Sans', sans-serif", fontSize: "0.75rem" }}
+                      style={{
+                        fontFamily: "'DM Sans', sans-serif",
+                        fontSize: "0.75rem",
+                      }}
                     >
                       {item.date}
                     </span>
@@ -518,7 +670,10 @@ function RecentNews() {
 
                   <p
                     className="text-sm text-[#6B7280] mb-4 leading-relaxed flex-1"
-                    style={{ fontFamily: "'DM Sans', sans-serif", fontSize: "0.875rem" }}
+                    style={{
+                      fontFamily: "'DM Sans', sans-serif",
+                      fontSize: "0.875rem",
+                    }}
                   >
                     {item.desc}
                   </p>

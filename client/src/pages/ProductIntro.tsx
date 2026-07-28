@@ -149,7 +149,8 @@ const PRODUCT_DATA: Record<ProductIntroData["slug"], ProductIntroData> = {
   },
 };
 
-// Per-product live demo — now uses differentiated widgets
+// Per-product illustrative demo. Values and dialogue are intentionally
+// disclosed as simulations in the customer-facing UI.
 function getProductDemo(slug: string, t: (zh: string, en: string) => string) {
   if (slug === "mindpromise") {
     return {
@@ -171,14 +172,14 @@ function getProductDemo(slug: string, t: (zh: string, en: string) => string) {
       type: "chatflow" as const,
       data: {
         messages: [
-          { role: "system" as const, content: "系统识别到意向线索：深圳XX科技有限公司", delay: 800 },
+          { role: "system" as const, content: "演示线索（虚构）：示例科技有限公司", delay: 800 },
           { role: "agent" as const, content: "您好，注意到您最近在关注企业 AI 解决方案。FrontMind 提供从审计到落地的完整服务，想了解下吗？", delay: 1500 },
           { role: "customer" as const, content: "我们正在考虑 AI 转型，但不确定从哪里开始", delay: 1200 },
           { role: "agent" as const, content: "我们的博士顾问团队可以安排一次 30 分钟的战略诊断会议，帮您梳理品牌在 AI 平台上的现状和机会点。", delay: 1800 },
           { role: "customer" as const, content: "听起来不错，可以约下周三吗？", delay: 1000 },
           { role: "system" as const, content: "线索已转化 → 分配至销售团队", delay: 600 },
         ],
-        title: t("智能体获客对话实况", "Agent Acquisition Live"),
+        title: t("智能体获客对话演示", "Agent Acquisition Demo"),
       },
     };
   }
@@ -193,7 +194,7 @@ function getProductDemo(slug: string, t: (zh: string, en: string) => string) {
         { id: "4", label: "FDE 入驻与联调", description: "硕博 FDE 入驻企业" },
         { id: "5", label: "效果监测与迭代", description: "持续监控效率与增长结果" },
       ],
-      title: t("部署管线实时进度", "Deployment Pipeline Live"),
+      title: t("部署管线交互演示", "Deployment Pipeline Demo"),
     },
   };
 }
@@ -253,6 +254,12 @@ export default function ProductIntroPage({ product, includeChrome = true }: Prod
 
             {/* Right: Hero Image or Live Demo Panel */}
             <div className="lg:mt-8">
+              <p className="mb-3 text-xs leading-relaxed text-slate-500">
+                {t(
+                  "交互演示 · 以下内容与数值为模拟场景，不是实时客户数据或效果承诺。",
+                  "Interactive demo · The content and values below are simulated, not live customer data or a performance guarantee.",
+                )}
+              </p>
               {demo.type === "radar" && (
                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 items-stretch">
                   <BarChart
@@ -262,7 +269,7 @@ export default function ProductIntroPage({ product, includeChrome = true }: Prod
                       { label: "通义千问", before: 18.33, after: 68.89 },
                       { label: "腾讯元宝", before: 37.11, after: 90.2 },
                     ]}
-                    title={t("AI可见度提升", "AI Visibility Improvement")}
+                    title={t("模拟 AI 可见度对比", "Simulated AI Visibility Comparison")}
                     unit="%"
                   />
                   <CircleRank
@@ -272,7 +279,7 @@ export default function ProductIntroPage({ product, includeChrome = true }: Prod
                       { label: "通义千问", before: 7.92, after: 2.35 },
                       { label: "腾讯元宝", before: 6.38, after: 2.55 },
                     ]}
-                    title={t("AI推荐排名提升", "AI Recommendation Ranking Improvement")}
+                    title={t("模拟 AI 推荐排名对比", "Simulated AI Recommendation Ranking")}
                     maxRank={12}
                   />
                 </div>
@@ -433,8 +440,8 @@ export default function ProductIntroPage({ product, includeChrome = true }: Prod
               </p>
             </div>
             <div className="flex justify-center gap-12 mb-12">
-              <CountUpNumber end={3} suffix="x" label={t("平均线索转化率提升", "Avg. lead conversion lift")} />
-              <CountUpNumber end={72} suffix="%" label={t("触达响应率", "Engagement response rate")} />
+              <CountUpNumber end={3} suffix="x" label={t("演示目标：线索转化", "Demo target: lead conversion")} />
+              <CountUpNumber end={72} suffix="%" label={t("演示目标：触达响应", "Demo target: engagement response")} />
             </div>
             <div className="grid md:grid-cols-3 gap-6">
               {[
@@ -468,8 +475,8 @@ export default function ProductIntroPage({ product, includeChrome = true }: Prod
               </p>
             </div>
             <div className="flex justify-center gap-12 mb-12">
-              <CountUpNumber end={14} suffix={t("天", " days")} label={t("平均上线周期", "Avg. launch cycle")} />
-              <CountUpNumber end={99} suffix="%" label={t("客户续约率", "Client renewal rate")} />
+              <CountUpNumber end={14} suffix={t("天", " days")} label={t("演示目标：上线周期", "Demo target: launch cycle")} />
+              <CountUpNumber end={99} suffix="%" label={t("演示目标：续约率", "Demo target: renewal rate")} />
             </div>
             <AnimatedTimeline steps={[
               { number: "1", title: t("明确 AI 化优先场景", "Identify AI Priority Scenarios"), description: t("围绕企业目标、客户入口、增长痛点和流程阻塞进行诊断。", "Diagnose around business goals, customer entry points, and process bottlenecks."), details: [t("AI 战略诊断", "AI Strategy Diagnosis"), t("客户入口梳理", "Customer Entry Mapping"), t("数据条件评估", "Data Readiness Assessment")] },

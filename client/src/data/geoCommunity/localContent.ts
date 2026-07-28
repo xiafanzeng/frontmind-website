@@ -15,13 +15,33 @@ export type GeoLocalContent = LocalContentMeta & {
   ready: boolean;
 };
 
-const contentFiles = import.meta.glob("../../content/geo-community/pages/**/*.md", {
-  eager: true,
-  import: "default",
-  query: "?raw",
-}) as Record<string, string>;
+type ContentLoader = () => Promise<string>;
 
-function parseFrontmatter(raw: string): { meta: LocalContentMeta; body: string } {
+const CONTENT_ROOT = "../../content/geo-community/pages";
+const contentFiles = import.meta.glob(
+  [
+    "../../content/geo-community/pages/**/*.md",
+    "!../../content/geo-community/pages/blogs/**/*.md",
+  ],
+  {
+    import: "default",
+    query: "?raw",
+  },
+) as Record<string, ContentLoader>;
+
+const contentLoadersByPath = Object.fromEntries(
+  Object.entries(contentFiles).map(([file, load]) => [
+    routePathForFile(file),
+    { file, load },
+  ]),
+) as Record<string, { file: string; load: ContentLoader } | undefined>;
+
+export const geoLocalContentPaths = Object.keys(contentLoadersByPath);
+
+function parseFrontmatter(raw: string): {
+  meta: LocalContentMeta;
+  body: string;
+} {
   if (!raw.startsWith("---")) return { meta: {}, body: raw };
   const end = raw.indexOf("\n---", 3);
   if (end === -1) return { meta: {}, body: raw };
@@ -49,18 +69,27 @@ function bodyCharacters(body: string) {
   return body.replace(/^#+\s.+$/gm, "").replace(/\s+/g, "").length;
 }
 
-export const geoLocalContent = Object.entries(contentFiles)
-  .map(([file, raw]) => {
-    const parsed = parseFrontmatter(raw);
-    return {
-      file,
-      ...parsed.meta,
-      body: parsed.body,
-      ready: parsed.meta.status === "ready" && bodyCharacters(parsed.body) > 300,
-    };
-  })
-  .filter((content): content is GeoLocalContent & { path: string } => Boolean(content.path));
+export async function loadGeoLocalContent(
+  routePath: string,
+): Promise<GeoLocalContent | undefined> {
+  const entry = contentLoadersByPath[routePath];
+  if (!entry) return undefined;
 
-export const geoLocalContentByPath = Object.fromEntries(
-  geoLocalContent.map((content) => [content.path, content]),
-) as Record<string, GeoLocalContent | undefined>;
+  const parsed = parseFrontmatter(await entry.load());
+  if (!parsed.meta.path) return undefined;
+
+  return {
+    file: entry.file,
+    ...parsed.meta,
+    body: parsed.body,
+    ready: parsed.meta.status === "ready" && bodyCharacters(parsed.body) > 300,
+  };
+}
+
+function routePathForFile(file: string) {
+  const relativePath = file
+    .slice(CONTENT_ROOT.length)
+    .replace(/\.md$/, "")
+    .replace(/\/index$/, "");
+  return relativePath || "/";
+}

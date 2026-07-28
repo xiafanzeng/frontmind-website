@@ -231,7 +231,7 @@ const coreRoutes: RouteMeta[] = [
     path: "/blog",
     schemaType: "CollectionPage",
     title: "FrontMind - GEO 研究与学习社区文章库",
-    description: "119 篇中文整理后的 GEO、AI 搜索、LLM 评测、技术 SEO 与内容策略文章。",
+    description: "143 篇中文整理后的 GEO、AI 搜索、LLM 评测、技术 SEO 与内容策略文章。",
     image: "/research/geo-academic-tracking-wide.webp",
     priority: "0.85",
     changefreq: "weekly",

@@ -1,0 +1,4 @@
+interface:
+  display_name: "官网一次性知识库构建"
+  short_description: "全面抓取企业官网与公开资料并一次性交付结构化知识库"
+  default_prompt: "使用 $website-one-shot-kb-builder 全面抓取企业资料并生成知识库 ZIP。"

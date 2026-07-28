@@ -1,0 +1,2029 @@
+import { afterEach, describe, expect, it, vi } from "vitest";
+import {
+  createGeoProject,
+  createGeoCustomQuestion,
+  createGeoPaymentCheckout,
+  createGeoServiceAccount,
+  createGeoServicePaymentCheckout,
+  downloadGeoArchive,
+  getGeoPaymentStatus,
+  getGeoServiceContractStatus,
+  getGeoServiceProvisioningStatus,
+  getGeoServicePaymentStatus,
+  normalizeGeoProject,
+  retryGeoEnterpriseAnalysis,
+  startGeoCurrentAssessment,
+  startGeoMonitoring,
+  startGeoOptimizationForecast,
+  startGeoService,
+  submitGeoServiceContractProfile,
+  uploadGeoFile,
+  verifyGeoInvitation,
+} from "./api";
+import type { GeoUploadedFile } from "./api";
+import type { GeoProject } from "./types";
+
+const categories = [
+  "reputation",
+  "product_scenario",
+  "industry_ranking",
+  "competitor_comparison",
+] as const;
+
+describe("normalizeGeoProject", () => {
+  it("normalizes the full project contract and locks ranking questions", () => {
+    const questions = categories.flatMap((category) =>
+      Array.from({ length: 5 }, (_, index) => ({
+        id: `${category}-${index + 1}`,
+        category,
+        question: `${category} question ${index + 1}`,
+        selectable: true,
+      })),
+    );
+    const project = normalizeGeoProject({
+      projectToken: "signed-token",
+      project: {
+        id: "project-1",
+        companyName: "示例企业",
+        status: "completed",
+        kbTask: { status: "completed", progress: 100 },
+        questionTask: { status: "completed", progress: 100 },
+        archive: {
+          filename: "示例企业.zip",
+          downloadUrl: "/api/geo/projects/signed-token/archive",
+        },
+        knowledgeBase: {
+          summary: "企业知识库摘要",
+          metrics: { pages: 72, sources: 118 },
+          sections: [{ id: "profile", title: "企业身份", status: "verified" }],
+          assets: [
+            {
+              id: "logo",
+              name: "品牌标识.svg",
+              branch_id: "profile",
+              previewUrl: "/brand/frontmind-logo.svg",
+            },
+          ],
+        },
+        questions,
+      },
+    });
+
+    expect(project.id).toBe("project-1");
+    expect(project.remoteToken).toBe("signed-token");
+    expect(project.status).toBe("ready");
+    expect(project.progress).toBe(100);
+    expect(project.knowledgeBase?.sections[0].title).toBe("企业身份");
+    expect(project.knowledgeBase?.assets[0].sectionId).toBe("profile");
+    expect(project.questions).toHaveLength(20);
+    expect(
+      project.questions.filter(
+        (question) => question.category === "industry_ranking",
+      ),
+    ).toSatisfy((ranking) => ranking.every((question) => !question.selectable));
+  });
+
+  it("uses a neutral archive filename when the API omits one", () => {
+    const project = normalizeGeoProject({
+      project: {
+        id: "project-without-archive-name",
+        companyName: "客户企业",
+        status: "completed",
+        kbTask: { status: "completed", progress: 100 },
+        knowledgeBase: { summary: "企业知识库摘要" },
+        questions: [],
+      },
+    });
+
+    expect(project.knowledgeBase?.archiveName).toBe("企业知识库.zip");
+  });
+
+  it("treats the server retry decision as authoritative and fails closed", () => {
+    const allowed = normalizeGeoProject({
+      project: {
+        id: "retry-allowed",
+        status: "failed",
+        knowledgeBaseRetryAvailable: true,
+        knowledgeBaseSupportRequired: true,
+        questionRetryAvailable: true,
+        assessmentRetryAvailable: true,
+        optimizationForecastRetryAvailable: true,
+      },
+    });
+    const denied = normalizeGeoProject(
+      {
+        project: {
+          id: "retry-denied",
+          status: "failed",
+          knowledgeBaseRetryAvailable: false,
+          knowledgeBaseSupportRequired: false,
+          questionRetryAvailable: false,
+          assessmentRetryAvailable: false,
+          optimizationForecastRetryAvailable: false,
+        },
+      },
+      {
+        knowledgeBaseRetryAvailable: true,
+        knowledgeBaseSupportRequired: true,
+        questionRetryAvailable: true,
+        assessmentRetryAvailable: true,
+        optimizationForecastRetryAvailable: true,
+      },
+    );
+    const omitted = normalizeGeoProject(
+      {
+        project: {
+          id: "retry-omitted",
+          status: "failed",
+        },
+      },
+      {
+        knowledgeBaseRetryAvailable: true,
+        knowledgeBaseSupportRequired: true,
+        questionRetryAvailable: true,
+        assessmentRetryAvailable: true,
+        optimizationForecastRetryAvailable: true,
+      },
+    );
+    const truthyButInvalid = normalizeGeoProject({
+      project: {
+        id: "retry-truthy-but-invalid",
+        status: "failed",
+        knowledgeBaseRetryAvailable: 1,
+        knowledgeBaseSupportRequired: "true",
+        questionRetryAvailable: "true",
+        assessmentRetryAvailable: 1,
+        optimizationForecastRetryAvailable: "true",
+      },
+    });
+
+    expect(allowed.knowledgeBaseRetryAvailable).toBe(true);
+    expect(allowed.knowledgeBaseSupportRequired).toBe(true);
+    expect(allowed.questionRetryAvailable).toBe(true);
+    expect(allowed.assessmentRetryAvailable).toBe(true);
+    expect(allowed.optimizationForecastRetryAvailable).toBe(true);
+    expect(denied.knowledgeBaseRetryAvailable).toBe(false);
+    expect(denied.knowledgeBaseSupportRequired).toBe(false);
+    expect(denied.questionRetryAvailable).toBe(false);
+    expect(denied.assessmentRetryAvailable).toBe(false);
+    expect(denied.optimizationForecastRetryAvailable).toBe(false);
+    expect(omitted.knowledgeBaseRetryAvailable).toBe(false);
+    expect(omitted.knowledgeBaseSupportRequired).toBe(false);
+    expect(omitted.questionRetryAvailable).toBe(false);
+    expect(omitted.assessmentRetryAvailable).toBe(false);
+    expect(omitted.optimizationForecastRetryAvailable).toBe(false);
+    expect(truthyButInvalid.knowledgeBaseRetryAvailable).toBe(false);
+    expect(truthyButInvalid.knowledgeBaseSupportRequired).toBe(false);
+    expect(truthyButInvalid.questionRetryAvailable).toBe(false);
+    expect(truthyButInvalid.assessmentRetryAvailable).toBe(false);
+    expect(truthyButInvalid.optimizationForecastRetryAvailable).toBe(false);
+  });
+
+  it("recalculates knowledge completeness from bounded counts", () => {
+    const project = normalizeGeoProject({
+      projectToken: "signed-token",
+      project: {
+        id: "project-completeness",
+        companyName: "示例企业",
+        status: "completed",
+        kbTask: { status: "completed", progress: 100 },
+        knowledgeBase: {
+          summary: "企业知识库摘要",
+          metrics: [
+            {
+              key: "completeness",
+              label: "知识库完整度",
+              value: "99%",
+            },
+          ],
+          sections: [{ id: "profile", title: "企业身份" }],
+          completeness: {
+            score: 99,
+            label: "知识库完整度",
+            basis: "严格核验节点除以适用节点。",
+            counts: {
+              totalLeaves: 46,
+              applicableLeaves: 5,
+              verifiedFirstParty: 31,
+              verifiedAuthoritative: 7,
+              supportedThirdParty: 2,
+              inferred: 2,
+              needsVerification: 4,
+              notApplicable: 0,
+            },
+            acquisition: {
+              officialPages: { completed: 999, total: 132 },
+              webQueries: { completed: 24, total: 28 },
+              images: { completed: -3, total: 46 },
+            },
+            gaps: ["就业数据仍需核验", 42, "证书版式仍需核验"],
+            caveat: "不代表整个互联网的绝对覆盖率。",
+          },
+        },
+        questions: [],
+      },
+    });
+
+    expect(project.knowledgeBase?.completeness).toMatchObject({
+      score: 87,
+      counts: {
+        totalLeaves: 46,
+        applicableLeaves: 46,
+        verifiedFirstParty: 31,
+        verifiedAuthoritative: 7,
+        supportedThirdParty: 2,
+        inferred: 2,
+        needsVerification: 4,
+        notApplicable: 0,
+      },
+      acquisition: {
+        officialPages: { completed: 132, total: 132 },
+        webQueries: { completed: 24, total: 28 },
+        images: { completed: 0, total: 46 },
+      },
+      gaps: ["就业数据仍需核验", "证书版式仍需核验"],
+    });
+    expect(
+      project.knowledgeBase?.metrics.find(
+        (metric) => metric.key === "completeness",
+      ),
+    ).toMatchObject({
+      value: "87%",
+      detail: "充分取证 40 / 46",
+    });
+  });
+
+  it("fails closed when completeness status counts do not match the total", () => {
+    const project = normalizeGeoProject({
+      project: {
+        id: "invalid-completeness",
+        status: "completed",
+        kbTask: { status: "completed" },
+        knowledgeBase: {
+          summary: "企业知识库摘要",
+          metrics: [
+            {
+              key: "completeness",
+              label: "知识库完整度",
+              value: "99%",
+            },
+          ],
+          completeness: {
+            score: 99,
+            counts: {
+              totalLeaves: 47,
+              applicableLeaves: 47,
+              verifiedFirstParty: 31,
+              verifiedAuthoritative: 7,
+              supportedThirdParty: 2,
+              inferred: 2,
+              needsVerification: 4,
+              notApplicable: 0,
+            },
+          },
+        },
+        questions: [],
+      },
+    });
+
+    expect(project.knowledgeBase?.completeness).toBeUndefined();
+    expect(
+      project.knowledgeBase?.metrics.some(
+        (metric) => metric.key === "completeness",
+      ),
+    ).toBe(false);
+  });
+
+  it("keeps raw task output out of business sections and preserves local selections", () => {
+    const project = normalizeGeoProject(
+      {
+        projectToken: "new-token",
+        project: {
+          id: "remote-id",
+          stage: "questions",
+          questionTask: {
+            status: "running",
+            progress: 0.45,
+            message: "不应出现在进度区域的后台对话",
+            output: [
+              {
+                text: '```json\n{"questions":[{"id":"q1","category":"美誉舆情","question":"品牌口碑好不好？"}]}\n```',
+              },
+            ],
+          },
+          executionLog: {
+            currentEntryId: "question-recommendation",
+            entries: [
+              {
+                id: "question-recommendation",
+                stage: "question_recommendation",
+                title: "问题推荐",
+                status: "running",
+                progress: 45,
+                events: [
+                  {
+                    id: "question-model-output",
+                    kind: "model_output",
+                    message: "已完成问题意图拆解，正在校验问题结构。",
+                  },
+                ],
+              },
+            ],
+          },
+        },
+      },
+      {
+        id: "local-id",
+        remoteToken: "old-token",
+        selectedQuestionId: "q1",
+        selectedPlatformIds: ["doubao"],
+        questions: [],
+      },
+    );
+
+    expect(project.id).toBe("local-id");
+    expect(project.remoteToken).toBe("new-token");
+    expect(project.progress).toBe(45);
+    expect(project.progressLabel).toBeUndefined();
+    expect(project.questions).toEqual([]);
+    expect(project.executionLog?.entries[0]?.events[0]?.message).toBe(
+      "已完成问题意图拆解，正在校验问题结构。",
+    );
+    expect(JSON.stringify(project)).not.toContain("品牌口碑好不好");
+    expect(project.selectedPlatformIds).toEqual(["doubao"]);
+  });
+
+  it("treats explicit empty server fields as authoritative clears", () => {
+    const project = normalizeGeoProject(
+      {
+        projectToken: "new-token",
+        project: {
+          id: "remote-id",
+          questions: [],
+          selectedQuestionId: null,
+          selectedPlatformIds: [],
+          attachments: [],
+          monitoring: null,
+          assessment: null,
+          optimizationForecast: null,
+          serviceActivation: null,
+          executionLog: null,
+          knowledgeBase: null,
+          archive: null,
+        },
+      },
+      {
+        questions: [
+          {
+            id: "stale-question",
+            category: "reputation",
+            question: "不应复活的旧问题",
+            selectable: true,
+          },
+        ],
+        selectedQuestionId: "stale-question",
+        selectedPlatformIds: ["doubao"],
+        files: [
+          {
+            id: "stale-file",
+            name: "stale.pdf",
+            size: 1,
+            type: "application/pdf",
+          },
+        ],
+        knowledgeBase: { summary: "stale" },
+        monitoring: { status: "completed" },
+        assessment: { status: "ready" },
+        optimizationForecast: { status: "ready" },
+        serviceActivation: { status: "active" },
+        executionLog: { entries: [] },
+      } as unknown as Partial<GeoProject>,
+    );
+
+    expect(project.questions).toEqual([]);
+    expect(project.selectedQuestionId).toBeUndefined();
+    expect(project.selectedPlatformIds).toEqual([]);
+    expect(project.files).toEqual([]);
+    expect(project.knowledgeBase).toBeUndefined();
+    expect(project.monitoring).toBeUndefined();
+    expect(project.assessment).toBeUndefined();
+    expect(project.optimizationForecast).toBeUndefined();
+    expect(project.serviceActivation).toBeUndefined();
+    expect(project.executionLog).toBeUndefined();
+  });
+
+  it("does not invent ready states from result-shaped fields without a status", () => {
+    const project = normalizeGeoProject({
+      project: {
+        id: "project-without-terminal-status",
+        assessment: {
+          totalScore: 80,
+          dimensions: {
+            semantic_visibility: {
+              score: 20,
+              maxScore: 30,
+            },
+          },
+        },
+        optimizationForecast: {
+          currentScore: 80,
+          dimensions: [
+            {
+              id: "semantic_visibility",
+              currentScore: 20,
+              targetLow: 21,
+              targetHigh: 24,
+              maxScore: 30,
+            },
+          ],
+        },
+      },
+    });
+
+    expect(project.assessment?.status).toBe("not_started");
+    expect(project.optimizationForecast?.status).toBe("not_started");
+  });
+
+  it.each(["paused", "upstream_unknown"])(
+    "fails closed for the non-empty assessment status %s",
+    (status) => {
+      const project = normalizeGeoProject({
+        project: {
+          id: `project-${status}`,
+          assessment: { status },
+          optimizationForecast: { status },
+          assessmentRetryAvailable: false,
+          optimizationForecastRetryAvailable: false,
+        },
+      });
+
+      expect(project.assessment?.status).toBe("failed");
+      expect(project.optimizationForecast?.status).toBe("failed");
+      expect(project.assessmentRetryAvailable).toBe(false);
+      expect(project.optimizationForecastRetryAvailable).toBe(false);
+      expect(project.stage).toBe("current_assessment");
+    },
+  );
+
+  it("normalizes the safe execution log snapshot", () => {
+    const project = normalizeGeoProject({
+      projectToken: "signed-token",
+      project: {
+        id: "project-1",
+        status: "running",
+        kbTask: { status: "completed", progress: 100 },
+        questionTask: { status: "completed", progress: 100 },
+        executionLog: {
+          currentEntryId: "monitoring",
+          updatedAt: "2026-07-23T03:05:00.000Z",
+          entries: [
+            {
+              id: "monitoring",
+              stage: "monitoring",
+              title: "问题监控",
+              status: "running",
+              progress: 70,
+              startedAt: "2026-07-23T03:00:00.000Z",
+              nextPollAt: "2026-07-23T03:10:00.000Z",
+              counters: { completed: 6, failed: 1, total: 10 },
+              events: [
+                {
+                  id: "monitoring-counts",
+                  kind: "result_summary",
+                  message: "已完成 6/10 次平台回答采集。",
+                  createdAt: "2026-07-23T03:04:00.000Z",
+                },
+                {
+                  id: "invalid-event",
+                  kind: "reasoning",
+                  message: "不允许的事件类型",
+                },
+              ],
+            },
+          ],
+        },
+      },
+    });
+
+    expect(project.executionLog).toEqual({
+      currentEntryId: "monitoring",
+      fetchedAt: "2026-07-23T03:05:00.000Z",
+      updatedAt: "2026-07-23T03:05:00.000Z",
+      entries: [
+        {
+          id: "monitoring",
+          stage: "monitoring",
+          title: "问题监控",
+          status: "running",
+          progress: 70,
+          startedAt: "2026-07-23T03:00:00.000Z",
+          nextPollAt: "2026-07-23T03:10:00.000Z",
+          counters: { completed: 6, failed: 1, total: 10 },
+          events: [
+            {
+              id: "monitoring-counts",
+              kind: "result_summary",
+              message: "已完成 6/10 次平台回答采集。",
+              createdAt: "2026-07-23T03:04:00.000Z",
+            },
+          ],
+        },
+      ],
+    });
+  });
+
+  it("surfaces a rejected question structure as a retryable failure", () => {
+    const project = normalizeGeoProject({
+      projectToken: "signed-token",
+      project: {
+        id: "project-1",
+        status: "completed",
+        questionTask: { status: "completed", progress: 100 },
+        questionValidationError:
+          "推荐结果未通过四类各五题的结构校验，请重试生成",
+      },
+    });
+
+    expect(project.status).toBe("failed");
+    expect(project.error).toContain("结构校验");
+  });
+
+  it("normalizes real monitoring answers and scoped assessment output", () => {
+    const project = normalizeGeoProject({
+      projectToken: "monitor-token",
+      project: {
+        id: "project-monitor",
+        status: "completed",
+        monitoring: {
+          run_id: "monitor-run-1",
+          state: "polling_until_finished",
+          platforms: ["doubao", "qianwen"],
+          expected_records: 10,
+          completed_records: 2,
+          records: [
+            {
+              id: "record-1",
+              platform: "doubao",
+              run_index: 1,
+              status: "completed",
+              answerContent: "示例企业被真实回答提及。",
+              media: [
+                {
+                  type: "video",
+                  url: "https://media.example/interview.mp4",
+                  thumbnailUrl: "https://media.example/interview.webp",
+                  title: "企业采访",
+                },
+                { type: "image", url: "javascript:alert(1)" },
+              ],
+              citationList: [
+                { title: "官网", url: "https://example.com/about" },
+              ],
+              referenceList: ["行业参考资料"],
+            },
+          ],
+        },
+        assessment: {
+          status: "completed",
+          result: {
+            total_score: 61.5,
+            grade: "B",
+            coverage_rate: 0.8,
+            confidence: "medium",
+            dimensions: {
+              semantic_visibility: {
+                score: 18,
+                max_score: 30,
+                summary: "回答中存在稳定提及。",
+              },
+            },
+            knowledge_comparisons: [
+              {
+                id: "fact-1",
+                topic: "企业定位",
+                classification: "aligned",
+                knowledge_base_fact: "科研驱动",
+                answer_finding: "回答准确覆盖定位。",
+                platforms: ["doubao"],
+              },
+            ],
+          },
+        },
+        optimizationForecast: {
+          status: "completed",
+          horizonWeeks: 4,
+          currentScore: 61.5,
+          targetLow: 69,
+          targetExpected: 72,
+          targetHigh: 75,
+          gradeLow: "B",
+          gradeHigh: "A",
+          summary: "在完整执行并同口径复测的前提下建立条件目标区间。",
+          dimensions: [
+            {
+              id: "semantic_visibility",
+              label: "语义可见度",
+              currentScore: 18,
+              targetLow: 21,
+              targetExpected: 22.5,
+              targetHigh: 24,
+              maxScore: 30,
+              actions: ["建设可引用问答资产"],
+            },
+          ],
+          assumptions: ["内容完成发布与收录检查"],
+          roadmap: [
+            {
+              phase: 1,
+              weeks: "第 1 周",
+              title: "事实校准",
+              actions: ["核验企业事实"],
+              verificationGate: "关键事实均可追溯",
+            },
+          ],
+        },
+      },
+    });
+
+    expect(project.stage).toBe("current_assessment");
+    expect(project.monitoring).toMatchObject({
+      runId: "monitor-run-1",
+      status: "capturing",
+      expectedRecords: 10,
+      completedRecords: 2,
+    });
+    expect(project.monitoring?.answers[0]).toMatchObject({
+      platformId: "doubao",
+      runIndex: 1,
+      answer: "示例企业被真实回答提及。",
+    });
+    expect(project.monitoring?.answers[0].citations).toHaveLength(1);
+    expect(project.monitoring?.answers[0].media).toEqual([
+      {
+        type: "video",
+        url: "https://media.example/interview.mp4",
+        thumbnailUrl: "https://media.example/interview.webp",
+        title: "企业采访",
+      },
+    ]);
+    expect(project.monitoring?.answers[0].references).toEqual([
+      { title: "行业参考资料" },
+    ]);
+    expect(project.assessment).toMatchObject({
+      status: "ready",
+      totalScore: 61.5,
+      grade: "B",
+      coverage: 80,
+    });
+    expect(project.assessment?.dimensions[0]).toMatchObject({
+      id: "semantic_visibility",
+      score: 18,
+      maxScore: 30,
+    });
+    expect(project.assessment?.comparisons[0].status).toBe("aligned");
+    expect(project.optimizationForecast).toMatchObject({
+      status: "ready",
+      horizonWeeks: 4,
+      currentScore: 61.5,
+      targetLow: 69,
+      targetExpected: 72,
+      targetHigh: 75,
+      gradeLow: "B",
+      gradeHigh: "A",
+    });
+    expect(project.optimizationForecast?.dimensions[0]).toMatchObject({
+      id: "semantic_visibility",
+      currentScore: 18,
+      targetExpected: 22.5,
+    });
+  });
+
+  it("normalizes the server public assessment shape without losing root-level dimensions or comparisons", () => {
+    const project = normalizeGeoProject({
+      projectToken: "public-assessment-token",
+      project: {
+        id: "public-assessment-project",
+        assessment: {
+          status: "ready",
+          totalScore: 50,
+          rawTotalScore: 45,
+          grade: "C",
+          rawGrade: "D",
+          structuralExcludedMaxScore: 10,
+          applicableMaxScore: 90,
+          coverage: 0.8,
+          confidence: "medium",
+          scope_label: "单问题可测口径",
+          summary: "服务端公开评估摘要",
+          dimensions: {
+            semantic_visibility: {
+              id: "semantic_visibility",
+              label: "语义可见度",
+              score: 16,
+              maxScore: 30,
+              summary: "真实维度摘要",
+            },
+            competitive_advantage: {
+              id: "competitive_advantage",
+              label: "竞争优势",
+              score: 4,
+              maxScore: 10,
+              summary: "真实竞争优势摘要",
+            },
+          },
+          comparisons: [
+            {
+              id: "comparison-public-1",
+              topic: "企业定位",
+              status: "aligned",
+              knowledgeBaseFact: "真实知识库事实",
+              answerFinding: "真实平台回答发现",
+              recommendedAction: "真实建议动作",
+              evidenceRefs: ["source-public-1"],
+            },
+          ],
+          platformBreakdown: [
+            {
+              platform: "doubao",
+              responseCount: 5,
+              successfulResponses: 4,
+              brandMentionRate: 0.5,
+              averageRank: 2,
+              factAccuracy: 0.8,
+              propositionHitRate: 0.7,
+              citationCount: 3,
+              referenceCount: 4,
+              sentiment: "neutral",
+              verdict: "服务端返回的真实平台评估结论",
+              evidenceRefs: ["doubao/run-01"],
+            },
+          ],
+          priorityActions: [
+            {
+              priority: 1,
+              dimension: "semanticAuthority",
+              action: "服务端返回的真实优先动作",
+              expectedImpact: "服务端返回的真实预期影响",
+              evidenceRefs: ["doubao/run-01"],
+            },
+          ],
+          limitations: ["服务端返回的真实适用限制"],
+          rankingDiagnostics: {
+            eligible: true,
+            totalObservations: 5,
+            rankedObservations: 4,
+            unmentionedObservations: 1,
+            averageRank: 2,
+            firstPlaceRate: 0.2,
+            top3Rate: 0.8,
+            top5Rate: 1,
+            competitorRankGap: 1,
+            calculationBasis: "服务端返回的真实排名计算口径",
+          },
+          methodology: {
+            assessmentType: "question_baseline",
+            isFullBsasAudit: false,
+            normalizedMeasuredScore: 55,
+            applicableScore: 50,
+            applicableMaxScore: 90,
+            structuralExcludedMaxScore: 10,
+            confidenceScore: 0.8,
+          },
+        },
+      },
+    });
+
+    expect(project.assessment?.dimensions).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          id: "semantic_visibility",
+          score: 16,
+          summary: "真实维度摘要",
+        }),
+        expect.objectContaining({
+          id: "competitive_advantage",
+          score: 4,
+          summary: "真实竞争优势摘要",
+        }),
+      ]),
+    );
+    expect(project.assessment?.comparisons).toEqual([
+      expect.objectContaining({
+        id: "comparison-public-1",
+        knowledgeBaseFact: "真实知识库事实",
+        recommendedAction: "真实建议动作",
+      }),
+    ]);
+    expect(project.assessment).toMatchObject({
+      rawTotalScore: 45,
+      rawGrade: "D",
+      structuralExcludedMaxScore: 10,
+      applicableMaxScore: 90,
+      coverage: 80,
+      confidence: "medium",
+      scopeLabel: "单问题可测口径",
+      platformBreakdown: [
+        expect.objectContaining({
+          platformId: "doubao",
+          successfulResponses: 4,
+          factAccuracy: 0.8,
+          verdict: "服务端返回的真实平台评估结论",
+        }),
+      ],
+      priorityActions: [
+        expect.objectContaining({
+          dimension: "semantic_authority",
+          action: "服务端返回的真实优先动作",
+        }),
+      ],
+      limitations: ["服务端返回的真实适用限制"],
+      rankingDiagnostics: expect.objectContaining({
+        eligible: true,
+        rankedObservations: 4,
+        calculationBasis: "服务端返回的真实排名计算口径",
+      }),
+      methodology: expect.objectContaining({
+        assessmentType: "question_baseline",
+        confidenceScore: 0.8,
+      }),
+    });
+  });
+
+  it("normalizes the server public monitoring record fields", () => {
+    const project = normalizeGeoProject({
+      projectToken: "public-monitor-token",
+      project: {
+        id: "public-monitor-project",
+        monitoring: {
+          runId: "public-monitor-run",
+          status: "completed",
+          platforms: ["doubao"],
+          expectedRecords: 1,
+          completedRecords: 1,
+          failedRecords: 0,
+          records: [
+            {
+              recordId: "public-monitor-record",
+              platform: "doubao",
+              runIndex: 1,
+              status: "completed",
+              answerText: "服务端返回的真实平台回答正文",
+              completedAt: "2026-07-26T08:30:00.000Z",
+              media: [],
+              citations: [],
+              references: [],
+            },
+          ],
+        },
+      },
+    });
+
+    expect(project.monitoring?.answers).toEqual([
+      expect.objectContaining({
+        id: "public-monitor-record",
+        answer: "服务端返回的真实平台回答正文",
+        capturedAt: "2026-07-26T08:30:00.000Z",
+      }),
+    ]);
+  });
+
+  it.each([
+    ["submission_in_progress", "submitted"],
+    ["submitted", "submitted"],
+    ["polling", "capturing"],
+    ["status_poll_in_flight", "capturing"],
+    ["polling_until_finished", "capturing"],
+    ["partial_review_required", "partial_review"],
+    ["remote_failed", "failed"],
+    ["shape_mismatch", "failed"],
+    ["submission_unknown", "submitted"],
+  ])("maps Agent monitor state %s to %s", (state, expected) => {
+    const project = normalizeGeoProject({
+      project: {
+        id: "project-state",
+        monitoring: { runId: "run-state", state, platforms: ["kimi"] },
+      },
+    });
+    expect(project.monitoring?.status).toBe(expected);
+  });
+});
+
+describe("uploadGeoFile", () => {
+  afterEach(() => {
+    vi.useRealTimers();
+    vi.unstubAllGlobals();
+  });
+
+  it("fails closed when invite verification receives successful HTML", async () => {
+    const fetchMock = vi.fn<typeof fetch>().mockResolvedValue(
+      new Response("<html>private reverse-proxy error details</html>", {
+        status: 200,
+        headers: { "content-type": "text/html; charset=utf-8" },
+      }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    const error = await verifyGeoInvitation("valid-looking-code").catch(
+      (reason: unknown) => reason,
+    );
+
+    expect(error).toMatchObject({
+      code: "INVALID_RESPONSE_CONTENT_TYPE",
+      status: 502,
+      message: "服务返回格式无效，请稍后重试。",
+    });
+    expect(String((error as Error).message)).not.toContain(
+      "private reverse-proxy error details",
+    );
+  });
+
+  it("rejects invalid JSON and an invalid invite success shape", async () => {
+    const fetchMock = vi
+      .fn<typeof fetch>()
+      .mockResolvedValueOnce(
+        new Response("{not-json", {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        }),
+      )
+      .mockResolvedValueOnce(
+        new Response(JSON.stringify({ ok: "true" }), {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        }),
+      );
+    vi.stubGlobal("fetch", fetchMock);
+
+    await expect(verifyGeoInvitation("invite-code")).rejects.toMatchObject({
+      code: "INVALID_JSON_RESPONSE",
+      status: 502,
+    });
+    await expect(verifyGeoInvitation("invite-code")).rejects.toMatchObject({
+      code: "INVALID_INVITE_RESPONSE",
+      status: 502,
+    });
+  });
+
+  it("fails closed when project creation receives JSON with the wrong shape", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn<typeof fetch>().mockResolvedValue(
+        new Response(JSON.stringify({ ok: true }), {
+          status: 201,
+          headers: { "content-type": "application/json" },
+        }),
+      ),
+    );
+
+    await expect(
+      createGeoProject("Acme", [], { requestId: "request-1" }),
+    ).rejects.toMatchObject({
+      code: "INVALID_PROJECT_RESPONSE",
+      status: 502,
+    });
+  });
+
+  it("times out stalled JSON requests", async () => {
+    vi.useFakeTimers();
+    const fetchMock = vi.fn<typeof fetch>().mockImplementation(
+      (_input, init) =>
+        new Promise<Response>((_resolve, reject) => {
+          init?.signal?.addEventListener(
+            "abort",
+            () => reject(init.signal?.reason),
+            { once: true },
+          );
+        }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    const result = verifyGeoInvitation("invite-code").catch(
+      (reason: unknown) => reason,
+    );
+    await vi.advanceTimersByTimeAsync(30_000);
+
+    await expect(result).resolves.toMatchObject({
+      code: "REQUEST_TIMEOUT",
+      status: 408,
+      message: "请求超时，请检查网络后重试。",
+    });
+  });
+
+  it("aborts a stalled archive body after the download timeout", async () => {
+    vi.useFakeTimers();
+    const fetchMock = vi.fn<typeof fetch>().mockImplementation(
+      (_input, init) =>
+        new Promise<Response>((_resolve, reject) => {
+          init?.signal?.addEventListener(
+            "abort",
+            () => reject(init.signal?.reason),
+            { once: true },
+          );
+        }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+    const project = {
+      remoteToken: "signed-project-token",
+      title: "Acme",
+    } as GeoProject;
+
+    const result = downloadGeoArchive(project).catch(
+      (reason: unknown) => reason,
+    );
+    await vi.advanceTimersByTimeAsync(5 * 60_000);
+
+    await expect(result).resolves.toMatchObject({
+      code: "REQUEST_TIMEOUT",
+      status: 408,
+    });
+  });
+
+  it("preserves caller cancellation without proxy fallback during direct upload", async () => {
+    const controller = new AbortController();
+    const reason = new DOMException("draft deleted", "AbortError");
+    let markDirectUploadStarted: (() => void) | undefined;
+    const directUploadStarted = new Promise<void>((resolve) => {
+      markDirectUploadStarted = resolve;
+    });
+    const fetchMock = vi
+      .fn<typeof fetch>()
+      .mockResolvedValueOnce(
+        new Response(
+          JSON.stringify({
+            fileId: "file-1",
+            filename: "企业资料.pdf",
+            uploadToken: "signed-upload-token",
+            directUploadUrl: "https://storage.example/upload",
+          }),
+          { status: 201, headers: { "content-type": "application/json" } },
+        ),
+      )
+      .mockImplementationOnce(
+        (_input, init) =>
+          new Promise<Response>((_resolve, reject) => {
+            init?.signal?.addEventListener(
+              "abort",
+              () => reject(init.signal?.reason),
+              { once: true },
+            );
+            markDirectUploadStarted?.();
+          }),
+      );
+    vi.stubGlobal("fetch", fetchMock);
+
+    const file = new File(["brochure"], "企业资料.pdf", {
+      type: "application/pdf",
+    });
+    const result = uploadGeoFile(file, {
+      signal: controller.signal,
+    }).catch((error: unknown) => error);
+    await directUploadStarted;
+    controller.abort(reason);
+
+    await expect(result).resolves.toBe(reason);
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(fetchMock.mock.calls[1][1]?.signal?.aborted).toBe(true);
+  });
+
+  it("does not fall back to the upload proxy after a direct upload timeout", async () => {
+    vi.useFakeTimers();
+    const fetchMock = vi
+      .fn<typeof fetch>()
+      .mockResolvedValueOnce(
+        new Response(
+          JSON.stringify({
+            fileId: "file-1",
+            filename: "企业资料.pdf",
+            uploadToken: "signed-upload-token",
+            directUploadUrl: "https://storage.example/upload",
+          }),
+          { status: 201, headers: { "content-type": "application/json" } },
+        ),
+      )
+      .mockImplementationOnce(
+        (_input, init) =>
+          new Promise<Response>((_resolve, reject) => {
+            init?.signal?.addEventListener(
+              "abort",
+              () => reject(init.signal?.reason),
+              { once: true },
+            );
+          }),
+      );
+    vi.stubGlobal("fetch", fetchMock);
+
+    const file = new File(["brochure"], "企业资料.pdf", {
+      type: "application/pdf",
+    });
+    const result = uploadGeoFile(file).catch((reason: unknown) => reason);
+    await vi.advanceTimersByTimeAsync(5 * 60_000);
+
+    await expect(result).resolves.toMatchObject({
+      code: "REQUEST_TIMEOUT",
+      status: 408,
+    });
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+  });
+
+  it("accepts an empty successful response from direct storage", async () => {
+    const fetchMock = vi
+      .fn<typeof fetch>()
+      .mockResolvedValueOnce(
+        new Response(
+          JSON.stringify({
+            fileId: "file-1",
+            filename: "企业资料.pdf",
+            uploadToken: "signed-upload-token",
+            directUploadUrl: "https://storage.example/upload",
+          }),
+          { status: 201, headers: { "content-type": "application/json" } },
+        ),
+      )
+      .mockResolvedValueOnce(new Response(null, { status: 204 }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    const file = new File(["brochure"], "企业资料.pdf", {
+      type: "application/pdf",
+    });
+
+    await expect(uploadGeoFile(file)).resolves.toMatchObject({
+      id: "file-1",
+      uploadToken: "signed-upload-token",
+    });
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+  });
+
+  it("falls back to the authenticated website proxy when direct storage upload fails", async () => {
+    const fetchMock = vi
+      .fn<typeof fetch>()
+      .mockResolvedValueOnce(
+        new Response(
+          JSON.stringify({
+            fileId: "file-1",
+            filename: "企业资料.pdf",
+            uploadToken: "signed-upload-token",
+            directUploadUrl: "https://storage.example/upload",
+          }),
+          { status: 201, headers: { "content-type": "application/json" } },
+        ),
+      )
+      .mockResolvedValueOnce(
+        new Response("storage unavailable", { status: 503 }),
+      )
+      .mockResolvedValueOnce(
+        new Response(JSON.stringify({ ok: true, status: "uploaded" }), {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        }),
+      );
+    vi.stubGlobal("fetch", fetchMock);
+
+    const file = new File(["brochure"], "企业资料.pdf", {
+      type: "application/pdf",
+    });
+    const uploaded = await uploadGeoFile(file);
+
+    expect(uploaded).toMatchObject({
+      id: "file-1",
+      name: "企业资料.pdf",
+      uploadToken: "signed-upload-token",
+    });
+    expect(fetchMock).toHaveBeenCalledTimes(3);
+    expect(fetchMock.mock.calls[2][0]).toBe("/api/geo/uploads/proxy");
+    expect(
+      new Headers(fetchMock.mock.calls[2][1]?.headers).get(
+        "x-geo-upload-token",
+      ),
+    ).toBe("signed-upload-token");
+  });
+
+  it("checkpoints each uploaded file and resumes with only missing files", async () => {
+    const firstFile = new File(["first"], "first.pdf", {
+      type: "application/pdf",
+    });
+    const secondFile = new File(["second"], "second.pdf", {
+      type: "application/pdf",
+    });
+    const checkpoints: GeoUploadedFile[][] = [];
+    const firstAttemptFetch = vi
+      .fn<typeof fetch>()
+      .mockResolvedValueOnce(
+        new Response(
+          JSON.stringify({
+            fileId: "file-1",
+            filename: "first.pdf",
+            uploadToken: "upload-token-1",
+          }),
+          { status: 201, headers: { "content-type": "application/json" } },
+        ),
+      )
+      .mockResolvedValueOnce(
+        new Response(JSON.stringify({ ok: true, status: "uploaded" }), {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        }),
+      )
+      .mockResolvedValueOnce(
+        new Response(
+          JSON.stringify({
+            error: { code: "UPLOAD_INIT_FAILED", message: "second failed" },
+          }),
+          { status: 503, headers: { "content-type": "application/json" } },
+        ),
+      );
+    vi.stubGlobal("fetch", firstAttemptFetch);
+
+    await expect(
+      createGeoProject("Acme", [firstFile, secondFile], {
+        requestId: "request-1",
+        onUploadsReady: (files) => checkpoints.push(files),
+      }),
+    ).rejects.toMatchObject({ code: "UPLOAD_INIT_FAILED", status: 503 });
+    expect(checkpoints).toHaveLength(1);
+    expect(checkpoints[0]).toEqual([
+      expect.objectContaining({ id: "file-1", name: "first.pdf" }),
+    ]);
+
+    const retryFetch = vi
+      .fn<typeof fetch>()
+      .mockResolvedValueOnce(
+        new Response(
+          JSON.stringify({
+            fileId: "file-2",
+            filename: "second.pdf",
+            uploadToken: "upload-token-2",
+          }),
+          { status: 201, headers: { "content-type": "application/json" } },
+        ),
+      )
+      .mockResolvedValueOnce(
+        new Response(JSON.stringify({ ok: true, status: "uploaded" }), {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        }),
+      )
+      .mockResolvedValueOnce(
+        new Response(
+          JSON.stringify({
+            projectToken: "project-token",
+            project: {
+              id: "project-1",
+              companyName: "Acme",
+              status: "queued",
+              kbTask: { status: "queued", progress: 0 },
+            },
+          }),
+          { status: 201, headers: { "content-type": "application/json" } },
+        ),
+      );
+    vi.stubGlobal("fetch", retryFetch);
+
+    await expect(
+      createGeoProject("Acme", [firstFile, secondFile], {
+        requestId: "request-1",
+        uploadedFiles: checkpoints[0],
+        onUploadsReady: (files) => checkpoints.push(files),
+      }),
+    ).resolves.toMatchObject({ id: "project-1" });
+
+    expect(JSON.parse(String(retryFetch.mock.calls[0][1]?.body))).toMatchObject(
+      {
+        filename: "second.pdf",
+      },
+    );
+    expect(
+      JSON.parse(String(retryFetch.mock.calls[2][1]?.body)).attachments,
+    ).toEqual([
+      {
+        fileId: "file-1",
+        filename: "first.pdf",
+        uploadToken: "upload-token-1",
+      },
+      {
+        fileId: "file-2",
+        filename: "second.pdf",
+        uploadToken: "upload-token-2",
+      },
+    ]);
+    expect(checkpoints[1]).toEqual([
+      expect.objectContaining({ id: "file-1" }),
+      expect.objectContaining({ id: "file-2" }),
+    ]);
+  });
+
+  it("fails closed when a resumed upload ticket is not for the ordered file prefix", async () => {
+    const file = new File(["first"], "first.pdf", {
+      type: "application/pdf",
+    });
+    const fetchMock = vi.fn<typeof fetch>();
+    vi.stubGlobal("fetch", fetchMock);
+
+    await expect(
+      createGeoProject("Acme", [file], {
+        requestId: "request-1",
+        uploadedFiles: [
+          {
+            id: "file-1",
+            name: "first.pdf",
+            size: file.size,
+            type: file.type,
+            uploadToken: "upload-token-1",
+            sourceName: "different.pdf",
+            sourceLastModified: file.lastModified,
+          },
+        ],
+      }),
+    ).rejects.toMatchObject({
+      code: "INVALID_UPLOAD_CHECKPOINT",
+      status: 400,
+    });
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+});
+
+describe("retryGeoEnterpriseAnalysis", () => {
+  afterEach(() => vi.unstubAllGlobals());
+
+  it("sends the locally stored input and file references", async () => {
+    const fetchMock = vi.fn<typeof fetch>().mockResolvedValue(
+      new Response(
+        JSON.stringify({
+          projectToken: "next-token",
+          project: {
+            id: "project-1",
+            companyName: "Acme",
+            status: "running",
+            kbTask: { status: "running", progress: 10 },
+          },
+        }),
+        { status: 201, headers: { "content-type": "application/json" } },
+      ),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+    const project: GeoProject = {
+      id: "project-1",
+      remoteId: "project-1",
+      remoteToken: "current-token",
+      title: "Acme",
+      input: "Acme",
+      createdAt: "2026-01-01T00:00:00.000Z",
+      updatedAt: "2026-01-01T00:00:00.000Z",
+      stage: "enterprise_analysis",
+      status: "failed",
+      progress: 0,
+      files: [
+        {
+          id: "file-1",
+          name: "catalog.pdf",
+          size: 42,
+          type: "application/pdf",
+        },
+      ],
+      questions: [],
+      selectedPlatformIds: [],
+    };
+
+    const retried = await retryGeoEnterpriseAnalysis(project);
+
+    expect(retried.remoteToken).toBe("next-token");
+    expect(JSON.parse(String(fetchMock.mock.calls[0][1]?.body))).toEqual({
+      input: "Acme",
+      attachments: [{ fileId: "file-1", filename: "catalog.pdf" }],
+    });
+  });
+});
+
+describe("monitoring and assessment API", () => {
+  afterEach(() => vi.unstubAllGlobals());
+
+  const project: GeoProject = {
+    id: "project-1",
+    remoteToken: "signed-project-token",
+    title: "示例企业",
+    input: "示例企业",
+    createdAt: "2026-07-22T00:00:00.000Z",
+    updatedAt: "2026-07-22T00:00:00.000Z",
+    stage: "monitoring",
+    status: "ready",
+    progress: 100,
+    files: [],
+    questions: [],
+    selectedQuestionId: "reputation-01",
+    selectedPlatformIds: ["doubao", "kimi"],
+  };
+
+  it("creates and checks a server-priced ZPAY checkout", async () => {
+    const checkoutPayload = {
+      payment: {
+        authorization: "signed-payment-authorization",
+        orderId: "202607221800001234567890",
+        amountFen: 400,
+        unitPriceFen: 200,
+        answersPerPlatform: 5,
+        expiresAt: "2026-07-23T10:00:00.000Z",
+        action: "https://zpayz.cn/submit.php",
+        method: "POST",
+        fields: {
+          pid: "merchant123",
+          type: "alipay",
+          out_trade_no: "202607221800001234567890",
+          notify_url: "https://frontmind.net/api/geo/payments/notify",
+          return_url: "https://frontmind.net/api/geo/payments/return",
+          name: "FrontMind GEO 问题现状监控（2个平台，每平台5次）",
+          money: "4.00",
+          param: "signed-payment-authorization",
+          sign: "signed",
+          sign_type: "MD5",
+        },
+      },
+    };
+    const fetchMock = vi
+      .fn<typeof fetch>()
+      .mockResolvedValueOnce(
+        new Response(JSON.stringify(checkoutPayload), {
+          status: 201,
+          headers: { "content-type": "application/json" },
+        }),
+      )
+      .mockResolvedValueOnce(
+        new Response(
+          JSON.stringify({
+            payment: {
+              status: "paid",
+              orderId: checkoutPayload.payment.orderId,
+              amountFen: 400,
+              tradeNo: "zpay-trade-1",
+              paidAt: "2026-07-22T10:05:00.000Z",
+            },
+          }),
+          { headers: { "content-type": "application/json" } },
+        ),
+      );
+    vi.stubGlobal("fetch", fetchMock);
+
+    const checkout = await createGeoPaymentCheckout(project, {
+      questionId: "reputation-01",
+      platformIds: ["doubao", "kimi"],
+      method: "alipay",
+    });
+    expect(checkout).toMatchObject({
+      action: "https://zpayz.cn/submit.php",
+      method: "POST",
+      amountFen: 400,
+    });
+    expect(JSON.parse(String(fetchMock.mock.calls[0][1]?.body))).toEqual({
+      questionId: "reputation-01",
+      platformIds: ["doubao", "kimi"],
+      method: "alipay",
+    });
+
+    await expect(
+      getGeoPaymentStatus(project, {
+        questionId: "reputation-01",
+        platformIds: ["doubao", "kimi"],
+        authorization: checkout.authorization,
+      }),
+    ).resolves.toMatchObject({
+      status: "paid",
+      amountFen: 400,
+      tradeNo: "zpay-trade-1",
+    });
+  });
+
+  it("renders review-required payments only from complete canonical settlement facts", async () => {
+    const orderId = "202607221800001234567890";
+    const fetchMock = vi
+      .fn<typeof fetch>()
+      .mockResolvedValueOnce(
+        new Response(
+          JSON.stringify({
+            payment: {
+              status: "review_required",
+              orderId,
+              amountFen: 400,
+              tradeNo: "zpay-trade-review-1",
+              paidAt: "2026-07-23T10:31:00.000Z",
+              message: "付款已安全入账，需要人工核对",
+            },
+          }),
+          { headers: { "content-type": "application/json" } },
+        ),
+      )
+      .mockResolvedValueOnce(
+        new Response(
+          JSON.stringify({
+            payment: {
+              status: "paid",
+              orderId,
+              amountFen: 400,
+              paidAt: "2026-07-22T10:05:00.000Z",
+            },
+          }),
+          { headers: { "content-type": "application/json" } },
+        ),
+      )
+      .mockResolvedValueOnce(
+        new Response(
+          JSON.stringify({
+            payment: {
+              status: "review_required",
+              orderId,
+              amountFen: 400,
+              tradeNo: "zpay-trade-review-1",
+              paidAt: "2026-07-23T18:31:00+08:00",
+            },
+          }),
+          { headers: { "content-type": "application/json" } },
+        ),
+      );
+    vi.stubGlobal("fetch", fetchMock);
+    const input = {
+      questionId: "reputation-01",
+      platformIds: ["doubao", "kimi"] as ("doubao" | "kimi")[],
+      authorization: "signed-payment-authorization",
+    };
+
+    await expect(getGeoPaymentStatus(project, input)).resolves.toMatchObject({
+      status: "review_required",
+      tradeNo: "zpay-trade-review-1",
+      message: "付款已安全入账，需要人工核对",
+    });
+    await expect(getGeoPaymentStatus(project, input)).rejects.toMatchObject({
+      code: "INVALID_PAYMENT_STATUS",
+      status: 502,
+    });
+    await expect(getGeoPaymentStatus(project, input)).rejects.toMatchObject({
+      code: "INVALID_PAYMENT_STATUS",
+      status: 502,
+    });
+  });
+
+  it("submits a custom question and adopts the signed project token", async () => {
+    const customQuestion = {
+      id: "custom-1234",
+      category: "product_scenario",
+      question: "FrontMind 超前智能适合哪些企业使用？",
+      rationale: "用户自定义问题",
+      evidenceRefs: ["knowledge-base"],
+      selectable: true,
+    };
+    const fetchMock = vi.fn<typeof fetch>().mockResolvedValue(
+      new Response(
+        JSON.stringify({
+          projectToken: "next-project-token",
+          question: customQuestion,
+          project: {
+            id: "project-1",
+            companyName: "示例企业",
+            status: "completed",
+            questions: [customQuestion],
+          },
+        }),
+        { status: 201, headers: { "content-type": "application/json" } },
+      ),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    const result = await createGeoCustomQuestion(
+      project,
+      customQuestion.question,
+    );
+
+    expect(result.question).toMatchObject(customQuestion);
+    expect(result.project.remoteToken).toBe("next-project-token");
+    expect(JSON.parse(String(fetchMock.mock.calls[0][1]?.body))).toEqual({
+      question: customQuestion.question,
+    });
+  });
+
+  it("rejects a checkout response that could post to an untrusted host", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn<typeof fetch>().mockResolvedValue(
+        new Response(
+          JSON.stringify({
+            payment: {
+              authorization: "signed-payment-authorization",
+              orderId: "202607221800001234567890",
+              amountFen: 200,
+              unitPriceFen: 200,
+              answersPerPlatform: 5,
+              expiresAt: "2026-07-23T10:00:00.000Z",
+              action: "https://attacker.example/submit.php",
+              method: "POST",
+              fields: {},
+            },
+          }),
+          { headers: { "content-type": "application/json" } },
+        ),
+      ),
+    );
+
+    await expect(
+      createGeoPaymentCheckout(project, {
+        questionId: "reputation-01",
+        platformIds: ["doubao"],
+        method: "wxpay",
+      }),
+    ).rejects.toMatchObject({ code: "INVALID_PAYMENT_CHECKOUT" });
+  });
+
+  it("submits a strict contract profile and polls only by the opaque project token", async () => {
+    const response = {
+      projectToken: "manual-contract-token",
+      project: {
+        id: "project-1",
+        stage: "service_activation",
+        serviceActivation: {
+          status: "contract_preparing",
+          questionId: "reputation-01",
+          category: "reputation",
+          amountFen: 200_000,
+          billingMonths: 1,
+          contractId: "manual-contract-001",
+          contractWorkflowReference: "manual-order-reference-001",
+          manualOrderStatus: "pending_admin",
+        },
+      },
+    };
+    const fetchMock = vi
+      .fn<typeof fetch>()
+      .mockResolvedValueOnce(
+        new Response(JSON.stringify(response), {
+          status: 201,
+          headers: { "content-type": "application/json" },
+        }),
+      )
+      .mockResolvedValueOnce(
+        new Response(
+          JSON.stringify({
+            ...response,
+            project: {
+              ...response.project,
+              serviceActivation: {
+                ...response.project.serviceActivation,
+                status: "signature_required",
+                manualOrderStatus: "signature_required",
+                signingUrl: "https://sign.example.com/manual-contract-001",
+              },
+            },
+          }),
+          { headers: { "content-type": "application/json" } },
+        ),
+      );
+    vi.stubGlobal("fetch", fetchMock);
+    const profile = {
+      legalName: "深圳星辰科技有限公司",
+      creditCode: "91440300MA5F12345X",
+      address: "深圳市南山区科技园一号",
+      signatoryName: "张三",
+      signatoryTitle: "运营负责人",
+      mobile: "13800138000",
+      email: "contracts@example.com",
+      authorized: true as const,
+    };
+
+    const submitted = await submitGeoServiceContractProfile(project, profile);
+    expect(fetchMock.mock.calls[0][0]).toBe(
+      "/api/geo/projects/signed-project-token/services/contracts",
+    );
+    expect(JSON.parse(String(fetchMock.mock.calls[0][1]?.body))).toEqual({
+      profile,
+    });
+    expect(submitted.serviceActivation).toMatchObject({
+      status: "contract_preparing",
+      contractId: "manual-contract-001",
+      contractWorkflowReference: "manual-order-reference-001",
+      manualOrderStatus: "pending_admin",
+    });
+
+    const refreshed = await getGeoServiceContractStatus(submitted);
+    expect(fetchMock.mock.calls[1][0]).toBe(
+      "/api/geo/projects/manual-contract-token/services/contracts/status",
+    );
+    expect(JSON.parse(String(fetchMock.mock.calls[1][1]?.body))).toEqual({});
+    expect(refreshed.serviceActivation).toMatchObject({
+      status: "signature_required",
+      manualOrderStatus: "signature_required",
+      signingUrl: "https://sign.example.com/manual-contract-001",
+    });
+  });
+
+  it("creates, checks, and confirms a server-priced one-month service order", async () => {
+    const orderId = "202607221800009876543210";
+    const authorization = "signed-service-authorization";
+    const checkoutPayload = {
+      payment: {
+        authorization,
+        orderId,
+        amountFen: 200_000,
+        category: "reputation",
+        billingMonths: 1,
+        expiresAt: "2026-07-23T10:00:00.000Z",
+        action: "https://zpayz.cn/submit.php",
+        method: "POST",
+        fields: {
+          pid: "merchant123",
+          type: "wxpay",
+          out_trade_no: orderId,
+          notify_url: "https://frontmind.net/api/geo/payments/notify",
+          return_url: "https://frontmind.net/api/geo/payments/return",
+          name: "FrontMind GEO 美誉舆情优化服务（1个问题 / 1个月）",
+          money: "2000.00",
+          param: authorization,
+          sign: "signed",
+          sign_type: "MD5",
+        },
+      },
+    };
+    const fetchMock = vi
+      .fn<typeof fetch>()
+      .mockResolvedValueOnce(
+        new Response(JSON.stringify(checkoutPayload), {
+          status: 201,
+          headers: { "content-type": "application/json" },
+        }),
+      )
+      .mockResolvedValueOnce(
+        new Response(
+          JSON.stringify({
+            payment: {
+              status: "paid",
+              orderId,
+              amountFen: 200_000,
+              tradeNo: "zpay-service-1",
+              paidAt: "2026-07-22T10:05:00.000Z",
+            },
+          }),
+          { headers: { "content-type": "application/json" } },
+        ),
+      )
+      .mockResolvedValueOnce(
+        new Response(
+          JSON.stringify({
+            projectToken: "service-paid-token",
+            project: {
+              id: "project-1",
+              stage: "service_activation",
+              serviceActivation: {
+                status: "profile_required",
+                questionId: "reputation-01",
+                category: "reputation",
+                amountFen: 200_000,
+                billingMonths: 1,
+                orderId,
+                paidAt: "2026-07-22T10:05:00.000Z",
+              },
+            },
+          }),
+          { status: 201, headers: { "content-type": "application/json" } },
+        ),
+      );
+    vi.stubGlobal("fetch", fetchMock);
+
+    const checkout = await createGeoServicePaymentCheckout(project, "wxpay");
+    expect(checkout).toMatchObject({
+      amountFen: 200_000,
+      category: "reputation",
+      billingMonths: 1,
+    });
+    expect(JSON.parse(String(fetchMock.mock.calls[0][1]?.body))).toEqual({
+      method: "wxpay",
+    });
+
+    await expect(
+      getGeoServicePaymentStatus(project, authorization),
+    ).resolves.toMatchObject({
+      status: "paid",
+      amountFen: 200_000,
+    });
+    expect(JSON.parse(String(fetchMock.mock.calls[1][1]?.body))).toEqual({
+      authorization,
+    });
+
+    const paid = await startGeoService(
+      project,
+      authorization,
+      "one-time-purchase-intent-001",
+    );
+    expect(JSON.parse(String(fetchMock.mock.calls[2][1]?.body))).toEqual({
+      authorization,
+      schemaVersion: 2,
+      purchaseIntent: "one-time-purchase-intent-001",
+    });
+    expect(paid).toMatchObject({
+      remoteToken: "service-paid-token",
+      stage: "service_activation",
+      serviceActivation: {
+        status: "profile_required",
+        amountFen: 200_000,
+      },
+    });
+  });
+
+  it("sends only account credentials and display name to the website account endpoint", async () => {
+    const fetchMock = vi.fn<typeof fetch>().mockResolvedValue(
+      new Response(
+        JSON.stringify({
+          projectToken: "service-provisioned-token",
+          project: {
+            id: "project-1",
+            stage: "service_activation",
+            serviceActivation: {
+              status: "active",
+              questionId: "reputation-01",
+              category: "reputation",
+              amountFen: 200_000,
+              billingMonths: 1,
+              accountUsername: "frontmind.user",
+              accountDisplayName: "示例企业",
+              workspaceUrl: "https://dashboard.frontmind.net/",
+            },
+          },
+        }),
+        { status: 201, headers: { "content-type": "application/json" } },
+      ),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    const updated = await createGeoServiceAccount(project, {
+      displayName: "示例企业",
+      username: "frontmind.user",
+      password: "StrongPassword123",
+    });
+
+    expect(fetchMock.mock.calls[0][0]).toBe(
+      "/api/geo/projects/signed-project-token/services/account",
+    );
+    expect(JSON.parse(String(fetchMock.mock.calls[0][1]?.body))).toEqual({
+      displayName: "示例企业",
+      username: "frontmind.user",
+      password: "StrongPassword123",
+    });
+    expect(updated.serviceActivation).toMatchObject({
+      status: "active",
+      accountUsername: "frontmind.user",
+      accountDisplayName: "示例企业",
+      workspaceUrl: "https://dashboard.frontmind.net/",
+    });
+  });
+
+  it("uses the password-free v2 account contract and polls the provisioning status", async () => {
+    const responseBody = {
+      projectToken: "service-v2-token",
+      project: {
+        id: "project-1",
+        stage: "service_activation",
+        serviceActivation: {
+          status: "signature_required",
+          questionId: "reputation-01",
+          category: "reputation",
+          amountFen: 200_000,
+          billingMonths: 1,
+          planCode: "basic",
+          serviceDays: 30,
+          provisioningVersion: 2,
+          provisioningReference: "purchase-reference-001",
+          provisioningStatus: "pending_confirmation",
+          knowledgeImport: { status: "pending" },
+        },
+      },
+    };
+    const fetchMock = vi
+      .fn<typeof fetch>()
+      .mockResolvedValueOnce(
+        new Response(JSON.stringify(responseBody), {
+          status: 202,
+          headers: { "content-type": "application/json" },
+        }),
+      )
+      .mockResolvedValueOnce(
+        new Response(JSON.stringify(responseBody), {
+          headers: { "content-type": "application/json" },
+        }),
+      );
+    vi.stubGlobal("fetch", fetchMock);
+
+    const submitted = await createGeoServiceAccount(project, {
+      schemaVersion: 2,
+      account: {
+        mode: "create",
+        displayName: "示例企业",
+        username: "frontmind.user",
+      },
+    });
+    const body = JSON.parse(String(fetchMock.mock.calls[0][1]?.body));
+    expect(body).toEqual({
+      schemaVersion: 2,
+      account: {
+        mode: "create",
+        displayName: "示例企业",
+        username: "frontmind.user",
+      },
+    });
+    expect(JSON.stringify(body)).not.toMatch(/password|userId/);
+    expect(submitted.serviceActivation).toMatchObject({
+      provisioningVersion: 2,
+      provisioningStatus: "pending_confirmation",
+      knowledgeImport: { status: "pending" },
+    });
+
+    await getGeoServiceProvisioningStatus(submitted);
+    expect(fetchMock.mock.calls[1][0]).toBe(
+      "/api/geo/projects/service-v2-token/services/account/status",
+    );
+    expect(JSON.parse(String(fetchMock.mock.calls[1][1]?.body))).toEqual({});
+  });
+
+  it("sends only the selected question, platforms, and payment authorization", async () => {
+    const fetchMock = vi.fn<typeof fetch>().mockResolvedValue(
+      new Response(
+        JSON.stringify({
+          projectToken: "next-token",
+          project: {
+            id: "project-1",
+            monitoring: {
+              runId: "run-1",
+              status: "submitted",
+              platforms: ["doubao", "kimi"],
+            },
+          },
+        }),
+        { status: 201, headers: { "content-type": "application/json" } },
+      ),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    const updated = await startGeoMonitoring(project, {
+      questionId: "reputation-01",
+      platformIds: ["doubao", "kimi"],
+      paymentAuthorization: "paid-order-token",
+    });
+
+    expect(fetchMock.mock.calls[0][0]).toBe(
+      "/api/geo/projects/signed-project-token/monitoring",
+    );
+    expect(JSON.parse(String(fetchMock.mock.calls[0][1]?.body))).toEqual({
+      questionId: "reputation-01",
+      platformIds: ["doubao", "kimi"],
+      paymentAuthorization: "paid-order-token",
+    });
+    expect(updated.monitoring?.runId).toBe("run-1");
+  });
+
+  it("starts assessment through an explicit POST without a request body", async () => {
+    const fetchMock = vi.fn<typeof fetch>().mockResolvedValue(
+      new Response(
+        JSON.stringify({
+          projectToken: "assessment-token",
+          project: {
+            id: "project-1",
+            assessment: { status: "queued" },
+          },
+        }),
+        { status: 201, headers: { "content-type": "application/json" } },
+      ),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    const updated = await startGeoCurrentAssessment(project);
+
+    expect(fetchMock.mock.calls[0][0]).toBe(
+      "/api/geo/projects/signed-project-token/assessment",
+    );
+    expect(fetchMock.mock.calls[0][1]).toMatchObject({ method: "POST" });
+    expect(fetchMock.mock.calls[0][1]?.body).toBeUndefined();
+    expect(updated.assessment?.status).toBe("queued");
+  });
+
+  it("starts optimization forecasting through an explicit POST", async () => {
+    const fetchMock = vi.fn<typeof fetch>().mockResolvedValue(
+      new Response(
+        JSON.stringify({
+          projectToken: "forecast-token",
+          project: {
+            id: "project-1",
+            optimizationForecast: {
+              status: "queued",
+              dimensions: [],
+              assumptions: [],
+              roadmap: [],
+            },
+          },
+        }),
+        { status: 201, headers: { "content-type": "application/json" } },
+      ),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    const updated = await startGeoOptimizationForecast(project);
+
+    expect(fetchMock.mock.calls[0][0]).toBe(
+      "/api/geo/projects/signed-project-token/optimization-forecast",
+    );
+    expect(fetchMock.mock.calls[0][1]).toMatchObject({ method: "POST" });
+    expect(fetchMock.mock.calls[0][1]?.body).toBeUndefined();
+    expect(updated.remoteToken).toBe("forecast-token");
+    expect(updated.optimizationForecast?.status).toBe("queued");
+  });
+});

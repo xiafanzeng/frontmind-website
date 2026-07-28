@@ -1,0 +1,321 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://frontmind.net/schemas/geo-optimization-outcome-forecast-4-week-v1.json",
+  "title": "FrontMind GEO Optimization Outcome Forecast Raw Output",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schemaVersion",
+    "forecastType",
+    "horizonWeeks",
+    "scenario",
+    "dimensions",
+    "roadmap",
+    "summary",
+    "limitations",
+    "claimGuardrails"
+  ],
+  "properties": {
+    "schemaVersion": { "const": 1 },
+    "forecastType": { "const": "conditional_4_week" },
+    "horizonWeeks": { "const": 4 },
+    "scenario": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["name", "actionIds", "assumptions", "verificationWeeks"],
+      "properties": {
+        "name": { "const": "full_execution" },
+        "actionIds": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 6,
+          "uniqueItems": true,
+          "items": { "$ref": "#/$defs/actionId" }
+        },
+        "assumptions": {
+          "type": "array",
+          "minItems": 3,
+          "maxItems": 12,
+          "items": { "type": "string", "minLength": 8, "maxLength": 500 }
+        },
+        "verificationWeeks": {
+          "type": "array",
+          "prefixItems": [{ "const": 2 }, { "const": 4 }],
+          "items": false,
+          "minItems": 2,
+          "maxItems": 2
+        }
+      }
+    },
+    "dimensions": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "semanticVisibility",
+        "semanticCoherence",
+        "semanticRichness",
+        "semanticAuthority",
+        "competitiveAdvantage"
+      ],
+      "properties": {
+        "semanticVisibility": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "aiSearchVisibility",
+            "webSearchSov",
+            "multiPlatformCoverage"
+          ],
+          "properties": {
+            "aiSearchVisibility": { "$ref": "#/$defs/indicatorForecast" },
+            "webSearchSov": { "$ref": "#/$defs/indicatorForecast" },
+            "multiPlatformCoverage": { "$ref": "#/$defs/indicatorForecast" }
+          }
+        },
+        "semanticCoherence": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["corePropositionHitRate", "toneConsistency"],
+          "properties": {
+            "corePropositionHitRate": { "$ref": "#/$defs/indicatorForecast" },
+            "toneConsistency": { "$ref": "#/$defs/indicatorForecast" }
+          }
+        },
+        "semanticRichness": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "questionStageCoverage",
+            "semanticEntityRichness",
+            "contentFormatDiversity"
+          ],
+          "properties": {
+            "questionStageCoverage": { "$ref": "#/$defs/indicatorForecast" },
+            "semanticEntityRichness": { "$ref": "#/$defs/indicatorForecast" },
+            "contentFormatDiversity": { "$ref": "#/$defs/indicatorForecast" }
+          }
+        },
+        "semanticAuthority": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "authoritativeSourceRatio",
+            "structuredDataCompleteness",
+            "thirdPartyEndorsement"
+          ],
+          "properties": {
+            "authoritativeSourceRatio": { "$ref": "#/$defs/indicatorForecast" },
+            "structuredDataCompleteness": {
+              "$ref": "#/$defs/indicatorForecast"
+            },
+            "thirdPartyEndorsement": { "$ref": "#/$defs/indicatorForecast" }
+          }
+        },
+        "competitiveAdvantage": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["firstMentionRate", "exclusiveSemanticSpace"],
+          "properties": {
+            "firstMentionRate": { "$ref": "#/$defs/indicatorForecast" },
+            "exclusiveSemanticSpace": { "$ref": "#/$defs/indicatorForecast" }
+          }
+        }
+      }
+    },
+    "roadmap": {
+      "type": "array",
+      "minItems": 4,
+      "maxItems": 4,
+      "items": { "$ref": "#/$defs/roadmapPhase" }
+    },
+    "summary": { "type": "string", "minLength": 20, "maxLength": 2000 },
+    "limitations": {
+      "type": "array",
+      "minItems": 3,
+      "maxItems": 20,
+      "items": { "type": "string", "minLength": 4, "maxLength": 500 }
+    },
+    "claimGuardrails": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "isGuarantee",
+        "planningAssumptionOnly",
+        "requiresSameScopeRemeasurement"
+      ],
+      "properties": {
+        "isGuarantee": { "const": false },
+        "planningAssumptionOnly": { "const": true },
+        "requiresSameScopeRemeasurement": { "const": true }
+      }
+    }
+  },
+  "$defs": {
+    "actionId": {
+      "enum": [
+        "GEO_A1_entity_facts",
+        "GEO_A2_ai_visibility",
+        "GEO_A3_qa_assets",
+        "GEO_A4_positioning_language",
+        "GEO_A5_site_schema",
+        "GEO_A6_distribution_citations"
+      ]
+    },
+    "indicatorForecast": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "measurementStatus",
+        "gapClosureLow",
+        "gapClosureHigh",
+        "effectType",
+        "confidence",
+        "actionIds",
+        "rationale",
+        "dependencies",
+        "evidenceRefs",
+        "timeToSignalWeeks",
+        "verificationMetric"
+      ],
+      "properties": {
+        "measurementStatus": { "enum": ["projectable", "not_projectable"] },
+        "gapClosureLow": {
+          "type": ["number", "null"],
+          "minimum": 0,
+          "maximum": 1
+        },
+        "gapClosureHigh": {
+          "type": ["number", "null"],
+          "minimum": 0,
+          "maximum": 1
+        },
+        "effectType": {
+          "enum": ["direct_asset", "observed_outcome", "not_applicable"]
+        },
+        "confidence": { "type": "number", "minimum": 0, "maximum": 1 },
+        "actionIds": {
+          "type": "array",
+          "maxItems": 6,
+          "uniqueItems": true,
+          "items": { "$ref": "#/$defs/actionId" }
+        },
+        "rationale": { "type": "string", "minLength": 8, "maxLength": 1000 },
+        "dependencies": {
+          "type": "array",
+          "maxItems": 12,
+          "items": { "type": "string", "minLength": 4, "maxLength": 500 }
+        },
+        "evidenceRefs": {
+          "type": "array",
+          "maxItems": 30,
+          "items": { "type": "string", "minLength": 1, "maxLength": 500 }
+        },
+        "timeToSignalWeeks": {
+          "type": ["integer", "null"],
+          "minimum": 1,
+          "maximum": 4
+        },
+        "verificationMetric": {
+          "type": "string",
+          "minLength": 4,
+          "maxLength": 500
+        }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": { "measurementStatus": { "const": "projectable" } }
+          },
+          "then": {
+            "properties": {
+              "gapClosureLow": { "type": "number" },
+              "gapClosureHigh": { "type": "number" },
+              "effectType": { "enum": ["direct_asset", "observed_outcome"] },
+              "actionIds": { "minItems": 1 },
+              "dependencies": { "minItems": 1 },
+              "evidenceRefs": { "minItems": 1 }
+            }
+          },
+          "else": {
+            "properties": {
+              "gapClosureLow": { "type": "null" },
+              "gapClosureHigh": { "type": "null" },
+              "effectType": { "const": "not_applicable" },
+              "confidence": { "const": 0 },
+              "timeToSignalWeeks": { "type": "null" }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "measurementStatus": { "const": "projectable" },
+              "effectType": { "const": "direct_asset" }
+            },
+            "required": ["measurementStatus", "effectType"]
+          },
+          "then": {
+            "properties": {
+              "gapClosureLow": { "type": "number", "maximum": 0.65 },
+              "gapClosureHigh": { "type": "number", "maximum": 0.9 }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "measurementStatus": { "const": "projectable" },
+              "effectType": { "const": "observed_outcome" }
+            },
+            "required": ["measurementStatus", "effectType"]
+          },
+          "then": {
+            "properties": {
+              "gapClosureLow": { "type": "number", "maximum": 0.2 },
+              "gapClosureHigh": { "type": "number", "maximum": 0.4 }
+            }
+          }
+        }
+      ]
+    },
+    "roadmapPhase": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["phase", "weeks", "title", "actions", "verificationGate"],
+      "properties": {
+        "phase": { "type": "integer", "minimum": 1, "maximum": 4 },
+        "weeks": { "type": "string", "minLength": 3, "maxLength": 40 },
+        "title": { "type": "string", "minLength": 4, "maxLength": 120 },
+        "actions": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 8,
+          "items": { "type": "string", "minLength": 6, "maxLength": 500 }
+        },
+        "verificationGate": {
+          "type": "string",
+          "minLength": 6,
+          "maxLength": 500
+        }
+      },
+      "allOf": [
+        {
+          "if": { "properties": { "phase": { "const": 1 } } },
+          "then": { "properties": { "weeks": { "const": "第 1 周" } } }
+        },
+        {
+          "if": { "properties": { "phase": { "const": 2 } } },
+          "then": { "properties": { "weeks": { "const": "第 2 周" } } }
+        },
+        {
+          "if": { "properties": { "phase": { "const": 3 } } },
+          "then": { "properties": { "weeks": { "const": "第 3 周" } } }
+        },
+        {
+          "if": { "properties": { "phase": { "const": 4 } } },
+          "then": { "properties": { "weeks": { "const": "第 4 周" } } }
+        }
+      ]
+    }
+  }
+}

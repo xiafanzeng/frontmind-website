@@ -1,11 +1,13 @@
 import { jsxLocPlugin } from "@builder.io/vite-plugin-jsx-loc";
 import tailwindcss from "@tailwindcss/vite";
 import react from "@vitejs/plugin-react";
+import express from "express";
 import fs from "node:fs";
 import path from "node:path";
-import { defineConfig, type Plugin, type ViteDevServer } from "vite";
+import { defineConfig, loadEnv, type Plugin, type ViteDevServer } from "vite";
 import { vitePluginManusRuntime } from "vite-plugin-manus-runtime";
 import { handleVisitorStatsRequest } from "./server/visitorStats";
+import { createGeoRouter } from "./server/geo/router";
 
 // =============================================================================
 // Manus Debug Collector - Vite Plugin
@@ -163,7 +165,10 @@ function vitePluginStorageProxy(): Plugin {
           return;
         }
 
-        const forgeBaseUrl = (process.env.BUILT_IN_FORGE_API_URL || "").replace(/\/+$/, "");
+        const forgeBaseUrl = (process.env.BUILT_IN_FORGE_API_URL || "").replace(
+          /\/+$/,
+          "",
+        );
         const forgeKey = process.env.BUILT_IN_FORGE_API_KEY;
 
         if (!forgeBaseUrl || !forgeKey) {
@@ -173,7 +178,10 @@ function vitePluginStorageProxy(): Plugin {
         }
 
         try {
-          const forgeUrl = new URL("v1/storage/presign/get", forgeBaseUrl + "/");
+          const forgeUrl = new URL(
+            "v1/storage/presign/get",
+            forgeBaseUrl + "/",
+          );
           forgeUrl.searchParams.set("path", key);
 
           const forgeResp = await fetch(forgeUrl, {
@@ -215,14 +223,42 @@ function vitePluginVisitorStatsApi(): Plugin {
   };
 }
 
-export default defineConfig(({ command }) => {
+function vitePluginGeoApi(env: NodeJS.ProcessEnv): Plugin {
+  return {
+    name: "frontmind-geo-api",
+    configureServer(server: ViteDevServer) {
+      // Mount through a real Express app so its response helpers (`status`,
+      // `json`, `cookie`, …) are initialized before the router runs. Vite's
+      // Connect response object does not provide them on its own.
+      const geoApp = express();
+      geoApp.use(createGeoRouter({ env }));
+      server.middlewares.use("/api/geo", geoApp);
+    },
+  };
+}
+
+export default defineConfig(({ command, mode }) => {
   const isProductionBuild = command === "build";
+  // Vite only exposes VITE_-prefixed values to browser code. The GEO API gets
+  // the complete server-side env explicitly so `.env.local` works in dev
+  // without ever serializing merchant or broker secrets into the client.
+  const geoServerEnv: NodeJS.ProcessEnv = {
+    ...loadEnv(mode, PROJECT_ROOT, ""),
+    ...process.env,
+  };
   const plugins = [
     react(),
     tailwindcss(),
     ...(isProductionBuild
       ? []
-      : [jsxLocPlugin(), vitePluginManusRuntime(), vitePluginManusDebugCollector(), vitePluginStorageProxy(), vitePluginVisitorStatsApi()]),
+      : [
+          jsxLocPlugin(),
+          vitePluginManusRuntime(),
+          vitePluginManusDebugCollector(),
+          vitePluginStorageProxy(),
+          vitePluginVisitorStatsApi(),
+          vitePluginGeoApi(geoServerEnv),
+        ]),
   ];
 
   return {
@@ -243,7 +279,12 @@ export default defineConfig(({ command }) => {
         output: {
           manualChunks(id) {
             if (!id.includes("node_modules")) return undefined;
-            if (id.includes("react") || id.includes("react-dom") || id.includes("scheduler")) return "vendor-react";
+            if (
+              id.includes("react") ||
+              id.includes("react-dom") ||
+              id.includes("scheduler")
+            )
+              return "vendor-react";
             if (id.includes("framer-motion")) return "vendor-motion";
             if (id.includes("lucide-react")) return "vendor-icons";
             if (id.includes("@radix-ui")) return "vendor-radix";

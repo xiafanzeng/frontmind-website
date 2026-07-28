@@ -5,19 +5,11 @@ import SectionLabel from "@/components/SectionLabel";
 import Navbar from "@/components/Navbar";
 import Footer from "@/components/Footer";
 import { useLang } from "@/contexts/LanguageContext";
-import {
-  ArrowRight,
-  FileText,
-  Mail,
-} from "lucide-react";
+import { FRONTMIND_CONTACT_EMAILS } from "@/lib/frontmind-contact";
+import { ArrowRight, FileText, Mail } from "lucide-react";
 
 const CTA_IMG =
   "https://d2xsxph8kpxj0f.cloudfront.net/310519663574964680/kqDR6C992NM8WoGVvcwuPU/frontmind-cta-scene-XSQHkwEMYtwgJ8WUCXEzzY.webp";
-
-const CONTACT_EMAILS = [
-  "fanzengxia@link.cuhk.edu.cn",
-  "litongxin@cuhk.edu.cn",
-];
 
 type ContactProps = {
   includeChrome?: boolean;
@@ -110,21 +102,30 @@ export default function Contact({ includeChrome = true }: ContactProps) {
       ),
     },
     {
-      q: t("FrontMind 与传统 SEO 代理商有什么不同？", "How is FrontMind different from a traditional SEO agency?"),
+      q: t(
+        "FrontMind 与传统 SEO 代理商有什么不同？",
+        "How is FrontMind different from a traditional SEO agency?",
+      ),
       a: t(
         "传统 SEO 主要争夺搜索结果排名；FrontMind 关注企业是否能在 ChatGPT、Perplexity、Google AI、Claude 等答案环境中被正确理解、引用、推荐和执行。我们处理的是语义资产、可信证据、AI 可抓取性和业务流程落地，而不是低质量内容铺量。",
         "Traditional SEO focuses on search rankings. FrontMind focuses on whether an enterprise is correctly understood, cited, recommended, and acted on by answer environments such as ChatGPT, Perplexity, Google AI, and Claude.",
       ),
     },
     {
-      q: t("什么是 GEO？它与 SEO 有什么不同？", "What is GEO and how is it different from SEO?"),
+      q: t(
+        "什么是 GEO？它与 SEO 有什么不同？",
+        "What is GEO and how is it different from SEO?",
+      ),
       a: t(
         "GEO（生成式引擎优化）关注企业在生成式 AI 回答中的可见度、可信度和被引用概率。SEO 解决网页是否被排名，GEO 进一步解决 AI 是否理解企业事实、能力边界、证据链和推荐理由。",
         "GEO focuses on visibility, trust, and citation probability in generative AI answers. SEO addresses web ranking; GEO addresses whether AI understands enterprise facts, capability boundaries, evidence chains, and recommendation reasons.",
       ),
     },
     {
-      q: t("MindPromise、MindReach、MindNexus 分别解决什么问题？", "What do MindPromise, MindReach, and MindNexus solve?"),
+      q: t(
+        "MindPromise、MindReach、MindNexus 分别解决什么问题？",
+        "What do MindPromise, MindReach, and MindNexus solve?",
+      ),
       a: t(
         "MindPromise 智诺让 AI 正确理解企业，构建品牌语义、权威内容、AI 引用一致性与信任证据体系。MindReach 智达基于这套企业理解，支持获客、营销和客服智能体识别高意向线索。MindNexus 智汇把 AI 工作流、系统协同和 FDE 支持嵌入企业运营。",
         "MindPromise helps AI understand the enterprise through semantic assets and trustworthy proof. MindReach supports acquisition, marketing, and service agents. MindNexus embeds AI workflows, system coordination, and FDE support into enterprise operations.",
@@ -152,14 +153,20 @@ export default function Contact({ includeChrome = true }: ContactProps) {
       ),
     },
     {
-      q: t("企业员工已经会用 AI，还需要这类方案吗？", "If employees already use AI, is this still needed?"),
+      q: t(
+        "企业员工已经会用 AI，还需要这类方案吗？",
+        "If employees already use AI, is this still needed?",
+      ),
       a: t(
         "需要。个人会用 AI 不等于企业具备 AI 原生业务系统。企业 AI 化需要统一语义资产、明确流程边界、接入数据与系统、建立权限和复盘机制，并持续监测结果。",
         "Yes. Individual AI use does not equal an AI-native business system. Enterprise AI transformation requires shared semantic assets, workflow boundaries, data and system access, governance, and continuous monitoring.",
       ),
     },
     {
-      q: t("FrontMind 的科研背景体现在哪里？", "Where does FrontMind's research background show up?"),
+      q: t(
+        "FrontMind 的科研背景体现在哪里？",
+        "Where does FrontMind's research background show up?",
+      ),
       a: t(
         "FrontMind 孵化于香港中文大学（深圳）数据科学学院 AI 智能决策实验室相关创新生态，方法论长期关注自然语言处理、多智能体系统、模型偏好监测、GEO 评测和企业级流程部署。",
         "FrontMind grew from the CUHK-Shenzhen School of Data Science AI decision-making lab ecosystem. Its methodology draws on NLP, multi-agent systems, model preference monitoring, GEO evaluation, and enterprise workflow deployment.",
@@ -175,8 +182,8 @@ export default function Contact({ includeChrome = true }: ContactProps) {
     {
       q: t("如何联系？", "How can we get in touch?"),
       a: t(
-        `请发送邮件至 ${CONTACT_EMAILS[0]} 或 ${CONTACT_EMAILS[1]}。来信中可包含公司背景、您的职务、介绍材料和希望讨论的方向。`,
-        `Please email ${CONTACT_EMAILS[0]} or ${CONTACT_EMAILS[1]}. You may include company context, your title, introduction material, and the topic you would like to discuss.`,
+        `请发送邮件至 ${FRONTMIND_CONTACT_EMAILS[0]} 或 ${FRONTMIND_CONTACT_EMAILS[1]}。来信中可包含公司背景、您的职务、介绍材料和希望讨论的方向。`,
+        `Please email ${FRONTMIND_CONTACT_EMAILS[0]} or ${FRONTMIND_CONTACT_EMAILS[1]}. You may include company context, your title, introduction material, and the topic you would like to discuss.`,
       ),
     },
   ];
@@ -185,13 +192,20 @@ export default function Contact({ includeChrome = true }: ContactProps) {
     <div className="min-h-screen bg-[#f5f5f7]">
       {includeChrome && <Navbar />}
 
-      <section aria-label="Contact Hero" className="relative overflow-hidden pt-28 pb-16 md:pt-36 md:pb-20">
-        <div className="absolute inset-0 bg-cover bg-center opacity-10" style={{ backgroundImage: `url(${CTA_IMG})` }} />
+      <section
+        aria-label="Contact Hero"
+        className="relative overflow-hidden pt-28 pb-16 md:pt-36 md:pb-20"
+      >
+        <div
+          className="absolute inset-0 bg-cover bg-center opacity-10"
+          style={{ backgroundImage: `url(${CTA_IMG})` }}
+        />
         <div className="absolute inset-0 bg-gradient-to-b from-[#f5f5f7] via-[#f5f5f7]/95 to-[#f5f5f7]" />
         <div
           className="absolute inset-0 opacity-[0.02]"
           style={{
-            backgroundImage: "linear-gradient(#3D1560 1px, transparent 1px), linear-gradient(90deg, #3D1560 1px, transparent 1px)",
+            backgroundImage:
+              "linear-gradient(#3D1560 1px, transparent 1px), linear-gradient(90deg, #3D1560 1px, transparent 1px)",
             backgroundSize: "60px 60px",
           }}
         />
@@ -201,13 +215,27 @@ export default function Contact({ includeChrome = true }: ContactProps) {
         >
           <div className="max-w-3xl">
             <SectionLabel text={t("联系我们", "Contact Us")} color="purple" />
-            <h1 className="mb-6 text-4xl font-bold leading-tight text-[#1A1A2E] md:text-5xl" style={{ fontFamily: "'DM Serif Display', serif" }}>
+            <h1
+              className="mb-6 text-4xl font-bold leading-tight text-[#1A1A2E] md:text-5xl"
+              style={{ fontFamily: "'DM Serif Display', serif" }}
+            >
               {t(
-                <>与 FrontMind<br />开启一次业务讨论</>,
-                <>Start a Business Conversation<br />with FrontMind</>,
+                <>
+                  与 FrontMind
+                  <br />
+                  开启一次业务讨论
+                </>,
+                <>
+                  Start a Business Conversation
+                  <br />
+                  with FrontMind
+                </>,
               )}
             </h1>
-            <p className="max-w-2xl text-lg leading-relaxed text-[#6B7280]" style={{ fontFamily: "'DM Sans', sans-serif" }}>
+            <p
+              className="max-w-2xl text-lg leading-relaxed text-[#6B7280]"
+              style={{ fontFamily: "'DM Sans', sans-serif" }}
+            >
               {t(
                 "如果您的企业正在思考 AI 搜索可见度、智能体增长或内部流程 AI 化，欢迎将业务背景与合作方向发送给我们。FrontMind 团队会基于材料判断适合的交流方式。",
                 "If your organization is exploring AI search visibility, agentic growth, or enterprise AI workflows, share your business context and collaboration direction with us. The FrontMind team will review the material and suggest an appropriate next step.",
@@ -224,11 +252,23 @@ export default function Contact({ includeChrome = true }: ContactProps) {
         >
           <div className="grid grid-cols-1 gap-8 lg:grid-cols-[0.9fr_1.1fr] lg:items-start">
             <div>
-              <SectionLabel text={t("商务联系", "Business Contact")} color="purple" />
-              <h2 className="mb-4 text-3xl font-bold leading-tight text-[#1A1A2E] md:text-4xl" style={{ fontFamily: "'DM Serif Display', serif" }}>
-                {t("请将合作方向发送至以下邮箱", "Share Your Collaboration Direction")}
+              <SectionLabel
+                text={t("商务联系", "Business Contact")}
+                color="purple"
+              />
+              <h2
+                className="mb-4 text-3xl font-bold leading-tight text-[#1A1A2E] md:text-4xl"
+                style={{ fontFamily: "'DM Serif Display', serif" }}
+              >
+                {t(
+                  "请将合作方向发送至以下邮箱",
+                  "Share Your Collaboration Direction",
+                )}
               </h2>
-              <p className="max-w-xl text-base leading-relaxed text-[#6B7280]" style={{ fontFamily: "'DM Sans', sans-serif" }}>
+              <p
+                className="max-w-xl text-base leading-relaxed text-[#6B7280]"
+                style={{ fontFamily: "'DM Sans', sans-serif" }}
+              >
                 {t(
                   "来信可简要说明公司背景、您的职务、公司介绍材料与希望讨论的重点。我们更重视问题本身的质量，也会以此判断后续是否适合安排初步沟通、专题诊断或方案讨论。",
                   "Your note may briefly include company context, your role, introduction material, and the topic you would like to discuss. We value the quality of the question and use it to determine whether an initial conversation, diagnosis, or solution discussion is appropriate.",
@@ -237,7 +277,7 @@ export default function Contact({ includeChrome = true }: ContactProps) {
             </div>
 
             <div className="grid grid-cols-1 gap-4">
-              {CONTACT_EMAILS.map((email) => (
+              {FRONTMIND_CONTACT_EMAILS.map((email) => (
                 <a
                   key={email}
                   href={mailtoHref(email)}
@@ -248,15 +288,20 @@ export default function Contact({ includeChrome = true }: ContactProps) {
                       <Mail size={20} />
                     </span>
                     <span className="min-w-0">
-                      <span className="block break-all text-base font-bold text-[#1A1A2E] md:text-lg" style={{ fontFamily: "'DM Sans', sans-serif" }}>
+                      <span
+                        className="block break-all text-base font-bold text-[#1A1A2E] md:text-lg"
+                        style={{ fontFamily: "'DM Sans', sans-serif" }}
+                      >
                         {email}
                       </span>
                     </span>
                   </span>
-                  <ArrowRight size={18} className="shrink-0 text-[#3D1560] transition-transform group-hover:translate-x-1" />
+                  <ArrowRight
+                    size={18}
+                    className="shrink-0 text-[#3D1560] transition-transform group-hover:translate-x-1"
+                  />
                 </a>
               ))}
-
             </div>
           </div>
 
@@ -268,30 +313,42 @@ export default function Contact({ includeChrome = true }: ContactProps) {
                     <FileText size={18} />
                   </span>
                   <div>
-                    <h3 className="text-xl font-bold text-[#1A1A2E]" style={{ fontFamily: "'DM Serif Display', serif" }}>
+                    <h3
+                      className="text-xl font-bold text-[#1A1A2E]"
+                      style={{ fontFamily: "'DM Serif Display', serif" }}
+                    >
                       {t("来信示例", "Sample Note")}
                     </h3>
-                    <p className="mt-1 text-sm text-[#6B7280]" style={{ fontFamily: "'DM Sans', sans-serif" }}>
-                      {t("请将花括号中的内容替换为贵司实际信息。", "Replace the content in braces with your organization's details.")}
+                    <p
+                      className="mt-1 text-sm text-[#6B7280]"
+                      style={{ fontFamily: "'DM Sans', sans-serif" }}
+                    >
+                      {t(
+                        "请将花括号中的内容替换为贵司实际信息。",
+                        "Replace the content in braces with your organization's details.",
+                      )}
                     </p>
                   </div>
                 </div>
-                <span className="w-fit text-xs font-bold uppercase tracking-[0.18em] text-[#C5A24D]" style={{ fontFamily: "'DM Sans', sans-serif" }}>
+                <span
+                  className="w-fit text-xs font-bold uppercase tracking-[0.18em] text-[#C5A24D]"
+                  style={{ fontFamily: "'DM Sans', sans-serif" }}
+                >
                   {t("Business Reference", "Business Reference")}
                 </span>
               </div>
 
               <div className="bg-[#FBFAFC] px-6 py-6 md:px-8">
                 <div className="border-l-2 border-[#C5A24D] bg-white px-5 py-5 shadow-[0_18px_45px_rgba(26,26,46,0.06)] md:px-6">
-                {sampleLetterLines.map((line, index) => (
-                  <p
-                    key={`${line}-${index}`}
-                    className={`${line ? "mb-2" : "mb-3"} text-sm leading-relaxed text-[#374151] last:mb-0`}
-                    style={{ fontFamily: "'DM Sans', sans-serif" }}
-                  >
-                    {line || "\u00A0"}
-                  </p>
-                ))}
+                  {sampleLetterLines.map((line, index) => (
+                    <p
+                      key={`${line}-${index}`}
+                      className={`${line ? "mb-2" : "mb-3"} text-sm leading-relaxed text-[#374151] last:mb-0`}
+                      style={{ fontFamily: "'DM Sans', sans-serif" }}
+                    >
+                      {line || "\u00A0"}
+                    </p>
+                  ))}
                 </div>
               </div>
             </div>
@@ -307,20 +364,38 @@ export default function Contact({ includeChrome = true }: ContactProps) {
           <div className="mx-auto max-w-4xl">
             <div className="mb-14 text-center">
               <SectionLabel text={t("常见问题", "FAQ")} color="gold" />
-              <h2 className="text-3xl font-bold leading-tight text-[#1A1A2E] md:text-4xl" style={{ fontFamily: "'DM Serif Display', serif" }}>
+              <h2
+                className="text-3xl font-bold leading-tight text-[#1A1A2E] md:text-4xl"
+                style={{ fontFamily: "'DM Serif Display', serif" }}
+              >
                 {t("常见问题解答", "Frequently Asked Questions")}
               </h2>
             </div>
 
             <div className="space-y-4">
               {faqItems.map((faq) => (
-                <details key={String(faq.q)} className="fm-card group overflow-hidden">
-                  <summary className="flex cursor-pointer list-none items-center justify-between px-6 py-5 transition-colors" style={{ fontFamily: "'DM Sans', sans-serif" }}>
-                    <span className="pr-4 text-sm font-semibold text-[#1A1A2E]">{faq.q}</span>
-                    <span className="shrink-0 text-lg text-[#3D1560] transition-transform group-open:rotate-45">+</span>
+                <details
+                  key={String(faq.q)}
+                  className="fm-card group overflow-hidden"
+                >
+                  <summary
+                    className="flex cursor-pointer list-none items-center justify-between px-6 py-5 transition-colors"
+                    style={{ fontFamily: "'DM Sans', sans-serif" }}
+                  >
+                    <span className="pr-4 text-sm font-semibold text-[#1A1A2E]">
+                      {faq.q}
+                    </span>
+                    <span className="shrink-0 text-lg text-[#3D1560] transition-transform group-open:rotate-45">
+                      +
+                    </span>
                   </summary>
                   <div className="px-6 pb-5">
-                    <p className="text-sm leading-relaxed text-[#6B7280]" style={{ fontFamily: "'DM Sans', sans-serif" }}>{faq.a}</p>
+                    <p
+                      className="text-sm leading-relaxed text-[#6B7280]"
+                      style={{ fontFamily: "'DM Sans', sans-serif" }}
+                    >
+                      {faq.a}
+                    </p>
                   </div>
                 </details>
               ))}

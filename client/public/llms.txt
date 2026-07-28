@@ -32,7 +32,7 @@ FrontMind 不是传统 SEO 代理商。FrontMind 将生成式 AI 系统视为新
 - https://www.frontmind.net/mindnexus — MindNexus 智汇 - FrontMind 产品介绍: 了解 MindNexus 智汇如何通过企业级 AI 工作流部署、系统协同与 FDE 入驻，让 AI 嵌入组织流程。
 - https://www.frontmind.net/research — FrontMind 研究与社区: FrontMind 研究与社区汇集 GEO 研究进展、中文学习文章和 AI 搜索实践内容。
 - https://www.frontmind.net/research/community — FrontMind - GEO 学习社区: GEO 学习社区内容已整合到 FrontMind 阅读场景，帮助企业和从业者理解 AI 搜索、AEO、GEO 与 LLM 评测。
-- https://www.frontmind.net/blog — FrontMind - GEO 研究与学习社区文章库: 119 篇中文整理后的 GEO、AI 搜索、LLM 评测、技术 SEO 与内容策略文章。
+- https://www.frontmind.net/blog — FrontMind - GEO 研究与学习社区文章库: 143 篇中文整理后的 GEO、AI 搜索、LLM 评测、技术 SEO 与内容策略文章。
 - https://www.frontmind.net/about — 关于 FrontMind: 了解 FrontMind 的港中深科研背景、硕博 FDE 团队、企业 AI 化方法论与端到端部署能力。
 - https://www.frontmind.net/contact — 联系 FrontMind: 联系 FrontMind，讨论 GEO、AI 品牌可见度、智能体增长、企业级 AI 工作流部署与 FDE 入驻。
 - https://www.frontmind.net/news — FrontMind 新闻动态: FrontMind 最新公司动态、行业新闻与产品更新。
@@ -71,6 +71,30 @@ FrontMind 不是传统 SEO 代理商。FrontMind 将生成式 AI 系统视为新
 
 The full canonical URL list is available in https://www.frontmind.net/sitemap.xml. The following entries are high-priority GEO, AEO, AI search, LLM evaluation, and technical SEO references.
 
+- https://www.frontmind.net/blog/world-first-ai-scientist-geo-research — 打造全球首个 GEO 研究 AI 科学家 - FrontMind GEO 社区: GEO 研究科学家是一套拟议中的 AI 研究系统：把 AI 搜索观察转化为可控实验、研究卡片和可复验证据。
+- https://www.frontmind.net/blog/top-ai-search-geo-experts — 顶尖 AI 搜索与 GEO 专家：该关注谁、该聘请谁 - FrontMind GEO 社区: 从原创研究、方法透明度、规模化验证和落地能力四个维度，评估 AI 搜索与 GEO 专家及企业合作伙伴。
+- https://www.frontmind.net/blog/top-10-seo-skills-github-stars — 2026 年 GitHub 最受欢迎的 10 项 SEO 技能（按 Star 数排名） - FrontMind GEO 社区: 基于 2026 年 7 月的 GitHub Star 数盘点 10 个 SEO 技能项目，并比较覆盖范围、Agent 适配度、安装检查与选型风险。
+- https://www.frontmind.net/blog/conversation-analytics-chat-is-the-new-funnel — 对话分析：聊天正在成为新的转化漏斗 - FrontMind GEO 社区: 首轮 AI 可见度并不足以解释转化；对话分析关注品牌在多轮比较、约束和评估中的持续出现与最终推荐。
+- https://www.frontmind.net/blog/ai-search-casting-call-retrieval — AI 搜索的“选角”：SEO 排名为何不等于被检索 - FrontMind GEO 社区: 传统排名并不保证进入 AI 答案；候选选择、重排和可直接作答的内容单元共同决定 GEO 可见度。
+- https://www.frontmind.net/blog/ai-search-rorschach-test-prompt-intent — AI 搜索的“罗夏墨迹测验”：一个提示词为何包含多重意图 - FrontMind GEO 社区: 一个 AI 搜索提示词往往隐藏多条决策路线；用意图地图组织内容，比机械复制查询词更能覆盖真实需求。
+- https://www.frontmind.net/blog/ai-search-courtroom-corroboration — AI 搜索的“法庭”：为什么多源印证比发布更多内容更重要 - FrontMind GEO 社区: 自有证据、独立印证和主张具体性共同构成 AI 搜索信任；发布数量本身并不能替代外部验证。
+- https://www.frontmind.net/blog/ai-search-credit-score-brand-authority — AI 搜索的“信用评分”：AI 如何从第三方证据建立品牌权威 - FrontMind GEO 社区: AI 搜索中的品牌权威不是一个公开分数，而是实体一致性、来源相关性和第三方印证共同形成的证据模式。
+- https://www.frontmind.net/blog/ai-search-telephone-game-claim-drift — AI 搜索的“传话游戏”：品牌主张如何在答案管线中漂移 - FrontMind GEO 社区: 从检索、摘要到引用与最终答案，品牌主张可能逐步失真；主张卡片和语义完整性监测可降低漂移。
+- https://www.frontmind.net/blog/ai-search-supply-chain-original-research — AI 搜索的“供应链”：原创研究如何成为 AI 信任的事实 - FrontMind GEO 社区: 原创研究要经过透明方法、首发、独立解读、品类复用和持续维护，才会成为可检查、可引用的 AI 证据。
+- https://www.frontmind.net/blog/ai-search-compression-engine-brand-positioning — AI 搜索是一台压缩引擎：品牌定位为何从答案中消失 - FrontMind GEO 社区: AI 答案必须压缩大量来源；显式、可比较、有证据和有边界的定位更容易在摘要中被忠实保留。
+- https://www.frontmind.net/blog/ai-search-matchmaker-recommendation-fit — AI 搜索的“红娘难题”：品牌推荐中“最匹配”为何胜过“最好” - FrontMind GEO 社区: 准确推荐依赖受众、任务、约束、证据和排除条件；清晰的适配信号比泛化的“最好”更有价值。
+- https://www.frontmind.net/blog/ai-search-weather-system-visibility-variance — AI 搜索像天气系统：模型波动下如何衡量 GEO 可见度 - FrontMind GEO 社区: 单张答案截图只是一次观测；GEO 应跨提示词、模型、日期、答案角色和来源环境衡量可见度分布。
+- https://www.frontmind.net/blog/ai-search-dark-funnel-answer-influence — AI 搜索的“暗漏斗”：为什么引荐流量无法衡量答案影响力 - FrontMind GEO 社区: AI 引荐流量只能衡量可观察点击，无法覆盖答案对认知、考虑和后续直接访问的全部影响。
+- https://www.frontmind.net/blog/hidden-intent-map-behind-ai-search — AI 搜索背后的隐藏意图地图 - FrontMind GEO 社区: Kojable 分析了 984 个 DevOps 提示模板对应的 74,346 条 AI 回答，揭示提示意图、检索路线和引用行为如何塑造可见度。
+- https://www.frontmind.net/blog/mentioned-isnt-enough-brand-citations-ai-answers — 仅被提及还不够：74,346 条 AI 答案揭示的品牌引用真相 - FrontMind GEO 社区: Kojable 横跨 ChatGPT、Claude、Gemini 和 Perplexity 分析 74,346 条回答，说明品牌提及与品牌成为被引权威之间存在关键差异。
+- https://www.frontmind.net/blog/hnsw-and-geo-retrieval-layer — HNSW 与 GEO：无人讨论的检索层 - FrontMind GEO 社区: HNSW 解释了为什么相关内容仍可能进不了 AI 答案；近似向量检索、分块、过滤和重排共同决定候选集。
+- https://www.frontmind.net/blog/what-is-corroboration-authority — 什么是“印证权威”？AI 搜索背后的第三方信任层 - FrontMind GEO 社区: 印证权威是 LinkedIn、评测平台、分析机构、社区和媒体等独立来源对同一品牌主张进行确认时形成的信任权重。
+- https://www.frontmind.net/blog/latent-authority-perplexity-patent — 什么是“潜在权威”？Perplexity 搜索专利揭示的新型数字影响力 - FrontMind GEO 社区: 潜在权威描述实体在模型中被持续编码为某一主题默认参考对象的程度；Perplexity 专利展示了多轮搜索状态可能如何强化它。
+- https://www.frontmind.net/blog/emotion-concepts-llm-function-claude-sonnet-45-arxiv-2604-07729 — LLM 具有内部“情绪”：Claude Sonnet 4.5 情绪向量研究意味着什么 - FrontMind GEO 社区: Anthropic 论文描绘了 Claude Sonnet 4.5 内部的情绪向量，并讨论情绪语境如何因果性地影响输出、偏好与内容表达。
+- https://www.frontmind.net/blog/language-models-injective-invertible-arxiv-2510-15511 — 语言模型是单射且可逆的：对 GEO、隐私与 AI 透明度意味着什么 - FrontMind GEO 社区: arXiv:2510.15511 论证解码器 Transformer 几乎必然为单射，并用 SipIt 从隐藏状态恢复精确输入，改变了我们对隐私和可解释性的理解。
+- https://www.frontmind.net/blog/llm-multi-format-robustness-arxiv-2606-11643-geo — 同一问题换种格式，LLM 答案就不同：新研究如何改进一致性 - FrontMind GEO 社区: arXiv:2606.11643 显示多格式训练可显著提升 LLM 的全格式一致性与跨格式稳健性，并为 GEO 内容设计带来直接启示。
+- https://www.frontmind.net/blog/why-llm-answers-dont-show-citations — 为什么 LLM 答案不显示引用：证据被使用却未归因的 20 个原因 - FrontMind GEO 社区: 没有可见引用并不代表来源未被使用；模型记忆、检索重排、归因逻辑、产品界面和缓存策略都可能让引用消失。
+- https://www.frontmind.net/blog/google-agentic-resource-discovery-specification — Google 智能体资源发现（ARD）：智能体网络缺失的关键一层 - FrontMind GEO 社区: ARD 通过目录和注册表让 AI Agent 发现、验证并连接网络工具；这会为 SEO、GEO 和 AI 可见度建立新的发现基础设施。
 - https://www.frontmind.net/blog/raid-geo-intent-driven-generative-search-optimization — RAID G-SEO：不看用户查询，也能建模搜索意图并击败原始 GEO 策略 - FrontMind GEO 社区: RAID G-SEO（arXiv:2508.11158）在 9 种原始 GEO 策略上全面胜出：客观指标 +0.42、主观指标 +1.09。它用四阶段意图管线和 4W 角色反思，在看不到用户查询时推断搜索意图。
 - https://www.frontmind.net/blog/geo-sfe-structural-feature-engineering-citation — GEO-SFE：影响 AI 是否引用你的，不只是内容，还有文档结构 - FrontMind GEO 社区: GEO-SFE（arXiv:2603.29979）把 GEO 优化从“写什么”推进到“如何组织”。研究显示，三级层级结构可让 6 个生成式引擎的引用率提升 17.3%，并给出标题深度、段落长度和格式整合等 5 条量化原则。
 - https://www.frontmind.net/blog/webknograph-gnn-internal-linking-seo — WebKnoGraph：内部链接上线前，先用开源框架测试效果 - FrontMind GEO 社区: WebKnoGraph（arXiv:2606.06106）用 GraphSAGE 和 PageRank 模拟，在部署前测试内部链接策略。四个指标、五种策略、自动与专家辅助选择，SEO 顾问都应该了解。
@@ -87,30 +111,6 @@ The full canonical URL list is available in https://www.frontmind.net/sitemap.xm
 - https://www.frontmind.net/blog/ga4-regex-chatgpt-perplexity-gemini-claude-copilot — ChatGPT、Perplexity、Gemini、Claude 和 Copilot 的 GA4 正则表达式 - FrontMind GEO 社区: 适用于 GA4 渠道组的 RE2 正则表达式，覆盖 ChatGPT、Perplexity、Gemini、Claude、Copilot 等 AI 引擎，并包含常见错误、测试方法和季度维护计划。
 - https://www.frontmind.net/blog/custom-ai-search-channel-group-ga4 — 如何在 GA4 中创建自定义 AI 搜索渠道组 - FrontMind GEO 社区: 分步创建 GA4 自定义渠道组，并添加“AI Search”渠道定义。涵盖管理入口、渠道优先级、正则条件，以及如何在流量获取报告和 Explorations 中使用。
 - https://www.frontmind.net/blog/how-to-find-ai-referral-traffic-ga4 — 如何在 GA4 中查找 AI 推荐流量 - FrontMind GEO 社区: 如何用流量获取过滤器和自由形式 Explorations，在 GA4 中查找 ChatGPT、Perplexity、Gemini、Claude 等 AI 推荐流量，并建立会话来源基线。
-- https://www.frontmind.net/blog/deepseek-v4-hybrid-attention-1m-context-memory — DeepSeek V4 如何将 100 万个 token 塞进 9.62 GB，并把推理成本降低 6 倍 - FrontMind GEO 社区: DeepSeek V4 通过 Hybrid Attention（CSA + HCA + 滑动窗口）将长上下文 KV 缓存减少约 90%。100 万 token 只需 9.62 GiB，比 GPT-5.5 便宜约 6 倍。
-- https://www.frontmind.net/blog/autoregressive-ranking-dual-cross-encoders-paper — 双编码器要用 464,000 维才能给 100 万文档排序，自回归 LLM 只要 512 维 - FrontMind GEO 社区: arXiv:2601.05588 解释了为什么双编码器需要约 464K 维才能给 1M 文档排序，自回归 LLM 如何用 512 维完成排序，以及 SToICaL 损失带来了什么。
-- https://www.frontmind.net/blog/feat-geo-paper-feature-level-optimization — FeatGEO：为什么最初 9 种 GEO 策略正在现代 AI 引擎上失效，以及替代方案是什么 - FrontMind GEO 社区: FeatGEO（arXiv:2604.19113）显示，最初 9 种 GEO 启发式策略在 GPT-4o、Gemini 和 Qwen 上可能损害引用可见性；特征级优化正在胜出。
-- https://www.frontmind.net/blog/generative-engine-optimization-resources-courses-tutorials — 生成式引擎优化（GEO）：2026 年最佳资源、课程与教程 - FrontMind GEO 社区: 面向 SEO 专业人士的 2026 年 GEO 学习资源：免费指南、研究论文、YouTube 教程、结构化学习路径，以及开始实践 GEO 所需的工具。
-- https://www.frontmind.net/blog/how-to-learn-geo-generative-engine-optimization — 如何学习 GEO：给 SEO 专业人士的分步路线图 - FrontMind GEO 社区: SEO 专业人士如何学习 GEO：哪些 SEO 技能可以迁移，需要掌握哪些新概念（实体信任、引用面、LLMs.txt），以及 2026 年最佳结构化学习路径。
-- https://www.frontmind.net/blog/geo-framework — GEO 框架：2026 年如何为 AI 搜索优化内容 - FrontMind GEO 社区: 2026 年 AI 搜索内容优化的 GEO 框架：内容结构、实体权威、技术 GEO（Schema、LLMs.txt、robots.txt）以及 90 天实施计划。
-- https://www.frontmind.net/blog/crawlability-seo-geo-two-meanings — 2026 年，可抓取性仍然是 SEO 任务吗？这个词现在有两个含义 - FrontMind GEO 社区: 可抓取性在 2026 年有两个含义：一是 Google SEO 管道中的抓取与索引，二是 GEO 中 AI 机器人对原始 HTML 的检索。混为一谈会让两边都受损。
-- https://www.frontmind.net/blog/paperclip-for-seo-complete-guide — Paperclip for SEO：运行 AI SEO 团队的完整指南 - FrontMind GEO 社区: Paperclip SEO 完整指南：建立自主 AI agent 团队，处理关键词研究、内容生产、技术审核和报告，覆盖 17 个 SEO 工作流程。
-- https://www.frontmind.net/blog/paperclip-seo-what-is-paperclip — 什么是 Paperclip，为什么 SEO 团队应该关心 - FrontMind GEO 社区: 面向 SEO 团队解释 Paperclip：它是什么、和 Claude/其他 AI 工具有何不同，以及最适合哪些 SEO 工作流。
-- https://www.frontmind.net/blog/paperclip-seo-first-agent-setup — 在 Paperclip 中设置你的第一个 SEO Agent：分步指南 - FrontMind GEO 社区: 在 Paperclip 中设置第一个 SEO agent 的分步指南：目标定义、agent 配置、skill injection 和首次 Heartbeat 运行。
-- https://www.frontmind.net/blog/paperclip-seo-org-chart — 在 Paperclip 中构建 AI SEO 组织结构图：角色、层级和汇报线 - FrontMind GEO 社区: 如何在 Paperclip 中构建 AI SEO 组织结构图：创建哪些 agent 角色、如何设计汇报线，以及授权如何从 SEO Manager 流向 specialist agents。
-- https://www.frontmind.net/blog/paperclip-automated-keyword-research — 使用 Paperclip Agents 自动化关键词研究：每周运行，无需手动触发 - FrontMind GEO 社区: 如何用 Paperclip agent 自动做关键词研究：每周 Heartbeat、意图聚类、机会评分和结构化输出，无需手动触发。
-- https://www.frontmind.net/blog/paperclip-content-gap-analysis-agents — 使用 Paperclip Autonomous Agents 大规模做内容差距分析 - FrontMind GEO 社区: 使用 Paperclip agent 持续运行内容差距分析：自动竞品关键词对比、覆盖映射，以及按计划交付的优先差距报告。
-- https://www.frontmind.net/blog/paperclip-competitor-monitoring-heartbeats — 使用 Paperclip Heartbeats 自动监控竞争对手 - FrontMind GEO 社区: 使用 Paperclip Heartbeats 自动监控竞争对手 SEO：每周排名变化、新内容检测和 SERP 变化警报，无需手动触发。
-- https://www.frontmind.net/blog/paperclip-content-brief-pipeline — 在 Paperclip 中构建自动化 Content Brief Pipeline - FrontMind GEO 社区: 在 Paperclip 中构建自动化 content brief pipeline：批准后的关键词触发 brief 生成、SERP 分析和作者可用的结构化输出。
-- https://www.frontmind.net/blog/paperclip-publishing-at-scale-startups — 大规模发布：种子阶段初创公司如何用 Paperclip 搭建 AI 内容工作流 - FrontMind GEO 社区: 种子阶段初创公司如何用 Paperclip 大规模发布：用 2-3 名 operator 和一组 specialist agents 替代 6 人内容团队。
-- https://www.frontmind.net/blog/paperclip-multi-agent-content-review — Paperclip 中的 Multi-Agent 内容审核与质量控制 - FrontMind GEO 社区: 如何在 Paperclip 中设置 multi-agent 内容审核：专门的 reviewer agent 覆盖 SEO 准确性、factual grounding、brand voice 和内部链接，并设置人工升级门。
-- https://www.frontmind.net/blog/paperclip-technical-seo-audits-heartbeats — 使用 Paperclip Heartbeats 进行定期技术 SEO Audit - FrontMind GEO 社区: 使用 Paperclip Heartbeats 自动执行技术 SEO audit：定期 crawl 分析、问题优先级排序和每月结构化报告，无需手动触发。
-- https://www.frontmind.net/blog/paperclip-internal-linking-agents — 使用 Paperclip Agents 自动化内部链接 - FrontMind GEO 社区: 如何用 Paperclip agent 自动做内部链接：持续识别链接机会、生成锚文本，并为大型网站输出结构化更新建议。
-- https://www.frontmind.net/blog/paperclip-schema-markup-at-scale — 使用 Paperclip 大规模生成 Schema 标记 - FrontMind GEO 社区: 使用 Paperclip agent 大规模生成 Schema 标记：按页面类型批量生成 JSON-LD、验证并输出可实施结果，每页无需手工处理。
-- https://www.frontmind.net/blog/paperclip-multi-client-seo-agency — 使用 Paperclip Multi-Company 功能运行多个 SEO 客户 - FrontMind GEO 社区: SEO 机构如何使用 Paperclip Multi-Company：每个客户独立 agent 部署、集中计费、单独组织结构图，以及一名 operator 管理 10+ 客户。
-- https://www.frontmind.net/blog/paperclip-cost-controlled-seo-agencies — 成本可控的 AI SEO：机构如何用 Paperclip 管理预算 - FrontMind GEO 社区: 如何在 Paperclip 中管理 AI SEO 成本：每个 agent 每月预算、支出跟踪、客户成本分配，以及达到限制时自动停止 agent 的budget guardrail。
-- https://www.frontmind.net/blog/paperclip-seo-governance-audit-logs — 使用 Paperclip 做 SEO Governance：审批、覆盖和 Audit Logs - FrontMind GEO 社区: Paperclip 中的 SEO governance：如何配置 approval workflow、override agent 决策、维护 audit logs，并构建满足客户和合规要求的治理层。
-- https://www.frontmind.net/blog/paperclip-automated-seo-reporting — 使用 Paperclip Ticketing 和 Audit Trail 自动生成 SEO 报告 - FrontMind GEO 社区: 使用 Paperclip 自动化 SEO 报告：ticketing 和 audit trail 数据供 reporting agent 调用，几分钟内生成客户可读报告，而不是花数小时手工整理。
 
 ## Chinese Query Targets / 中文检索关键词
 

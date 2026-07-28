@@ -1,0 +1,4 @@
+interface:
+  display_name: "GEO 优化问题推荐"
+  short_description: "生成企业产品 Q&A 与三类可追溯 GEO 优化问题"
+  default_prompt: "使用 $geo-question-recommender 从企业知识库生成企业产品 Q&A 与其他三类 GEO 优化问题。"
