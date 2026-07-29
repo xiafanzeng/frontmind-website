@@ -194,7 +194,7 @@ cd /Users/fanzengxia/Documents/GitHub/frontmind-agent
 pnpm install --prod=false --frozen-lockfile
 pnpm check
 pnpm test
-FRONTMIND_BUILD_VERSION=dashboard-20260728-r1 pnpm build
+pnpm build # 构建标识自动生成；无需在 1Panel 配置 FRONTMIND_BUILD_VERSION
 
 test -f dist/private-workflows/socratic-kb-builder.skill
 test -f dist/private-workflows/brand-question-portfolio.skill/SKILL.md

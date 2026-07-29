@@ -59,6 +59,7 @@ export type GeoExecutionEvent = {
     | "status"
     | "model_output"
     | "result_summary"
+    | "progress_summary"
     | "artifact"
     | "poll"
     | "error";
@@ -72,6 +73,27 @@ export type GeoExecutionCounters = {
   total: number;
 };
 
+export type GeoCrawlProgress = {
+  schemaVersion: 1;
+  reportedAt: string;
+  phase:
+    | "planning"
+    | "crawling"
+    | "extracting"
+    | "assets"
+    | "documents"
+    | "finalizing"
+    | "completed";
+  visitedLinks: number;
+  successfulPages: number;
+  failedPages: number;
+  textCharacters: number;
+  imagesDiscovered: number;
+  imagesDownloaded: number;
+  documentsParsed: number;
+  webQueriesExecuted: number;
+};
+
 export type GeoExecutionLogEntry = {
   id: string;
   stage: GeoStage;
@@ -83,6 +105,7 @@ export type GeoExecutionLogEntry = {
   completedAt?: string;
   nextPollAt?: string;
   counters?: GeoExecutionCounters;
+  crawlProgress?: GeoCrawlProgress;
   events: GeoExecutionEvent[];
 };
 

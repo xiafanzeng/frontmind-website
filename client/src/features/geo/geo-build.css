@@ -767,6 +767,11 @@
   font-size: 14px !important;
   line-height: 1.55 !important;
 }
+.geo-execution-dialog-actions {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
 .geo-execution-refresh {
   display: inline-flex;
   min-height: 38px;
@@ -778,6 +783,20 @@
   color: #5b4067;
   font-size: 13px;
   font-weight: 800;
+}
+.geo-execution-close {
+  display: inline-grid;
+  width: 38px;
+  height: 38px;
+  flex: 0 0 38px;
+  place-items: center;
+  border: 1px solid #d9cfdd;
+  background: #fff;
+  color: #5b4067;
+}
+.geo-execution-close:hover {
+  border-color: #826092;
+  background: #faf6fb;
 }
 .geo-execution-refresh:hover:not(:disabled) {
   border-color: #826092;
@@ -2822,6 +2841,55 @@
 .geo-progress-meta span {
   color: #746d78;
   font-size: 14px;
+}
+.geo-crawl-progress-summary {
+  margin-top: 18px;
+  border-left: 3px solid #805291;
+  background: #f8f4fa;
+  padding: 13px 15px;
+}
+.geo-crawl-progress-summary strong {
+  color: #4c2c5a;
+  font-size: 13px;
+}
+.geo-crawl-progress-summary p {
+  margin: 5px 0 0;
+  color: #514a55;
+  font-size: 14px;
+  line-height: 1.65;
+}
+.geo-crawl-progress-summary small {
+  display: block;
+  margin-top: 5px;
+  color: #817985;
+  font-size: 12px;
+}
+.geo-status-sync-delay {
+  display: flex;
+  gap: 10px;
+  margin-top: 14px;
+  border: 1px solid #decf9f;
+  background: #fffbef;
+  padding: 12px 14px;
+  color: #765b12;
+}
+.geo-status-sync-delay strong {
+  font-size: 14px;
+}
+.geo-status-sync-delay p {
+  margin: 3px 0 0;
+  font-size: 13px;
+  line-height: 1.55;
+}
+.geo-status-sync-delay button {
+  margin-top: 7px;
+  border: 0;
+  border-bottom: 1px solid currentColor;
+  background: transparent;
+  padding: 0;
+  color: #5b2d70;
+  font-size: 13px;
+  font-weight: 800;
 }
 .geo-milestone-list {
   display: grid;
@@ -10653,8 +10721,14 @@
     height: 38px;
   }
   .geo-execution-refresh {
-    grid-column: 1 / -1;
     justify-content: center;
+  }
+  .geo-execution-dialog-actions {
+    grid-column: 1 / -1;
+    justify-content: space-between;
+  }
+  .geo-execution-dialog-actions .geo-execution-refresh {
+    flex: 1;
   }
   .geo-execution-layout {
     display: block;

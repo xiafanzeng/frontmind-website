@@ -46,6 +46,7 @@ const fixtureBranchPaths = [
   "02_team",
   "03_products/product-a",
   "04_technology",
+  "05_manufacturing",
   "06_industries/research",
   "07_service",
   "08_competitive_advantages",
@@ -91,6 +92,107 @@ async function buildFixtureZip(
     "09_media_assets/product_images/product-a.png",
     Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]),
   );
+  return Buffer.from(await zip.generateAsync({ type: "uint8array" }));
+}
+
+async function buildWebsiteLeadBudgetFixture(options?: {
+  leafCount?: number;
+  imageCount?: number;
+  documentCount?: number;
+  extraFileCount?: number;
+  narrativeCharactersPerLeaf?: number;
+  officialPagesCompleted?: number;
+  webQueriesCompleted?: number;
+  sourceCharactersPerLeaf?: number;
+}) {
+  const leafCount = options?.leafCount ?? 40;
+  const imageCount = options?.imageCount ?? 1;
+  const documentCount = options?.documentCount ?? 0;
+  const zip = new JSZip();
+  const root = zip.folder("Bounded_knowledge_base")!;
+  root.file("README.md", "# Bounded 企业知识库\n\n广度优先的企业事实底稿。");
+  root.file("00_knowledge_tree.md", "# 知识树\n\n八个目录均已写入。");
+  root.file(
+    "00_completeness.json",
+    JSON.stringify({
+      counts: {
+        totalLeaves: leafCount,
+        verifiedFirstParty: leafCount,
+        verifiedAuthoritative: 0,
+        supportedThirdParty: 0,
+        inferred: 0,
+        needsVerification: 0,
+        notApplicable: 0,
+      },
+      acquisition: {
+        officialPages: {
+          completed: options?.officialPagesCompleted ?? 100,
+          total: Math.max(options?.officialPagesCompleted ?? 100, 100),
+        },
+        images: {
+          completed: imageCount,
+          total: imageCount,
+        },
+        documents: {
+          completed: documentCount,
+          total: documentCount,
+        },
+        webQueries: {
+          completed: options?.webQueriesCompleted ?? 12,
+          total: options?.webQueriesCompleted ?? 12,
+        },
+      },
+      gaps: [],
+      evaluatedAt: "2026-07-29T01:00:00.000Z",
+    }),
+  );
+  root.file(
+    "00_crawl_coverage_report.md",
+    "# 官网抓取覆盖报告\n\n已按预算完成广度优先采集。",
+  );
+  root.file(
+    "00_web_intelligence_report.md",
+    "# 全网企业情报报告\n\n公开查询未超过预算。",
+  );
+  root.file(
+    "00_source_index.md",
+    "# 来源索引\n\n- 企业官网：https://example.com/",
+  );
+  for (let index = 0; index < leafCount; index += 1) {
+    const branch = fixtureBranchPaths[index % fixtureBranchPaths.length]!;
+    root.file(
+      `${branch}/leaf-${String(index + 1).padStart(2, "0")}.md`,
+      [
+        `# 叶子 ${index + 1}`,
+        "",
+        "> 最后更新: 2026-07-29 | 状态: verified_first_party | 来源: 企业官网",
+        "",
+        "## 核心内容",
+        "",
+        "知".repeat(options?.narrativeCharactersPerLeaf ?? 20),
+        "",
+        "## 原始来源",
+        "",
+        `源`.repeat(options?.sourceCharactersPerLeaf ?? 0),
+        "- https://example.com/",
+      ].join("\n"),
+    );
+  }
+  for (let index = 0; index < imageCount; index += 1) {
+    root.file(
+      `09_media_assets/product_images/image-${index + 1}.png`,
+      Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]),
+    );
+  }
+  for (let index = 0; index < documentCount; index += 1) {
+    root.file(
+      `10_reference_assets/documents/document-${index + 1}.pdf`,
+      Buffer.from("%PDF-1.4\n"),
+    );
+  }
+  for (let index = 0; index < (options?.extraFileCount ?? 0); index += 1) {
+    root.file(`10_reference_assets/ledger-${index + 1}.txt`, "source ledger");
+  }
   return Buffer.from(await zip.generateAsync({ type: "uint8array" }));
 }
 
@@ -382,6 +484,74 @@ describe("knowledge-base ZIP manifest", () => {
       filename: "product-a.png",
     });
   });
+
+  it("applies current website budgets only when the new-build profile is explicit", async () => {
+    const archive = await buildWebsiteLeadBudgetFixture({
+      leafCount: 57,
+      imageCount: 49,
+      extraFileCount: 39,
+      narrativeCharactersPerLeaf: 320,
+      officialPagesCompleted: 121,
+      webQueriesCompleted: 13,
+    });
+
+    await expect(
+      parseKnowledgeBaseArchive(archive, { companyName: "HistoricalCo" }),
+    ).resolves.toMatchObject({
+      completeness: {
+        counts: { totalLeaves: 57 },
+      },
+    });
+    await expect(
+      parseKnowledgeBaseArchive(archive, {
+        companyName: "NewCo",
+        validationProfile: "website-lead-v1",
+      }),
+    ).rejects.toThrow(/150 files/);
+  });
+
+  it("accepts a bounded new package and excludes source/status material from the narrative budget", async () => {
+    const archive = await buildWebsiteLeadBudgetFixture({
+      sourceCharactersPerLeaf: 1_000,
+    });
+
+    await expect(
+      parseKnowledgeBaseArchive(archive, {
+        companyName: "BoundedCo",
+        validationProfile: "website-lead-v1",
+      }),
+    ).resolves.toMatchObject({
+      completeness: {
+        counts: { totalLeaves: 40 },
+      },
+    });
+  });
+
+  it.each([
+    ["content leaves", { leafCount: 57 }, /56 content leaves/],
+    ["files", { extraFileCount: 104 }, /150 files/],
+    ["images", { imageCount: 49 }, /48 downloaded images/],
+    ["documents", { documentCount: 23 }, /22 packaged documents/],
+    ["narrative", { narrativeCharactersPerLeaf: 451 }, /18000 characters/],
+    [
+      "official pages",
+      { officialPagesCompleted: 121 },
+      /120 successfully parsed official pages/,
+    ],
+    ["public queries", { webQueriesCompleted: 13 }, /12 public-web queries/],
+  ] as const)(
+    "rejects a new website package that exceeds the %s budget",
+    async (_name, options, expectedError) => {
+      const archive = await buildWebsiteLeadBudgetFixture(options);
+
+      await expect(
+        parseKnowledgeBaseArchive(archive, {
+          companyName: "OverBudgetCo",
+          validationProfile: "website-lead-v1",
+        }),
+      ).rejects.toThrow(expectedError);
+    },
+  );
 
   it("never exposes local, private, credentialed, or non-public source URLs to the client", async () => {
     const zip = await JSZip.loadAsync(await buildFixtureZip());

@@ -238,4 +238,64 @@ describe("GEO execution log", () => {
     });
     expect(log.currentEntryId).toBe("service-activation");
   });
+
+  it("maps missing or paused task state to waiting and uses the stable submission time", () => {
+    const log = buildGeoExecutionLog({
+      knowledgeBaseTask: { status: "paused", output: [] },
+      submittedAt: {
+        knowledgeBase: "2026-07-28T08:00:00.000Z",
+      },
+      now: new Date("2026-07-28T08:00:30.000Z"),
+    });
+
+    expect(log.entries[0]).toMatchObject({
+      status: "waiting",
+      startedAt: "2026-07-28T08:00:00.000Z",
+      events: [
+        expect.objectContaining({
+          kind: "status",
+          message: "企业分析任务已提交，正在同步执行状态。",
+        }),
+      ],
+    });
+  });
+
+  it("returns structured crawl progress without exposing its marker as model output", () => {
+    const marker =
+      'FRONTMIND_GEO_CRAWL_PROGRESS_V1 {"schemaVersion":1,"reportedAt":"2026-07-28T08:05:00.000Z","phase":"crawling","visitedLinks":12,"successfulPages":10,"failedPages":2,"textCharacters":24680,"imagesDiscovered":18,"imagesDownloaded":11,"documentsParsed":3,"webQueriesExecuted":2}';
+    const log = buildGeoExecutionLog({
+      knowledgeBaseTask: {
+        status: "running",
+        output: [
+          {
+            type: "message",
+            role: "assistant",
+            content: [{ type: "output_text", text: marker }],
+          },
+        ],
+      },
+      submittedAt: {
+        knowledgeBase: "2026-07-28T08:00:00.000Z",
+      },
+    });
+
+    expect(log.entries[0]).toMatchObject({
+      updatedAt: "2026-07-28T08:05:00.000Z",
+      crawlProgress: {
+        visitedLinks: 12,
+        successfulPages: 10,
+        textCharacters: 24_680,
+      },
+    });
+    expect(log.entries[0]?.events).toContainEqual({
+      id: "enterprise-analysis-crawl-progress-2026-07-28T08:05:00.000Z",
+      kind: "progress_summary",
+      message:
+        "已访问 12 个链接，成功采集 10 个页面，提取 24680 字文字，发现 18 张图片并保存 11 张，已解析 3 份文档。",
+      createdAt: "2026-07-28T08:05:00.000Z",
+    });
+    expect(JSON.stringify(log)).not.toContain(
+      "FRONTMIND_GEO_CRAWL_PROGRESS_V1",
+    );
+  });
 });

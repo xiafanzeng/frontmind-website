@@ -12,6 +12,7 @@ import {
   AssessmentOverview,
   CurrentAssessment,
   EnterpriseAnalysis,
+  formatExecutionElapsed,
   GeoWorkspaceHandoff,
   MonitoringResults,
   OptimizationForecastView,
@@ -22,6 +23,26 @@ import { KnowledgeCompletenessDetails } from "./KnowledgeCompletenessDialog";
 import { createGeoStylePreviewProject } from "./preview";
 
 describe("GEO style preview rendering", () => {
+  it("starts execution timing at zero when no remote start time exists", () => {
+    expect(formatExecutionElapsed(undefined, undefined, 1_000)).toBe(
+      "00:00:00",
+    );
+    expect(
+      formatExecutionElapsed(
+        "2026-07-28T08:00:00.000Z",
+        undefined,
+        Date.parse("2026-07-28T09:02:03.000Z"),
+      ),
+    ).toBe("01:02:03");
+    expect(
+      formatExecutionElapsed(
+        "2026-07-28T08:00:00.000Z",
+        "2026-07-28T08:00:30.000Z",
+        Date.parse("2026-07-28T09:00:00.000Z"),
+      ),
+    ).toBe("00:00:30");
+  });
+
   it("keeps the active stage readable in the compact navigation", () => {
     const html = renderToStaticMarkup(
       <StageNavigation
@@ -177,14 +198,29 @@ describe("GEO style preview rendering", () => {
     expect(html).not.toContain("重新检查");
   });
 
-  it("routes an unknown knowledge-base state to support without claiming retries are exhausted", () => {
+  it("shows delayed status as non-terminal support guidance", () => {
     const project = {
       ...createGeoStylePreviewProject(),
-      status: "failed" as const,
+      preview: undefined,
+      status: "analyzing" as const,
       knowledgeBase: undefined,
       knowledgeBaseRetryAvailable: false,
       knowledgeBaseSupportRequired: true,
-      error: "企业知识库任务状态暂不可识别，系统已阻止重复创建。",
+      executionLog: {
+        currentEntryId: "enterprise-analysis",
+        fetchedAt: "2026-07-28T08:15:00.000Z",
+        updatedAt: "2026-07-28T08:15:00.000Z",
+        entries: [
+          {
+            id: "enterprise-analysis",
+            stage: "enterprise_analysis" as const,
+            title: "企业分析",
+            status: "waiting" as const,
+            startedAt: "2026-07-28T08:00:00.000Z",
+            events: [],
+          },
+        ],
+      },
     };
     const html = renderToStaticMarkup(
       <EnterpriseAnalysis
@@ -199,10 +235,67 @@ describe("GEO style preview rendering", () => {
       />,
     );
 
+    expect(html).toContain("状态同步延迟");
     expect(html).toContain("联系技术支持");
+    expect(html).toContain("不会重复创建任务");
+    expect(html).not.toContain("企业分析未能完成");
     expect(html).not.toContain("自动修复次数已用完");
     expect(html).not.toContain("新建企业项目");
     expect(html).not.toContain("重新检查");
+  });
+
+  it("renders the latest trusted crawl checkpoint on the analysis page", () => {
+    const project = {
+      ...createGeoStylePreviewProject(),
+      preview: undefined,
+      status: "analyzing" as const,
+      knowledgeBase: undefined,
+      executionLog: {
+        currentEntryId: "enterprise-analysis",
+        fetchedAt: "2026-07-28T08:05:10.000Z",
+        updatedAt: "2026-07-28T08:05:10.000Z",
+        entries: [
+          {
+            id: "enterprise-analysis",
+            stage: "enterprise_analysis" as const,
+            title: "企业分析",
+            status: "running" as const,
+            startedAt: "2026-07-28T08:00:00.000Z",
+            crawlProgress: {
+              schemaVersion: 1 as const,
+              reportedAt: "2026-07-28T08:05:00.000Z",
+              phase: "crawling" as const,
+              visitedLinks: 12,
+              successfulPages: 10,
+              failedPages: 2,
+              textCharacters: 24_680,
+              imagesDiscovered: 18,
+              imagesDownloaded: 11,
+              documentsParsed: 3,
+              webQueriesExecuted: 2,
+            },
+            events: [],
+          },
+        ],
+      },
+    };
+    const html = renderToStaticMarkup(
+      <EnterpriseAnalysis
+        project={project}
+        onDownload={vi.fn()}
+        onRetry={vi.fn()}
+        onNewProject={vi.fn()}
+        onContact={vi.fn()}
+        onStart={vi.fn()}
+        starting={false}
+        retrying={false}
+      />,
+    );
+
+    expect(html).toContain("最新采集摘要");
+    expect(html).toContain("已访问 12 个链接，成功采集 10 个页面");
+    expect(html).toContain("24680 字文字");
+    expect(html).toContain("已解析 3 份文档");
   });
 
   it("only offers an authorized question retry and locks it in flight", () => {

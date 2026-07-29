@@ -1,41 +1,96 @@
 ---
 name: website-one-shot-kb-builder
-description: Build a comprehensive enterprise knowledge base through AI-driven pre-filling in one uninterrupted run. Adapts to ANY industry (manufacturing, SaaS, services, e-commerce, etc.). The AI researches and pre-fills every node with text and images, evidence-classifies every claim, and packages the final Markdown/ZIP without asking the user to confirm or correct. Use for the FrontMind website GEO enterprise-analysis workflow.
+description: Build a breadth-first, budget-bounded enterprise knowledge base in one uninterrupted website run. Cover every business branch and real product family while limiting crawl depth, retained text, images, documents, public queries, leaf count, and ZIP size. Emit trustworthy cumulative crawl checkpoints, evidence-classify every claim, record honest verification gaps, and package the final Markdown/ZIP without asking the user to confirm or correct. Use for the FrontMind website GEO enterprise-analysis lead-generation workflow.
 ---
 
 # Website One-Shot Enterprise Knowledge Base Builder
 
-Build the same structured, industry-adaptive enterprise knowledge base as `socratic-kb-builder` through AI-driven research and pre-filling, but remove its user-confirmation loop and complete the entire build in one task.
+Build a useful, industry-adaptive enterprise knowledge base through AI-driven research and pre-filling, without a user-confirmation loop. This website version is a bounded lead-generation experience: preserve breadth across business questions and product families, but stop deep collection when its time or resource budget is reached.
 
 ## Core Principle
 
-> **Pre-fill Every Node, Then Package Once.** Every node is populated by AI from uploaded materials + web research. Never ask a question, request confirmation or correction, present a skip choice, or wait for user input.
+> **Cover Every Branch, Bound the Depth, Then Package Once.** Populate a stable 40–56-leaf tree from uploads and selected evidence. Never ask a question, request confirmation or correction, present a skip choice, or wait for user input. A truthful `needs_verification` gap is preferable to another crawl round or an invented fact.
 
 ## Workflow
 
 ```
-Phase 1: Intake & Exhaustive Research → Phase 2: Scaffold Adaptive Tree → Phase 3: Pre-fill & Verify Every Leaf Node → Phase 4: Package ZIP at 100%
+Phase 1: Plan Coverage & Bounded Research → Phase 2: Finalize Adaptive Tree → Phase 3: Write & Verify Every Leaf → Phase 4: Validate & Package
 ```
 
-## Phase 1: Intake & Deep Research
+## Time and Resource Budget
+
+Target completion in **45–55 minutes** and finish within **60 minutes** without introducing a server-side hard kill. Do not wait to consume the time budget.
+
+| Elapsed time     | Required work                                                                                                                    |
+| ---------------- | -------------------------------------------------------------------------------------------------------------------------------- |
+| 0–5 minutes      | Detect enterprise type and product families; establish the seven-question/eight-directory coverage matrix and source priorities. |
+| 5–25 minutes     | Collect selected high-value official pages breadth-first.                                                                        |
+| 25–35 minutes    | Process user uploads first, then selected images and official linked documents.                                                  |
+| 35–42 minutes    | Run limited public queries only to verify identity or fill high-impact answer gaps.                                              |
+| At 42 minutes    | Stop all new discovery and switch to leaf writing with the evidence already collected.                                           |
+| After 50 minutes | Only validate, repair references, package and deliver. Do not start new collection or expand the tree.                           |
+
+The first budget reached—time or resource—ends that collection activity:
+
+| Resource                                            |                                                   Hard budget |
+| --------------------------------------------------- | ------------------------------------------------------------: |
+| Official HTML page retrieval attempts               |                                                           120 |
+| All attempted links, including images and documents |                                  about 180; do not exceed 180 |
+| Validated images saved and packaged                 |                                                            48 |
+| Official linked documents parsed                    |                                                            12 |
+| User uploads                                        | the existing maximum of 10; process before external documents |
+| Public-web queries executed                         |                                                            12 |
+| Deduplicated raw evidence text retained             |                                            300,000 characters |
+| Customer-visible knowledge narrative                |         target 12,000 Chinese characters; hard maximum 18,000 |
+| Content leaves under `01`–`08`                      |                                                         40–56 |
+| Total files in the final ZIP                        |                                                           150 |
+
+Budgets constrain acquisition and packaging, not truthfulness. When a budget is exhausted, record the unresolved topic as a concise gap and continue writing. Never use budget consumption, crawl counters, or elapsed time to invent a knowledge-base completeness percentage.
+
+## Phase 1: Plan Coverage & Bounded Research
 
 1. Consume the company name, website URL, and any supplied materials (brochures, catalogs, PPTs, images). If an intake field is missing, record the gap and continue with available evidence instead of asking the user.
-2. **Crawl every company website exhaustively** — accept one or multiple official domains. Discover `robots.txt`, sitemap indexes and nested sitemaps; recursively traverse same-domain navigation, category pagination, product/service detail pages, about/team/history, cases/applications, news, support, downloads, contact pages and language variants. Render client-side content where necessary.
-3. **Analyze uploads** — extract text, specs, images, claims from all files.
-4. **Detect enterprise type** — manufacturing / SaaS / services / e-commerce / education / other.
-5. **Research the enterprise across the public web** — do not stop at the official sites. Build multilingual query sets from the company name, aliases, domains, product families/models, leaders, certifications, patents, applications, customers and target markets. Search authoritative registries, patent/certification databases, news and industry media, exhibitions, distributors, B2B catalogs, recruiting pages, social accounts and accessible public video/image sources.
-6. **Resolve and verify web intelligence** — disambiguate entities, deduplicate syndicated content, retain publication/capture dates, compare conflicting claims and rank first-party or authoritative records above third-party pages. Every third-party fact must retain its exact source URL and source type.
-7. **Collect images comprehensively** — inspect `img`, `picture`, `srcset`, lazy-load attributes, CSS backgrounds, product galleries, Open Graph images and downloadable media on both official and relevant public pages. Preserve originals where available; deduplicate by content hash; record source page URL, direct asset URL, alt/caption, dimensions, file type, company/product association and usage notes. Keep third-party images in a separate reference collection with ownership/licensing status; never present them as company-owned assets.
-8. **Extract linked documents** — download and parse official PDF catalogs, manuals, brochures, specification sheets and other first-party files; associate extracted text and images with their source pages. Index useful third-party documents separately with provenance and authority level.
-9. **Create two quantitative coverage reports** — the official-site crawl report must show discovered/successful/failed page counts; cleaned main-text characters and words; deduplicated content-block characters and words; discovered/successfully downloaded/failed image counts; unique image content hashes; duplicate count; downloaded image bytes; format and resolution distributions; and document counts. Reporting only page totals or image URLs is insufficient. The public-web intelligence report lists queries, languages, result domains, pages, downloaded assets, conflicts and unresolved gaps. Do not enter Phase 2 until official sites have been traversed to exhaustion and the full-web query matrix has been completed or every remaining failure is documented.
-10. **Maintain raw completeness inputs** — count final leaf nodes by the six evidence statuses, record acquisition completed/total pairs for official pages, validated images, parsed documents and executed public-web queries, retain concise unresolved gaps, and record the evaluation time. These are observations from this one uninterrupted collection run, not an iteration backlog.
-11. Save all raw text, files, images, metadata and both coverage reports to `/home/ubuntu/kb_build/{company_name}/raw/`.
+2. Detect enterprise type—manufacturing, SaaS, services, e-commerce, education, or other—and identify every real product/service family before deepening any one branch.
+3. Create a breadth-first URL queue from navigation, `robots.txt`, sitemap indexes and nested sitemaps. Prioritize homepage, about, product-family/service overviews, core product details, technology/manufacturing, industries/cases, cooperation/support, contact, team and certifications. Sample news, pagination, language variants and long-tail SKU pages only when they fill a missing business branch or high-impact answer.
+4. Process up to 10 user uploads before linked documents. Extract only evidence needed by the coverage matrix and deduplicate retained text blocks.
+5. Expand large SKU catalogs into a sourced product-family inventory. Every real product family must appear in the knowledge base, but only core families receive separate parameters, scenarios, cases and FAQ leaves.
+6. Save first-party images in this order: Logo/brand identity, core products or services, application scenarios, technology or manufacturing capability, certifications, then team. Deduplicate by content hash. Save no more than three preview images per content branch and about 21 preview images across the page; use remaining package capacity only for high-value first-party assets. For third-party images, record the page URL, direct asset URL, source and ownership status by default—do not download the file.
+7. Parse selected official catalogs, manuals, brochures or specification sheets only when they support a priority leaf. Uploaded files take precedence within the combined document-processing window.
+8. Use public queries only for entity resolution, authoritative verification, and unanswered facts that materially affect customer Q&A. Every retained third-party fact must keep its exact source URL, source type, capture/publication date and conflict notes.
+9. Maintain one URL/status ledger, deduplicated evidence excerpts and one source index. Do not save both raw HTML and cleaned text for every page. Raw HTML is temporary working material and must not enter the final ZIP by default.
+10. Create quantitative official-site and public-web reports from the actual run. Report attempted/successful/failed pages, extracted/deduplicated text, discovered/downloaded/failed images, parsed documents, query results and unresolved gaps without claiming exhaustion.
+11. Maintain the unchanged raw completeness inputs: final leaf counts by the six evidence statuses, acquisition completed/total pairs, concise unresolved gaps and evaluation time.
+
+### Crawl Progress Checkpoints
+
+Maintain these cumulative counters from the task start:
+
+- `visitedLinks`: unique links whose retrieval was attempted.
+- `successfulPages`: visited pages successfully fetched and parsed.
+- `failedPages`: visited pages that failed retrieval or parsing.
+- `textCharacters`: cleaned text characters actually extracted.
+- `imagesDiscovered`: distinct image asset URLs discovered.
+- `imagesDownloaded`: image bodies successfully downloaded and validated.
+- `documentsParsed`: linked or uploaded documents successfully parsed.
+- `webQueriesExecuted`: public-web queries actually executed.
+
+Emit a one-line assistant output checkpoint whenever elapsed task time crosses each 5-minute boundary. Also emit one at every phase transition and at final completion. Continue useful work between checkpoints: never sleep, pause, poll without work, or delay completion merely to reach a time boundary. If the run finishes before five minutes, emit the final checkpoint without waiting.
+
+Use exactly this marker followed by one compact JSON object on the same line:
+
+```text
+FRONTMIND_GEO_CRAWL_PROGRESS_V1 {"schemaVersion":1,"reportedAt":"CURRENT_ISO_8601_TIME","phase":"crawling","visitedLinks":ACTUAL_INTEGER,"successfulPages":ACTUAL_INTEGER,"failedPages":ACTUAL_INTEGER,"textCharacters":ACTUAL_INTEGER,"imagesDiscovered":ACTUAL_INTEGER,"imagesDownloaded":ACTUAL_INTEGER,"documentsParsed":ACTUAL_INTEGER,"webQueriesExecuted":ACTUAL_INTEGER}
+```
+
+Set `phase` to exactly one of `planning`, `crawling`, `extracting`, `assets`, `documents`, `finalizing`, or `completed`. Derive every count from the current run's actual logs. Counts must be non-negative integers and must never decrease between checkpoints; `successfulPages + failedPages` must not exceed `visitedLinks`, and `imagesDownloaded` must not exceed `imagesDiscovered`. Never copy example values, estimate unobserved work, report discovered assets as downloaded, or use these counters to invent a knowledge-base completeness percentage.
 
 ## Phase 2: Scaffold Adaptive Tree
 
 Read `references/knowledge-tree.md` for the seven-question coverage model, its canonical eight-directory mapping, and industry variants.
 
-Use seven universal business questions as the coverage model, then package every leaf under the canonical `01_company_overview/` through `08_competitive_advantages/` content directories defined by `references/output-format.md`. The fourth question, “你怎么做到的？”, maps to `04_technology/`, `05_manufacturing/`, or both according to the enterprise type. The questions are not summary nodes and must not be emitted as a competing directory structure. Expand them into a complete leaf-node manifest based on the actual products, services, capabilities and customer industries. A typical build contains about **40-115 leaf nodes**.
+Use seven universal business questions as the coverage model, then package every leaf under the canonical `01_company_overview/` through `08_competitive_advantages/` content directories defined by `references/output-format.md`. The fourth question, “你怎么做到的？”, maps to `04_technology/`, `05_manufacturing/`, or both according to the enterprise type. The questions are not summary nodes and must not be emitted as a competing directory structure.
+
+Start with exactly 40 leaves allocated as follows: enterprise identity 5, team 3, products/services 12, core capabilities 8 across `04` and `05`, industries/customers 4, cooperation/service 4, and competitive advantages 4. Add no more than 16 leaves, only for priority product families, industry scenarios or evidence needed for customer Q&A. The final tree must contain **40–56 leaves**. Every `01`–`08` directory must contain a supported leaf or one truthful `needs_verification` gap leaf.
 
 | #   | Branch       | Core Question                |
 | --- | ------------ | ---------------------------- |
@@ -54,7 +109,7 @@ Use seven universal business questions as the coverage model, then package every
 - Services → 方法论、交付流程、团队资质、知识产权
 - E-commerce → 供应商体系、物流、库存、品控
 
-Pre-fill all leaf nodes from Phase 1 data. Give every leaf a stable node ID and evidence status. Mark: `verified_first_party`, `verified_authoritative`, `supported_third_party`, `inferred`, `needs_verification`, or `not_applicable`.
+Pre-fill all leaf nodes from Phase 1 data. Give every leaf a stable node ID and evidence status. Mark: `verified_first_party`, `verified_authoritative`, `supported_third_party`, `inferred`, `needs_verification`, or `not_applicable`. Product-family consolidation is allowed and required for large catalogs; deleting a real product family from the overview is not.
 
 Create the adaptive tree and true leaf-node count, then immediately process every leaf in the order below without presenting the scaffold for approval.
 
@@ -62,9 +117,9 @@ Create the adaptive tree and true leaf-node count, then immediately process ever
 
 Read `references/questioning-strategy.md` for the original research workflow and its response-free one-shot processing rules.
 
-### For EVERY node:
+### For Every Node
 
-1. **Research & Draft** — Compile from uploads + exhaustive official-site crawl + full-web enterprise intelligence. Include sourced images.
+1. **Draft from retained evidence** — Compile from uploads, selected official pages/documents and limited public intelligence. After the discovery cutoff, do not reopen research.
 2. **Record with sources** — Write the draft and mark where each fact came from.
 3. **Classify evidence** — Apply the evidence status that matches the strongest support; never turn a benchmark or inference into an enterprise fact.
 4. **Handle gaps without interaction:**
@@ -78,9 +133,10 @@ Read `references/questioning-strategy.md` for the original research workflow and
 
 - **NEVER leave applicable nodes blank.** Always write supported content first and label evidence gaps explicitly.
 - **One complete Markdown file per leaf.**
-- **No bulk summarization.** Never skip a whole branch, collapse several real leaves into one node or infer facts merely to reach final packaging.
+- **Bounded consolidation.** Never skip a whole branch. Consolidate long-tail SKUs, repeated news, pagination and language variants into sourced family or topic leaves; do not infer facts merely to reach final packaging.
 - **Source attribution** on every fact (宣传册/官网/行业调研).
-- **Images alongside text** whenever relevant.
+- **Images alongside text** only when they add customer-visible value and remain within the image budget.
+- **Narrative size.** Default each business branch to about 900–1,800 Chinese characters; the products branch may reach 3,000. Source tables, status headers and machine manifests do not count toward the visible narrative budget.
 - **Industry benchmarks** for sparse nodes must remain clearly labelled as benchmark context or `inferred`, never as confirmed enterprise facts.
 - **100% traversal gate.** Completion is `written or reasoned-not-applicable leaf nodes / total leaf nodes`; ZIP generation is forbidden before every leaf is handled.
 - **Server-verifiable inventory gate.** The number of Markdown leaf files packaged under the eight canonical content directories must equal `counts.totalLeaves`, every canonical content directory must contain at least one non-empty leaf, and every leaf file must declare exactly one evidence status in its header using the output template. When evidence for a canonical directory is absent, write one truthful `needs_verification` gap leaf instead of leaving it empty or inventing a fact. The website rejects a ZIP when the packaged files or their status totals disagree with `00_completeness.json`.
@@ -103,15 +159,17 @@ Read `references/questioning-strategy.md` for the original research workflow and
 
 Save progress to `/home/ubuntu/kb_build/{company_name}/progress.json` after every leaf.
 
-## Phase 4: Package & Deliver — Only at 100%
+## Phase 4: Validate, Package & Deliver
 
 Read `references/output-format.md` for ZIP structure and markdown templates.
 
-Enter this phase automatically only after the true leaf-node traversal reaches 100%. Generate ZIP with hierarchical folders, Markdown files per node, first-party images in `images/` subdirectories, separately labelled third-party reference assets, README, final knowledge-tree status, official-site crawl coverage report, full-web intelligence report, machine-readable raw `00_completeness.json`, image asset inventory and unresolved verification gaps. `00_completeness.json` must contain only status counts, acquisition completed/total pairs, gap strings and `evaluatedAt`; it must not contain a score, percentage, label, basis, caveat or derived applicable-leaf count. Deliver Markdown/ZIP immediately; never ask whether to generate, and never generate an interactive webpage or HTML research experience.
+Enter this phase automatically after every stable leaf is written or reasoned `not_applicable`. Generate the bounded ZIP with hierarchical folders, Markdown files per node, selected first-party images, URL-only third-party references, README, final knowledge-tree status, both acquisition reports, the machine-readable raw `00_completeness.json`, image inventory and unresolved verification gaps. The final ZIP must contain at most 150 files, at most 48 saved images, 40–56 content leaves and at most 18,000 Chinese characters of customer-visible knowledge narrative. Do not include per-page raw HTML or duplicate cleaned-page files.
+
+`00_completeness.json` must keep its existing exact field shape and contain only status counts, acquisition completed/total pairs, gap strings and `evaluatedAt`; it must not contain a score, percentage, label, basis, caveat or derived applicable-leaf count. Budget exhaustion may create a recorded gap but must never change an evidence status or manufacture completeness. Deliver Markdown/ZIP immediately; never ask whether to generate, and never generate an interactive webpage or HTML research experience.
 
 ## Reference Files
 
-- **`references/knowledge-tree.md`** — Original universal tree structure and industry variants, with only interaction statuses replaced by evidence/completion statuses. Read at Phase 2.
-- **`references/questioning-strategy.md`** — Original pre-fill research workflow, with only confirmation/skip/reply behavior replaced by automatic evidence processing. Read at Phase 3.
-- **`references/output-format.md`** — Original ZIP directory structure and Markdown templates, with only interactive progress text replaced by a final completion report. Read at Phase 4.
+- **`references/knowledge-tree.md`** — Universal coverage structure, bounded leaf allocation and industry variants. Read at Phase 2.
+- **`references/questioning-strategy.md`** — Breadth-first source selection and response-free leaf processing. Read at Phase 3.
+- **`references/output-format.md`** — Bounded ZIP structure, budgets and unchanged completeness manifest. Read at Phase 4.
 - **`references/source-manifest.json`** — SHA-256 provenance for the exact `socratic-kb-builder.skill` source archive.

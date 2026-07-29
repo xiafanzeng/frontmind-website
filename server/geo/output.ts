@@ -8,6 +8,7 @@ import {
 export type NormalizedTaskStatus =
   | "queued"
   | "running"
+  | "waiting"
   | "completed"
   | "failed"
   | "cancelled"
@@ -24,6 +25,7 @@ export function normalizeTaskStatus(value: unknown): NormalizedTaskStatus {
   if (["pending", "queued", "created"].includes(status)) return "queued";
   if (["running", "in_progress", "processing"].includes(status))
     return "running";
+  if (["paused", "waiting", "pending_sync"].includes(status)) return "waiting";
   if (
     ["completed", "complete", "succeeded", "success", "done"].includes(status)
   )
@@ -61,7 +63,11 @@ export function normalizeTask(
     status,
     progress:
       progress ??
-      (status === "completed" ? 100 : status === "queued" ? 0 : null),
+      (status === "completed"
+        ? 100
+        : status === "queued" || status === "waiting"
+          ? 0
+          : null),
     title:
       stringValue(task.task_title) ||
       stringValue(metadata?.task_title) ||

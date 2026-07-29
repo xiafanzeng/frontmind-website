@@ -4,61 +4,58 @@
 
 Every leaf follows: **Research → Pre-fill → Source → Verify → Classify → Continue**.
 
-Never present a blank question and never present a confirmation question. Before writing a leaf, search uploads, all official-site crawl results and appropriate public sources, then create a sourced draft with relevant enterprise images. If evidence remains sparse, state the exact gap and mark the content `needs_verification`; do not wait for a user reply.
+Never present a blank question and never present a confirmation question. Before the 42-minute discovery cutoff, select evidence breadth-first under the fixed budgets. After the cutoff, write only from retained uploads, excerpts, source records and selected assets. If evidence remains sparse, state the exact gap and mark the content `needs_verification`; do not wait for a user reply or reopen broad research.
 
 ## Pre-fill Sources and Priority
 
-| Priority | Source                         | Required method                                                                              | Extract                                                                                             |
-| -------- | ------------------------------ | -------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------- |
-| 1        | User uploads                   | Parse every PDF/PPT/Word/sheet/image; OCR when needed                                        | Direct facts, tables, specs, claims, original images                                                |
-| 2        | Official company sites         | Exhaustive recursive crawl of all supplied domains                                           | Product/service pages, about/team/history, cases, support, contact, news, downloads, text and media |
-| 3        | Official linked documents      | Download and parse catalogs, manuals, brochures and spec sheets                              | Detailed parameters, models, workflows, diagrams, product media                                     |
-| 4        | Full-web authoritative sources | Multilingual query matrix and entity verification                                            | Registrations, certifications, patents, awards, exhibitions and credible coverage                   |
-| 5        | Public ecosystem sources       | Search distributors, B2B catalogs, recruiting, social, public video/image and industry pages | Product aliases, market presence, applications, media and leads for verification                    |
-| 6        | Industry and competitors       | Benchmark research                                                                           | Standard terminology, expected fields and comparison context                                        |
-| 7        | AI synthesis                   | Only from sourced evidence above                                                             | Clearly labelled inferences and gap-filling suggestions                                             |
+| Priority | Source                       | Required method                                                                         | Extract                                                                                          |
+| -------- | ---------------------------- | --------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------ |
+| 1        | User uploads                 | Parse up to the existing ten-file limit first; OCR only when needed for a priority leaf | Direct facts, tables, specs, claims, original images                                             |
+| 2        | Official company sites       | Breadth-first selection within 120 HTML attempts                                        | Product families, identity, capabilities, industries, cooperation, contact and selected evidence |
+| 3        | Official linked documents    | Parse at most 12 selected catalogs, manuals, brochures or spec sheets                   | Priority parameters, workflows, diagrams and product media                                       |
+| 4        | Public authoritative sources | Use the 12-query budget for entity verification and high-impact gaps                    | Registrations, certifications, patents, awards and credible coverage                             |
+| 5        | Public ecosystem sources     | Use only when a priority gap remains after first-party research                         | Product aliases, market presence, applications and leads for verification                        |
+| 6        | Industry and competitors     | Use only as clearly labelled comparison context                                         | Standard terminology and bounded benchmark context                                               |
+| 7        | AI synthesis                 | Only from sourced evidence above                                                        | Clearly labelled inferences and gap-filling suggestions                                          |
 
 Official enterprise facts and images outrank third-party material. Never present a generic stock/reference image as an enterprise-owned asset.
 
-## Exhaustive Official-Site Research
+## Bounded Official-Site Research
 
-Before Phase 2 begins:
+Use a single breadth-first queue and stop the activity at its time or link budget:
 
 1. Normalize every supplied official URL and identify canonical domains and subdomains.
 2. Fetch `robots.txt`, `sitemap.xml`, sitemap indexes and nested sitemaps.
-3. Recursively traverse same-domain links to a fixpoint, including category pagination, product/service details, application/case pages, about/team/history, technology/R&D, quality/manufacturing, support/downloads, contact, news and useful language variants.
-4. Render client-side pages when server HTML is incomplete. Expand visible tabs, accordions, galleries and pagination when they reveal source content.
+3. Prioritize one or more representative pages for identity, every product/service family, capabilities, industries/cases, cooperation/support, contact, team and certifications.
+4. Render client-side pages only when a priority page lacks server-rendered evidence. Expand tabs, accordions or galleries only when they fill a matrix gap.
 5. Parse JSON-LD, metadata, headings, tables, lists, downloadable documents, image captions and alt text.
 6. Discover images from `img`, `picture`, `source/srcset`, lazy-load attributes, CSS backgrounds, Open Graph metadata, product galleries and document-embedded media.
-7. Preserve the highest-resolution first-party asset available. Deduplicate by content hash while retaining every source-page relationship.
+7. Preserve selected highest-value first-party assets and deduplicate by content hash while retaining source-page relationships.
 8. Store for each asset: local path, source page, original URL, alt/caption, dimensions, MIME type, product/service association and verification status.
-9. Produce a quantitative coverage report with explicit skipped/failed URLs. It must state page discovery/download/parse results, cleaned and deduplicated main-text characters/words, image discovery and actual download results, content-hash deduplication, downloaded bytes, image format/resolution distribution and document totals. A count of pages or image URLs alone is not acceptable. Mine every supplied official domain across its actual product/service lines, applications, cases, support/downloads, about pages and available galleries instead of summarizing only its homepage.
+9. Keep a single URL/status ledger, deduplicated evidence excerpts and source index. Do not retain per-page HTML plus a duplicate cleaned-text file; exclude raw HTML from the final ZIP by default.
+10. Produce a quantitative coverage report with explicit selected, skipped and failed URLs. State page retrieval/parse results, cleaned and retained text, image discovery and actual downloads, content hashes and document totals.
 
-Do not scaffold the knowledge tree while large portions of an official site remain undiscovered or unparsed.
+Do not follow category pagination, long-tail SKUs, repeated news or language variants to a fixpoint. Discovering another URL does not authorize exceeding 120 HTML attempts, 180 total attempted links, 300,000 retained evidence characters or the 42-minute discovery cutoff.
 
-## Full-Web Enterprise Intelligence
+## Limited Public-Web Intelligence
 
-After the official-site crawl and before Phase 2, perform a separate public-web discovery pass. This is mandatory even when the official website is comprehensive.
+After first-party collection, use no more than 12 public-web queries to resolve identity and close high-impact evidence gaps.
 
-1. Build a query matrix from the legal/trading names, Chinese and English aliases, domains, brand names, product families, individual model numbers, leaders, certification identifiers, patent terms, applications and customer industries.
-2. Run queries in Chinese, English and relevant target-market languages. Search both general results and source-specific combinations such as company + product model, company + exhibition, company + certification, company + patent, company + distributor and company + case study.
-3. Cover authoritative corporate, patent and certification records; news and industry media; trade-show/exhibitor pages; distributor/dealer pages; B2B catalogs; recruiting pages; social profiles; and accessible public video/image sources.
+1. Build a ranked query list from legal/trading names, aliases, domains, core product families, leaders, certification identifiers and the most important unresolved Q&A topics.
+2. Use relevant languages only when they materially improve entity resolution or verification.
+3. Prefer authoritative corporate, patent and certification records, then credible news or industry sources.
 4. Resolve similarly named companies by domain, address, contact details, logo, product portfolio and legal identity. Never merge evidence from an unresolved entity.
 5. Deduplicate reposted or syndicated pages, preserve publication and capture dates, and record conflicts. Official company sources and authoritative registries outrank third-party claims.
-6. Collect relevant text, documents and imagery. Put non-first-party media in `reference_assets/`, retain the source page and direct asset URL, and label ownership/licensing as `unknown`, `third_party`, `licensed` or `company_confirmed`.
-7. Produce `00_web_intelligence_report.md` with all queries, languages, result domains, selected/rejected pages, extracted facts/assets, conflicts and unresolved coverage gaps.
+6. Record non-first-party media by source page, direct asset URL and ownership/licensing status. Do not download third-party image files by default.
+7. Produce `00_web_intelligence_report.md` with actual queries, result domains, selected/rejected pages, extracted facts/assets, conflicts and unresolved coverage gaps.
 
-For the current company, combine the full official product/application/support/media inventory with resolved external records and market evidence. A homepage summary or a few search snippets is not sufficient.
+When all 12 queries are used or 42 minutes is reached, record remaining gaps and stop. Public research must not continue merely to make the knowledge base appear complete.
 
 ## True Node Inventory
 
-Use the seven universal questions to verify coverage, but write the expanded leaves only into the eight canonical content directories defined by `output-format.md`. The capability question maps to technology, manufacturing, or both. These questions are not summary nodes or a competing filesystem layout. Product and customer-industry leaves grow dynamically. Typical totals are:
+Use the seven universal questions to verify coverage, but write the expanded leaves only into the eight canonical content directories defined by `output-format.md`. The capability question maps to technology, manufacturing, or both. These questions are not summary nodes or a competing filesystem layout.
 
-| Enterprise scope     | Expected leaf-node count |
-| -------------------- | -----------------------: |
-| Small, 1–3 products  |                    40–55 |
-| Medium, 4–6 products |                    60–80 |
-| Large, 7–10 products |                   85–115 |
+Create the 40-leaf base allocation from `knowledge-tree.md`, then add at most 16 leaves for priority product families, important industry scenarios and customer-answer evidence. Every real product family appears in the overview even when long-tail SKUs are consolidated. The final count is **40–56** for every enterprise size.
 
 Give each leaf a stable ID. Maintain totals for the six evidence statuses defined in `knowledge-tree.md`. Completion is `written leaves / total leaves` and may reach 100% only after every applicable leaf has content and every non-applicable leaf has a reason.
 
@@ -110,7 +107,7 @@ Continue automatically. Never ask the user to design, confirm, correct, upload f
 The following are forbidden:
 
 - Waiting for user confirmation, correction, skip/direct-prefill, structure approval, or delivery approval.
-- Skipping a whole branch or collapsing real leaves into a summary.
+- Skipping a whole branch or omitting a real product family from the overview.
 - Adding “生成初版成果”, “是否立即生成”, A/B/C delivery choices, or equivalent stage-confirmation prompts.
 - Proposing or producing an interactive research page, HTML site or webpage preview. This workflow produces Markdown/ZIP for a separate website application to render.
 
@@ -131,4 +128,4 @@ Do not use ASCII trees, long separator glyphs, character progress bars, or fence
 
 ## Packaging Gate
 
-Package automatically when written leaves plus reasoned `not_applicable` leaves equal total leaves. Produce the final Markdown/ZIP without asking an extra question. Include the official-site crawl coverage report, full-web intelligence report, first-party and third-party image asset inventories, and unresolved verification gaps.
+Package automatically when written leaves plus reasoned `not_applicable` leaves equal total leaves. Produce the final Markdown/ZIP without asking an extra question. Keep 40–56 leaves, at most 48 saved images, at most 18,000 customer-visible narrative characters and at most 150 ZIP files. Include both acquisition reports, first-party image inventory, URL-only third-party reference inventory and unresolved verification gaps.

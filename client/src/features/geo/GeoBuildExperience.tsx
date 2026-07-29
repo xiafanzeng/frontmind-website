@@ -65,6 +65,7 @@ import {
 } from "@/lib/frontmind-contact";
 import {
   Dialog,
+  DialogClose,
   DialogContent,
   DialogDescription,
   DialogFooter,
@@ -614,17 +615,19 @@ function formatDate(value?: string): string {
   }).format(date);
 }
 
-function formatExecutionElapsed(
+export function formatExecutionElapsed(
   startedAt: string | undefined,
   completedAt: string | undefined,
   now: number,
 ): string {
-  if (!startedAt) return "尚未返回开始时间";
-  const started = new Date(startedAt).getTime();
+  const started = startedAt ? new Date(startedAt).getTime() : Number.NaN;
   const ended = completedAt ? new Date(completedAt).getTime() : now;
-  if (!Number.isFinite(started) || !Number.isFinite(ended))
-    return "时间信息待同步";
-  const elapsedSeconds = Math.max(0, Math.floor((ended - started) / 1_000));
+  const stableStarted = Number.isFinite(started) ? started : now;
+  const stableEnded = Number.isFinite(ended) ? ended : now;
+  const elapsedSeconds = Math.max(
+    0,
+    Math.floor((stableEnded - stableStarted) / 1_000),
+  );
   const hours = Math.floor(elapsedSeconds / 3_600);
   const minutes = Math.floor((elapsedSeconds % 3_600) / 60);
   const seconds = elapsedSeconds % 60;
@@ -648,6 +651,7 @@ function executionEventActor(
   if (
     kind === "model_output" ||
     kind === "result_summary" ||
+    kind === "progress_summary" ||
     kind === "artifact"
   )
     return "FrontMind Agent";
@@ -3352,9 +3356,9 @@ function GeoBuildExperienceZh() {
                 ? "删除待启动草稿？"
                 : deleteSafetyBlocked
                   ? "当前不能删除项目"
-                : deleteRemoteCompleted
-                  ? "删除本机项目记录？"
-                  : "删除项目记录？"}
+                  : deleteRemoteCompleted
+                    ? "删除本机项目记录？"
+                    : "删除项目记录？"}
             </DialogTitle>
             <DialogDescription className="geo-dialog-description">
               {deleteTarget && isGeoDraftProject(deleteTarget) ? (
@@ -3401,9 +3405,7 @@ function GeoBuildExperienceZh() {
             >
               取消
             </button>
-            {deleteError &&
-              !deleteRemoteCompleted &&
-              !deleteSafetyBlocked && (
+            {deleteError && !deleteRemoteCompleted && !deleteSafetyBlocked && (
               <button
                 type="button"
                 className="geo-local-delete-button"
@@ -3848,6 +3850,7 @@ function ExecutionLogDialog({
       <DialogContent
         className="geo-dialog geo-execution-dialog"
         overlayClassName="geo-dialog-overlay"
+        showCloseButton={false}
       >
         <DialogHeader className="geo-execution-dialog-header">
           <span className="geo-dialog-mark">
@@ -3859,15 +3862,26 @@ function ExecutionLogDialog({
               查看当前环节的真实任务状态、计时与可展示结果。
             </DialogDescription>
           </div>
-          <button
-            type="button"
-            className="geo-execution-refresh"
-            onClick={onRefresh}
-            disabled={!canRefresh || refreshing}
-          >
-            <RotateCw size={14} className={refreshing ? "is-spinning" : ""} />
-            {refreshing ? "刷新中" : "刷新状态"}
-          </button>
+          <div className="geo-execution-dialog-actions">
+            <button
+              type="button"
+              className="geo-execution-refresh"
+              onClick={onRefresh}
+              disabled={!canRefresh || refreshing}
+            >
+              <RotateCw size={14} className={refreshing ? "is-spinning" : ""} />
+              {refreshing ? "刷新中" : "刷新状态"}
+            </button>
+            <DialogClose asChild>
+              <button
+                type="button"
+                className="geo-execution-close"
+                aria-label="关闭执行日志"
+              >
+                <X size={18} />
+              </button>
+            </DialogClose>
+          </div>
         </DialogHeader>
 
         {!log || log.entries.length === 0 ? (
@@ -3923,7 +3937,7 @@ function ExecutionLogDialog({
                       <small>执行计时</small>
                       <strong>
                         {formatExecutionElapsed(
-                          selectedEntry.startedAt,
+                          selectedEntry.startedAt || project.createdAt,
                           selectedEntry.completedAt,
                           clock,
                         )}
@@ -4183,7 +4197,8 @@ export function EnterpriseAnalysis({
     );
   }
 
-  if (!knowledgeBase) return <AnalysisProgress project={project} />;
+  if (!knowledgeBase)
+    return <AnalysisProgress project={project} onContact={onContact} />;
 
   const fallbackMetrics = [
     {
@@ -4551,7 +4566,13 @@ export function EnterpriseAnalysis({
   );
 }
 
-function AnalysisProgress({ project }: { project: GeoProject }) {
+function AnalysisProgress({
+  project,
+  onContact,
+}: {
+  project: GeoProject;
+  onContact: () => void;
+}) {
   const executionEntry = project.executionLog?.entries.find(
     (entry) => entry.id === "enterprise-analysis",
   );
@@ -4559,13 +4580,15 @@ function AnalysisProgress({ project }: { project: GeoProject }) {
     executionEntry?.progress ?? project.progress,
     project.status === "uploading" ? 8 : 12,
   );
-  const statusEvents =
-    executionEntry?.events.filter((event) => event.kind === "status") ?? [];
-  const activityRows = statusEvents.length
-    ? statusEvents.slice(-6).map((event) => ({
+  const visibleEvents =
+    executionEntry?.events.filter(
+      (event) => event.kind === "status" || event.kind === "progress_summary",
+    ) ?? [];
+  const activityRows = visibleEvents.length
+    ? visibleEvents.slice(-6).map((event) => ({
         id: event.id,
         label: event.message,
-        detail: `执行系统${
+        detail: `${event.kind === "progress_summary" ? "FrontMind Agent" : "执行系统"}${
           event.createdAt ? ` · ${formatDate(event.createdAt)}` : ""
         }`,
       }))
@@ -4599,7 +4622,7 @@ function AnalysisProgress({ project }: { project: GeoProject }) {
         </h2>
         <p>
           FrontMind
-          正在执行一次性全面抓取。此阶段无需逐项确认，完成后将直接生成可核验知识库。
+          正在按业务分支进行广度优先、深度受控的资料采集。此阶段无需逐项确认，完成后将直接生成可核验知识库。
         </p>
         <div
           className="geo-progress-bar"
@@ -4615,6 +4638,36 @@ function AnalysisProgress({ project }: { project: GeoProject }) {
           <strong>{progress}%</strong>
           <span>{project.progressLabel || "正在调度企业信息采集任务"}</span>
         </div>
+        {executionEntry?.crawlProgress && (
+          <div className="geo-crawl-progress-summary" aria-live="polite">
+            <strong>最新采集摘要</strong>
+            <p>
+              已访问 {executionEntry.crawlProgress.visitedLinks}{" "}
+              个链接，成功采集 {executionEntry.crawlProgress.successfulPages}{" "}
+              个页面，提取 {executionEntry.crawlProgress.textCharacters}{" "}
+              字文字，发现 {executionEntry.crawlProgress.imagesDiscovered}{" "}
+              张图片并保存 {executionEntry.crawlProgress.imagesDownloaded}{" "}
+              张，已解析 {executionEntry.crawlProgress.documentsParsed} 份文档。
+            </p>
+            <small>
+              最近更新 {formatDate(executionEntry.crawlProgress.reportedAt)}
+            </small>
+          </div>
+        )}
+        {project.knowledgeBaseSupportRequired && (
+          <div className="geo-status-sync-delay" role="status">
+            <CircleAlert size={17} />
+            <div>
+              <strong>状态同步延迟</strong>
+              <p>
+                任务仍在后台执行并会继续每 30 秒同步；当前不会重复创建任务。
+              </p>
+              <button type="button" onClick={onContact}>
+                联系技术支持
+              </button>
+            </div>
+          </div>
+        )}
       </section>
       <div className="geo-milestone-list">
         {activityRows.map((activity, index) => {

@@ -8,6 +8,7 @@ import type {
   GeoAssessmentResult,
   GeoAssessmentStatus,
   GeoExecutionLog,
+  GeoCrawlProgress,
   GeoFileReference,
   GeoKnowledgeComparison,
   GeoKnowledgeComparisonStatus,
@@ -1245,11 +1246,13 @@ function normalizeAssessmentStatus(value: unknown): GeoAssessmentStatus {
   if (["queued", "submitted", "created"].includes(raw)) return "queued";
   if (["running", "processing", "in_progress", "evaluating"].includes(raw))
     return "running";
+  if (["paused", "waiting", "upstream_unknown", "unknown"].includes(raw))
+    return "running";
   if (["ready", "completed", "complete", "success", "succeeded"].includes(raw))
     return "ready";
   if (["failed", "error", "cancelled", "canceled"].includes(raw))
     return "failed";
-  return "failed";
+  return "running";
 }
 
 function normalizeAssessmentDimension(
@@ -1943,6 +1946,7 @@ function normalizeExecutionLog(value: unknown): GeoExecutionLog | undefined {
     "status",
     "model_output",
     "result_summary",
+    "progress_summary",
     "artifact",
     "poll",
     "error",
@@ -1995,6 +1999,9 @@ function normalizeExecutionLog(value: unknown): GeoExecutionLog | undefined {
       ];
     });
     const progress = numberValue(entry.progress);
+    const crawlProgress = normalizeCrawlProgress(
+      entry.crawlProgress ?? entry.crawl_progress,
+    );
 
     return [
       {
@@ -2008,6 +2015,7 @@ function normalizeExecutionLog(value: unknown): GeoExecutionLog | undefined {
         completedAt: textValue(entry.completedAt, entry.completed_at),
         nextPollAt: textValue(entry.nextPollAt, entry.next_poll_at),
         counters,
+        ...(crawlProgress ? { crawlProgress } : {}),
         events,
       },
     ];
@@ -2037,6 +2045,79 @@ function normalizeExecutionLog(value: unknown): GeoExecutionLog | undefined {
     updatedAt:
       textValue(source.updatedAt, source.updated_at, fetchedAt) ?? fetchedAt,
     entries,
+  };
+}
+
+function normalizeCrawlProgress(value: unknown): GeoCrawlProgress | undefined {
+  const source = asRecord(value);
+  const phases = new Set<GeoCrawlProgress["phase"]>([
+    "planning",
+    "crawling",
+    "extracting",
+    "assets",
+    "documents",
+    "finalizing",
+    "completed",
+  ]);
+  const phase = textValue(source.phase) as
+    | GeoCrawlProgress["phase"]
+    | undefined;
+  const reportedAt = textValue(source.reportedAt, source.reported_at);
+  const values = {
+    visitedLinks: numberValue(source.visitedLinks, source.visited_links),
+    successfulPages: numberValue(
+      source.successfulPages,
+      source.successful_pages,
+    ),
+    failedPages: numberValue(source.failedPages, source.failed_pages),
+    textCharacters: numberValue(source.textCharacters, source.text_characters),
+    imagesDiscovered: numberValue(
+      source.imagesDiscovered,
+      source.images_discovered,
+    ),
+    imagesDownloaded: numberValue(
+      source.imagesDownloaded,
+      source.images_downloaded,
+    ),
+    documentsParsed: numberValue(
+      source.documentsParsed,
+      source.documents_parsed,
+    ),
+    webQueriesExecuted: numberValue(
+      source.webQueriesExecuted,
+      source.web_queries_executed,
+    ),
+  };
+  if (
+    source.schemaVersion !== 1 ||
+    !phase ||
+    !phases.has(phase) ||
+    !reportedAt ||
+    !Number.isFinite(Date.parse(reportedAt)) ||
+    Object.values(values).some(
+      (count) =>
+        !Number.isSafeInteger(count) ||
+        Number(count) < 0 ||
+        Number(count) > 1_000_000_000,
+    ) ||
+    Number(values.successfulPages) + Number(values.failedPages) >
+      Number(values.visitedLinks) ||
+    Number(values.imagesDownloaded) > Number(values.imagesDiscovered)
+  ) {
+    return undefined;
+  }
+  return {
+    schemaVersion: 1,
+    reportedAt: new Date(reportedAt).toISOString(),
+    phase,
+    visitedLinks: values.visitedLinks!,
+    successfulPages: values.successfulPages!,
+    failedPages: values.failedPages!,
+    textCharacters: values.textCharacters!,
+    imagesDiscovered: values.imagesDiscovered!,
+    imagesDownloaded: values.imagesDownloaded!,
+    documentsParsed: values.documentsParsed!,
+    webQueriesExecuted: values.webQueriesExecuted!,
   };
 }
 

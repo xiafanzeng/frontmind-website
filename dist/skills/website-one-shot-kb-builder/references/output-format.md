@@ -2,7 +2,7 @@
 
 ## Final ZIP Structure
 
-The final deliverable preserves the original structured ZIP hierarchy exactly:
+The final deliverable uses this canonical hierarchy. Example filenames illustrate placement, not a requirement to create every listed file:
 
 ```
 {company_name}_knowledge_base/
@@ -73,7 +73,19 @@ The final deliverable preserves the original structured ZIP hierarchy exactly:
     └── documents/
 ```
 
-The package must contain Markdown, the raw `00_completeness.json` manifest and source assets only. Do not create an interactive research page, HTML website, webpage preview or other web deliverable.
+The package must contain Markdown, the raw `00_completeness.json` manifest and selected source assets only. Do not create an interactive research page, HTML website, webpage preview or other web deliverable. Do not include per-page raw HTML or a second cleaned-text file for every URL.
+
+## Final Package Budgets
+
+- 40–56 counted content-leaf Markdown files across `01`–`08`.
+- No more than 150 files in the entire ZIP, including root reports and assets.
+- No more than 48 validated downloaded images.
+- Target about 12,000 Chinese characters and never exceed 18,000 customer-visible knowledge narrative characters.
+- Default each business branch to about 900–1,800 narrative characters; `03_products/` may reach 3,000.
+- Status headers, source tables, acquisition reports, source indexes and machine manifests are excluded from the customer-visible narrative count.
+- Third-party images are URL/source/ownership records by default and do not require downloaded files.
+
+If any package budget would be exceeded, consolidate long-tail SKU/topic leaves, remove low-value duplicate assets, and retain a truthful source or gap record. Do not delete a real product family from the overview, leave a canonical directory empty, downgrade evidence, or invent completeness.
 
 ## Required Crawl Coverage Metrics
 
@@ -87,7 +99,7 @@ The package must contain Markdown, the raw `00_completeness.json` manifest and s
 | Image volume and quality | total downloaded bytes, format distribution, dimension coverage, count above a useful resolution threshold |
 | Documents                | discovered, downloaded, parsed and failed files by type                                                    |
 
-Show counts and units directly. Do not replace them with qualitative statements such as “大量文字与图片”, and do not treat an image URL as a successful download until the response body has been fetched and validated as image content.
+Also state the applicable collection budgets and whether each stopped because the need was satisfied, the resource budget was reached or the time cutoff occurred. Show counts and units directly. Do not replace them with qualitative statements such as “大量文字与图片”, and do not treat an image URL as a successful download until the response body has been fetched and validated as image content.
 
 ## Required Machine-Readable Completeness Input
 
@@ -183,6 +195,9 @@ Replace every brace-delimited token below with counts calculated from the packag
 ## Final Packaging Gate
 
 - Package automatically only when every true leaf node contains Markdown content or a reasoned `not_applicable` record.
+- Count 40–56 content leaves and no more than 150 total ZIP files.
+- Package no more than 48 validated images and no per-page raw HTML archive.
+- Keep customer-visible knowledge narrative at or below 18,000 Chinese characters.
 - Do not ask “是否生成初版成果” or offer A/B/C generation choices.
 - Include `00_completeness.json`, the official-site crawl coverage report, full-web intelligence report, source index, first-party image inventory, third-party reference-asset inventory and unresolved verification gaps.
 - Retain evidence status for every leaf in `00_knowledge_tree.md`.

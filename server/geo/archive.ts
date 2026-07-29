@@ -20,6 +20,23 @@ const MAX_ASSETS = 240;
 const MAX_SINGLE_ASSET_PREVIEW_BYTES = 4 * 1024 * 1024;
 const MAX_TOTAL_ASSET_PREVIEW_BYTES = 16 * 1024 * 1024;
 const MIN_KNOWLEDGE_LEAVES = 40;
+const WEBSITE_LEAD_MAX_KNOWLEDGE_LEAVES = 56;
+const WEBSITE_LEAD_MAX_FILES = 150;
+const WEBSITE_LEAD_MAX_IMAGES = 48;
+const WEBSITE_LEAD_MAX_DOCUMENTS = 22;
+const WEBSITE_LEAD_MAX_NARRATIVE_CHARACTERS = 18_000;
+const WEBSITE_LEAD_MAX_OFFICIAL_PAGES = 120;
+const WEBSITE_LEAD_MAX_WEB_QUERIES = 12;
+const WEBSITE_LEAD_CONTENT_PREFIXES = [
+  "01_company_overview/",
+  "02_team/",
+  "03_products/",
+  "04_technology/",
+  "05_manufacturing/",
+  "06_industries/",
+  "07_service/",
+  "08_competitive_advantages/",
+] as const;
 const REQUIRED_ROOT_MARKDOWN_FILES = [
   "README.md",
   "00_knowledge_tree.md",
@@ -450,6 +467,12 @@ export async function parseKnowledgeBaseArchive(
     companyName: string;
     generatedAt?: string;
     /**
+     * Apply the current website lead-generation package budgets. Omit this
+     * for historical archives so previously accepted deliveries remain
+     * readable under the broader safety-only parser limits.
+     */
+    validationProfile?: "website-lead-v1";
+    /**
      * Optional deployment-side tightening for the streamed legacy checksum
      * pass. Values can only lower, never raise, the global safety ceiling.
      */
@@ -549,6 +572,9 @@ export async function parseKnowledgeBaseArchive(
     }
   }
   validatePackagedLeafInventory(markdownFiles, contract);
+  if (options.validationProfile === "website-lead-v1") {
+    validateWebsiteLeadPackageBudgets(files, markdownFiles, contract);
+  }
   for (const branch of branchDefinitions) {
     const branchHasContent = Array.from(markdownFiles.entries()).some(
       ([filename, content]) =>
@@ -1436,6 +1462,192 @@ function validatePackagedLeafInventory(
   }
 }
 
+function validateWebsiteLeadPackageBudgets(
+  files: Array<{ entry: JSZip.JSZipObject; path: string }>,
+  markdownFiles: Map<string, string>,
+  contract: ParsedKnowledgeBaseContract,
+) {
+  if (contract.kind !== "canonical") {
+    throw new Error(
+      "New website knowledge-base builds must use the canonical archive contract",
+    );
+  }
+  if (files.length > WEBSITE_LEAD_MAX_FILES) {
+    throw new Error(
+      `New website knowledge-base archive exceeds ${WEBSITE_LEAD_MAX_FILES} files`,
+    );
+  }
+  if (
+    contract.completeness.counts.totalLeaves > WEBSITE_LEAD_MAX_KNOWLEDGE_LEAVES
+  ) {
+    throw new Error(
+      `New website knowledge-base archive exceeds ${WEBSITE_LEAD_MAX_KNOWLEDGE_LEAVES} content leaves`,
+    );
+  }
+  for (const prefix of WEBSITE_LEAD_CONTENT_PREFIXES) {
+    const hasLeaf = Array.from(markdownFiles.entries()).some(
+      ([filename, markdown]) =>
+        filename.startsWith(prefix) && markdown.trim().length >= 8,
+    );
+    if (!hasLeaf) {
+      throw new Error(
+        `New website knowledge-base archive is missing a leaf under ${prefix}`,
+      );
+    }
+  }
+  if (files.some(({ path: entryPath }) => /\.html?$/i.test(entryPath))) {
+    throw new Error(
+      "New website knowledge-base archive must not package per-page HTML",
+    );
+  }
+
+  const imageCount = files.filter(({ path: entryPath }) =>
+    isImagePath(entryPath),
+  ).length;
+  if (imageCount > WEBSITE_LEAD_MAX_IMAGES) {
+    throw new Error(
+      `New website knowledge-base archive exceeds ${WEBSITE_LEAD_MAX_IMAGES} downloaded images`,
+    );
+  }
+  const documentCount = files.filter(({ path: entryPath }) =>
+    isDocumentPath(entryPath),
+  ).length;
+  if (documentCount > WEBSITE_LEAD_MAX_DOCUMENTS) {
+    throw new Error(
+      `New website knowledge-base archive exceeds ${WEBSITE_LEAD_MAX_DOCUMENTS} packaged documents`,
+    );
+  }
+
+  const acquisition = contract.completeness.acquisition;
+  if (
+    (acquisition.officialPages?.completed ?? 0) >
+    WEBSITE_LEAD_MAX_OFFICIAL_PAGES
+  ) {
+    throw new Error(
+      `New website knowledge-base archive exceeds ${WEBSITE_LEAD_MAX_OFFICIAL_PAGES} successfully parsed official pages`,
+    );
+  }
+  if ((acquisition.images?.completed ?? 0) > WEBSITE_LEAD_MAX_IMAGES) {
+    throw new Error(
+      `New website knowledge-base archive exceeds ${WEBSITE_LEAD_MAX_IMAGES} validated image downloads`,
+    );
+  }
+  // The manifest combines up to ten user uploads with up to twelve linked
+  // official documents, so the machine-readable completed count may be 22.
+  if ((acquisition.documents?.completed ?? 0) > WEBSITE_LEAD_MAX_DOCUMENTS) {
+    throw new Error(
+      `New website knowledge-base archive exceeds ${WEBSITE_LEAD_MAX_DOCUMENTS} parsed documents`,
+    );
+  }
+  if (
+    (acquisition.webQueries?.completed ?? 0) > WEBSITE_LEAD_MAX_WEB_QUERIES ||
+    (acquisition.webQueries?.total ?? 0) > WEBSITE_LEAD_MAX_WEB_QUERIES
+  ) {
+    throw new Error(
+      `New website knowledge-base archive exceeds ${WEBSITE_LEAD_MAX_WEB_QUERIES} public-web queries`,
+    );
+  }
+
+  const narrativeCharacters = websiteLeadNarrativeCharacters(
+    markdownFiles,
+    contract,
+  );
+  if (narrativeCharacters > WEBSITE_LEAD_MAX_NARRATIVE_CHARACTERS) {
+    throw new Error(
+      `New website knowledge-base narrative exceeds ${WEBSITE_LEAD_MAX_NARRATIVE_CHARACTERS} characters`,
+    );
+  }
+}
+
+function websiteLeadNarrativeCharacters(
+  markdownFiles: Map<string, string>,
+  contract: ParsedKnowledgeBaseContract,
+) {
+  return Array.from(markdownFiles.entries())
+    .filter(([filename]) =>
+      contract.branches.some((branch) =>
+        branch.prefixes.some((prefix) => filename.startsWith(prefix)),
+      ),
+    )
+    .reduce(
+      (total, [, markdown]) => total + narrativeCharacterCountForLeaf(markdown),
+      0,
+    );
+}
+
+function narrativeCharacterCountForLeaf(markdown: string) {
+  const retainedLines: string[] = [];
+  const lines = stripLeadingMarkdownFrontmatter(markdown).split(/\r?\n/);
+  let excludedSectionDepth: number | undefined;
+  for (let index = 0; index < lines.length; index += 1) {
+    const line = lines[index] || "";
+    const heading = line.match(/^(#{1,6})\s+(.+?)\s*$/);
+    if (heading) {
+      const depth = heading[1]!.length;
+      if (excludedSectionDepth !== undefined && depth <= excludedSectionDepth) {
+        excludedSectionDepth = undefined;
+      }
+      const title = heading[2] || "";
+      if (
+        /(?:原始|证据|引用|参考)?来源|素材清单|机器清单|证据状态|状态头|sources?|references?|asset inventory/i.test(
+          title,
+        )
+      ) {
+        excludedSectionDepth = depth;
+      }
+      // Headings organize the display but are not narrative copy.
+      continue;
+    }
+    if (excludedSectionDepth !== undefined) continue;
+    if (
+      /^\s*>\s*.*(?:状态|status)\s*[:：].*(?:来源|source)\s*[:：]/i.test(line)
+    ) {
+      continue;
+    }
+    if (
+      /^\s*[-*]\s+(?:node_id|path|evidence_status|source_ids|status)\s*[:：]/i.test(
+        line,
+      )
+    ) {
+      continue;
+    }
+    if (line.trim().startsWith("|")) {
+      const tableLines: string[] = [];
+      let tableIndex = index;
+      while (
+        tableIndex < lines.length &&
+        (lines[tableIndex] || "").trim().startsWith("|")
+      ) {
+        tableLines.push(lines[tableIndex] || "");
+        tableIndex += 1;
+      }
+      index = tableIndex - 1;
+      const tableText = tableLines.join("\n");
+      if (!/(?:来源|出处|证据链接|source|url)/i.test(tableText)) {
+        retainedLines.push(tableText);
+      }
+      continue;
+    }
+    retainedLines.push(line);
+  }
+
+  const plainText = retainedLines
+    .join("\n")
+    .replace(/<!--[\s\S]*?-->/g, "")
+    .replace(/!\[[^\]]*]\([^)]*\)/g, "")
+    .replace(/\[([^\]]+)]\([^)]*\)/g, "$1")
+    .replace(/https?:\/\/[^\s)>\]]+/gi, "")
+    .replace(/<[^>]+>/g, "");
+  return Array.from(
+    plainText
+      .replace(/\s/g, "")
+      .replace(
+        /[!"#$%&'()*+,\-./:;<=>?@[\\\]^_`{|}~，。！？；：“”‘’（）【】《》…—·]/g,
+        "",
+      ),
+  ).length;
+}
+
 function canonicalStatusForPackagedLeaf(
   filename: string,
   markdown: string,
@@ -1814,6 +2026,14 @@ function isAssetPath(filename: string) {
   return /\.(?:avif|webp|png|jpe?g|gif|svg|mp4|mov|webm|pdf|pptx?|docx?|xlsx?)$/i.test(
     filename,
   );
+}
+
+function isImagePath(filename: string) {
+  return /\.(?:avif|webp|png|jpe?g|gif|svg)$/i.test(filename);
+}
+
+function isDocumentPath(filename: string) {
+  return /\.(?:pdf|pptx?|docx?|xlsx?)$/i.test(filename);
 }
 
 function assetType(filename: string) {

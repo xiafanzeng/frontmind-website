@@ -445,7 +445,7 @@ describe("normalizeGeoProject", () => {
   });
 
   it.each(["paused", "upstream_unknown"])(
-    "fails closed for the non-empty assessment status %s",
+    "keeps the non-final assessment status %s running",
     (status) => {
       const project = normalizeGeoProject({
         project: {
@@ -457,8 +457,8 @@ describe("normalizeGeoProject", () => {
         },
       });
 
-      expect(project.assessment?.status).toBe("failed");
-      expect(project.optimizationForecast?.status).toBe("failed");
+      expect(project.assessment?.status).toBe("running");
+      expect(project.optimizationForecast?.status).toBe("running");
       expect(project.assessmentRetryAvailable).toBe(false);
       expect(project.optimizationForecastRetryAvailable).toBe(false);
       expect(project.stage).toBe("current_assessment");

@@ -1,4 +1,10 @@
 import type { BrokerMonitorRun, BrokerTask } from "./broker";
+import {
+  GEO_CRAWL_PROGRESS_MARKER,
+  geoCrawlProgressSummary,
+  parseTrustedGeoCrawlProgress,
+  type GeoCrawlProgress,
+} from "./crawl-progress";
 import { normalizeTask, type NormalizedTaskStatus } from "./output";
 
 export type GeoExecutionStatus =
@@ -14,6 +20,7 @@ export type GeoExecutionEventKind =
   | "status"
   | "model_output"
   | "result_summary"
+  | "progress_summary"
   | "artifact"
   | "poll"
   | "error";
@@ -47,6 +54,7 @@ export type GeoExecutionLogEntry = {
   completedAt?: string;
   nextPollAt?: string;
   counters?: GeoExecutionCounters;
+  crawlProgress?: GeoCrawlProgress;
   events: GeoExecutionEvent[];
 };
 
@@ -76,6 +84,12 @@ type BuildGeoExecutionLogInput = {
   assessmentTask?: BrokerTask;
   optimizationForecastTask?: BrokerTask;
   validated?: ValidatedExecutionResults;
+  submittedAt?: {
+    knowledgeBase?: string;
+    question?: string;
+    assessment?: string;
+    optimizationForecast?: string;
+  };
   now?: Date;
 };
 
@@ -94,6 +108,8 @@ export function buildGeoExecutionLog(
       publicTaskId: "knowledge-base",
       resultSummary: input.validated?.knowledgeBaseSummary,
       artifactName: input.validated?.knowledgeBaseArchiveName,
+      fallbackStartedAt: input.submittedAt?.knowledgeBase,
+      includeCrawlProgress: true,
     }),
   ];
 
@@ -110,6 +126,7 @@ export function buildGeoExecutionLog(
           Number(input.validated?.questionCount) > 0
             ? `已完成 ${input.validated?.questionCount} 道 GEO 优化问题的生成与结构校验。`
             : undefined,
+        fallbackStartedAt: input.submittedAt?.question,
       }),
     );
   }
@@ -130,6 +147,7 @@ export function buildGeoExecutionLog(
               input.validated.comparisonCount,
             )
           : undefined,
+        fallbackStartedAt: input.submittedAt?.assessment,
       }),
     );
   }
@@ -145,6 +163,7 @@ export function buildGeoExecutionLog(
         resultSummary: input.validated?.forecastReady
           ? input.validated.forecastSummary
           : undefined,
+        fallbackStartedAt: input.submittedAt?.optimizationForecast,
       }),
     );
   }
@@ -200,6 +219,8 @@ type TaskEntryInput = {
     | "optimization-forecast";
   resultSummary?: string;
   artifactName?: string;
+  fallbackStartedAt?: string;
+  includeCrawlProgress?: boolean;
 };
 
 function taskEntry(input: TaskEntryInput): GeoExecutionLogEntry {
@@ -212,13 +233,20 @@ function taskEntry(input: TaskEntryInput): GeoExecutionLogEntry {
     input.task.createdAt,
     asRecord(input.task.metadata).started_at,
     asRecord(input.task.metadata).created_at,
+    input.fallbackStartedAt,
   );
-  const updatedAt = timestampValue(
-    input.task.updated_at,
-    input.task.updatedAt,
-    asRecord(input.task.metadata).updated_at,
-    asRecord(input.task.metadata).updatedAt,
-  );
+  const crawlProgress = input.includeCrawlProgress
+    ? parseTrustedGeoCrawlProgress(input.task)
+    : undefined;
+  const updatedAt = latestTimestamp([
+    timestampValue(
+      input.task.updated_at,
+      input.task.updatedAt,
+      asRecord(input.task.metadata).updated_at,
+      asRecord(input.task.metadata).updatedAt,
+    ),
+    crawlProgress?.reportedAt,
+  ]);
   const completedAt = timestampValue(
     input.task.completed_at,
     input.task.completedAt,
@@ -227,9 +255,13 @@ function taskEntry(input: TaskEntryInput): GeoExecutionLogEntry {
     asRecord(input.task.metadata).completed_at,
     asRecord(input.task.metadata).completedAt,
   );
+  const terminalAt =
+    status === "completed" || status === "failed"
+      ? (completedAt ?? updatedAt)
+      : completedAt;
   const eventTime =
     status === "completed"
-      ? (completedAt ?? updatedAt)
+      ? terminalAt
       : status === "queued"
         ? startedAt
         : (updatedAt ?? startedAt);
@@ -253,6 +285,14 @@ function taskEntry(input: TaskEntryInput): GeoExecutionLogEntry {
       ...(modelOutput.createdAt ? { createdAt: modelOutput.createdAt } : {}),
     });
   });
+  if (crawlProgress) {
+    events.push({
+      id: `${input.id}-crawl-progress-${crawlProgress.reportedAt}`,
+      kind: "progress_summary",
+      message: geoCrawlProgressSummary(crawlProgress),
+      createdAt: crawlProgress.reportedAt,
+    });
+  }
 
   const resultSummary = safeSummary(input.resultSummary);
   if (status === "completed" && resultSummary) {
@@ -260,9 +300,7 @@ function taskEntry(input: TaskEntryInput): GeoExecutionLogEntry {
       id: `${input.id}-result`,
       kind: "result_summary",
       message: resultSummary,
-      ...((completedAt ?? updatedAt)
-        ? { createdAt: completedAt ?? updatedAt }
-        : {}),
+      ...((completedAt ?? updatedAt) ? { createdAt: terminalAt } : {}),
     });
   }
 
@@ -272,9 +310,7 @@ function taskEntry(input: TaskEntryInput): GeoExecutionLogEntry {
       id: `${input.id}-artifact`,
       kind: "artifact",
       message: `已生成知识库归档：${artifactName}`,
-      ...((completedAt ?? updatedAt)
-        ? { createdAt: completedAt ?? updatedAt }
-        : {}),
+      ...((completedAt ?? updatedAt) ? { createdAt: terminalAt } : {}),
     });
   }
 
@@ -288,7 +324,8 @@ function taskEntry(input: TaskEntryInput): GeoExecutionLogEntry {
       : {}),
     ...(startedAt ? { startedAt } : {}),
     ...(updatedAt ? { updatedAt } : {}),
-    ...(completedAt ? { completedAt } : {}),
+    ...(terminalAt ? { completedAt: terminalAt } : {}),
+    ...(crawlProgress ? { crawlProgress } : {}),
     events: deduplicateEvents(events),
   };
 }
@@ -418,7 +455,12 @@ function safeAssistantOutputTexts(task: BrokerTask): Array<{
 
 function safeModelText(value: unknown): string | undefined {
   const text = stringValue(value);
-  if (!text || looksLikeStructuredPayload(text)) return undefined;
+  if (
+    !text ||
+    text.includes(GEO_CRAWL_PROGRESS_MARKER) ||
+    looksLikeStructuredPayload(text)
+  )
+    return undefined;
   return limitText(text);
 }
 
@@ -454,7 +496,7 @@ function taskStatusMessage(title: string, status: GeoExecutionStatus) {
   if (status === "running") return `${title}正在执行。`;
   if (status === "completed") return `${title}已完成。`;
   if (status === "failed") return `${title}执行未成功。`;
-  return `${title}状态暂时无法识别。`;
+  return `${title}任务已提交，正在同步执行状态。`;
 }
 
 function monitorStatusMessage(status: GeoExecutionStatus) {
@@ -472,7 +514,7 @@ function publicTaskStatus(status: NormalizedTaskStatus): GeoExecutionStatus {
   if (status === "running") return "running";
   if (status === "completed") return "completed";
   if (status === "failed" || status === "cancelled") return "failed";
-  return "unknown";
+  return "waiting";
 }
 
 function monitorStatus(status: BrokerMonitorRun["status"]): GeoExecutionStatus {

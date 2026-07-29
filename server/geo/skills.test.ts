@@ -1,7 +1,6 @@
 import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
-import { execFileSync } from "node:child_process";
 import { describe, expect, it } from "vitest";
 import {
   buildGeoQuestionPrompt,
@@ -37,33 +36,28 @@ describe("website one-shot knowledge-base skill", () => {
     expect(crypto.createHash("sha256").update(source).digest("hex")).toBe(
       expectedSourceSha,
     );
-
-    const sourceSkill = execFileSync(
-      "unzip",
-      ["-p", sourceArchive, "SKILL.md"],
-      { encoding: "utf8" },
-    );
-    for (const invariant of [
-      "Crawl every company website exhaustively",
-      "Research the enterprise across the public web",
-      "Collect images comprehensively",
-      "Create two quantitative coverage reports",
-      "40-115 leaf nodes",
-    ]) {
-      expect(sourceSkill).toContain(invariant);
-    }
   });
 
-  it("preserves every crawl/research/evidence/tree/ZIP invariant but removes the wait loop", async () => {
+  it("enforces bounded breadth-first research while preserving evidence and ZIP invariants", async () => {
     const skill = await loadWebsiteKnowledgeBaseSkill();
     for (const invariant of [
       "robots.txt",
       "nested sitemaps",
-      "multilingual query",
+      "0–5 minutes",
+      "At 42 minutes",
+      "After 50 minutes",
+      "Official HTML page retrieval attempts",
+      "120",
+      "48",
+      "300,000 characters",
+      "18,000",
+      "40–56",
+      "150",
+      "product-family inventory",
+      "URL/status ledger",
       "deduplicate by content hash",
       "third-party images",
       "exact source URL",
-      "40-115 leaf nodes",
       "eight canonical content directories",
       "00_crawl_coverage_report.md",
       "00_web_intelligence_report.md",
@@ -86,6 +80,14 @@ describe("website one-shot knowledge-base skill", () => {
       "Present the adaptive tree and true leaf-node count, then immediately begin the first leaf-node confirmation",
     ]) {
       expect(skill).not.toContain(removedMechanic);
+    }
+    for (const removedExhaustiveConstraint of [
+      "Crawl every company website exhaustively",
+      "official sites have been traversed to exhaustion",
+      "40-115 leaf nodes",
+      "A typical build contains about **40-115 leaf nodes**",
+    ]) {
+      expect(skill).not.toContain(removedExhaustiveConstraint);
     }
     expect(skill).toContain(expectedSourceSha);
   });
@@ -113,6 +115,11 @@ describe("website one-shot knowledge-base skill", () => {
       "`01_company_overview/`",
       "`08_competitive_advantages/`",
       "`00_completeness.json`",
+      "40–56 个真实叶子",
+      "最多 150 个文件",
+      "最多 48 个已下载并验证的图片",
+      "硬上限 18,000 字",
+      "历史 ZIP",
       '"verifiedFirstParty":VERIFIED_FIRST_PARTY',
       "六个状态计数",
       "| 状态: {verified_first_party|verified_authoritative|supported_third_party|inferred|needs_verification|not_applicable}",

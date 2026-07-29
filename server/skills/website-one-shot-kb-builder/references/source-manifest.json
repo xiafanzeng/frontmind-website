@@ -7,5 +7,5 @@
     "references/questioning-strategy.md",
     "references/output-format.md"
   ],
-  "transformation": "Socratic intake, per-leaf confirmation/wait, interaction status, and delivery-approval mechanics are replaced by automatic one-shot completion. A machine-verifiable packaged-leaf/status consistency gate is added for the website API. Crawl, research, image, evidence, adaptive leaf expansion, and ZIP principles are preserved. Seven universal business questions are mapped explicitly into the website API's eight canonical content directories; the capability question maps to technology, manufacturing, or both."
+  "transformation": "Socratic intake, per-leaf confirmation/wait, interaction status, and delivery-approval mechanics are replaced by automatic one-shot completion. The website lead-generation variant preserves evidence status, seven-question coverage, eight canonical content directories, raw completeness inputs and machine-verifiable ZIP consistency, while replacing exhaustive collection and open-ended adaptive expansion with a 45–55 minute breadth-first workflow, fixed acquisition budgets and a 40–56 leaf package."
 }

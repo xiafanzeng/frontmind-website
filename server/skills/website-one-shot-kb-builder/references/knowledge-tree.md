@@ -4,17 +4,17 @@
 
 The tree is not a fixed manufacturing template. It adapts to the enterprise type detected in Phase 1. Seven universal business questions define coverage, while the deliverable always uses the eight canonical content directories required by `output-format.md`:
 
-| #   | Universal question | Canonical directory mapping |
-| --- | ------------------ | --------------------------- |
-| 1   | 你是谁？           | `01_company_overview/`      |
-| 2   | 你的团队？         | `02_team/`                  |
-| 3   | 你卖什么？         | `03_products/`              |
+| #   | Universal question | Canonical directory mapping                 |
+| --- | ------------------ | ------------------------------------------- |
+| 1   | 你是谁？           | `01_company_overview/`                      |
+| 2   | 你的团队？         | `02_team/`                                  |
+| 3   | 你卖什么？         | `03_products/`                              |
 | 4   | 你怎么做到的？     | `04_technology/` and/or `05_manufacturing/` |
-| 5   | 卖给谁？           | `06_industries/`            |
-| 6   | 为什么选你？       | `08_competitive_advantages/` |
-| 7   | 怎么合作？         | `07_service/`               |
+| 5   | 卖给谁？           | `06_industries/`                            |
+| 6   | 为什么选你？       | `08_competitive_advantages/`                |
+| 7   | 怎么合作？         | `07_service/`                               |
 
-These questions are a coverage taxonomy, not an alternative filesystem layout or seven summary nodes. Every terminal item below must become a leaf in its mapped canonical directory and must be pre-filled, source-attributed, and evidence-classified automatically. All eight canonical content directories must be present; a directory with no supported fact receives one explicit `needs_verification` gap leaf.
+These questions are a coverage taxonomy, not an alternative filesystem layout or seven summary nodes. The bounded inventory must cover each question, every real product family and every canonical directory. All eight canonical content directories must be present; a directory with no supported fact receives one explicit `needs_verification` gap leaf.
 
 ## Universal Tree Template
 
@@ -28,13 +28,11 @@ These questions are a coverage taxonomy, not an alternative filesystem layout or
   - 2.1 创始人/核心领导
   - 2.2 核心团队介绍
   - 2.3 团队规模与文化
-- **3. 产品/服务**（按真实产品线与服务线动态扩展）
-  - 3.X.1 概述与定位
-  - 3.X.2 核心参数/功能
-  - 3.X.3 差异化卖点
-  - 3.X.4 应用场景
-  - 3.X.5 客户案例
-  - 3.X.6 常见问题
+- **3. 产品/服务**（先建立完整产品族清单，再按优先级展开）
+  - 3.1 产品族/服务族总览
+  - 3.X.1 核心产品族概述与定位
+  - 3.X.2 核心参数/功能与差异化卖点
+  - 3.X.3 应用场景、案例与常见问题
 - **4. 核心能力**（按行业选择或推导能力维度）
   - 4.1 能力维度 A
   - 4.2 能力维度 B
@@ -68,19 +66,34 @@ These questions are a coverage taxonomy, not an alternative filesystem layout or
 | 金融/保险 | 风控体系、合规牌照、技术平台、资金安全         |
 | 创意/设计 | 创作流程、工具与技术栈、作品集、版权管理       |
 
-If no listed variant fits, infer at least four capability dimensions from sourced company evidence and industry structure.
+If no listed variant fits, derive capability dimensions from sourced company evidence and industry structure. The eight capability leaves allocated across `04_technology/` and `05_manufacturing/` may use a truthful `not_applicable` or `needs_verification` status when one canonical directory does not fit, but neither directory may be empty.
 
 ## Leaf-Node Inventory and Count
 
-Create the complete inventory before population begins. Product/service and customer/industry leaves must expand for every real line found across uploads, exhaustive official-site crawling and full-web enterprise intelligence. Third-party discoveries may create candidate leaves or enrich existing leaves, but must remain source-labelled until verified.
+Create a stable bounded inventory before population begins. Start with these 40 leaves:
 
-| Enterprise scope | Product/service lines | Customer industries | Expected leaf nodes |
-| ---------------- | --------------------: | ------------------: | ------------------: |
-| Small            |                   1–3 |                 2–3 |               40–55 |
-| Medium           |                   4–6 |                 3–5 |               60–80 |
-| Large            |                  7–10 |                 5–8 |              85–115 |
+| Coverage branch                        | Base leaves |
+| -------------------------------------- | ----------: |
+| Enterprise identity                    |           5 |
+| Team                                   |           3 |
+| Products/services                      |          12 |
+| Core capabilities across `04` and `05` |           8 |
+| Industries/customers                   |           4 |
+| Cooperation/service                    |           4 |
+| Competitive advantages                 |           4 |
+| **Total**                              |      **40** |
 
-Never replace the true inventory with an eight-row summary. If the count falls below 40, audit the official-site crawl, product/service expansion, application/case coverage, FAQs, support and media assets before proceeding. Nodes that are genuinely not applicable remain in the inventory with an explained `not_applicable` status.
+Add at most 16 leaves, prioritizing core product families, important industry scenarios and evidence required by likely customer Q&A. The final inventory must contain **40–56 leaves**. Do not expand merely because the site has many SKUs, news posts, pagination pages or language variants.
+
+For a large catalog:
+
+- Include every real product/service family in the product overview.
+- Give detailed parameters, scenarios, cases and FAQ treatment only to core families.
+- Consolidate related long-tail SKUs into a sourced family leaf.
+- Consolidate duplicate-language and repeated-news evidence instead of creating new leaves.
+- Keep third-party discoveries source-labelled; they enrich or verify a leaf but do not automatically create one.
+
+Never replace the inventory with an eight-row summary. If the count is below 40, first allocate missing base leaves without triggering another crawl round. Nodes that are genuinely not applicable remain in the inventory with an explained `not_applicable` status.
 
 ## Evidence and Completion Status Model
 

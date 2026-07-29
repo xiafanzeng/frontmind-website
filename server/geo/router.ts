@@ -169,11 +169,14 @@ type ProjectTokenValue = {
   companyName: string;
   companyNameSource?: "explicit" | "input" | "website" | "attachment";
   knowledgeBaseTaskId: string;
+  knowledgeBaseSubmittedAt?: string;
+  knowledgeBaseValidationProfile?: "website-lead-v1";
   knowledgeBaseAttempt?: 1 | 2;
   uploadFileIds?: string[];
   archiveFileIds?: string[];
   temporaryFileIds?: string[];
   questionTaskId?: string;
+  questionSubmittedAt?: string;
   questionAttempt?: 1 | 2;
   previousKnowledgeBaseTaskIds?: string[];
   previousQuestionTaskIds?: string[];
@@ -187,9 +190,11 @@ type ProjectTokenValue = {
   monitorCheckoutExpiresAt?: string;
   monitorPaidAt?: string;
   assessmentTaskId?: string;
+  assessmentSubmittedAt?: string;
   assessmentAttempt?: 1 | 2;
   previousAssessmentTaskIds?: string[];
   optimizationForecastTaskId?: string;
+  optimizationForecastSubmittedAt?: string;
   optimizationForecastAttempt?: 1 | 2;
   previousOptimizationForecastTaskIds?: string[];
   serviceOrderId?: string;
@@ -768,6 +773,7 @@ export function createGeoRouter(options: GeoRouterOptions = {}): Router {
       const nextValue: ProjectTokenValue = {
         ...trackedValue,
         knowledgeBaseTaskId: repairedTaskId,
+        knowledgeBaseSubmittedAt: new Date().toISOString(),
         knowledgeBaseAttempt: 2,
         temporaryFileIds: attachment.temporary
           ? Array.from(
@@ -866,6 +872,7 @@ export function createGeoRouter(options: GeoRouterOptions = {}): Router {
       const nextValue: ProjectTokenValue = {
         ...trackedValue,
         questionTaskId: retriedTaskId,
+        questionSubmittedAt: new Date().toISOString(),
         questionAttempt: 2,
         temporaryFileIds: attachment.temporary
           ? Array.from(
@@ -987,6 +994,7 @@ export function createGeoRouter(options: GeoRouterOptions = {}): Router {
       value.knowledgeBaseTaskId,
       resolved.knowledgeBaseTask,
       value.companyName,
+      value.knowledgeBaseValidationProfile,
     );
     try {
       validateServiceAssessmentOutputs(
@@ -1201,6 +1209,7 @@ export function createGeoRouter(options: GeoRouterOptions = {}): Router {
       }
       await parseKnowledgeBaseArchive(bytes, {
         companyName: value.companyName,
+        validationProfile: value.knowledgeBaseValidationProfile,
         generatedAt:
           typeof knowledgeBaseTask.completed_at === "string"
             ? knowledgeBaseTask.completed_at
@@ -1717,6 +1726,8 @@ export function createGeoRouter(options: GeoRouterOptions = {}): Router {
         companyName: companyIdentity.name,
         companyNameSource: companyIdentity.source,
         knowledgeBaseTaskId: taskId,
+        knowledgeBaseSubmittedAt: new Date().toISOString(),
+        knowledgeBaseValidationProfile: "website-lead-v1",
         knowledgeBaseAttempt: 1,
         uploadFileIds: uploads.map((upload) => upload.fileId),
       };
@@ -1826,6 +1837,7 @@ export function createGeoRouter(options: GeoRouterOptions = {}): Router {
             currentTask,
             value.companyName,
             completedArchiveDescriptor,
+            value.knowledgeBaseValidationProfile,
           );
         } catch (error) {
           if (!(error instanceof KnowledgeBaseArchiveValidationError))
@@ -1894,6 +1906,8 @@ export function createGeoRouter(options: GeoRouterOptions = {}): Router {
       const nextValue: ProjectTokenValue = {
         ...trackArchiveFile(value, currentTask),
         knowledgeBaseTaskId: taskId,
+        knowledgeBaseSubmittedAt: new Date().toISOString(),
+        knowledgeBaseValidationProfile: "website-lead-v1",
         knowledgeBaseAttempt: 2,
         previousKnowledgeBaseTaskIds: Array.from(
           new Set([
@@ -2016,6 +2030,7 @@ export function createGeoRouter(options: GeoRouterOptions = {}): Router {
       const nextValue: ProjectTokenValue = {
         ...trackedValue,
         questionTaskId,
+        questionSubmittedAt: new Date().toISOString(),
         questionAttempt: 1,
         temporaryFileIds: archiveAttachment.temporary
           ? Array.from(
@@ -2397,6 +2412,7 @@ export function createGeoRouter(options: GeoRouterOptions = {}): Router {
         value.knowledgeBaseTaskId,
         knowledgeBaseTask,
         value.companyName,
+        value.knowledgeBaseValidationProfile,
       );
 
       if (value.assessmentTaskId) {
@@ -2499,6 +2515,7 @@ export function createGeoRouter(options: GeoRouterOptions = {}): Router {
         knowledgeBaseTask,
         value.companyName,
         archive,
+        value.knowledgeBaseValidationProfile,
       );
 
       const monitoringDocument = {
@@ -2618,6 +2635,7 @@ export function createGeoRouter(options: GeoRouterOptions = {}): Router {
       const nextValue: ProjectTokenValue = {
         ...value,
         assessmentTaskId,
+        assessmentSubmittedAt: new Date().toISOString(),
         assessmentAttempt: value.assessmentAttempt || 1,
         temporaryFileIds: Array.from(
           new Set([
@@ -2690,6 +2708,7 @@ export function createGeoRouter(options: GeoRouterOptions = {}): Router {
         value.knowledgeBaseTaskId,
         knowledgeBaseTask,
         value.companyName,
+        value.knowledgeBaseValidationProfile,
       );
 
       if (normalizeTaskStatus(assessmentTask.status) !== "completed") {
@@ -2804,6 +2823,7 @@ export function createGeoRouter(options: GeoRouterOptions = {}): Router {
         knowledgeBaseTask,
         value.companyName,
         archive,
+        value.knowledgeBaseValidationProfile,
       );
 
       const assessmentFilename = `${sanitizeFilename(
@@ -2936,6 +2956,7 @@ export function createGeoRouter(options: GeoRouterOptions = {}): Router {
       const nextValue: ProjectTokenValue = {
         ...value,
         optimizationForecastTaskId: forecastTaskId,
+        optimizationForecastSubmittedAt: new Date().toISOString(),
         optimizationForecastAttempt: value.optimizationForecastAttempt || 1,
         temporaryFileIds: Array.from(
           new Set([...(value.temporaryFileIds || []), ...temporaryFiles]),
@@ -3778,6 +3799,7 @@ export function createGeoRouter(options: GeoRouterOptions = {}): Router {
         task,
         value.companyName,
         archive,
+        value.knowledgeBaseValidationProfile,
       );
       const upstream = archive.fileId
         ? await broker.downloadFile(archive.fileId)
@@ -3851,6 +3873,7 @@ export function createGeoRouter(options: GeoRouterOptions = {}): Router {
         task,
         value.companyName,
         archive,
+        value.knowledgeBaseValidationProfile,
       );
       const asset = manifest.assets.find(
         (candidate) => candidate.id === req.params.assetId,
@@ -4158,18 +4181,15 @@ async function buildProjectView(
   const optimizationForecastTaskView = optimizationForecastTask
     ? normalizeTask(optimizationForecastTask, "optimization-forecast")
     : undefined;
-  const knowledgeBaseUnknownError =
-    "企业知识库任务状态暂不可识别，系统已阻止重复创建，请联系技术支持";
-  const questionUnknownError =
-    "问题推荐任务状态暂不可识别，系统已阻止重复创建，请刷新确认或联系技术支持";
-  const publicQuestionsTaskView =
-    questionsTaskView?.status === "unknown"
-      ? {
-          ...questionsTaskView,
-          status: "failed" as const,
-          error: questionUnknownError,
-        }
-      : questionsTaskView;
+  const statusSyncPending = (status: string | undefined) =>
+    status === "unknown" || status === "waiting";
+  const publicQuestionsTaskView = statusSyncPending(questionsTaskView?.status)
+    ? {
+        ...questionsTaskView,
+        status: "running" as const,
+        error: undefined,
+      }
+    : questionsTaskView;
   const archiveDescriptor =
     knowledgeBase.status === "completed"
       ? findArchiveDescriptor(knowledgeBaseTask)
@@ -4190,6 +4210,7 @@ async function buildProjectView(
         knowledgeBaseTask,
         value.companyName,
         archiveDescriptor,
+        value.knowledgeBaseValidationProfile,
       );
     } catch (error) {
       if (!(error instanceof KnowledgeBaseArchiveValidationError)) throw error;
@@ -4215,11 +4236,11 @@ async function buildProjectView(
         progress: 100,
         error: knowledgeBaseValidationPublicError,
       }
-    : knowledgeBase.status === "unknown"
+    : statusSyncPending(knowledgeBase.status)
       ? {
           ...knowledgeBase,
-          status: "failed" as const,
-          error: knowledgeBaseUnknownError,
+          status: "running" as const,
+          error: undefined,
         }
       : knowledgeBase;
   const executionKnowledgeBaseTask = knowledgeBaseValidationFailure
@@ -4229,14 +4250,7 @@ async function buildProjectView(
         output: [],
         error: { message: knowledgeBaseValidationPublicError },
       }
-    : knowledgeBase.status === "unknown"
-      ? {
-          ...knowledgeBaseTask,
-          status: "failed",
-          output: [],
-          error: { message: knowledgeBaseUnknownError },
-        }
-      : knowledgeBaseTask;
+    : knowledgeBaseTask;
   const generatedQuestions =
     questionTask && questionsTaskView?.status === "completed"
       ? parseQuestionSetFromTask(questionTask)?.questions
@@ -4359,22 +4373,22 @@ async function buildProjectView(
   const failed =
     ["failed", "cancelled"].includes(publicKnowledgeBaseTask.status) ||
     (questionsTaskView &&
-      ["failed", "cancelled", "unknown"].includes(questionsTaskView.status)) ||
+      ["failed", "cancelled"].includes(questionsTaskView.status)) ||
     (assessmentTaskView &&
-      ["failed", "cancelled", "unknown"].includes(assessmentTaskView.status)) ||
+      ["failed", "cancelled"].includes(assessmentTaskView.status)) ||
     (optimizationForecastTaskView &&
-      ["failed", "cancelled", "unknown"].includes(
-        optimizationForecastTaskView.status,
-      )) ||
+      ["failed", "cancelled"].includes(optimizationForecastTaskView.status)) ||
     (monitorRun &&
       ["remote_failed", "shape_mismatch"].includes(monitorRun.status)) ||
     invalidQuestionResult;
+  const taskProjectStatus = (taskStatus: string) =>
+    statusSyncPending(taskStatus) ? "running" : taskStatus;
   const status = failed
     ? "failed"
     : optimizationForecastTaskView
-      ? optimizationForecastTaskView.status
+      ? taskProjectStatus(optimizationForecastTaskView.status)
       : assessmentTaskView
-        ? assessmentTaskView.status
+        ? taskProjectStatus(assessmentTaskView.status)
         : monitorRun &&
             [
               "submission_in_progress",
@@ -4386,10 +4400,10 @@ async function buildProjectView(
           : questions
             ? "completed"
             : publicQuestionsTaskView
-              ? publicQuestionsTaskView.status
+              ? taskProjectStatus(publicQuestionsTaskView.status)
               : knowledgeBaseManifest
                 ? "ready_for_questions"
-                : publicKnowledgeBaseTask.status;
+                : taskProjectStatus(publicKnowledgeBaseTask.status);
   const stage =
     servicePaid || manualServiceOrder
       ? "service_activation"
@@ -4446,6 +4460,12 @@ async function buildProjectView(
     monitorRun,
     assessmentTask,
     optimizationForecastTask,
+    submittedAt: {
+      knowledgeBase: value.knowledgeBaseSubmittedAt,
+      question: value.questionSubmittedAt,
+      assessment: value.assessmentSubmittedAt,
+      optimizationForecast: value.optimizationForecastSubmittedAt,
+    },
     validated: {
       knowledgeBaseSummary: knowledgeBaseManifest?.summary,
       knowledgeBaseArchiveName: knowledgeBaseManifest
@@ -4474,6 +4494,7 @@ async function buildProjectView(
 
   return {
     id: value.projectId,
+    createdAt: value.knowledgeBaseSubmittedAt,
     companyName: value.companyName,
     stage,
     status,
@@ -4519,7 +4540,9 @@ async function buildProjectView(
     selectedQuestionId: value.monitorQuestionId,
     selectedPlatformIds: value.monitorPlatformIds || [],
     knowledgeBaseRetryAvailable,
-    knowledgeBaseSupportRequired: knowledgeBase.status === "unknown",
+    knowledgeBaseSupportRequired:
+      statusSyncPending(knowledgeBase.status) &&
+      hasElapsed(value.knowledgeBaseSubmittedAt, 15 * 60 * 1_000),
     questionRetryAvailable,
     assessmentRetryAvailable,
     optimizationForecastRetryAvailable,
@@ -4651,9 +4674,7 @@ async function buildProjectView(
       : undefined,
     error: knowledgeBaseValidationFailure
       ? knowledgeBaseValidationPublicError
-      : knowledgeBase.status === "unknown"
-        ? knowledgeBaseUnknownError
-        : undefined,
+      : undefined,
   };
 }
 
@@ -4665,15 +4686,12 @@ function toPublicAssessmentView(
 ) {
   const taskView = normalizeTask(task, "assessment");
   if (taskView.status !== "completed") {
+    const syncing = ["unknown", "waiting"].includes(taskView.status);
     return {
-      status:
-        taskView.status === "unknown" ? ("failed" as const) : taskView.status,
+      status: syncing ? ("running" as const) : taskView.status,
       dimensions: {},
       comparisons: [],
-      error:
-        taskView.status === "unknown"
-          ? "现状评估任务状态暂不可识别，系统已阻止重复创建，请刷新确认或联系技术支持"
-          : taskView.error,
+      error: syncing ? undefined : taskView.error,
     };
   }
   try {
@@ -4801,16 +4819,13 @@ function toPublicOptimizationForecastView(
 ) {
   const taskView = normalizeTask(task, "optimization-forecast");
   if (taskView.status !== "completed") {
+    const syncing = ["unknown", "waiting"].includes(taskView.status);
     return {
-      status:
-        taskView.status === "unknown" ? ("failed" as const) : taskView.status,
+      status: syncing ? ("running" as const) : taskView.status,
       dimensions: [],
       assumptions: [],
       roadmap: [],
-      error:
-        taskView.status === "unknown"
-          ? "优化效果评估任务状态暂不可识别，系统已阻止重复创建，请刷新确认或联系技术支持"
-          : taskView.error,
+      error: syncing ? undefined : taskView.error,
     };
   }
 
@@ -4935,6 +4950,7 @@ async function loadKnowledgeEvidencePaths(
   taskId: string,
   task: BrokerTask,
   companyName: string,
+  validationProfile?: "website-lead-v1",
 ) {
   const archive = findArchiveDescriptor(task);
   if (!archive) {
@@ -4946,6 +4962,7 @@ async function loadKnowledgeEvidencePaths(
     task,
     companyName,
     archive,
+    validationProfile,
   );
   return manifest.evidencePaths;
 }
@@ -4956,13 +4973,16 @@ async function loadKnowledgeBaseManifest(
   task: BrokerTask,
   companyName: string,
   archive: { fileId?: string; url?: string; filename: string },
+  validationProfile?: "website-lead-v1",
 ) {
   let cache = manifestCacheByBroker.get(broker);
   if (!cache) {
     cache = new Map();
     manifestCacheByBroker.set(broker, cache);
   }
-  const cacheKey = `${taskId}:${archive.fileId || archive.url || archive.filename}`;
+  const cacheKey = `${taskId}:${archive.fileId || archive.url || archive.filename}:${
+    validationProfile || "historical-compatible"
+  }`;
   const cached = cache.get(cacheKey);
   if (cached && cached.expiresAt > Date.now()) return cached.promise;
 
@@ -4996,6 +5016,7 @@ async function loadKnowledgeBaseManifest(
       if (!bytes.length) throw new Error("Knowledge-base archive is empty");
       return await parseKnowledgeBaseArchive(bytes, {
         companyName,
+        validationProfile,
         generatedAt:
           typeof task.completed_at === "string"
             ? task.completed_at
@@ -5303,6 +5324,7 @@ async function resolveCanonicalCompanyIdentity(
       knowledgeBaseTask,
       value.companyName,
       archive,
+      value.knowledgeBaseValidationProfile,
     );
   } catch (error) {
     if (
@@ -5591,6 +5613,19 @@ function headerValue(req: Request, name: string) {
 
 function stringQuery(value: unknown) {
   return typeof value === "string" ? value : "";
+}
+
+function hasElapsed(
+  startedAt: string | undefined,
+  durationMs: number,
+  nowMs = Date.now(),
+) {
+  const startedMs = startedAt ? Date.parse(startedAt) : Number.NaN;
+  return (
+    Number.isFinite(startedMs) &&
+    nowMs >= startedMs &&
+    nowMs - startedMs >= durationMs
+  );
 }
 
 function requestRateLimitKey(req: Request) {

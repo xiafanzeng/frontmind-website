@@ -65,6 +65,7 @@ class MockBroker implements GeoPresalesBroker {
   taskResults = new Map<string, BrokerTask>();
   monitorCredentialConfigured = true;
   publicUrlConfigured = true;
+  omitNextKnowledgeTaskStatus = false;
 
   async getStatus() {
     return {
@@ -151,7 +152,12 @@ class MockBroker implements GeoPresalesBroker {
                 },
               ],
             }
-          : { id, status: "running", progress: 0.25, output: [] };
+          : !isQuestionTask &&
+              !isAssessmentTask &&
+              !isForecastTask &&
+              this.omitNextKnowledgeTaskStatus
+            ? { id, progress: 0.25, output: [] }
+            : { id, status: "running", progress: 0.25, output: [] };
     this.tasks.set(id, task);
     this.idempotentTasks.set(input.idempotencyKey, task);
     return task;
@@ -1538,6 +1544,9 @@ describe("GEO API", () => {
       "test-session-secret-at-least-16-characters",
     ).open<Record<string, unknown>>(initial.projectToken, "project").value;
     expect(initialValue.knowledgeBaseAttempt).toBe(1);
+    expect(initialValue.knowledgeBaseValidationProfile).toBe(
+      "website-lead-v1",
+    );
 
     broker.taskResultErrors.delete("kb-1");
     broker.taskResults.set("kb-1", {
@@ -1561,6 +1570,9 @@ describe("GEO API", () => {
       "project",
     ).value;
     expect(retriedValue.knowledgeBaseAttempt).toBe(2);
+    expect(retriedValue.knowledgeBaseValidationProfile).toBe(
+      "website-lead-v1",
+    );
   });
 
   it("uses a trusted completed knowledge-base snapshot when the result endpoint is temporarily unavailable", async () => {
@@ -2971,7 +2983,7 @@ describe("GEO API", () => {
     expect(broker.forecastTaskCount).toBe(2);
   });
 
-  it("fails closed on an unrecognized forecast task without creating a duplicate", async () => {
+  it("keeps an unrecognized forecast task running without creating a duplicate", async () => {
     const ready = await createServiceReadyProject();
     broker.tasks.set(ready.forecastTaskId, {
       id: ready.forecastTaskId,
@@ -2985,9 +2997,7 @@ describe("GEO API", () => {
     );
     expect(current.response.status).toBe(200);
     expect((current.body as any).project.optimizationForecast).toMatchObject({
-      status: "failed",
-      error:
-        "优化效果评估任务状态暂不可识别，系统已阻止重复创建，请刷新确认或联系技术支持",
+      status: "running",
     });
     expect(
       (current.body as any).project.optimizationForecastRetryAvailable,
@@ -4039,7 +4049,42 @@ describe("GEO API", () => {
     expect(broker.questionTaskCount).toBe(2);
   });
 
-  it("fails closed on unrecognized knowledge-base and question states without duplicating tasks", async () => {
+  it("keeps a create response without status waiting and reuses the original task", async () => {
+    broker.omitNextKnowledgeTaskStatus = true;
+    const { cookie } = await verifyInvite();
+    const created = await jsonRequest("/projects", cookie, {
+      method: "POST",
+      body: { input: "Acme", attachments: [] },
+    });
+    const initial = created.body as Record<string, any>;
+
+    expect(initial.project).toMatchObject({
+      status: "running",
+      knowledgeBaseRetryAvailable: false,
+      knowledgeBaseSupportRequired: false,
+      kbTask: { status: "running" },
+      executionLog: {
+        entries: [
+          expect.objectContaining({
+            id: "enterprise-analysis",
+            status: "waiting",
+            startedAt: expect.any(String),
+          }),
+        ],
+      },
+    });
+    expect(broker.prompts).toHaveLength(1);
+
+    const refreshed = await jsonRequest(
+      `/projects/${encodeURIComponent(initial.projectToken)}`,
+      cookie,
+    );
+    expect(refreshed.response.status).toBe(200);
+    expect((refreshed.body as any).project.status).toBe("running");
+    expect(broker.prompts).toHaveLength(1);
+  });
+
+  it("keeps unrecognized knowledge-base and question states waiting without duplicating tasks", async () => {
     const { cookie } = await verifyInvite();
     const created = await jsonRequest("/projects", cookie, {
       method: "POST",
@@ -4057,13 +4102,19 @@ describe("GEO API", () => {
       cookie,
     );
     expect((unknownKnowledgeBase.body as any).project).toMatchObject({
-      status: "failed",
+      status: "running",
       knowledgeBaseRetryAvailable: false,
-      knowledgeBaseSupportRequired: true,
+      knowledgeBaseSupportRequired: false,
       kbTask: {
-        status: "failed",
-        error:
-          "企业知识库任务状态暂不可识别，系统已阻止重复创建，请联系技术支持",
+        status: "running",
+      },
+      executionLog: {
+        entries: [
+          expect.objectContaining({
+            id: "enterprise-analysis",
+            status: "waiting",
+          }),
+        ],
       },
     });
     const knowledgeBaseReplay = await jsonRequest(
@@ -4088,12 +4139,10 @@ describe("GEO API", () => {
       ready.cookie,
     );
     expect((unknownQuestion.body as any).project).toMatchObject({
-      status: "failed",
+      status: "running",
       questionRetryAvailable: false,
       questionTask: {
-        status: "failed",
-        error:
-          "问题推荐任务状态暂不可识别，系统已阻止重复创建，请刷新确认或联系技术支持",
+        status: "running",
       },
     });
     const questionReplay = await jsonRequest(
@@ -4103,6 +4152,46 @@ describe("GEO API", () => {
     );
     expect(questionReplay.response.status).toBe(200);
     expect(broker.questionTaskCount).toBe(1);
+  });
+
+  it("offers support after 15 minutes of unknown state while remaining non-terminal", async () => {
+    const { cookie } = await verifyInvite();
+    const created = await jsonRequest("/projects", cookie, {
+      method: "POST",
+      body: { input: "Acme", attachments: [] },
+    });
+    const initial = created.body as Record<string, any>;
+    broker.tasks.set("kb-1", {
+      id: "kb-1",
+      status: "paused",
+      output: [],
+    });
+    const codec = new GeoTokenCodec(
+      "test-session-secret-at-least-16-characters",
+    );
+    const stored = codec.open<Record<string, unknown>>(
+      initial.projectToken,
+      "project",
+    ).value;
+    const delayedToken = codec.seal(
+      "project",
+      {
+        ...stored,
+        knowledgeBaseSubmittedAt: "2026-07-28T00:00:00.000Z",
+      },
+      60 * 60 * 1000,
+    );
+
+    const delayed = await jsonRequest(
+      `/projects/${encodeURIComponent(delayedToken)}`,
+      cookie,
+    );
+    expect((delayed.body as any).project).toMatchObject({
+      status: "running",
+      knowledgeBaseSupportRequired: true,
+      kbTask: { status: "running" },
+    });
+    expect(broker.prompts).toHaveLength(1);
   });
 });
 
@@ -4696,6 +4785,7 @@ async function fixtureArchive() {
     "02_team",
     "03_products/device",
     "04_technology",
+    "05_manufacturing",
     "06_industries/research",
     "07_service",
     "08_competitive_advantages",
