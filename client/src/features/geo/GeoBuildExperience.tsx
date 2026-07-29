@@ -965,6 +965,30 @@ function isPreviewableKnowledgeAsset(asset: GeoKnowledgeAsset) {
   );
 }
 
+function knowledgeAssetRoleRank(asset: GeoKnowledgeAsset) {
+  return asset.displayRole === "hero"
+    ? 0
+    : asset.displayRole === "inline"
+      ? 1
+      : asset.displayRole === "badge"
+        ? 2
+        : 1;
+}
+
+function knowledgeAssetUsesContain(asset: GeoKnowledgeAsset) {
+  return (
+    asset.displayRole === "badge" ||
+    [
+      "brand_identity",
+      "product_ui",
+      "product_diagram",
+      "certificate_badge",
+      "document_figure",
+    ].includes(asset.assetType || "") ||
+    /logo|标识|证书|徽章|架构图|界面/i.test(`${asset.type || ""} ${asset.name}`)
+  );
+}
+
 function useLocalKnowledgeAssetPreviewUrls(
   projectId: string,
   assets: GeoKnowledgeAsset[],
@@ -1090,14 +1114,22 @@ function KnowledgeSectionVisual({
       ? assets.filter((asset) => !asset.sectionId)
       : [];
   const relatedAssets = [...directlyRelated, ...unassigned];
-  const visualAssets = relatedAssets
+  const allVisualAssets = relatedAssets
     .filter(isPreviewableKnowledgeAsset)
     .filter((asset) => asset.previewUrl || asset.url)
+    .sort(
+      (left, right) =>
+        knowledgeAssetRoleRank(left) - knowledgeAssetRoleRank(right),
+    );
+  const visualAssets = allVisualAssets
+    .filter((asset) => asset.displayRole !== "badge")
     .slice(0, 3);
+  const badgeAssets = allVisualAssets
+    .filter((asset) => asset.displayRole === "badge")
+    .slice(0, 6);
   const remainingCount = Math.max(
     0,
-    relatedAssets.filter(isPreviewableKnowledgeAsset).length -
-      visualAssets.length,
+    allVisualAssets.length - visualAssets.length - badgeAssets.length,
   );
 
   return (
@@ -1111,9 +1143,7 @@ function KnowledgeSectionVisual({
           visualAssets.map((asset, index) => (
             <div
               className={`geo-section-media-image ${
-                /logo|标识/i.test(`${asset.type || ""} ${asset.name}`)
-                  ? "is-contain"
-                  : ""
+                knowledgeAssetUsesContain(asset) ? "is-contain" : ""
               }`}
               key={asset.id}
             >
@@ -1131,6 +1161,15 @@ function KnowledgeSectionVisual({
           </div>
         )}
       </div>
+      {badgeAssets.length > 0 && (
+        <div className="geo-section-media-badges" aria-label="品牌与资质标识">
+          {badgeAssets.map((asset) => (
+            <div className="geo-section-media-badge" key={asset.id}>
+              <KnowledgeAssetPreviewImage asset={asset} />
+            </div>
+          ))}
+        </div>
+      )}
       <figcaption>
         <span>图文知识章节</span>
         <strong>{section.title}</strong>
@@ -4704,10 +4743,7 @@ export function EnterpriseAnalysis({
               {!activeLeaf &&
                 activeSection?.contentAvailability &&
                 activeSection.contentAvailability !== "complete" && (
-                  <div
-                    className="geo-evidence-availability-note"
-                    role="status"
-                  >
+                  <div className="geo-evidence-availability-note" role="status">
                     <CircleAlert size={16} aria-hidden="true" />
                     <span>
                       {activeSection.contentAvailability === "limited_evidence"
@@ -5003,9 +5039,7 @@ function AnalysisProgress({
     project.status === "uploading" ? 8 : 12,
   );
   const visibleEvents =
-    executionEntry?.events.filter(
-      (event) => event.kind === "status",
-    ) ?? [];
+    executionEntry?.events.filter((event) => event.kind === "status") ?? [];
   const activityRows = visibleEvents.length
     ? visibleEvents.slice(-6).map((event) => ({
         id: event.id,
@@ -5079,12 +5113,12 @@ function AnalysisProgress({
         <div className="geo-crawl-progress-summary" aria-live="polite">
           <strong>最新采集摘要</strong>
           <p>
-            已访问 {executionEntry.crawlProgress.visitedLinks}{" "}
-            个链接，成功采集 {executionEntry.crawlProgress.successfulPages}{" "}
-            个页面，提取 {executionEntry.crawlProgress.textCharacters}{" "}
-            字文字，发现 {executionEntry.crawlProgress.imagesDiscovered}{" "}
-            张图片并保存 {executionEntry.crawlProgress.imagesDownloaded}{" "}
-            张，已解析 {executionEntry.crawlProgress.documentsParsed} 份文档。
+            已访问 {executionEntry.crawlProgress.visitedLinks} 个链接，成功采集{" "}
+            {executionEntry.crawlProgress.successfulPages} 个页面，提取{" "}
+            {executionEntry.crawlProgress.textCharacters} 字文字，发现{" "}
+            {executionEntry.crawlProgress.imagesDiscovered} 张图片并保存{" "}
+            {executionEntry.crawlProgress.imagesDownloaded} 张，已解析{" "}
+            {executionEntry.crawlProgress.documentsParsed} 份文档。
           </p>
           <small>
             最近更新 {formatDate(executionEntry.crawlProgress.reportedAt)}

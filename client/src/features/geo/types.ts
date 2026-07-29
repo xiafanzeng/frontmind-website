@@ -385,6 +385,17 @@ export type GeoKnowledgeAsset = {
   archivePath?: string;
   width?: number;
   height?: number;
+  assetType?:
+    | "brand_identity"
+    | "product_ui"
+    | "product_diagram"
+    | "case_photo"
+    | "team_photo"
+    | "environment_photo"
+    | "certificate_badge"
+    | "document_figure"
+    | "other";
+  displayRole?: "hero" | "inline" | "badge";
 };
 
 export type GeoKnowledgeCompletenessCounts = {

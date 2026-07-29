@@ -85,7 +85,7 @@ Every Markdown file must appear exactly once in `00_package_manifest.json.docume
 - Keep the final ZIP at or below 220 MB uncompressed, every non-image document at or below 8 MB, and every entry's compression ratio at or below 200:1. Do not include symbolic links.
 - Use only Markdown, JSON, CSV, SHA-256 manifests, AVIF/WebP/PNG/JPEG/GIF images, and selected PDF/DOC/DOCX/XLS/XLSX/PPT/PPTX source documents. Convert text evidence to Markdown; for any unsupported external file, retain only its public URL and source record.
 - Treat paths as Unicode NFKC and case-insensitive when checking uniqueness; two paths that differ only by case or Unicode normalization are duplicates.
-- Treat 36–48 validated first-party images as a target. Package every eligible asset up to 48; a smaller honest `source_limited` or `budget_limited` delivery is valid.
+- Select images by brand and product-family coverage, not a numeric target. Package every eligible asset up to the 48-image hard ceiling; use an honest `source_limited` or `budget_limited` status when coverage or inspection remains incomplete.
 - Target 18,000–28,000 customer-visible formal characters, impose no total minimum, and never exceed 40,000.
 - Derive every overview and leaf minimum from actual linked `kind: evidence` documents; do not trust model-reported evidence counts.
 - Target about 1,500–2,500 characters for ordinary branch overviews and 3,000–4,000 for `03_products/` when evidence supports that depth.
@@ -187,7 +187,7 @@ Use exactly these top-level fields:
 }
 ```
 
-`discoveryMethods` must contain all seven mechanisms checked—`img`, `srcset_or_lazy`, `picture`, `css_background`, `open_graph`, `gallery`, and `official_document`—even when a mechanism yields no candidate. `scannedSourcePages` and every `checkedSourceCount` must be at least 1 so that a sparse result cannot claim `limited_evidence` without actually checking sources.
+`discoveryMethods` must contain all seven mechanisms checked—`img`, `srcset_or_lazy`, `picture`, `css_background`, `open_graph`, `gallery`, and `official_document`—even when a mechanism yields no candidate. `scannedSourcePages` must equal `00_completeness.json.acquisition.officialPages.completed`; every `checkedSourceCount` must be at least 1.
 
 Every public source, candidate, and asset URL stored in the package manifest must be a credential-free HTTP(S) URL no longer than 4,000 characters.
 
@@ -248,6 +248,8 @@ Every `assets` record uses only these fields:
   "bytes": ACTUAL_FILE_BYTES,
   "width": ACTUAL_PIXEL_WIDTH,
   "height": ACTUAL_PIXEL_HEIGHT,
+  "assetType": "brand_identity|product_ui|product_diagram|case_photo|team_photo|environment_photo|certificate_badge|document_figure|other",
+  "displayRole": "hero|inline|badge",
   "caption": "CUSTOMER_VISIBLE_CAPTION",
   "alt": "OPTIONAL_ACCESSIBLE_ALT_TEXT",
   "branchId": "CANONICAL_01_TO_08_DIRECTORY_NAME",
@@ -262,11 +264,12 @@ Rules for assets and counts:
 
 - Inventory every packaged raster image exactly once; IDs, paths and SHA-256 hashes are unique.
 - Read each final file body again to calculate `bytes`, `sha256`, `width` and `height`. Its suffix, declared MIME and magic bytes must agree. SVG is not a packaged display image: rasterize an authorized SVG to PNG/WebP or keep only its URL record.
-- Package only first-party images. Third-party and unknown-ownership media remain URL/source/ownership notes in the reference inventory and never fill the target.
+- Package only first-party images. Third-party and unknown-ownership media remain URL/source/ownership notes in the reference inventory.
 - Every image declares its canonical `branchId` and exact public first-party `sourcePageUrl`. `documentIds` must reference customer-visible documents in that branch, and every linked document must contain the same asset ID in `assetIds`.
 - Set `counts.totalFiles` to all non-directory ZIP entries, including both JSON manifests. Recount it after final compression layout is fixed.
 - Set `counts.packagedImages` and `00_completeness.json.acquisition.images.completed` to the exact number of valid, deduplicated raster files in the final ZIP.
-- Record every discovered image candidate with direct URL, source page, method and status. `inspected = eligible + rejected` and `inspected <= discovered`. `target_met` requires at least 36 packaged eligible images, no uninspected candidate, and no `shortfallReason`; `source_limited` requires fewer than 36 eligible images and every candidate inspected; `budget_limited` requires at least one real uninspected candidate and may already contain 36 or more eligible images. Every eligible candidate maps to a packaged asset, and every packaged asset maps back to one eligible candidate.
+- Record every discovered image candidate with direct URL, source page, method and status. `inspected = eligible + rejected` and `inspected <= discovered`. `target_met` requires complete inspection, at least one brand visual and no `shortfallReason`; `source_limited` requires every candidate inspected plus a concrete coverage gap; `budget_limited` requires at least one real uninspected candidate. Every eligible candidate maps to a packaged asset, and every packaged asset maps back to one eligible candidate.
+- Apply the role-aware quality gates: `hero` ≥ 1200×600, `badge` ≥ 256×256, and other `inline` assets ≥ 800×450. Product-family coverage may use only `product_ui`, `product_diagram`, or `case_photo`; badges do not satisfy it.
 - `customerVisibleCharacters` counts only formal narrative from customer-visible overview/leaf documents. Exclude headings, frontmatter, status headers, source/reference sections, source tables, material/machine inventories, URLs and Markdown markup. Ignore whitespace and punctuation.
 - `evidenceCharacters` applies the same whitespace/punctuation/URL/markup exclusions to all non-customer-visible Markdown documents.
 
@@ -322,7 +325,7 @@ Replace every brace-delimited token below with counts calculated from the packag
 - Package automatically only when every true leaf node contains Markdown content or a reasoned `not_applicable` record.
 - Count 40–56 content leaves and no more than 150 total ZIP files.
 - Include the exact `00_package_manifest.json`, one overview per display branch, and bidirectional document/image links.
-- Treat 36–48 validated first-party images as a target; allow a smaller source-limited delivery only when the candidate ledger proves the shortfall. Package no SVG, third-party image file, duplicate hash or per-page raw HTML archive.
+- Use coverage-first validated first-party images up to the 48-image ceiling. Package no SVG, third-party image file, duplicate hash or per-page raw HTML archive.
 - Target 18,000–28,000 effective narrative characters, enforce the evidence-adaptive per-document minimums, and never exceed 40,000.
 - Reject repeated template prose and any formal copy framed as a raw snapshot or page excerpt.
 - Do not ask “是否生成初版成果” or offer A/B/C generation choices.

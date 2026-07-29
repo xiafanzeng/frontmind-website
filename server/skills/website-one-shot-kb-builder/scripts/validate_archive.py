@@ -78,6 +78,45 @@ PUNCTUATION = string.punctuation + "，。！？；：“”‘’（）【】�
 ID_PATTERN = re.compile(r"^[A-Za-z][A-Za-z0-9_-]{0,79}$")
 DISPLAY_BRANCH_IDS = set(DISPLAY_BRANCH.values())
 CONTENT_AVAILABILITY = {"complete", "limited_evidence", "needs_verification"}
+ASSET_TYPES = {
+    "brand_identity",
+    "product_ui",
+    "product_diagram",
+    "case_photo",
+    "team_photo",
+    "environment_photo",
+    "certificate_badge",
+    "document_figure",
+    "other",
+}
+DISPLAY_ROLES = {"hero", "inline", "badge"}
+CUSTOMER_NARRATIVE_LEAKAGE = (
+    (
+        "task or collection process",
+        re.compile(
+            r"本轮|本次(?:采集|任务|构建|处理|检索|核验)|本包|本知识库|"
+            r"抽取失败|采集失败|已核验|证据不足|未形成.{0,16}核验",
+            re.I,
+        ),
+    ),
+    (
+        "customer or procurement advice",
+        re.compile(
+            r"(?:客户|采购方|读者|使用方|合作方).{0,12}(?:应|需|建议|可将)|"
+            r"仍应|采购(?:或|与)?合规审查|合规审查|正式尽调|不能仅凭|"
+            r"不宜(?:直接)?(?:转换|认定|视为)?|不能外推",
+            re.I,
+        ),
+    ),
+    (
+        "company-claim interpretation or model reasoning",
+        re.compile(
+            r"这些内容属于企业自我定义|企业自我定义|对客户而言|"
+            r"可将其落实为|说明组织意图与品牌取向",
+            re.I,
+        ),
+    ),
+)
 MAX_PUBLIC_SOURCE_URL_CHARACTERS = 4000
 MAX_UNCOMPRESSED_BYTES = 220 * 1024 * 1024
 MAX_DOCUMENT_BYTES = 8 * 1024 * 1024
@@ -577,9 +616,15 @@ def validate(zip_path: str) -> dict[str, int]:
         for asset in assets:
             if not isinstance(asset, dict):
                 fail("asset record must be an object")
+            asset_required_keys = {
+                "id", "path", "sha256", "mimeType", "bytes", "width", "height",
+                "caption", "branchId", "documentIds", "sourcePageUrl", "ownership",
+            }
+            if schema_version == 2:
+                asset_required_keys |= {"assetType", "displayRole"}
             require_exact_keys(
                 asset,
-                {"id", "path", "sha256", "mimeType", "bytes", "width", "height", "caption", "branchId", "documentIds", "sourcePageUrl", "ownership"},
+                asset_required_keys,
                 {"alt", "sourceAssetUrl"},
             )
             if (
@@ -605,6 +650,11 @@ def validate(zip_path: str) -> dict[str, int]:
                 for key in ("width", "height")
             ):
                 fail("asset width and height must be positive integers")
+            if schema_version == 2 and (
+                asset.get("assetType") not in ASSET_TYPES
+                or asset.get("displayRole") not in DISPLAY_ROLES
+            ):
+                fail("assetType or displayRole is invalid")
             if (
                 asset["branchId"] not in DISPLAY_BRANCH
                 or not public_http_url(asset["sourcePageUrl"])
@@ -743,6 +793,13 @@ def validate(zip_path: str) -> dict[str, int]:
                     fail(f"leaf is thinner than its evidence-adaptive minimum: {doc['path']}")
             if re.search(r"第一方(?:原始)?快照|第一方页面摘录|原始快照|页面摘录", text, re.I):
                 fail(f"raw snapshot/page excerpt used as formal copy: {doc['path']}")
+            normalized_text = unicodedata.normalize("NFKC", text)
+            for label, pattern in CUSTOMER_NARRATIVE_LEAKAGE:
+                if pattern.search(normalized_text):
+                    fail(
+                        f"customer-facing audit language or internal reasoning "
+                        f"({label}): {doc['path']}"
+                    )
             if count >= 120:
                 fingerprints[re.sub(r"\d+", "#", re.sub(r"\s+", "", text))].append(doc["path"])
             for paragraph in re.split(r"\n\s*\n", text):
@@ -893,6 +950,31 @@ def validate(zip_path: str) -> dict[str, int]:
                 or asset.get("height") != dimensions[1]
             ):
                 fail(f"image dimensions mismatch: {asset['path']}")
+            if schema_version == 2:
+                asset_type = asset.get("assetType")
+                display_role = asset.get("displayRole")
+                badge_type = asset_type in {"brand_identity", "certificate_badge"}
+                if (
+                    (display_role == "badge" and not badge_type)
+                    or (
+                        asset_type == "certificate_badge"
+                        and display_role != "badge"
+                    )
+                ):
+                    fail(
+                        f"invalid assetType/displayRole combination: {asset['path']}"
+                    )
+                if display_role == "hero":
+                    minimum_met = dimensions[0] >= 1200 and dimensions[1] >= 600
+                elif display_role == "badge":
+                    minimum_met = dimensions[0] >= 256 and dimensions[1] >= 256
+                else:
+                    minimum_met = dimensions[0] >= 800 and dimensions[1] >= 450
+                if not minimum_met:
+                    fail(
+                        f"{display_role} image quality minimum not met: "
+                        f"{asset['path']}"
+                    )
             if asset.get("bytes") != len(data) or asset.get("sha256") != digest:
                 fail(f"image bytes/SHA-256 mismatch: {asset['path']}")
             if digest in hashes:
@@ -967,6 +1049,14 @@ def validate(zip_path: str) -> dict[str, int]:
                 or image_acquisition["total"] != discovered
             ):
                 fail("image discovery funnel does not match acquisition totals")
+            official_pages = completeness["acquisition"].get("officialPages")
+            if (
+                not isinstance(official_pages, dict)
+                or scanned_source_pages != official_pages.get("completed")
+            ):
+                fail(
+                    "image scan must cover every successfully parsed official page"
+                )
             allowed_methods = {
                 "img",
                 "srcset_or_lazy",
@@ -1020,19 +1110,24 @@ def validate(zip_path: str) -> dict[str, int]:
             status = selection.get("status")
             if status == "target_met":
                 if (
-                    eligible < 36
-                    or image_count < 36
-                    or uninspected_candidates
+                    uninspected_candidates
                     or selection.get("shortfallReason")
+                    or not any(
+                        asset.get("assetType") == "brand_identity"
+                        for asset in assets
+                    )
                 ):
-                    fail("image target claimed without 36 packaged eligible images")
+                    fail(
+                        "complete image coverage requires inspected candidates, "
+                        "brand imagery, and zero shortfall"
+                    )
             elif status in {"source_limited", "budget_limited"}:
                 if not selection.get("shortfallReason"):
                     fail("image shortfall must record a concrete reason")
                 if status == "source_limited" and (
-                    eligible >= 36 or inspected != discovered
+                    inspected != discovered
                 ):
-                    fail("source_limited claimed when 36 eligible images exist")
+                    fail("source_limited requires every candidate to be inspected")
                 if status == "budget_limited" and inspected >= discovered:
                     fail("budget_limited claimed without uninspected discovered candidates")
             else:
@@ -1085,6 +1180,8 @@ def validate(zip_path: str) -> dict[str, int]:
                     if not family_asset_ids or any(
                         asset_id not in assets_by_id
                         or assets_by_id[asset_id].get("branchId") != "03_products"
+                        or assets_by_id[asset_id].get("assetType")
+                        not in {"product_ui", "product_diagram", "case_photo"}
                         for asset_id in family_asset_ids
                     ):
                         fail("product family official visual is not packaged")

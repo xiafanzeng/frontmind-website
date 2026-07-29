@@ -9,14 +9,7 @@ type SkillDefinition = {
 
 const WEBSITE_KB_SKILL: SkillDefinition = {
   name: "website-one-shot-kb-builder",
-  files: [
-    "SKILL.md",
-    "references/knowledge-tree.md",
-    "references/questioning-strategy.md",
-    "references/output-format.md",
-    "references/source-manifest.json",
-    "scripts/validate_archive.py",
-  ],
+  files: ["SKILL.md"],
 };
 
 const QUESTION_SKILL: SkillDefinition = {

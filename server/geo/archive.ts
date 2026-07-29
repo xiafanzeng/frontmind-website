@@ -91,6 +91,31 @@ const LEGACY_REQUIRED_REPORT_FILES = [
   "references/source_index.md",
 ] as const;
 
+const CUSTOMER_NARRATIVE_LEAKAGE_RULES = [
+  {
+    label: "任务或采集过程",
+    pattern:
+      /本轮|本次(?:采集|任务|构建|处理|检索|核验)|本包|本知识库|抽取失败|采集失败|已核验|证据不足|未形成.{0,16}核验/i,
+  },
+  {
+    label: "客户或采购建议",
+    pattern:
+      /(?:客户|采购方|读者|使用方|合作方).{0,12}(?:应|需|建议|可将)|仍应|采购(?:或|与)?合规审查|合规审查|正式尽调|不能仅凭|不宜(?:直接)?(?:转换|认定|视为)?|不能外推/i,
+  },
+  {
+    label: "企业主张解释或模型推理",
+    pattern:
+      /这些内容属于企业自我定义|企业自我定义|对客户而言|可将其落实为|说明组织意图与品牌取向/i,
+  },
+] as const;
+
+export function customerFacingNarrativeViolation(value: string) {
+  const normalized = value.normalize("NFKC");
+  return CUSTOMER_NARRATIVE_LEAKAGE_RULES.find(({ pattern }) =>
+    pattern.test(normalized),
+  )?.label;
+}
+
 const PackageEvidenceStatusSchema = z.enum([
   "verified_first_party",
   "verified_authoritative",
@@ -110,6 +135,20 @@ const PackageBranchIdSchema = z.enum([
   "07_service",
   "08_competitive_advantages",
 ]);
+
+const PackageAssetTypeSchema = z.enum([
+  "brand_identity",
+  "product_ui",
+  "product_diagram",
+  "case_photo",
+  "team_photo",
+  "environment_photo",
+  "certificate_badge",
+  "document_figure",
+  "other",
+]);
+
+const PackageAssetDisplayRoleSchema = z.enum(["hero", "inline", "badge"]);
 
 const PackageDocumentSchema = z
   .object({
@@ -218,6 +257,11 @@ const PackageAssetSchema = z
   })
   .strict();
 
+const PackageAssetV2Schema = PackageAssetSchema.extend({
+  assetType: PackageAssetTypeSchema,
+  displayRole: PackageAssetDisplayRoleSchema,
+}).strict();
+
 const WebsiteLeadPackageManifestV1InputSchema = z
   .object({
     schemaVersion: z.literal(1),
@@ -272,7 +316,7 @@ const WebsiteLeadPackageManifestV2InputSchema = z
       .array(PackageDocumentV2Schema)
       .min(MIN_KNOWLEDGE_LEAVES + 7)
       .max(WEBSITE_LEAD_MAX_FILES),
-    assets: z.array(PackageAssetSchema).max(MAX_ASSETS),
+    assets: z.array(PackageAssetV2Schema).max(MAX_ASSETS),
     counts: z
       .object({
         totalFiles: z.number().int().min(1).max(MAX_ENTRY_COUNT),
@@ -313,7 +357,7 @@ const WebsiteLeadPackageManifestV2InputSchema = z
         inspectedCandidateImages: z.number().int().min(0).max(10_000_000),
         eligibleFirstPartyImages: z.number().int().min(0).max(MAX_ASSETS),
         rejectedCandidateImages: z.number().int().min(0).max(10_000_000),
-        scannedSourcePages: z.number().int().min(1).max(10_000),
+        scannedSourcePages: z.number().int().nonnegative().max(10_000),
         discoveryMethods: z
           .array(
             z.enum([
@@ -363,12 +407,7 @@ const WebsiteLeadPackageManifestV2InputSchema = z
                   .trim()
                   .regex(/^[A-Za-z][A-Za-z0-9_-]{0,79}$/)
                   .optional(),
-                rejectionReason: z
-                  .string()
-                  .trim()
-                  .min(8)
-                  .max(500)
-                  .optional(),
+                rejectionReason: z.string().trim().min(8).max(500).optional(),
               })
               .strict(),
           )
@@ -407,8 +446,8 @@ const WebsiteLeadPackageManifestV2InputSchema = z
 const WebsiteLeadPackageManifestInputSchema = z.discriminatedUnion(
   "schemaVersion",
   [
-  WebsiteLeadPackageManifestV1InputSchema,
-  WebsiteLeadPackageManifestV2InputSchema,
+    WebsiteLeadPackageManifestV1InputSchema,
+    WebsiteLeadPackageManifestV2InputSchema,
   ],
 );
 
@@ -764,7 +803,10 @@ export type KnowledgeBaseManifest = {
     leaves?: KnowledgeBaseSectionLeaf[];
     evidenceCount: number;
     status: "verified" | "inferred" | "needs_verification" | "not_applicable";
-    contentAvailability?: "complete" | "limited_evidence" | "needs_verification";
+    contentAvailability?:
+      | "complete"
+      | "limited_evidence"
+      | "needs_verification";
   }>;
   sources: Array<{
     id: string;
@@ -788,6 +830,8 @@ export type KnowledgeBaseManifest = {
     bytes?: number;
     width?: number;
     height?: number;
+    assetType?: z.infer<typeof PackageAssetTypeSchema>;
+    displayRole?: z.infer<typeof PackageAssetDisplayRoleSchema>;
     documentIds?: string[];
     sourcePageUrl?: string;
     sourceAssetUrl?: string;
@@ -1003,14 +1047,9 @@ async function parseKnowledgeBaseArchiveInternal(
         );
       }
       if (
-        ![
-          ".avif",
-          ".gif",
-          ".jpeg",
-          ".jpg",
-          ".png",
-          ".webp",
-        ].includes(extension) &&
+        ![".avif", ".gif", ".jpeg", ".jpg", ".png", ".webp"].includes(
+          extension,
+        ) &&
         declaredEntrySize(file.entry) > WEBSITE_LEAD_MAX_DOCUMENT_BYTES
       ) {
         throw new Error(
@@ -1274,6 +1313,8 @@ async function parseKnowledgeBaseArchiveInternal(
         bytes: asset.bytes,
         width: asset.width,
         height: asset.height,
+        ...("assetType" in asset ? { assetType: asset.assetType } : {}),
+        ...("displayRole" in asset ? { displayRole: asset.displayRole } : {}),
         documentIds: asset.documentIds,
         ...(asset.sourcePageUrl ? { sourcePageUrl: asset.sourcePageUrl } : {}),
         ...(asset.sourceAssetUrl
@@ -1434,7 +1475,7 @@ async function parseWebsiteLeadPackageManifest(
           ...asset,
           path: normalizeZipPath(asset.path),
         })),
-      },
+      } as WebsiteLeadPackageManifest,
     };
   } catch (error) {
     if (
@@ -2255,9 +2296,7 @@ async function validateWebsiteLeadPackageBudgets(
   const evidenceCharactersById = new Map(
     evidenceDocuments.map((document) => [
       document.id,
-      evidenceDocumentCharacterCount(
-        markdownFiles.get(document.path) || "",
-      ),
+      evidenceDocumentCharacterCount(markdownFiles.get(document.path) || ""),
     ]),
   );
   const evidenceContentHashes = new Map<string, string>();
@@ -2339,9 +2378,8 @@ async function validateWebsiteLeadPackageBudgets(
       }
       const actualEvidenceCharacters = evidenceDocumentIds.reduce(
         (total, evidenceDocumentId) => {
-          const evidenceDocument = manifestDocumentsById.get(
-            evidenceDocumentId,
-          );
+          const evidenceDocument =
+            manifestDocumentsById.get(evidenceDocumentId);
           if (
             !evidenceDocument ||
             evidenceDocument.kind !== "evidence" ||
@@ -2476,6 +2514,12 @@ async function validateWebsiteLeadPackageBudgets(
         `New website knowledge-base document ${document.path} uses a raw snapshot or page excerpt as customer-visible narrative`,
       );
     }
+    const narrativeViolation = customerFacingNarrativeViolation(narrativeText);
+    if (narrativeViolation) {
+      throw new Error(
+        `New website knowledge-base document ${document.path} contains customer-facing audit language or internal reasoning: ${narrativeViolation}`,
+      );
+    }
     const fingerprint = narrativeText
       .replace(/\d+/g, "#")
       .replace(/\s+/g, "")
@@ -2549,12 +2593,12 @@ async function validateWebsiteLeadPackageBudgets(
             (document) =>
               Boolean(document.branchId) &&
               sectionIdForPackageBranchId(document.branchId!) ===
-              evidence.branchId,
+                evidence.branchId,
           )
           .flatMap(
             (document) =>
-              (document as WebsiteLeadPackageDocumentV2)
-                .evidenceDocumentIds || [],
+              (document as WebsiteLeadPackageDocumentV2).evidenceDocumentIds ||
+              [],
           ),
       );
       const actualBranchEvidenceCharacters = Array.from(
@@ -2576,9 +2620,8 @@ async function validateWebsiteLeadPackageBudgets(
         actualBranchEvidenceCharacters,
         evidence.branchId,
       );
-      const declaredOverviewMinimum = (
-        overview as WebsiteLeadPackageDocumentV2
-      ).dynamicMinimumCharacters;
+      const declaredOverviewMinimum = (overview as WebsiteLeadPackageDocumentV2)
+        .dynamicMinimumCharacters;
       if (
         evidence.dynamicOverviewMinimum !== expectedMinimum ||
         declaredOverviewMinimum !== expectedMinimum
@@ -2631,12 +2674,10 @@ async function validateWebsiteLeadPackageBudgets(
     for (const leaf of leafDocuments) {
       actualStatusCounts[statusKey[leaf.evidenceStatus!]] += 1;
     }
-    for (const key of Object.keys(
-      actualStatusCounts,
-    ) as Array<keyof typeof actualStatusCounts>) {
-      if (
-        contract.completeness.counts[key] !== actualStatusCounts[key]
-      ) {
+    for (const key of Object.keys(actualStatusCounts) as Array<
+      keyof typeof actualStatusCounts
+    >) {
+      if (contract.completeness.counts[key] !== actualStatusCounts[key]) {
         throw new Error(
           `New website knowledge-base leaf status ${key} does not match 00_completeness.json`,
         );
@@ -2828,6 +2869,32 @@ async function validateWebsiteLeadPackageBudgets(
         `New website knowledge-base asset ${asset.path} dimensions do not match the package manifest`,
       );
     }
+    if (packageManifest.schemaVersion === 2) {
+      const v2Asset = asset as z.infer<typeof PackageAssetV2Schema>;
+      const isBadgeType = ["brand_identity", "certificate_badge"].includes(
+        v2Asset.assetType,
+      );
+      if (
+        (v2Asset.displayRole === "badge" && !isBadgeType) ||
+        (v2Asset.assetType === "certificate_badge" &&
+          v2Asset.displayRole !== "badge")
+      ) {
+        throw new Error(
+          `New website knowledge-base asset ${asset.path} has an invalid assetType/displayRole combination`,
+        );
+      }
+      const meetsMinimum =
+        v2Asset.displayRole === "hero"
+          ? dimensions.width >= 1_200 && dimensions.height >= 600
+          : v2Asset.displayRole === "badge"
+            ? dimensions.width >= 256 && dimensions.height >= 256
+            : dimensions.width >= 800 && dimensions.height >= 450;
+      if (!meetsMinimum) {
+        throw new Error(
+          `New website knowledge-base asset ${asset.path} does not meet the ${v2Asset.displayRole} image quality minimum`,
+        );
+      }
+    }
     if (bytes.byteLength !== asset.bytes) {
       throw new Error(
         `New website knowledge-base asset ${asset.path} byte count does not match the package manifest`,
@@ -2898,6 +2965,14 @@ async function validateWebsiteLeadPackageBudgets(
     }
   } else {
     const selection = packageManifest.imageSelection;
+    if (
+      acquisition.officialPages?.completed === undefined ||
+      selection.scannedSourcePages !== acquisition.officialPages.completed
+    ) {
+      throw new Error(
+        "New website knowledge-base image scan must cover every successfully parsed official page",
+      );
+    }
     const candidateUrls = new Set(
       selection.candidates.map((candidate) => candidate.url),
     );
@@ -2982,13 +3057,16 @@ async function validateWebsiteLeadPackageBudgets(
     }
     if (selection.status === "target_met") {
       if (
-        eligibleFirstPartyImages < WEBSITE_LEAD_IMAGE_TARGET_MIN ||
-        imageCount < WEBSITE_LEAD_IMAGE_TARGET_MIN ||
         uninspectedCandidates.length > 0 ||
-        selection.shortfallReason
+        selection.shortfallReason ||
+        !packageManifest.assets.some(
+          (asset) =>
+            (asset as z.infer<typeof PackageAssetV2Schema>).assetType ===
+            "brand_identity",
+        )
       ) {
         throw new Error(
-          "New website knowledge-base cannot claim the image target without 36 packaged eligible images",
+          "New website knowledge-base cannot claim complete image coverage without inspected candidates, brand imagery, and zero shortfall",
         );
       }
     } else {
@@ -2999,12 +3077,11 @@ async function validateWebsiteLeadPackageBudgets(
       }
       if (
         selection.status === "source_limited" &&
-        (eligibleFirstPartyImages >= WEBSITE_LEAD_IMAGE_TARGET_MIN ||
-          selection.inspectedCandidateImages !==
-            selection.discoveredCandidateImages)
+        selection.inspectedCandidateImages !==
+          selection.discoveredCandidateImages
       ) {
         throw new Error(
-          "New website knowledge-base cannot claim source_limited when 36 eligible images exist",
+          "New website knowledge-base source_limited status requires every discovered candidate to be inspected",
         );
       }
       if (
@@ -3034,17 +3111,14 @@ async function validateWebsiteLeadPackageBudgets(
       ) ||
       leafDocuments
         .filter((document) => document.branchId === "03_products")
-        .some(
-          (document) => {
-            const productFamilyIds = (
-              document as WebsiteLeadPackageDocumentV2
-            ).productFamilyIds;
-            return (
-              !productFamilyIds?.length ||
-              new Set(productFamilyIds).size !== productFamilyIds.length
-            );
-          },
-        )
+        .some((document) => {
+          const productFamilyIds = (document as WebsiteLeadPackageDocumentV2)
+            .productFamilyIds;
+          return (
+            !productFamilyIds?.length ||
+            new Set(productFamilyIds).size !== productFamilyIds.length
+          );
+        })
     ) {
       throw new Error(
         "New website knowledge-base product leaves must declare productFamilyIds",
@@ -3070,7 +3144,16 @@ async function validateWebsiteLeadPackageBudgets(
           family.assetIds.length === 0 ||
           family.assetIds.some((assetId) => {
             const asset = assetsById.get(assetId);
-            return !asset || asset.branchId !== "03_products";
+            const assetType = (
+              asset as z.infer<typeof PackageAssetV2Schema> | undefined
+            )?.assetType;
+            return (
+              !asset ||
+              asset.branchId !== "03_products" ||
+              !["product_ui", "product_diagram", "case_photo"].includes(
+                assetType || "",
+              )
+            );
           })
         ) {
           throw new Error(
@@ -3299,9 +3382,7 @@ function packageEvidenceCharacters(
     .reduce(
       (total, document) =>
         total +
-        evidenceDocumentCharacterCount(
-          markdownFiles.get(document.path) || "",
-        ),
+        evidenceDocumentCharacterCount(markdownFiles.get(document.path) || ""),
       0,
     );
 }
@@ -3621,7 +3702,7 @@ function classifyKnowledgeBaseValidationError(
     return "media";
   }
   if (
-    /(?:narrative|evidenceCharacters|evidence-adaptive|evidence-bearing|linked evidence|raw snapshot|page excerpt|repeats the same|repeated template|formal template|usable content|no evidence-backed leaf)/i.test(
+    /(?:narrative|evidenceCharacters|evidence-adaptive|evidence-bearing|linked evidence|raw snapshot|page excerpt|customer-facing audit language|internal reasoning|repeats the same|repeated template|formal template|usable content|no evidence-backed leaf)/i.test(
       message,
     )
   ) {
