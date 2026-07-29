@@ -6,6 +6,7 @@ import type {
 } from "./provisioning";
 import {
   createGeoDependencyHealthChecker,
+  geoPublicBuildSha,
   geoReadinessErrorLabel,
 } from "./health";
 
@@ -28,6 +29,14 @@ function dependencies() {
 }
 
 describe("GEO dependency health", () => {
+  it("exposes only a validated non-secret build SHA", () => {
+    expect(geoPublicBuildSha({ FRONTMIND_BUILD_SHA: "AbCdEf1234567" })).toBe(
+      "abcdef1234567",
+    );
+    expect(geoPublicBuildSha({ FRONTMIND_BUILD_SHA: "deploy-secret" })).toBeNull();
+    expect(geoPublicBuildSha({})).toBeNull();
+  });
+
   it("reduces readiness errors to a secret-free class label", () => {
     const sensitive = new Error(
       "https://agent.internal/api?token=super-secret-value",

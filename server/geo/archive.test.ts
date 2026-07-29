@@ -168,6 +168,7 @@ async function buildFixtureZip(
 }
 
 async function buildWebsiteLeadBudgetFixture(options?: {
+  schemaVersion?: 1 | 2;
   leafCount?: number;
   imageCount?: number;
   documentCount?: number;
@@ -197,7 +198,11 @@ async function buildWebsiteLeadBudgetFixture(options?: {
   omitImageSourcePage?: boolean;
   repeatedTemplateParagraph?: boolean;
   omitLeafSourceIds?: boolean;
+  v2EvidenceCharactersPerBranch?: number;
+  v2OverviewNarrativeCharacters?: number;
+  v2ContentStatus?: "complete" | "limited_evidence" | "needs_verification";
 }) {
+  const schemaVersion = options?.schemaVersion ?? 1;
   const leafCount = options?.leafCount ?? 40;
   const imageCount = options?.imageCount ?? 1;
   const documentCount = options?.documentCount ?? 0;
@@ -219,6 +224,10 @@ async function buildWebsiteLeadBudgetFixture(options?: {
       | "not_applicable";
     sourceIds?: string[];
     assetIds?: string[];
+    evidenceCharacters?: number;
+    dynamicMinimumCharacters?: number;
+    evidenceDocumentIds?: string[];
+    productFamilyIds?: string[];
     customerVisible: boolean;
   }> = [];
   const evidenceMarkdown: string[] = [];
@@ -301,7 +310,9 @@ async function buildWebsiteLeadBudgetFixture(options?: {
   );
   addManifestMarkdown(
     "00_crawl_coverage_report.md",
-    `# 官网抓取覆盖报告\n\n已按预算完成广度优先采集。\n\n成功下载图片：${
+    `# 官网抓取覆盖报告\n\n已按预算完成广度优先采集。\n\n发现图片：${
+      options?.imageTotalOverride ?? imageCount
+    }\n\n成功下载图片：${
       options?.crawlReportImageClaim ?? imageCount
     }`,
     {
@@ -332,6 +343,78 @@ async function buildWebsiteLeadBudgetFixture(options?: {
     },
   );
   const overviewPublicBranches = new Set<string>();
+  const v2DisplayBranches = [
+    ["company-identity", "01_company_overview"],
+    ["team", "02_team"],
+    ["products-services", "03_products"],
+    ["core-capabilities", "04_technology"],
+    ["customers-industries", "06_industries"],
+    ["cooperation", "07_service"],
+    ["why-frontmind", "08_competitive_advantages"],
+  ] as const;
+  const v2EvidenceByPublicBranch = new Map<
+    string,
+    { id: string; characters: number }
+  >();
+  const v2EvidenceByCanonicalBranch = new Map<
+    string,
+    { id: string; characters: number }
+  >();
+  if (schemaVersion === 2) {
+    for (const [publicBranch, branchId] of v2DisplayBranches) {
+      const id = `doc-evidence-${publicBranch}`;
+      const content = [
+        `# ${publicBranch} 去重证据`,
+        "",
+        String.fromCodePoint(0x5200 + v2EvidenceByPublicBranch.size).repeat(
+          options?.v2EvidenceCharactersPerBranch ?? 400,
+        ),
+      ].join("\n");
+      addManifestMarkdown(
+        `10_reference_assets/evidence/${publicBranch}.md`,
+        content,
+        {
+          id,
+          kind: "evidence",
+          title: `${publicBranch} 去重证据`,
+          branchId,
+          sourceIds: ["source-official"],
+          customerVisible: false,
+        },
+      );
+      v2EvidenceByPublicBranch.set(publicBranch, {
+        id,
+        characters: manifestEvidenceCharacterCount(content),
+      });
+      v2EvidenceByCanonicalBranch.set(
+        branchId,
+        v2EvidenceByPublicBranch.get(publicBranch)!,
+      );
+    }
+    const manufacturingContent = [
+      "# manufacturing 去重证据",
+      "",
+      String.fromCodePoint(0x5300).repeat(
+        options?.v2EvidenceCharactersPerBranch ?? 400,
+      ),
+    ].join("\n");
+    addManifestMarkdown(
+      "10_reference_assets/evidence/manufacturing.md",
+      manufacturingContent,
+      {
+        id: "doc-evidence-manufacturing",
+        kind: "evidence",
+        title: "manufacturing 去重证据",
+        branchId: "05_manufacturing",
+        sourceIds: ["source-official"],
+        customerVisible: false,
+      },
+    );
+    v2EvidenceByCanonicalBranch.set("05_manufacturing", {
+      id: "doc-evidence-manufacturing",
+      characters: manifestEvidenceCharacterCount(manufacturingContent),
+    });
+  }
   const productDocumentId = "doc-leaf-003";
   const productAssetIds = Array.from(
     { length: imageCount },
@@ -341,10 +424,16 @@ async function buildWebsiteLeadBudgetFixture(options?: {
     const branch = fixtureBranchPaths[index % fixtureBranchPaths.length]!;
     const branchId = branch.split("/")[0] as FixturePackageBranchId;
     const publicBranch =
-      branchId === "04_technology" || branchId === "05_manufacturing"
+      v2DisplayBranches.find(([, candidate]) => candidate === branchId)?.[0] ??
+      (branchId === "05_manufacturing"
         ? "core-capabilities"
-        : branchId;
-    const kind = overviewPublicBranches.has(publicBranch) ? "leaf" : "overview";
+        : "company-identity");
+    const kind =
+      schemaVersion === 2
+        ? "leaf"
+        : overviewPublicBranches.has(publicBranch)
+          ? "leaf"
+          : "overview";
     overviewPublicBranches.add(publicBranch);
     const documentId = `doc-leaf-${String(index + 1).padStart(3, "0")}`;
     const narrative =
@@ -391,9 +480,75 @@ async function buildWebsiteLeadBudgetFixture(options?: {
           ? {}
           : { sourceIds: ["source-official"] }),
         assetIds: documentId === productDocumentId ? productAssetIds : [],
+        ...(schemaVersion === 2
+          ? {
+              evidenceCharacters:
+                v2EvidenceByCanonicalBranch.get(branchId)!.characters,
+              dynamicMinimumCharacters: Math.min(
+                200,
+                Math.max(
+                  60,
+                  Math.ceil(
+                    v2EvidenceByCanonicalBranch.get(branchId)!.characters *
+                      0.2,
+                  ),
+                ),
+              ),
+              evidenceDocumentIds: [
+                v2EvidenceByCanonicalBranch.get(branchId)!.id,
+              ],
+              ...(branchId === "03_products"
+                ? { productFamilyIds: ["family-primary"] }
+                : {}),
+            }
+          : {}),
         customerVisible: true,
       },
     );
+  }
+  if (schemaVersion === 2) {
+    for (const [index, [publicBranch, branchId]] of v2DisplayBranches.entries()) {
+      const evidence = v2EvidenceByPublicBranch.get(publicBranch)!;
+      const narrativeCharacters =
+        options?.v2OverviewNarrativeCharacters ?? 200;
+      const documentId = `doc-overview-${publicBranch}`;
+      const narrative = String.fromCodePoint(0x5600 + index).repeat(
+        narrativeCharacters,
+      );
+      addManifestMarkdown(
+        `${branchId}/overview.md`,
+        [
+          `# ${publicBranch} 综述`,
+          "",
+          "> 最后更新: 2026-07-29 | 状态: verified_first_party | 来源: 企业官网",
+          "",
+          "## 正式综述",
+          "",
+          narrative,
+          "",
+          "## 原始来源",
+          "",
+          "- https://example.com/",
+        ].join("\n"),
+        {
+          id: documentId,
+          kind: "overview",
+          title: `${publicBranch} 综述`,
+          branchId,
+          order: 0,
+          evidenceStatus: "verified_first_party",
+          sourceIds: ["source-official"],
+          assetIds: branchId === "03_products" ? productAssetIds : [],
+          evidenceCharacters: evidence.characters,
+          dynamicMinimumCharacters: Math.min(
+            publicBranch === "products-services" ? 3_000 : 1_500,
+            Math.max(120, Math.ceil(evidence.characters * 0.25)),
+          ),
+          evidenceDocumentIds: [evidence.id],
+          customerVisible: true,
+        },
+      );
+    }
   }
   const packageAssets = [];
   for (let index = 0; index < imageCount; index += 1) {
@@ -438,10 +593,14 @@ async function buildWebsiteLeadBudgetFixture(options?: {
       caption: `产品图片 ${index + 1}`,
       alt: `产品图片 ${index + 1}`,
       branchId: "03_products",
-      documentIds: [productDocumentId],
+      documentIds:
+        schemaVersion === 2
+          ? [productDocumentId, "doc-overview-products-services"]
+          : [productDocumentId],
       ...(options?.omitImageSourcePage
         ? {}
         : { sourcePageUrl: "https://example.com/products" }),
+      sourceAssetUrl: `https://example.com/assets/image-${index + 1}.${extension}`,
       ownership: "first_party",
     });
   }
@@ -452,10 +611,16 @@ async function buildWebsiteLeadBudgetFixture(options?: {
     );
   }
   for (let index = 0; index < (options?.extraFileCount ?? 0); index += 1) {
-    root.file(`10_reference_assets/ledger-${index + 1}.txt`, "source ledger");
+    root.file(
+      `10_reference_assets/ledger-${index + 1}.csv`,
+      "source_id,url\nsource-official,https://example.com/",
+    );
   }
   const customerVisibleCharacters =
-    leafCount * (options?.narrativeCharactersPerLeaf ?? 200);
+    leafCount * (options?.narrativeCharactersPerLeaf ?? 200) +
+    (schemaVersion === 2
+      ? 7 * (options?.v2OverviewNarrativeCharacters ?? 200)
+      : 0);
   const eligibleFirstPartyImages =
     options?.eligibleFirstPartyImages ?? imageCount;
   const totalFiles =
@@ -468,7 +633,7 @@ async function buildWebsiteLeadBudgetFixture(options?: {
   root.file(
     "00_package_manifest.json",
     JSON.stringify({
-      schemaVersion: 1,
+      schemaVersion,
       profile: "website-lead-v1",
       documents: packageDocuments,
       assets: packageAssets,
@@ -481,15 +646,96 @@ async function buildWebsiteLeadBudgetFixture(options?: {
         ),
         packagedImages: imageCount,
       },
-      imageSelection: {
-        eligibleFirstPartyImages,
-        ...(eligibleFirstPartyImages < 36 && !options?.omitImageShortfallReason
-          ? {
-              shortfallReason:
-                "官网本次仅发现这些经过验证且适合客户展示的第一方图片。",
-            }
-          : {}),
-      },
+      ...(schemaVersion === 2
+        ? {
+            branchEvidence: v2DisplayBranches.map(
+              ([publicBranch], index) => {
+                const evidence = v2EvidenceByPublicBranch.get(publicBranch)!;
+                const branchEvidenceCharacters =
+                  evidence.characters +
+                  (publicBranch === "core-capabilities"
+                    ? v2EvidenceByCanonicalBranch.get("05_manufacturing")!
+                        .characters
+                    : 0);
+                return {
+                  branchId: publicBranch,
+                  overviewDocumentId: `doc-overview-${publicBranch}`,
+                  contentStatus:
+                    options?.v2ContentStatus ?? "limited_evidence",
+                  deduplicatedEvidenceCharacters: branchEvidenceCharacters,
+                  dynamicOverviewMinimum: Math.min(
+                    publicBranch === "products-services" ? 3_000 : 1_500,
+                    Math.max(
+                      120,
+                      Math.ceil(branchEvidenceCharacters * 0.25),
+                    ),
+                  ),
+                  checkedSourceCount: index + 1,
+                };
+              },
+            ),
+            imageSelection: {
+              status:
+                eligibleFirstPartyImages >= 36
+                  ? "target_met"
+                  : "source_limited",
+              discoveredCandidateImages: imageCount,
+              inspectedCandidateImages: imageCount,
+              eligibleFirstPartyImages,
+              rejectedCandidateImages: 0,
+              scannedSourcePages: 8,
+              discoveryMethods: [
+                "img",
+                "srcset_or_lazy",
+                "picture",
+                "css_background",
+                "open_graph",
+                "gallery",
+                "official_document",
+              ],
+              candidates: packageAssets.map((asset) => ({
+                url: asset.sourceAssetUrl,
+                sourcePageUrl: asset.sourcePageUrl,
+                method: "img",
+                status: "eligible",
+                assetId: asset.id,
+              })),
+              productFamilies: [
+                {
+                  id: "family-primary",
+                  name: "核心产品族",
+                  officialVisualFound: imageCount > 0,
+                  checkedSources: 3,
+                  assetIds: packageAssets.map((asset) => asset.id),
+                  ...(imageCount > 0
+                    ? {}
+                    : {
+                        gapReason:
+                          "已检查官网产品页、页面元数据和资料附件，未发现可交付的官方视觉素材。",
+                      }),
+                },
+              ],
+              ...(eligibleFirstPartyImages < 36 &&
+              !options?.omitImageShortfallReason
+                ? {
+                    shortfallReason:
+                      "官网已检查的第一方来源仅提供这些经过验证且适合客户展示的图片。",
+                  }
+                : {}),
+            },
+          }
+        : {
+            imageSelection: {
+              eligibleFirstPartyImages,
+              ...(eligibleFirstPartyImages < 36 &&
+              !options?.omitImageShortfallReason
+                ? {
+                    shortfallReason:
+                      "官网本次仅发现这些经过验证且适合客户展示的第一方图片。",
+                  }
+                : {}),
+            },
+          }),
     }),
   );
   return Buffer.from(await zip.generateAsync({ type: "uint8array" }));
@@ -923,6 +1169,271 @@ describe("knowledge-base ZIP manifest", () => {
       "https://example.com/",
     );
     expect(manifest.packageManifestSha256).toMatch(/^[a-f0-9]{64}$/);
+  });
+
+  it("accepts a sparse v2 company as limited_evidence when linked evidence and the image ledger are honest", async () => {
+    const archive = await buildWebsiteLeadBudgetFixture({
+      schemaVersion: 2,
+      imageCount: 1,
+      narrativeCharactersPerLeaf: 80,
+      v2EvidenceCharactersPerBranch: 120,
+      v2OverviewNarrativeCharacters: 140,
+      v2ContentStatus: "limited_evidence",
+    });
+
+    const manifest = await parseKnowledgeBaseArchive(archive, {
+      companyName: "WhiteLabelCo",
+      validationProfile: "website-lead-v1",
+    });
+
+    expect(manifest.sections).toHaveLength(7);
+    expect(
+      manifest.sections.every(
+        (section) => section.contentAvailability === "limited_evidence",
+      ),
+    ).toBe(true);
+    expect(manifest.assets).toHaveLength(1);
+    expect(manifest.completeness?.counts.totalLeaves).toBe(40);
+  });
+
+  it("rejects thin v2 overviews when the linked evidence documents are rich", async () => {
+    const archive = await buildWebsiteLeadBudgetFixture({
+      schemaVersion: 2,
+      imageCount: 1,
+      narrativeCharactersPerLeaf: 200,
+      v2EvidenceCharactersPerBranch: 10_000,
+      v2OverviewNarrativeCharacters: 200,
+      v2ContentStatus: "complete",
+    });
+
+    await expect(
+      parseKnowledgeBaseArchive(archive, {
+        companyName: "RichEvidenceCo",
+        validationProfile: "website-lead-v1",
+      }),
+    ).rejects.toThrow(/overview is thinner than its evidence-adaptive minimum/i);
+  });
+
+  it("rejects duplicate normalized evidence content in both validators", async () => {
+    const zip = await JSZip.loadAsync(
+      await buildWebsiteLeadBudgetFixture({ schemaVersion: 2, imageCount: 1 }),
+    );
+    const companyEvidence = await zip
+      .file(
+        "Bounded_knowledge_base/10_reference_assets/evidence/company-identity.md",
+      )!
+      .async("string");
+    zip.file(
+      "Bounded_knowledge_base/10_reference_assets/evidence/team.md",
+      companyEvidence,
+    );
+    const archive = Buffer.from(
+      await zip.generateAsync({ type: "uint8array" }),
+    );
+
+    await expect(
+      parseKnowledgeBaseArchive(archive, {
+        companyName: "DuplicateEvidenceCo",
+        validationProfile: "website-lead-v1",
+      }),
+    ).rejects.toThrow(/duplicate the same normalized content/i);
+
+    const temporaryDirectory = await mkdtemp(
+      path.join(os.tmpdir(), "website-kb-duplicate-evidence-"),
+    );
+    const archivePath = path.join(temporaryDirectory, "knowledge-base.zip");
+    try {
+      await writeFile(archivePath, archive);
+      const validatorPath = path.resolve(
+        process.cwd(),
+        "server/skills/website-one-shot-kb-builder/scripts/validate_archive.py",
+      );
+      await expect(
+        execFileAsync("python3", [validatorPath, archivePath]),
+      ).rejects.toMatchObject({
+        stderr: expect.stringContaining("duplicate normalized content"),
+      });
+    } finally {
+      await rm(temporaryDirectory, { recursive: true, force: true });
+    }
+  });
+
+  it("rejects cross-branch evidence links in both validators", async () => {
+    const zip = await JSZip.loadAsync(
+      await buildWebsiteLeadBudgetFixture({ schemaVersion: 2, imageCount: 1 }),
+    );
+    const manifestEntry = zip.file(
+      "Bounded_knowledge_base/00_package_manifest.json",
+    )!;
+    const packageManifest = JSON.parse(
+      await manifestEntry.async("string"),
+    ) as {
+      documents: Array<{ id: string; branchId?: string }>;
+    };
+    packageManifest.documents.find(
+      (document) => document.id === "doc-evidence-team",
+    )!.branchId = "01_company_overview";
+    zip.file(
+      "Bounded_knowledge_base/00_package_manifest.json",
+      JSON.stringify(packageManifest),
+    );
+    const archive = Buffer.from(
+      await zip.generateAsync({ type: "uint8array" }),
+    );
+
+    await expect(
+      parseKnowledgeBaseArchive(archive, {
+        companyName: "CrossBranchEvidenceCo",
+        validationProfile: "website-lead-v1",
+      }),
+    ).rejects.toThrow(/references an invalid evidence document/i);
+
+    const temporaryDirectory = await mkdtemp(
+      path.join(os.tmpdir(), "website-kb-cross-branch-evidence-"),
+    );
+    const archivePath = path.join(temporaryDirectory, "knowledge-base.zip");
+    try {
+      await writeFile(archivePath, archive);
+      const validatorPath = path.resolve(
+        process.cwd(),
+        "server/skills/website-one-shot-kb-builder/scripts/validate_archive.py",
+      );
+      await expect(
+        execFileAsync("python3", [validatorPath, archivePath]),
+      ).rejects.toMatchObject({
+        stderr: expect.stringContaining("invalid evidenceDocumentIds"),
+      });
+    } finally {
+      await rm(temporaryDirectory, { recursive: true, force: true });
+    }
+  });
+
+  it("rejects evidence links that do not share a source ID in both validators", async () => {
+    const zip = await JSZip.loadAsync(
+      await buildWebsiteLeadBudgetFixture({ schemaVersion: 2, imageCount: 1 }),
+    );
+    const manifestPath =
+      "Bounded_knowledge_base/00_package_manifest.json";
+    const packageManifest = JSON.parse(
+      await zip.file(manifestPath)!.async("string"),
+    ) as {
+      documents: Array<{ id: string; sourceIds?: string[] }>;
+    };
+    packageManifest.documents.find(
+      (document) => document.id === "doc-evidence-team",
+    )!.sourceIds = ["source-unrelated"];
+    zip.file(manifestPath, JSON.stringify(packageManifest));
+    const archive = Buffer.from(
+      await zip.generateAsync({ type: "uint8array" }),
+    );
+
+    await expect(
+      parseKnowledgeBaseArchive(archive, {
+        companyName: "SourceMismatchCo",
+        validationProfile: "website-lead-v1",
+      }),
+    ).rejects.toThrow(/invalid evidence document/i);
+
+    const temporaryDirectory = await mkdtemp(
+      path.join(os.tmpdir(), "website-kb-source-mismatch-"),
+    );
+    const archivePath = path.join(temporaryDirectory, "knowledge-base.zip");
+    try {
+      await writeFile(archivePath, archive);
+      const validatorPath = path.resolve(
+        process.cwd(),
+        "server/skills/website-one-shot-kb-builder/scripts/validate_archive.py",
+      );
+      await expect(
+        execFileAsync("python3", [validatorPath, archivePath]),
+      ).rejects.toMatchObject({
+        stderr: expect.stringContaining("invalid evidenceDocumentIds"),
+      });
+    } finally {
+      await rm(temporaryDirectory, { recursive: true, force: true });
+    }
+  });
+
+  it("rejects an overview document whose dynamic minimum disagrees with branchEvidence", async () => {
+    const zip = await JSZip.loadAsync(
+      await buildWebsiteLeadBudgetFixture({ schemaVersion: 2, imageCount: 1 }),
+    );
+    const manifestPath =
+      "Bounded_knowledge_base/00_package_manifest.json";
+    const packageManifest = JSON.parse(
+      await zip.file(manifestPath)!.async("string"),
+    ) as {
+      documents: Array<{
+        id: string;
+        dynamicMinimumCharacters?: number;
+      }>;
+    };
+    packageManifest.documents.find(
+      (document) => document.id === "doc-overview-team",
+    )!.dynamicMinimumCharacters = 1;
+    zip.file(manifestPath, JSON.stringify(packageManifest));
+    const archive = Buffer.from(
+      await zip.generateAsync({ type: "uint8array" }),
+    );
+
+    await expect(
+      parseKnowledgeBaseArchive(archive, {
+        companyName: "OverviewMinimumMismatchCo",
+        validationProfile: "website-lead-v1",
+      }),
+    ).rejects.toThrow(/evidence-adaptive overview minimum/i);
+
+    const temporaryDirectory = await mkdtemp(
+      path.join(os.tmpdir(), "website-kb-overview-minimum-"),
+    );
+    const archivePath = path.join(temporaryDirectory, "knowledge-base.zip");
+    try {
+      await writeFile(archivePath, archive);
+      const validatorPath = path.resolve(
+        process.cwd(),
+        "server/skills/website-one-shot-kb-builder/scripts/validate_archive.py",
+      );
+      await expect(
+        execFileAsync("python3", [validatorPath, archivePath]),
+      ).rejects.toMatchObject({
+        stderr: expect.stringContaining(
+          "overview document dynamic minimum does not match branch evidence",
+        ),
+      });
+    } finally {
+      await rm(temporaryDirectory, { recursive: true, force: true });
+    }
+  });
+
+  it("makes the deterministic validator accept an honest sparse v2 package", async () => {
+    const temporaryDirectory = await mkdtemp(
+      path.join(os.tmpdir(), "website-kb-validator-v2-"),
+    );
+    const archivePath = path.join(temporaryDirectory, "knowledge-base.zip");
+    try {
+      await writeFile(
+        archivePath,
+        await buildWebsiteLeadBudgetFixture({
+          schemaVersion: 2,
+          imageCount: 1,
+          narrativeCharactersPerLeaf: 80,
+          v2EvidenceCharactersPerBranch: 120,
+          v2OverviewNarrativeCharacters: 140,
+        }),
+      );
+      const validatorPath = path.resolve(
+        process.cwd(),
+        "server/skills/website-one-shot-kb-builder/scripts/validate_archive.py",
+      );
+      const { stdout } = await execFileAsync("python3", [
+        validatorPath,
+        archivePath,
+      ]);
+      expect(stdout).toContain("VALID");
+      expect(stdout).toContain('"images": 1');
+    } finally {
+      await rm(temporaryDirectory, { recursive: true, force: true });
+    }
   });
 
   it("passes the deterministic validator bundled with the website KB skill", async () => {

@@ -348,6 +348,7 @@ export type GeoKnowledgeSection = {
   markdown?: string;
   evidenceCount?: number;
   status?: "verified" | "inferred" | "needs_verification" | "not_applicable";
+  contentAvailability?: "complete" | "limited_evidence" | "needs_verification";
   /**
    * Customer-facing branch overview. Older archives only expose `summary` and
    * `markdown`; consumers must keep treating those fields as the fallback.

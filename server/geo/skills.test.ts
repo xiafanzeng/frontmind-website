@@ -20,7 +20,7 @@ const sourceArchive = path.resolve(
   "socratic-kb-builder.skill",
 );
 const expectedSourceSha =
-  "def09f9c1581de0f91e86d633ee059d6f10e78b75ea131e0e448490d7e719f50";
+  "7b801640c8986961c8c748aa53d0f448f2d45b866819270153b74eaa14bb5b77";
 const websiteKnowledgeBaseReferenceRoot = path.resolve(
   process.cwd(),
   "server",
@@ -30,6 +30,42 @@ const websiteKnowledgeBaseReferenceRoot = path.resolve(
 );
 
 describe("website one-shot knowledge-base skill", () => {
+  it("hashes the exact source and packaged skill contents reported by healthz", async () => {
+    const relativeFiles = [
+      "SKILL.md",
+      "references/knowledge-tree.md",
+      "references/questioning-strategy.md",
+      "references/output-format.md",
+      "references/source-manifest.json",
+      "scripts/validate_archive.py",
+    ];
+    const sourceRoot = path.resolve(
+      process.cwd(),
+      "server/skills/website-one-shot-kb-builder",
+    );
+    const distRoot = path.resolve(
+      process.cwd(),
+      "dist/skills/website-one-shot-kb-builder",
+    );
+    const bundle = (root: string) =>
+      relativeFiles
+        .map(
+          (relativePath) =>
+            `# FILE: ${relativePath}\n\n${fs
+              .readFileSync(path.join(root, relativePath), "utf8")
+              .trim()}`,
+        )
+        .join("\n\n---\n\n");
+    const loaded = await loadWebsiteKnowledgeBaseSkill();
+    expect(loaded).toBe(bundle(sourceRoot));
+    if (fs.existsSync(distRoot)) {
+      expect(bundle(distRoot)).toBe(loaded);
+    }
+    expect(crypto.createHash("sha256").update(loaded).digest("hex")).toMatch(
+      /^[a-f0-9]{64}$/,
+    );
+  });
+
   it("records and preserves the exact current source archive", () => {
     if (!fs.existsSync(sourceArchive)) return;
     const source = fs.readFileSync(sourceArchive);
@@ -51,8 +87,10 @@ describe("website one-shot knowledge-base skill", () => {
       "48",
       "36–48",
       "300,000 characters",
-      "8,000",
       "18,000",
+      "28,000",
+      "18,000",
+      "40,000",
       "40–56",
       "150",
       "product-family inventory",
@@ -74,6 +112,16 @@ describe("website one-shot knowledge-base skill", () => {
       "website rejects a ZIP",
       "scripts/validate_archive.py",
       "customer-facing overviews",
+      "limited_evidence",
+      "evidenceDocumentIds",
+      "source_limited",
+      "220 MB",
+      "8 MB",
+      "200:1",
+      "symbolic link",
+      "Unicode",
+      "share at least one `sourceId`",
+      "dynamicMinimumCharacters",
     ]) {
       expect(skill).toContain(invariant);
     }
@@ -124,8 +172,18 @@ describe("website one-shot knowledge-base skill", () => {
       "40–56 个真实叶子",
       "最多 150 个文件",
       "最多 48 个已下载并验证的图片",
-      "8,000–18,000",
+      "18,000–28,000",
+      "硬上限 40,000",
       "36–48 张",
+      "schemaVersion=2",
+      "evidenceDocumentIds",
+      "source_limited",
+      "220 MB",
+      "8 MB",
+      "200:1",
+      "符号链接",
+      "Unicode NFKC",
+      "至少共享一个 sourceId",
       "`scripts/validate_archive.py`",
       "SHA-256",
       '"verifiedFirstParty":VERIFIED_FIRST_PARTY',
@@ -161,6 +219,28 @@ describe("website one-shot knowledge-base skill", () => {
     expect(prompt).toContain("## FINAL MACHINE GATE");
     expect(prompt).toContain("只能使用下面的精确字段结构");
     expect(prompt).not.toContain('"totalLeaves":64');
+  });
+
+  it("builds category-specific one-time content and media repair prompts", async () => {
+    const contentPrompt = await buildWebsiteKnowledgeBaseRepairPrompt({
+      companyName: "Acme",
+      archiveFilename: "Acme-original.zip",
+      validationReason: "overview is thinner than its evidence-adaptive minimum",
+      validationCategory: "content",
+    });
+    expect(contentPrompt).toContain("正文定向修复任务");
+    expect(contentPrompt).toContain("limited_evidence");
+    expect(contentPrompt).not.toContain("禁止重新抓取网页、搜索全网");
+
+    const mediaPrompt = await buildWebsiteKnowledgeBaseRepairPrompt({
+      companyName: "Acme",
+      archiveFilename: "Acme-original.zip",
+      validationReason: "eligible image candidate was omitted",
+      validationCategory: "media",
+    });
+    expect(mediaPrompt).toContain("媒体定向修复任务");
+    expect(mediaPrompt).toContain("只访问其中已经列明的公开第一方官网来源");
+    expect(mediaPrompt).toContain('"validationCategory": "media"');
   });
 
   it("derives report values from the current run instead of leaking sample data", () => {

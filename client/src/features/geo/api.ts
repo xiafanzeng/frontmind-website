@@ -832,6 +832,16 @@ function normalizeSections(value: unknown): GeoKnowledgeSection[] {
       ];
     });
     const status = normalizeStatus(record.status ?? record.evidenceStatus);
+    const rawContentAvailability = textValue(
+      record.contentAvailability,
+      record.content_availability,
+    );
+    const contentAvailability =
+      rawContentAvailability === "complete" ||
+      rawContentAvailability === "limited_evidence" ||
+      rawContentAvailability === "needs_verification"
+        ? rawContentAvailability
+        : undefined;
     return [
       {
         id: textValue(record.id, record.key) ?? `section-${index + 1}`,
@@ -840,6 +850,7 @@ function normalizeSections(value: unknown): GeoKnowledgeSection[] {
         markdown: textValue(record.markdown, record.content, record.body),
         evidenceCount: numberValue(record.evidenceCount, record.sourceCount),
         status,
+        contentAvailability,
         overview: {
           summary: overviewSummary,
           markdown: overviewMarkdown,

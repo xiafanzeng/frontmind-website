@@ -1,6 +1,6 @@
 {
   "source": "frontmind-dashboard/private-workflows/socratic-kb-builder.skill",
-  "sourceArchiveSha256": "def09f9c1581de0f91e86d633ee059d6f10e78b75ea131e0e448490d7e719f50",
+  "sourceArchiveSha256": "7b801640c8986961c8c748aa53d0f448f2d45b866819270153b74eaa14bb5b77",
   "copiedEntries": [
     "SKILL.md",
     "references/knowledge-tree.md",
@@ -8,5 +8,5 @@
     "references/output-format.md"
   ],
   "addedEntries": ["agents/openai.yaml", "scripts/validate_archive.py"],
-  "transformation": "Socratic intake, per-leaf confirmation/wait, interaction status, and delivery-approval mechanics are replaced by automatic one-shot completion. The website lead-generation variant preserves evidence status, seven-question coverage, eight canonical content directories and raw completeness inputs, while replacing exhaustive collection with a 45–55 minute breadth-first workflow, fixed acquisition budgets, a 40–56 leaf package, formal overview/leaf presentation, real first-party image binding, a versioned package manifest and deterministic final ZIP validation."
+  "transformation": "Socratic intake, per-leaf confirmation/wait, interaction status, and delivery-approval mechanics are replaced by automatic one-shot completion. The website lead-generation variant preserves evidence status, seven-question coverage, eight canonical content directories and raw completeness inputs, while replacing exhaustive collection with a 45–60 minute breadth-first workflow, fixed acquisition ceilings, a 40–56 leaf package, seven formal overviews, evidence-adaptive limited_evidence delivery, image-candidate discovery accounting, archive contract v2 and deterministic final ZIP validation."
 }

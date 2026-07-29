@@ -14,6 +14,7 @@ import {
 } from "./geo/provisioning";
 import {
   createGeoDependencyHealthChecker,
+  geoPublicBuildSha,
   geoReadinessErrorLabel,
 } from "./geo/health";
 import { installBaseSecurityHeaders } from "./security";
@@ -30,12 +31,12 @@ import { loadGeoOptimizationOutcomeForecasterSkill } from "./geo/forecast";
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
-const GEO_RUNTIME_SKILL_NAMES = [
-  "website-one-shot-kb-builder",
-  "geo-question-recommender",
-  "geo-knowledge-answer-verifier",
-  "geo-current-state-evaluator",
-  "geo-optimization-outcome-forecaster",
+const GEO_RUNTIME_SKILLS = [
+  { name: "website-one-shot-kb-builder", version: 2 },
+  { name: "geo-question-recommender", version: 1 },
+  { name: "geo-knowledge-answer-verifier", version: 1 },
+  { name: "geo-current-state-evaluator", version: 1 },
+  { name: "geo-optimization-outcome-forecaster", version: 1 },
 ] as const;
 
 async function getGeoRuntimeSkillReadiness() {
@@ -46,8 +47,8 @@ async function getGeoRuntimeSkillReadiness() {
     loadGeoCurrentStateEvaluatorSkill(),
     loadGeoOptimizationOutcomeForecasterSkill(),
   ]);
-  return GEO_RUNTIME_SKILL_NAMES.map((name, index) => ({
-    name,
+  return GEO_RUNTIME_SKILLS.map((skill, index) => ({
+    ...skill,
     status: "ok" as const,
     contentHash: createHash("sha256")
       .update(contents[index], "utf8")
@@ -97,6 +98,7 @@ async function startServer() {
       ]);
       res.json({
         status: "ok",
+        buildSha: geoPublicBuildSha(),
         skills,
         dependencies,
       });

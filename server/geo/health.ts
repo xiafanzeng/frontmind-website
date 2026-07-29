@@ -15,6 +15,18 @@ export type GeoDependencyReadiness = {
   paymentReceiptLedger: { ready: true };
 };
 
+export function geoPublicBuildSha(
+  env: Record<string, string | undefined> = process.env,
+) {
+  const candidate = (
+    env.FRONTMIND_BUILD_SHA ||
+    env.GITHUB_SHA ||
+    env.RAILWAY_GIT_COMMIT_SHA ||
+    ""
+  ).trim();
+  return /^[a-f0-9]{7,64}$/i.test(candidate) ? candidate.toLowerCase() : null;
+}
+
 export function geoReadinessErrorLabel(error: unknown) {
   if (!(error instanceof Error)) return "UnknownError";
   return /^[A-Za-z][A-Za-z0-9_.-]{0,79}$/.test(error.name)

@@ -95,6 +95,8 @@ Only after uploads, official sites, official documents and public research all y
 
 Continue automatically. Never ask the user to design, confirm, correct, upload for, or skip the node.
 
+At branch level, use `limited_evidence` when some actual linked evidence supports a concise customer-ready narrative but not the normal article target. Use `needs_verification` only when the linked evidence union is empty. These are successful evidence states, not packaging failures. Never reduce an evidence character declaration to make a thin draft pass: link every retained evidence document and let both validators recalculate the requirement.
+
 ## Automatic Response-Free Handling
 
 - Sufficient first-party evidence → write and mark `verified_first_party`.
@@ -128,4 +130,4 @@ Do not use ASCII trees, long separator glyphs, character progress bars, or fence
 
 ## Packaging Gate
 
-Package automatically when written leaves plus reasoned `not_applicable` leaves equal total leaves. Produce the final Markdown/ZIP without asking an extra question. Keep 40–56 leaves, 8,000–18,000 effective customer-visible narrative characters, at least 120 effective characters in every evidence-bearing formal document, at most 48 saved images and at most 150 ZIP files. Include one formal overview per display branch, `00_package_manifest.json`, both acquisition reports, first-party image inventory, URL-only third-party reference inventory and unresolved verification gaps. Run the injected deterministic validator unchanged and deliver only after it prints `VALID`.
+Package automatically when written leaves plus reasoned `not_applicable` leaves equal total leaves. Produce the final Markdown/ZIP without asking an extra question. Keep 40–56 true leaves plus seven additional overviews, target 18,000–28,000 evidence-supported customer-visible characters without imposing a total minimum, never exceed 40,000 characters, save at most 48 images and keep at most 150 ZIP files. Include the schema-v2 `00_package_manifest.json`, linked evidence documents, both acquisition reports, the complete image-candidate ledger, product-family visual coverage, first-party image inventory, URL-only third-party reference inventory and unresolved verification gaps. Run the injected deterministic validator unchanged and deliver only after it prints `VALID`.

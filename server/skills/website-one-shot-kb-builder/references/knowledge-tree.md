@@ -87,6 +87,8 @@ Create a stable bounded inventory before population begins. Start with these 40 
 
 Add at most 16 leaves, prioritizing core product families, important industry scenarios and evidence required by likely customer Q&A. The final inventory must contain **40–56 leaves**. Do not expand merely because the site has many SKUs, news posts, pagination pages or language variants.
 
+The seven customer-facing branch overviews are additional `kind: overview` documents and never count toward the 40–56 true leaves. A branch may be `complete`, `limited_evidence`, or `needs_verification`; sparse public evidence lowers honest content depth, not structural coverage.
+
 For a large catalog:
 
 - Include every real product/service family in the product overview.

@@ -10,6 +10,7 @@ import {
 } from "./GeoAgentUserDashboard";
 import {
   AssessmentOverview,
+  claimKnowledgeBaseAutoRetry,
   CurrentAssessment,
   EnterpriseAnalysis,
   formatExecutionElapsed,
@@ -23,6 +24,56 @@ import { KnowledgeCompletenessDetails } from "./KnowledgeCompletenessDialog";
 import { createGeoStylePreviewProject } from "./preview";
 
 describe("GEO style preview rendering", () => {
+  it("claims at most one automatic knowledge-base repair for the same failed project", () => {
+    const project = {
+      ...createGeoStylePreviewProject(),
+      preview: undefined,
+      status: "failed" as const,
+      knowledgeBase: undefined,
+      knowledgeBaseRetryAvailable: true,
+      knowledgeBaseValidationCategory: "content" as const,
+    };
+    const attempted = new Set<string>();
+    const inFlight = new Set<string>();
+
+    expect(claimKnowledgeBaseAutoRetry(project, attempted, inFlight)).toBe(
+      true,
+    );
+    expect(claimKnowledgeBaseAutoRetry(project, attempted, inFlight)).toBe(
+      false,
+    );
+  });
+
+  it("only presents automatic repair as running while its request is in flight", () => {
+    const project = {
+      ...createGeoStylePreviewProject(),
+      preview: undefined,
+      status: "failed" as const,
+      knowledgeBase: undefined,
+      knowledgeBaseRetryAvailable: true,
+      knowledgeBaseValidationCategory: "content" as const,
+      error: "知识库正式正文未充分整理已有证据。",
+    };
+    const render = (retrying: boolean) =>
+      renderToStaticMarkup(
+        <EnterpriseAnalysis
+          project={project}
+          onDownload={vi.fn()}
+          onRetry={vi.fn()}
+          onNewProject={vi.fn()}
+          onContact={vi.fn()}
+          onStart={vi.fn()}
+          starting={false}
+          retrying={retrying}
+        />,
+      );
+
+    expect(render(true)).toContain("正在基于现有证据执行一次自动校验补救");
+    expect(render(true)).not.toContain("企业分析未能完成");
+    expect(render(false)).toContain("企业分析未能完成");
+    expect(render(false)).toContain("重新检查");
+  });
+
   it("starts execution timing at zero when no remote start time exists", () => {
     expect(formatExecutionElapsed(undefined, undefined, 1_000)).toBe(
       "00:00:00",
@@ -171,6 +222,7 @@ describe("GEO style preview rendering", () => {
             ],
             assetIds: ["asset-1", "asset-2", "asset-3", "asset-4"],
             status: "verified" as const,
+            contentAvailability: "limited_evidence" as const,
           },
         ],
         assets: Array.from({ length: 4 }, (_, index) => ({
@@ -200,6 +252,7 @@ describe("GEO style preview rendering", () => {
     expect(html).toContain("这是整理后的客户可见正文");
     expect(html).toContain("分支综述");
     expect(html).toContain("查看知识叶子");
+    expect(html).toContain("该分支公开证据有限");
     expect(html).toContain("另含 1 份素材");
     expect(html.match(/geo-section-media-image/g)).toHaveLength(3);
     expect(html).toContain("企业素材 4");
@@ -375,7 +428,15 @@ describe("GEO style preview rendering", () => {
             title: "企业分析",
             status: "waiting" as const,
             startedAt: "2026-07-28T08:00:00.000Z",
-            events: [],
+            events: [
+              {
+                id: "progress-summary-1",
+                kind: "progress_summary" as const,
+                message:
+                  "已访问 12 个链接，成功采集 10 个页面，提取 24680 字文字，发现 18 张图片并保存 11 张，已解析 3 份文档。",
+                createdAt: "2026-07-28T08:05:00.000Z",
+              },
+            ],
           },
         ],
       },
@@ -454,6 +515,7 @@ describe("GEO style preview rendering", () => {
     expect(html).toContain("已访问 12 个链接，成功采集 10 个页面");
     expect(html).toContain("24680 字文字");
     expect(html).toContain("已解析 3 份文档");
+    expect(html.match(/已访问 12 个链接/g)).toHaveLength(1);
   });
 
   it("only offers an authorized question retry and locks it in flight", () => {

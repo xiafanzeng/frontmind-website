@@ -2156,6 +2156,22 @@
   font-size: 22px;
   font-weight: 400;
 }
+.geo-evidence-availability-note {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  margin-top: 14px;
+  border: 1px solid #eadfbf;
+  background: #fffbf1;
+  padding: 10px 12px;
+  color: #705c27;
+  font-size: 13px;
+  line-height: 1.55;
+}
+.geo-evidence-availability-note svg {
+  flex: 0 0 auto;
+  margin-top: 2px;
+}
 .geo-knowledge-mode-switch {
   display: flex;
   gap: 5px;
@@ -2949,26 +2965,32 @@
   font-size: 14px;
 }
 .geo-crawl-progress-summary {
-  margin-top: 18px;
+  display: grid;
+  grid-column: 1 / -1;
+  grid-template-columns: max-content minmax(0, 1fr) max-content;
+  align-items: center;
+  gap: 10px 16px;
   border-left: 3px solid #805291;
   background: #f8f4fa;
-  padding: 13px 15px;
+  padding: 14px 18px;
 }
 .geo-crawl-progress-summary strong {
   color: #4c2c5a;
   font-size: 13px;
 }
 .geo-crawl-progress-summary p {
-  margin: 5px 0 0;
+  min-width: 0;
+  margin: 0;
   color: #514a55;
   font-size: 14px;
   line-height: 1.65;
 }
 .geo-crawl-progress-summary small {
   display: block;
-  margin-top: 5px;
+  margin: 0;
   color: #817985;
   font-size: 12px;
+  white-space: nowrap;
 }
 .geo-status-sync-delay {
   display: flex;
@@ -11004,6 +11026,14 @@
   }
   .geo-progress-copy > p {
     font-size: 15px;
+  }
+  .geo-crawl-progress-summary {
+    grid-template-columns: 1fr;
+    gap: 5px;
+    text-align: left;
+  }
+  .geo-crawl-progress-summary small {
+    white-space: normal;
   }
   .geo-milestone-list {
     display: block;

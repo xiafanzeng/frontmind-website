@@ -386,7 +386,7 @@ export const GeoKnowledgeImportRequestV2Schema =
 export const GeoKnowledgeImportRequestV3Schema =
   GeoKnowledgeImportRequestBaseSchema.extend({
     schemaVersion: z.literal(3),
-    archiveContractVersion: z.literal(1),
+    archiveContractVersion: z.union([z.literal(1), z.literal(2)]),
     validationProfile: z.literal("website-lead-v1"),
     packageManifestSha256: sha256Schema,
   }).strict();

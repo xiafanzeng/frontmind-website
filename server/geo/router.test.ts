@@ -1178,14 +1178,14 @@ describe("GEO API", () => {
     {
       category: "media",
       publicError:
-        "知识库未交付与报告一致的真实图片，已阻止下载及后续分析。现有证据无法补回缺失图片，请新建项目重新构建。",
-      retryAvailable: false,
+        "知识库媒体交付未通过校验，系统将基于已发现的第一方素材执行一次定向补救。",
+      retryAvailable: true,
     },
     {
       category: "content",
       publicError:
-        "知识库正式正文未达到交付标准，已阻止下载及后续分析。请新建项目重新构建完整正文。",
-      retryAvailable: false,
+        "知识库正式正文未充分整理已有证据，系统将执行一次定向补救。",
+      retryAvailable: true,
     },
   ] as const)(
     "publishes the $category validation category without exposing raw archive details",
@@ -1800,7 +1800,7 @@ describe("GEO API", () => {
 
   it("allows the single retry when a completed task returns an invalid ZIP", async () => {
     const invalidArchive = new JSZip();
-    invalidArchive.file("junk.txt", "not a FrontMind knowledge base");
+    invalidArchive.file("junk.csv", "value\nnot a FrontMind knowledge base");
     broker.archive = await invalidArchive.generateAsync({ type: "nodebuffer" });
     const { cookie } = await verifyInvite();
     const created = await jsonRequest("/projects", cookie, {
@@ -1851,7 +1851,7 @@ describe("GEO API", () => {
 
   it("exposes one knowledge-base repair, then reports exhausted without another retry claim", async () => {
     const invalidArchive = new JSZip();
-    invalidArchive.file("junk.txt", "not a FrontMind knowledge base");
+    invalidArchive.file("junk.csv", "value\nnot a FrontMind knowledge base");
     broker.archive = await invalidArchive.generateAsync({ type: "nodebuffer" });
     const { cookie } = await verifyInvite();
     const created = await jsonRequest("/projects", cookie, {
@@ -1924,7 +1924,7 @@ describe("GEO API", () => {
       knowledgeBaseRetryAvailable: false,
       kbTask: {
         status: "failed",
-        error: expect.stringContaining("自动整理次数已用完"),
+        error: expect.stringContaining("自动补救次数已用完"),
       },
     });
     expect(exhaustedPayload.project.kbTask.error).not.toContain("可重新检查");
@@ -1943,7 +1943,7 @@ describe("GEO API", () => {
 
   it("materializes a URL-only invalid ZIP once and tracks the repair attachment for cleanup", async () => {
     const invalidArchive = new JSZip();
-    invalidArchive.file("junk.txt", "not a FrontMind knowledge base");
+    invalidArchive.file("junk.csv", "value\nnot a FrontMind knowledge base");
     broker.archive = await invalidArchive.generateAsync({ type: "nodebuffer" });
     const { cookie } = await verifyInvite();
     const created = await jsonRequest("/projects", cookie, {

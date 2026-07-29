@@ -719,6 +719,25 @@ function errorMessage(error: unknown): string {
   return "暂时无法完成操作，请稍后重试。";
 }
 
+export function claimKnowledgeBaseAutoRetry(
+  project: GeoProject | undefined,
+  attempted: Set<string>,
+  inFlight: Set<string>,
+) {
+  if (
+    !project ||
+    project.status !== "failed" ||
+    Boolean(project.knowledgeBase) ||
+    project.knowledgeBaseRetryAvailable !== true ||
+    project.knowledgeBaseValidationCategory === "unsafe" ||
+    attempted.has(project.id) ||
+    inFlight.has(project.id)
+  )
+    return false;
+  attempted.add(project.id);
+  return true;
+}
+
 function looksLikeIndustryRankingQuestion(value: string) {
   return /(?:(?:行业|品类|领域|赛道).{0,10}(?:排名|排行|榜单|top\s*\d*|最好|最佳|第一|领先)|(?:哪家|哪个|哪些).{0,10}(?:最好|最佳|领先|值得推荐)|(?:推荐).{0,8}(?:品牌|公司|厂商|产品)|(?:品牌|公司|企业|平台|机构|服务商|供应商|厂商|工具|方案).{0,12}(?:推荐|排行|排名|有哪些|有哪(?:些|几)家|怎么选|如何选)|(?:有哪些|有哪(?:些|几)家).{0,12}(?:品牌|公司|企业|平台|机构|服务商|供应商|厂商|工具|方案))/i.test(
     value,
@@ -1288,6 +1307,7 @@ function GeoBuildExperienceZh() {
   const questionStartInFlight = useRef(new Set<string>());
   const questionRetryInFlight = useRef(new Set<string>());
   const analysisRetryInFlight = useRef(new Set<string>());
+  const analysisAutoRetryAttempted = useRef(new Set<string>());
   const questionStageAutoOpened = useRef(new Set<string>());
   const assessmentStartInFlight = useRef(new Set<string>());
   const forecastStartInFlight = useRef(new Set<string>());
@@ -1808,6 +1828,36 @@ function GeoBuildExperienceZh() {
     Boolean(activeProject?.knowledgeBase),
     refreshProject,
   ]);
+
+  useEffect(() => {
+    if (isGeoStylePreviewProject(activeProject)) return;
+    if (
+      !claimKnowledgeBaseAutoRetry(
+        activeProject,
+        analysisAutoRetryAttempted.current,
+        analysisRetryInFlight.current,
+      )
+    )
+      return;
+    if (!activeProject) return;
+    const projectId = activeProject.id;
+    analysisRetryInFlight.current.add(projectId);
+    setRetryingAnalysisId(projectId);
+    setStorageNotice("知识库正在进行一次自动校验补救，无需重复操作。");
+    void retryGeoEnterpriseAnalysis(activeProject)
+      .then((updated) => {
+        commitProject({ ...updated, error: undefined });
+      })
+      .catch((error) => {
+        setStorageNotice(`知识库自动补救未能启动：${errorMessage(error)}`);
+      })
+      .finally(() => {
+        analysisRetryInFlight.current.delete(projectId);
+        setRetryingAnalysisId((current) =>
+          current === projectId ? undefined : current,
+        );
+      });
+  }, [activeProject, commitProject]);
 
   useEffect(() => {
     if (isGeoStylePreviewProject(activeProject)) return;
@@ -4284,6 +4334,27 @@ export function EnterpriseAnalysis({
     );
   }
 
+  if (
+    project.status === "failed" &&
+    !knowledgeBase &&
+    !isGeoStylePreviewProject(project) &&
+    retrying &&
+    project.knowledgeBaseRetryAvailable === true &&
+    project.knowledgeBaseValidationCategory !== "unsafe"
+  ) {
+    return (
+      <AnalysisProgress
+        project={{
+          ...project,
+          status: "analyzing",
+          progressLabel: "正在基于现有证据执行一次自动校验补救",
+          error: undefined,
+        }}
+        onContact={onContact}
+      />
+    );
+  }
+
   if (project.status === "failed" && !knowledgeBase) {
     const retryAvailable = project.knowledgeBaseRetryAvailable === true;
     const supportRequired = project.knowledgeBaseSupportRequired === true;
@@ -4630,6 +4701,21 @@ export function EnterpriseAnalysis({
                   status={activeLeaf?.status || activeSection?.status}
                 />
               </header>
+              {!activeLeaf &&
+                activeSection?.contentAvailability &&
+                activeSection.contentAvailability !== "complete" && (
+                  <div
+                    className="geo-evidence-availability-note"
+                    role="status"
+                  >
+                    <CircleAlert size={16} aria-hidden="true" />
+                    <span>
+                      {activeSection.contentAvailability === "limited_evidence"
+                        ? "该分支公开证据有限，以下内容已按现有真实资料整理；未确认信息不会补写。"
+                        : "该分支暂未取得可确认事实，以下保留已检查范围和待企业补充的信息。"}
+                    </span>
+                  </div>
+                )}
               {activeLeaves.length > 0 && (
                 <div
                   className="geo-knowledge-mode-switch"
@@ -4918,7 +5004,7 @@ function AnalysisProgress({
   );
   const visibleEvents =
     executionEntry?.events.filter(
-      (event) => event.kind === "status" || event.kind === "progress_summary",
+      (event) => event.kind === "status",
     ) ?? [];
   const activityRows = visibleEvents.length
     ? visibleEvents.slice(-6).map((event) => ({
@@ -4974,22 +5060,6 @@ function AnalysisProgress({
           <strong>{progress}%</strong>
           <span>{project.progressLabel || "正在调度企业信息采集任务"}</span>
         </div>
-        {executionEntry?.crawlProgress && (
-          <div className="geo-crawl-progress-summary" aria-live="polite">
-            <strong>最新采集摘要</strong>
-            <p>
-              已访问 {executionEntry.crawlProgress.visitedLinks}{" "}
-              个链接，成功采集 {executionEntry.crawlProgress.successfulPages}{" "}
-              个页面，提取 {executionEntry.crawlProgress.textCharacters}{" "}
-              字文字，发现 {executionEntry.crawlProgress.imagesDiscovered}{" "}
-              张图片并保存 {executionEntry.crawlProgress.imagesDownloaded}{" "}
-              张，已解析 {executionEntry.crawlProgress.documentsParsed} 份文档。
-            </p>
-            <small>
-              最近更新 {formatDate(executionEntry.crawlProgress.reportedAt)}
-            </small>
-          </div>
-        )}
         {project.knowledgeBaseSupportRequired && (
           <div className="geo-status-sync-delay" role="status">
             <CircleAlert size={17} />
@@ -5005,6 +5075,22 @@ function AnalysisProgress({
           </div>
         )}
       </section>
+      {executionEntry?.crawlProgress && (
+        <div className="geo-crawl-progress-summary" aria-live="polite">
+          <strong>最新采集摘要</strong>
+          <p>
+            已访问 {executionEntry.crawlProgress.visitedLinks}{" "}
+            个链接，成功采集 {executionEntry.crawlProgress.successfulPages}{" "}
+            个页面，提取 {executionEntry.crawlProgress.textCharacters}{" "}
+            字文字，发现 {executionEntry.crawlProgress.imagesDiscovered}{" "}
+            张图片并保存 {executionEntry.crawlProgress.imagesDownloaded}{" "}
+            张，已解析 {executionEntry.crawlProgress.documentsParsed} 份文档。
+          </p>
+          <small>
+            最近更新 {formatDate(executionEntry.crawlProgress.reportedAt)}
+          </small>
+        </div>
+      )}
       <div className="geo-milestone-list">
         {activityRows.map((activity, index) => {
           const complete = executionEntry?.status === "completed";

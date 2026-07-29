@@ -154,14 +154,14 @@ const KNOWLEDGE_BASE_VALIDATION_PUBLIC_ERRORS: Record<
   structure:
     "知识库目录或清单未通过结构校验，已阻止下载及后续分析。可重新检查，由系统仅整理现有证据后再次验证。",
   media:
-    "知识库未交付与报告一致的真实图片，已阻止下载及后续分析。现有证据无法补回缺失图片，请新建项目重新构建。",
+    "知识库媒体交付未通过校验，系统将基于已发现的第一方素材执行一次定向补救。",
   content:
-    "知识库正式正文未达到交付标准，已阻止下载及后续分析。请新建项目重新构建完整正文。",
+    "知识库正式正文未充分整理已有证据，系统将执行一次定向补救。",
   unsafe:
     "知识库文件存在安全风险，已阻止下载及后续分析。请勿继续处理该文件，并联系技术支持。",
 };
 const KNOWLEDGE_BASE_VALIDATION_EXHAUSTED_PUBLIC_ERROR =
-  "知识库结构自动整理次数已用完，请新建项目后重新提交资料。";
+  "知识库自动补救次数已用完，请新建项目后重新提交资料。";
 
 type UploadTokenValue = {
   fileId: string;
@@ -746,6 +746,7 @@ export function createGeoRouter(options: GeoRouterOptions = {}): Router {
     invalidTask: BrokerTask,
     archive: { fileId?: string; url?: string; filename: string },
     validationReason: string,
+    validationCategory: Exclude<KnowledgeBaseValidationCategory, "unsafe">,
   ) => {
     const invalidTaskId = value.knowledgeBaseTaskId;
     const now = Date.now();
@@ -767,6 +768,7 @@ export function createGeoRouter(options: GeoRouterOptions = {}): Router {
           companyName: trackedValue.companyName,
           archiveFilename: attachment.filename,
           validationReason,
+          validationCategory,
         }),
         attachments: [
           {
@@ -1253,7 +1255,10 @@ export function createGeoRouter(options: GeoRouterOptions = {}): Router {
         ...(manifest.packageManifestSha256
           ? {
               schemaVersion: 3 as const,
-              archiveContractVersion: 1 as const,
+              archiveContractVersion:
+                manifest.archiveContractVersion === 2
+                  ? (2 as const)
+                  : (1 as const),
               validationProfile: "website-lead-v1" as const,
               packageManifestSha256: manifest.packageManifestSha256,
             }
@@ -1898,7 +1903,7 @@ export function createGeoRouter(options: GeoRouterOptions = {}): Router {
       }
       if (
         invalidCompletedOutput &&
-        invalidCompletedOutput.category !== "structure"
+        invalidCompletedOutput.category === "unsafe"
       ) {
         throw new GeoHttpError(
           KNOWLEDGE_BASE_VALIDATION_PUBLIC_ERRORS[
@@ -1921,6 +1926,10 @@ export function createGeoRouter(options: GeoRouterOptions = {}): Router {
           currentTask,
           completedArchiveDescriptor,
           invalidCompletedOutput.validationReason,
+          invalidCompletedOutput.category as Exclude<
+            KnowledgeBaseValidationCategory,
+            "unsafe"
+          >,
         );
         const project = await buildProjectView(
           broker,
@@ -4269,7 +4278,8 @@ async function buildProjectView(
   }
   const knowledgeBaseRetryAvailable =
     (value.knowledgeBaseAttempt || 1) < 2 &&
-    (knowledgeBaseValidationFailure?.category === "structure" ||
+    ((Boolean(knowledgeBaseValidationFailure) &&
+      knowledgeBaseValidationFailure?.category !== "unsafe") ||
       ["failed", "cancelled"].includes(knowledgeBase.status));
   const knowledgeBaseValidationPublicError = knowledgeBaseValidationFailure
     ? knowledgeBaseValidationFailure.category === "structure" &&
