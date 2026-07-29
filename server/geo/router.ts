@@ -9,9 +9,11 @@ import express, {
 import { ZodError } from "zod";
 import {
   extractKnowledgeBaseAssetPreviews,
+  KnowledgeBaseArchiveValidationError as ArchiveContractValidationError,
   parseKnowledgeBaseArchive,
   type KnowledgeBaseAssetPreview,
   type KnowledgeBaseManifest,
+  type KnowledgeBaseValidationCategory,
 } from "./archive";
 import {
   createGeoAdminNotifierFromEnv,
@@ -84,7 +86,7 @@ import {
   type GeoAccountProvisioner,
   GeoAccountProvisioningError,
   type GeoKnowledgeImporter,
-  type GeoKnowledgeImportResponseV2,
+  type GeoKnowledgeImportResponse,
   type GeoManualServiceOrderAccountSubmitter,
   type GeoManualServiceOrderCreator,
   type GeoManualServiceOrderPaymentConfirmer,
@@ -145,10 +147,21 @@ const MAX_ASSESSMENT_INPUT_BYTES = 12 * 1024 * 1024;
 const MAX_FORECAST_INPUT_BYTES = 12 * 1024 * 1024;
 const SESSION_RATE_LIMIT_WINDOW_MS = 60 * 60 * 1000;
 const GEO_MANUAL_CONTRACT_TEMPLATE_VERSION = "basic-2026.07-v1";
-const KNOWLEDGE_BASE_VALIDATION_PUBLIC_ERROR =
-  "知识库文件未通过安全与结构校验，已阻止下载及后续分析。可重新检查，由系统仅整理现有证据后再次验证。";
+const KNOWLEDGE_BASE_VALIDATION_PUBLIC_ERRORS: Record<
+  KnowledgeBaseValidationCategory,
+  string
+> = {
+  structure:
+    "知识库目录或清单未通过结构校验，已阻止下载及后续分析。可重新检查，由系统仅整理现有证据后再次验证。",
+  media:
+    "知识库未交付与报告一致的真实图片，已阻止下载及后续分析。现有证据无法补回缺失图片，请新建项目重新构建。",
+  content:
+    "知识库正式正文未达到交付标准，已阻止下载及后续分析。请新建项目重新构建完整正文。",
+  unsafe:
+    "知识库文件存在安全风险，已阻止下载及后续分析。请勿继续处理该文件，并联系技术支持。",
+};
 const KNOWLEDGE_BASE_VALIDATION_EXHAUSTED_PUBLIC_ERROR =
-  "知识库文件未通过安全与结构校验，已阻止下载及后续分析。自动修复次数已用完，请新建项目后重新提交资料。";
+  "知识库结构自动整理次数已用完，请新建项目后重新提交资料。";
 
 type UploadTokenValue = {
   fileId: string;
@@ -1121,7 +1134,7 @@ export function createGeoRouter(options: GeoRouterOptions = {}): Router {
 
   const mergeKnowledgeImport = (
     value: ProjectTokenValue,
-    response: GeoKnowledgeImportResponseV2,
+    response: GeoKnowledgeImportResponse,
     sha256: string,
     idempotencyKey: string,
   ): ProjectTokenValue => {
@@ -1207,7 +1220,7 @@ export function createGeoRouter(options: GeoRouterOptions = {}): Router {
           "ARCHIVE_VALIDATION_FAILED",
         );
       }
-      await parseKnowledgeBaseArchive(bytes, {
+      const manifest = await parseKnowledgeBaseArchive(bytes, {
         companyName: value.companyName,
         validationProfile: value.knowledgeBaseValidationProfile,
         generatedAt:
@@ -1217,11 +1230,34 @@ export function createGeoRouter(options: GeoRouterOptions = {}): Router {
               ? knowledgeBaseTask.updated_at
               : undefined,
       });
+      if (
+        value.knowledgeBaseValidationProfile === "website-lead-v1" &&
+        !manifest.packageManifestSha256
+      ) {
+        throw new KnowledgeBaseArchiveValidationError(
+          "validated website archive does not expose a package manifest hash",
+          "structure",
+        );
+      }
       const sha256 = crypto.createHash("sha256").update(bytes).digest("hex");
       const descriptorHash = knowledgeArchiveDescriptorHash(descriptor);
-      const idempotencyKey = `geo-basic:${value.projectId}:${descriptorHash}:${sha256}:knowledge-v2`;
+      const idempotencyKey = [
+        "geo-basic",
+        value.projectId,
+        descriptorHash,
+        sha256,
+        manifest.packageManifestSha256 || "historical",
+        manifest.packageManifestSha256 ? "knowledge-v3" : "knowledge-v2",
+      ].join(":");
       const imported = await knowledgeImporter(value.projectId, {
-        schemaVersion: 2,
+        ...(manifest.packageManifestSha256
+          ? {
+              schemaVersion: 3 as const,
+              archiveContractVersion: 1 as const,
+              validationProfile: "website-lead-v1" as const,
+              packageManifestSha256: manifest.packageManifestSha256,
+            }
+          : { schemaVersion: 2 as const }),
         companyName: value.companyName,
         taskId: value.knowledgeBaseTaskId,
         outputItemId: descriptor.outputItemId,
@@ -1830,6 +1866,7 @@ export function createGeoRouter(options: GeoRouterOptions = {}): Router {
           if (!completedArchiveDescriptor)
             throw new KnowledgeBaseArchiveValidationError(
               "completed task does not contain a ZIP artifact",
+              "structure",
             );
           await loadKnowledgeBaseManifest(
             broker,
@@ -1858,6 +1895,18 @@ export function createGeoRouter(options: GeoRouterOptions = {}): Router {
         );
         res.json({ projectToken: req.params.projectToken, project });
         return;
+      }
+      if (
+        invalidCompletedOutput &&
+        invalidCompletedOutput.category !== "structure"
+      ) {
+        throw new GeoHttpError(
+          KNOWLEDGE_BASE_VALIDATION_PUBLIC_ERRORS[
+            invalidCompletedOutput.category
+          ],
+          invalidCompletedOutput.category === "unsafe" ? 422 : 409,
+          `KNOWLEDGE_BASE_${invalidCompletedOutput.category.toUpperCase()}_REBUILD_REQUIRED`,
+        );
       }
       if ((value.knowledgeBaseAttempt || 1) >= 2) {
         throw new GeoHttpError(
@@ -4201,6 +4250,7 @@ async function buildProjectView(
   if (knowledgeBase.status === "completed" && !archiveDescriptor) {
     knowledgeBaseValidationFailure = new KnowledgeBaseArchiveValidationError(
       "completed task does not contain a ZIP artifact",
+      "structure",
     );
   } else if (archiveDescriptor) {
     try {
@@ -4219,12 +4269,16 @@ async function buildProjectView(
   }
   const knowledgeBaseRetryAvailable =
     (value.knowledgeBaseAttempt || 1) < 2 &&
-    (Boolean(knowledgeBaseValidationFailure) ||
+    (knowledgeBaseValidationFailure?.category === "structure" ||
       ["failed", "cancelled"].includes(knowledgeBase.status));
-  const knowledgeBaseValidationPublicError =
-    (value.knowledgeBaseAttempt || 1) < 2
-      ? KNOWLEDGE_BASE_VALIDATION_PUBLIC_ERROR
-      : KNOWLEDGE_BASE_VALIDATION_EXHAUSTED_PUBLIC_ERROR;
+  const knowledgeBaseValidationPublicError = knowledgeBaseValidationFailure
+    ? knowledgeBaseValidationFailure.category === "structure" &&
+      (value.knowledgeBaseAttempt || 1) >= 2
+      ? KNOWLEDGE_BASE_VALIDATION_EXHAUSTED_PUBLIC_ERROR
+      : KNOWLEDGE_BASE_VALIDATION_PUBLIC_ERRORS[
+          knowledgeBaseValidationFailure.category
+        ]
+    : KNOWLEDGE_BASE_VALIDATION_PUBLIC_ERRORS.structure;
   const archiveUrl =
     archiveDescriptor && knowledgeBaseManifest
       ? `/api/geo/projects/${encodeURIComponent(projectToken)}/archive`
@@ -4523,8 +4577,9 @@ async function buildProjectView(
       ? {
           ...omitKnowledgeEvidencePaths(knowledgeBaseManifest),
           assets: knowledgeBaseManifest.assets.map(
-            ({ zipPath: _zipPath, ...asset }) => ({
+            ({ zipPath, ...asset }) => ({
               ...asset,
+              archivePath: zipPath,
               previewUrl: /\.(?:avif|webp|png|jpe?g|gif)$/i.test(asset.name)
                 ? `/api/geo/projects/${encodeURIComponent(
                     projectToken,
@@ -4540,9 +4595,11 @@ async function buildProjectView(
     selectedQuestionId: value.monitorQuestionId,
     selectedPlatformIds: value.monitorPlatformIds || [],
     knowledgeBaseRetryAvailable,
+    knowledgeBaseValidationCategory: knowledgeBaseValidationFailure?.category,
     knowledgeBaseSupportRequired:
-      statusSyncPending(knowledgeBase.status) &&
-      hasElapsed(value.knowledgeBaseSubmittedAt, 15 * 60 * 1_000),
+      knowledgeBaseValidationFailure?.category === "unsafe" ||
+      (statusSyncPending(knowledgeBase.status) &&
+        hasElapsed(value.knowledgeBaseSubmittedAt, 15 * 60 * 1_000)),
     questionRetryAvailable,
     assessmentRetryAvailable,
     optimizationForecastRetryAvailable,
@@ -5004,6 +5061,7 @@ async function loadKnowledgeBaseManifest(
       if (error instanceof GeoByteLimitError) {
         throw new KnowledgeBaseArchiveValidationError(
           "Knowledge-base archive exceeds the compressed size limit",
+          "unsafe",
         );
       }
       throw new GeoHttpError(
@@ -5029,8 +5087,13 @@ async function loadKnowledgeBaseManifest(
         "[GEO API] Rejected an invalid knowledge-base archive:",
         error instanceof Error ? error.message : String(error),
       );
+      const category =
+        error instanceof ArchiveContractValidationError
+          ? error.category
+          : ("structure" as const);
       throw new KnowledgeBaseArchiveValidationError(
         knowledgeBaseValidationReason(error),
+        category,
       );
     }
   })();
@@ -5678,11 +5741,14 @@ class GeoHttpError extends Error {
 }
 
 class KnowledgeBaseArchiveValidationError extends GeoHttpError {
-  constructor(readonly validationReason: string) {
+  constructor(
+    readonly validationReason: string,
+    readonly category: KnowledgeBaseValidationCategory = "structure",
+  ) {
     super(
-      "知识库 ZIP 未通过安全与结构校验，已阻止下载及后续分析",
+      KNOWLEDGE_BASE_VALIDATION_PUBLIC_ERRORS[category],
       422,
-      "ARCHIVE_VALIDATION_FAILED",
+      `ARCHIVE_${category.toUpperCase()}_VALIDATION_FAILED`,
     );
     this.name = "KnowledgeBaseArchiveValidationError";
   }

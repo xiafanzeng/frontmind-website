@@ -3,6 +3,7 @@ import path from "node:path";
 
 type SkillDefinition = {
   name: string;
+  cacheKey?: string;
   files: readonly string[];
 };
 
@@ -14,6 +15,7 @@ const WEBSITE_KB_SKILL: SkillDefinition = {
     "references/questioning-strategy.md",
     "references/output-format.md",
     "references/source-manifest.json",
+    "scripts/validate_archive.py",
   ],
 };
 
@@ -24,6 +26,12 @@ const QUESTION_SKILL: SkillDefinition = {
     "references/demark-question-logic.md",
     "references/output-schema.json",
   ],
+};
+
+const WEBSITE_KB_VALIDATOR: SkillDefinition = {
+  name: "website-one-shot-kb-builder",
+  cacheKey: "website-one-shot-kb-builder:validator",
+  files: ["scripts/validate_archive.py"],
 };
 
 const skillCache = new Map<string, string>();
@@ -51,15 +59,14 @@ function skillRootCandidates() {
 }
 
 async function loadSkill(definition: SkillDefinition) {
-  const cached = skillCache.get(definition.name);
+  const cacheKey = definition.cacheKey || definition.name;
+  const cached = skillCache.get(cacheKey);
   if (cached) return cached;
 
   let lastError: unknown;
   for (const root of skillRootCandidates()) {
     try {
-      const skillRoot = await fs.realpath(
-        path.resolve(root, definition.name),
-      );
+      const skillRoot = await fs.realpath(path.resolve(root, definition.name));
       const sections = await Promise.all(
         definition.files.map(async (relativePath) => {
           const absolutePath = path.resolve(skillRoot, relativePath);
@@ -74,7 +81,7 @@ async function loadSkill(definition: SkillDefinition) {
         }),
       );
       const value = sections.join("\n\n---\n\n");
-      skillCache.set(definition.name, value);
+      skillCache.set(cacheKey, value);
       return value;
     } catch (error) {
       lastError = error;
@@ -92,6 +99,10 @@ export function loadWebsiteKnowledgeBaseSkill() {
 
 export function loadGeoQuestionRecommenderSkill() {
   return loadSkill(QUESTION_SKILL);
+}
+
+export function loadWebsiteKnowledgeBaseValidator() {
+  return loadSkill(WEBSITE_KB_VALIDATOR);
 }
 
 export function clearGeoSkillCacheForTests() {

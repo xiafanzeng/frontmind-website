@@ -2,6 +2,7 @@ import type { CreateProjectRequest } from "./schemas";
 import {
   loadGeoQuestionRecommenderSkill,
   loadWebsiteKnowledgeBaseSkill,
+  loadWebsiteKnowledgeBaseValidator,
 } from "./skills";
 
 type WebsiteKnowledgePromptInput = Omit<CreateProjectRequest, "attachments"> & {
@@ -12,7 +13,7 @@ const KNOWLEDGE_BASE_FINAL_MACHINE_GATE = `
 在提交最终响应前，必须在本地解压最终 ZIP 并逐项通过以下机器门禁；任一项失败都必须先修正并重新打包：
 
 1. ZIP 可仅有一个 \`{company_name}_knowledge_base/\` 包装目录；该目录内不得再出现 \`knowledge/\`、\`reports/\`、\`references/\` 等 legacy 中间层。
-2. 知识库根目录必须直接包含 \`README.md\`、\`00_knowledge_tree.md\`、\`00_completeness.json\`、\`00_crawl_coverage_report.md\`、\`00_web_intelligence_report.md\`、\`00_source_index.md\`。
+2. 知识库根目录必须直接包含 \`README.md\`、\`00_knowledge_tree.md\`、\`00_completeness.json\`、\`00_package_manifest.json\`、\`00_crawl_coverage_report.md\`、\`00_web_intelligence_report.md\`、\`00_source_index.md\`。
 3. 知识库根目录必须直接使用 canonical 目录：\`01_company_overview/\`、\`02_team/\`、\`03_products/\`、\`04_technology/\`、\`05_manufacturing/\`、\`06_industries/\`、\`07_service/\`、\`08_competitive_advantages/\`、\`09_media_assets/\`、\`10_reference_assets/\`。内容叶子 Markdown 只能由 \`01_company_overview/\` 至 \`08_competitive_advantages/\` 计数；\`01\`–\`08\` 每个目录都必须至少包含一个非空叶子 Markdown。没有可核验事实的目录也必须写入一个明确说明当前证据缺口的 \`needs_verification\` 叶子，禁止留空、伪造事实或复制无关内容。
 4. 新构建的计数范围内必须有 40–56 个真实叶子 Markdown 文件；每个文件开头必须包含且只能声明一个精确状态头：
    \`> 最后更新: {本次日期} | 状态: {verified_first_party|verified_authoritative|supported_third_party|inferred|needs_verification|not_applicable} | 来源: {本文件实际来源类型}\`
@@ -20,9 +21,11 @@ const KNOWLEDGE_BASE_FINAL_MACHINE_GATE = `
    \`{"counts":{"totalLeaves":TOTAL_LEAVES,"verifiedFirstParty":VERIFIED_FIRST_PARTY,"verifiedAuthoritative":VERIFIED_AUTHORITATIVE,"supportedThirdParty":SUPPORTED_THIRD_PARTY,"inferred":INFERRED,"needsVerification":NEEDS_VERIFICATION,"notApplicable":NOT_APPLICABLE},"acquisition":{"officialPages":{"completed":OFFICIAL_PAGES_COMPLETED,"total":OFFICIAL_PAGES_TOTAL},"images":{"completed":IMAGES_COMPLETED,"total":IMAGES_TOTAL},"documents":{"completed":DOCUMENTS_COMPLETED,"total":DOCUMENTS_TOTAL},"webQueries":{"completed":WEB_QUERIES_COMPLETED,"total":WEB_QUERIES_TOTAL}},"gaps":[CURRENT_RUN_GAP_STRINGS],"evaluatedAt":CURRENT_RUN_ISO_8601_TIMESTAMP}\`
    如果某个 acquisition 维度没有诚实的分母，只能省略该维度，禁止编造数值。
 6. 六个状态计数必须均为非负整数、总和精确等于 \`totalLeaves\`，并与逐文件重数结果完全一致；每个 acquisition 的 \`completed\` 不得大于 \`total\`。
-7. 根文档、叶子内容、来源索引和素材引用中的相对路径必须指向 ZIP 内真实文件；禁止路径穿越、绝对路径、空文件、模板占位符或把 URL 当作已下载素材。
-8. 新构建的整个 ZIP 最多 150 个文件、最多 48 个已下载并验证的图片；不得包含逐页面原始 HTML 或与之成对重复保存的清洗文本。客户可见知识正文目标约 12,000 字且硬上限 18,000 字，状态头、来源表、采集报告、索引和机器清单不计入正文。
-9. 若且仅若本任务明确是历史 ZIP 的结构修复，可以保留原 ZIP 已有且真实的超过新预算的叶子、文件、图片与正文，不得为满足新预算删除历史证据；服务端对历史归档的兼容范围不因新构建预算而收紧。
+7. 根文档、叶子内容、来源索引和素材引用中的相对路径必须指向 ZIP 内真实文件；禁止路径穿越、绝对路径、空文件、模板占位符或把 URL 当作已下载素材。每个客户展示分支必须有且只有一个正式 \`overview\` 文档，其余正式文档标为 \`leaf\`；采集报告、来源索引和证据材料不得标为客户展示正文。
+8. \`00_package_manifest.json\` 必须严格使用 schemaVersion=1、profile=website-lead-v1，并逐项登记 documents、assets、counts 和 imageSelection。每张图片必须登记真实 ZIP path、SHA-256、MIME、字节数、像素宽高、图注、所属分支、关联文档、公开第一方来源页和 first_party 权属；每个文档和图片 ID、path 必须唯一，双向 assetIds/documentIds 必须一致，counts 必须由最终 ZIP 重新计算。
+9. 新构建的整个 ZIP 最多 150 个文件、最多 48 个已下载并验证的图片；若至少有 36 张合格第一方图片，必须打包 36–48 张；若不足 36 张，必须打包全部合格图片并在 imageSelection.shortfallReason 写明实际原因。图片只允许 AVIF/WebP/PNG/JPEG/GIF，扩展名、MIME、magic bytes、SHA-256 和实际字节数必须一致；SVG 必须先栅格化，第三方图片只记录 URL 与权属，不得下载凑数。
+10. 不得包含逐页面原始 HTML 或与之成对重复保存的清洗文本。客户可见正式知识正文必须在 8,000–18,000 个有效字符之间，目标约 12,000；有证据的 overview/leaf 每篇至少 120 个有效字符。状态头、来源表、采集报告、索引和机器清单不计入正文；不得用重复模板、“第一方原始快照”“第一方页面摘录”“原始快照”或“页面摘录”充当正式正文。
+11. 使用 skill 注入的 \`scripts/validate_archive.py\` 对最终 ZIP 执行确定性校验。若工作区没有该文件，必须从本 prompt 的 \`# FILE: scripts/validate_archive.py\` 区块原样落盘后执行 \`python3 scripts/validate_archive.py FINAL_ZIP\`。只有退出码为 0 且输出以 \`VALID \` 开头时才能交付；失败后修正并重新运行，不得自行放宽脚本。
 
 最终响应必须附带且只附带通过上述门禁的 ZIP；不要把检查报告、临时目录、脚本或解释当作交付物。`.trim();
 
@@ -70,6 +73,7 @@ export async function buildWebsiteKnowledgeBaseRepairPrompt({
   archiveFilename: string;
   validationReason: string;
 }) {
+  const validator = await loadWebsiteKnowledgeBaseValidator();
   return [
     "这是 website-one-shot-kb-builder 的唯一一次产物结构修复任务。读取随任务附带的原知识库 ZIP，只修复目录、文件命名、清单 schema、叶子状态头、索引引用和打包结构。",
     "禁止重新抓取网页、搜索全网、调用外部来源或新增事实。不得把缺失证据补写成已验证事实；只能重排原 ZIP 中已有内容与证据。无法由原证据支持的叶子必须保留为 needs_verification，确实不适用的叶子才可标为 not_applicable。",
@@ -88,6 +92,9 @@ export async function buildWebsiteKnowledgeBaseRepairPrompt({
       null,
       2,
     ),
+    "",
+    "## 只读校验资源（不是修复输入，不得修改）",
+    validator,
     "",
     "## FINAL MACHINE GATE（全部通过后才能交付）",
     KNOWLEDGE_BASE_FINAL_MACHINE_GATE,

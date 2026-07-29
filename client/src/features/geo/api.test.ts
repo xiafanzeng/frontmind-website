@@ -98,6 +98,84 @@ describe("normalizeGeoProject", () => {
     expect(project.knowledgeBase?.archiveName).toBe("企业知识库.zip");
   });
 
+  it("normalizes formal branch overviews, leaves, asset bindings, and local ZIP paths", () => {
+    const project = normalizeGeoProject({
+      project: {
+        id: "project-presentation-contract",
+        companyName: "图文企业",
+        status: "completed",
+        knowledgeBase: {
+          summary: "正式知识体系",
+          sections: [
+            {
+              id: "products-services",
+              title: "产品与服务",
+              summary: "产品族正式综述",
+              markdown: "旧版合并正文",
+              overviewMarkdown: "## 产品与服务综述\n正式对外正文。",
+              overviewAssetIds: ["asset-overview"],
+              assetIds: ["asset-overview", "asset-api"],
+              leaves: [
+                {
+                  id: "leaf-api",
+                  title: "API 服务",
+                  markdown: "## API 服务\n可直接调用的企业服务内容。",
+                  status: "verified",
+                  assetIds: ["asset-api"],
+                },
+              ],
+            },
+          ],
+          assets: [
+            {
+              id: "asset-overview",
+              name: "产品总览.webp",
+              sectionId: "products-services",
+              zipPath: "03_products/images/overview.webp",
+              caption: "产品族总览",
+              alt: "产品族总览图",
+              mimeType: "image/webp",
+              width: 1200,
+              height: 800,
+            },
+            {
+              id: "asset-unsafe-url",
+              name: "来源说明.txt",
+              previewUrl: "javascript:alert(1)",
+              url: "//untrusted.example/asset",
+            },
+          ],
+        },
+      },
+    });
+
+    const section = project.knowledgeBase?.sections[0];
+    expect(section?.overview).toEqual({
+      summary: "产品族正式综述",
+      markdown: "## 产品与服务综述\n正式对外正文。",
+      assetIds: ["asset-overview"],
+    });
+    expect(section?.leaves?.[0]).toMatchObject({
+      id: "leaf-api",
+      title: "API 服务",
+      status: "verified",
+      assetIds: ["asset-api"],
+    });
+    expect(project.knowledgeBase?.assets[0]).toMatchObject({
+      archivePath: "03_products/images/overview.webp",
+      caption: "产品族总览",
+      alt: "产品族总览图",
+      type: "image/webp",
+      width: 1200,
+      height: 800,
+    });
+    expect(project.knowledgeBase?.assets[1]).toMatchObject({
+      id: "asset-unsafe-url",
+      previewUrl: undefined,
+      url: undefined,
+    });
+  });
+
   it("treats the server retry decision as authoritative and fails closed", () => {
     const allowed = normalizeGeoProject({
       project: {
@@ -177,6 +255,53 @@ describe("normalizeGeoProject", () => {
     expect(truthyButInvalid.questionRetryAvailable).toBe(false);
     expect(truthyButInvalid.assessmentRetryAvailable).toBe(false);
     expect(truthyButInvalid.optimizationForecastRetryAvailable).toBe(false);
+  });
+
+  it.each([
+    ["structure", true, false],
+    ["media", false, false],
+    ["content", false, false],
+    ["unsafe", false, true],
+  ] as const)(
+    "normalizes the %s knowledge validation category with its server-authorized action",
+    (category, retryAvailable, supportRequired) => {
+      const project = normalizeGeoProject({
+        project: {
+          id: `validation-${category}`,
+          status: "failed",
+          knowledgeBaseValidationCategory: category,
+          knowledgeBaseRetryAvailable: retryAvailable,
+          knowledgeBaseSupportRequired: supportRequired,
+          error: `${category} validation failed`,
+        },
+      });
+
+      expect(project).toMatchObject({
+        knowledgeBaseValidationCategory: category,
+        knowledgeBaseRetryAvailable: retryAvailable,
+        knowledgeBaseSupportRequired: supportRequired,
+      });
+    },
+  );
+
+  it("accepts the snake-case validation category and drops unknown categories", () => {
+    const snakeCase = normalizeGeoProject({
+      project: {
+        id: "validation-snake-case",
+        status: "failed",
+        knowledge_base_validation_category: "content",
+      },
+    });
+    const unknown = normalizeGeoProject({
+      project: {
+        id: "validation-unknown",
+        status: "failed",
+        knowledgeBaseValidationCategory: "other",
+      },
+    });
+
+    expect(snakeCase.knowledgeBaseValidationCategory).toBe("content");
+    expect(unknown.knowledgeBaseValidationCategory).toBeUndefined();
   });
 
   it("recalculates knowledge completeness from bounded counts", () => {

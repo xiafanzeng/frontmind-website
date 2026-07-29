@@ -1,0 +1,694 @@
+#!/usr/bin/env python3
+"""Deterministically validate a website-lead-v1 knowledge-base ZIP."""
+
+from __future__ import annotations
+
+import argparse
+import hashlib
+import io
+import ipaddress
+import json
+import re
+import string
+import sys
+import zipfile
+from collections import Counter, defaultdict
+from pathlib import Path, PurePosixPath
+from urllib.parse import urlsplit
+
+try:
+    from PIL import Image, UnidentifiedImageError
+except ImportError:  # The server still performs an independent native decode.
+    Image = None
+    UnidentifiedImageError = OSError
+
+CONTENT_PREFIXES = (
+    "01_company_overview/",
+    "02_team/",
+    "03_products/",
+    "04_technology/",
+    "05_manufacturing/",
+    "06_industries/",
+    "07_service/",
+    "08_competitive_advantages/",
+)
+DISPLAY_BRANCH = {
+    "01_company_overview": "company-identity",
+    "02_team": "team",
+    "03_products": "products-services",
+    "04_technology": "core-capabilities",
+    "05_manufacturing": "core-capabilities",
+    "06_industries": "customers-industries",
+    "07_service": "cooperation",
+    "08_competitive_advantages": "why-frontmind",
+}
+STATUSES = (
+    "verified_first_party",
+    "verified_authoritative",
+    "supported_third_party",
+    "inferred",
+    "needs_verification",
+    "not_applicable",
+)
+STATUS_KEYS = {
+    "verified_first_party": "verifiedFirstParty",
+    "verified_authoritative": "verifiedAuthoritative",
+    "supported_third_party": "supportedThirdParty",
+    "inferred": "inferred",
+    "needs_verification": "needsVerification",
+    "not_applicable": "notApplicable",
+}
+MIME_BY_SUFFIX = {
+    ".avif": "image/avif",
+    ".webp": "image/webp",
+    ".png": "image/png",
+    ".jpg": "image/jpeg",
+    ".jpeg": "image/jpeg",
+    ".gif": "image/gif",
+}
+ROOT_MARKDOWN = {
+    "README.md",
+    "00_knowledge_tree.md",
+    "00_crawl_coverage_report.md",
+    "00_web_intelligence_report.md",
+    "00_source_index.md",
+}
+PUNCTUATION = string.punctuation + "，。！？；：“”‘’（）【】《》…—·"
+ID_PATTERN = re.compile(r"^[A-Za-z][A-Za-z0-9_-]{0,79}$")
+
+
+def fail(message: str) -> None:
+    raise ValueError(message)
+
+
+def normalized_path(raw: str) -> str:
+    if "\x00" in raw or "\\" in raw or raw.startswith("/") or re.match(r"^[A-Za-z]:", raw):
+        fail(f"unsafe ZIP path: {raw!r}")
+    path = PurePosixPath(raw)
+    if ".." in path.parts:
+        fail(f"path traversal in ZIP entry: {raw!r}")
+    return str(path)
+
+
+def public_http_url(raw: object) -> bool:
+    if not isinstance(raw, str):
+        return False
+    try:
+        parsed = urlsplit(raw)
+        if parsed.scheme not in ("http", "https") or not parsed.hostname:
+            return False
+        if parsed.username or parsed.password:
+            return False
+        hostname = parsed.hostname.lower().rstrip(".")
+        if hostname == "localhost" or hostname.endswith(".localhost"):
+            return False
+        try:
+            address = ipaddress.ip_address(hostname)
+        except ValueError:
+            return True
+        return not (
+            address.is_private
+            or address.is_loopback
+            or address.is_link_local
+            or address.is_multicast
+            or address.is_reserved
+            or address.is_unspecified
+        )
+    except (TypeError, ValueError):
+        return False
+
+
+def strip_wrapper(paths: list[str]) -> tuple[str, list[str]]:
+    roots = {path.split("/", 1)[0] for path in paths if path}
+    wrapper = next(iter(roots)) if len(roots) == 1 and any("/" in path for path in paths) else ""
+    return wrapper, [
+        path[len(wrapper) + 1 :] if wrapper and path.startswith(wrapper + "/") else path
+        for path in paths
+    ]
+
+
+def meaningful_count(text: str) -> int:
+    return len("".join(ch for ch in text if not ch.isspace() and ch not in PUNCTUATION))
+
+
+def strip_frontmatter(markdown: str) -> str:
+    return re.sub(r"^\ufeff?---[ \t]*\r?\n[\s\S]*?\r?\n---[ \t]*(?:\r?\n|$)", "", markdown, count=1)
+
+
+def narrative_text(markdown: str) -> str:
+    lines = strip_frontmatter(markdown).splitlines()
+    retained: list[str] = []
+    excluded_depth: int | None = None
+    index = 0
+    excluded_heading = re.compile(
+        r"(?:原始|证据|引用|参考)?来源|素材清单|展示素材|机器清单|证据状态|状态头|sources?|references?|asset inventory",
+        re.I,
+    )
+    while index < len(lines):
+        line = lines[index]
+        heading = re.match(r"^(#{1,6})\s+(.+?)\s*$", line)
+        if heading:
+            depth = len(heading.group(1))
+            if excluded_depth is not None and depth <= excluded_depth:
+                excluded_depth = None
+            if excluded_heading.search(heading.group(2)):
+                excluded_depth = depth
+            index += 1
+            continue
+        if excluded_depth is not None:
+            index += 1
+            continue
+        if re.match(r"^\s*>\s*.*(?:状态|status)\s*[:：].*(?:来源|source)\s*[:：]", line, re.I):
+            index += 1
+            continue
+        if re.match(r"^\s*[-*]\s+(?:node_id|path|evidence_status|source_ids|status)\s*[:：]", line, re.I):
+            index += 1
+            continue
+        if line.strip().startswith("|"):
+            table: list[str] = []
+            while index < len(lines) and lines[index].strip().startswith("|"):
+                table.append(lines[index])
+                index += 1
+            table_text = "\n".join(table)
+            if not re.search(r"来源|出处|证据链接|source|url", table_text, re.I):
+                retained.append(table_text)
+            continue
+        retained.append(line)
+        index += 1
+    text = "\n".join(retained)
+    text = re.sub(r"<!--[\s\S]*?-->", "", text)
+    text = re.sub(r"!\[[^\]]*]\([^)]*\)", "", text)
+    text = re.sub(r"\[([^\]]+)]\([^)]*\)", r"\1", text)
+    text = re.sub(r"https?://[^\s)>\]]+", "", text, flags=re.I)
+    return re.sub(r"<[^>]+>", "", text)
+
+
+def evidence_count(markdown: str) -> int:
+    text = strip_frontmatter(markdown)
+    text = re.sub(r"<!--[\s\S]*?-->", "", text)
+    text = re.sub(r"!\[[^\]]*]\([^)]*\)", "", text)
+    text = re.sub(r"\[([^\]]+)]\([^)]*\)", r"\1", text)
+    text = re.sub(r"https?://[^\s)>\]]+", "", text, flags=re.I)
+    text = re.sub(r"<[^>]+>", "", text)
+    text = re.sub(r"^#{1,6}\s+", "", text, flags=re.M)
+    return meaningful_count(text)
+
+
+def reported_saved_image_count(markdown: str) -> int | None:
+    patterns = (
+        r"(?:成功下载|已下载|已保存|保存并打包|downloaded|packaged|saved)[^\n|]{0,30}(?:图片|图像|images?|assets?)[^\d]{0,12}([\d,]+)",
+        r"(?:图片|图像|images?|assets?)[^\n|]{0,30}(?:成功下载|已下载|已保存|保存并打包|downloaded|packaged|saved)[^\d]{0,12}([\d,]+)",
+        r"第一方图片资源[^\d\n|]{0,20}([\d,]+)",
+    )
+    for pattern in patterns:
+        match = re.search(pattern, markdown, re.I)
+        if match:
+            return int(match.group(1).replace(",", ""))
+    return None
+
+
+def image_is_valid(data: bytes, mime: str) -> bool:
+    if mime == "image/png":
+        return (
+            len(data) >= 24
+            and data[:8] == b"\x89PNG\r\n\x1a\n"
+            and data[12:16] == b"IHDR"
+            and int.from_bytes(data[16:20], "big") > 0
+            and int.from_bytes(data[20:24], "big") > 0
+        )
+    if mime == "image/jpeg":
+        return len(data) >= 4 and data[:2] == b"\xff\xd8" and data[2] == 0xFF and data[-2:] == b"\xff\xd9"
+    if mime == "image/gif":
+        return len(data) >= 10 and data[:6] in (b"GIF87a", b"GIF89a") and data[6:8] != b"\0\0" and data[8:10] != b"\0\0"
+    if mime == "image/webp":
+        return len(data) >= 16 and data[:4] == b"RIFF" and data[8:12] == b"WEBP" and int.from_bytes(data[4:8], "little") + 8 <= len(data)
+    if mime == "image/avif":
+        return len(data) >= 16 and data[4:8] == b"ftyp" and data[8:12] in (b"avif", b"avis")
+    return False
+
+
+def structural_image_dimensions(data: bytes, mime: str) -> tuple[int, int] | None:
+    if mime == "image/png" and len(data) >= 24:
+        return (
+            int.from_bytes(data[16:20], "big"),
+            int.from_bytes(data[20:24], "big"),
+        )
+    if mime == "image/gif" and len(data) >= 10:
+        return (
+            int.from_bytes(data[6:8], "little"),
+            int.from_bytes(data[8:10], "little"),
+        )
+    if mime == "image/jpeg" and len(data) >= 4:
+        offset = 2
+        while offset + 9 < len(data):
+            if data[offset] != 0xFF:
+                offset += 1
+                continue
+            marker = data[offset + 1]
+            if marker in {0xD8, 0xD9}:
+                offset += 2
+                continue
+            segment_length = int.from_bytes(data[offset + 2 : offset + 4], "big")
+            if segment_length < 2 or offset + 2 + segment_length > len(data):
+                break
+            if marker in {
+                0xC0,
+                0xC1,
+                0xC2,
+                0xC3,
+                0xC5,
+                0xC6,
+                0xC7,
+                0xC9,
+                0xCA,
+                0xCB,
+                0xCD,
+                0xCE,
+                0xCF,
+            }:
+                return (
+                    int.from_bytes(data[offset + 7 : offset + 9], "big"),
+                    int.from_bytes(data[offset + 5 : offset + 7], "big"),
+                )
+            offset += 2 + segment_length
+        return None
+    if mime == "image/webp" and len(data) >= 30:
+        chunk = data[12:16]
+        if chunk == b"VP8X":
+            return (
+                int.from_bytes(data[24:27], "little") + 1,
+                int.from_bytes(data[27:30], "little") + 1,
+            )
+        if chunk == b"VP8L" and data[20] == 0x2F and len(data) >= 25:
+            packed = int.from_bytes(data[21:25], "little")
+            return ((packed & 0x3FFF) + 1, ((packed >> 14) & 0x3FFF) + 1)
+        if chunk == b"VP8 " and data[23:26] == b"\x9d\x01\x2a":
+            return (
+                int.from_bytes(data[26:28], "little") & 0x3FFF,
+                int.from_bytes(data[28:30], "little") & 0x3FFF,
+            )
+        return None
+    if mime == "image/avif":
+        offset = data.find(b"ispe")
+        if offset >= 4 and offset + 16 <= len(data):
+            box_size = int.from_bytes(data[offset - 4 : offset], "big")
+            if box_size >= 20 and offset - 4 + box_size <= len(data):
+                return (
+                    int.from_bytes(data[offset + 8 : offset + 12], "big"),
+                    int.from_bytes(data[offset + 12 : offset + 16], "big"),
+                )
+    return None
+
+
+def decoded_image_dimensions(data: bytes, mime: str) -> tuple[int, int] | None:
+    dimensions = structural_image_dimensions(data, mime)
+    if not image_is_valid(data, mime) or not dimensions or 0 in dimensions:
+        return None
+    if dimensions[0] * dimensions[1] > 40_000_000:
+        return None
+    if Image is None:
+        return dimensions
+    expected_format = {
+        "image/png": "PNG",
+        "image/jpeg": "JPEG",
+        "image/gif": "GIF",
+        "image/webp": "WEBP",
+        "image/avif": "AVIF",
+    }[mime]
+    try:
+        with Image.open(io.BytesIO(data)) as image:
+            if image.format != expected_format or image.size != dimensions:
+                return None
+            image.verify()
+        with Image.open(io.BytesIO(data)) as image:
+            image.load()
+    except (OSError, SyntaxError, ValueError, UnidentifiedImageError):
+        # Pillow builds without an AVIF plugin cannot decode a valid AVIF.
+        # The service performs a mandatory native libvips decode afterwards.
+        return dimensions if mime == "image/avif" else None
+    return dimensions
+
+
+def require_exact_keys(value: object, required: set[str], optional: set[str] = set()) -> None:
+    if not isinstance(value, dict):
+        fail("expected a JSON object")
+    keys = set(value)
+    if not required <= keys or keys - required - optional:
+        fail(f"invalid object keys: required={sorted(required)}, actual={sorted(keys)}")
+
+
+def validate(zip_path: str) -> dict[str, int]:
+    if Path(zip_path).stat().st_size > 100 * 1024 * 1024:
+        fail("ZIP exceeds the compressed size limit")
+    with zipfile.ZipFile(zip_path) as archive:
+        infos = [info for info in archive.infolist() if not info.is_dir()]
+        if len(infos) > 150:
+            fail("ZIP contains more than 150 files")
+        if sum(info.file_size for info in infos) > 300 * 1024 * 1024:
+            fail("ZIP exceeds the uncompressed safety limit")
+        if any(info.flag_bits & 0x1 for info in infos):
+            fail("encrypted ZIP entries are not allowed")
+        raw_paths = [normalized_path(info.filename) for info in infos]
+        wrapper, paths = strip_wrapper(raw_paths)
+        if len(paths) != len(set(paths)):
+            fail("duplicate ZIP paths")
+        info_by_path = dict(zip(paths, infos))
+
+        def read(entry_path: str, limit: int) -> bytes:
+            info = info_by_path.get(entry_path)
+            if info is None:
+                fail(f"missing file: {entry_path}")
+            if info.file_size > limit:
+                fail(f"oversized file: {entry_path}")
+            data = archive.read(info)
+            if len(data) != info.file_size:
+                fail(f"truncated file: {entry_path}")
+            return data
+
+        required = ROOT_MARKDOWN | {"00_completeness.json", "00_package_manifest.json"}
+        missing = required - set(paths)
+        if missing:
+            fail(f"missing required root files: {sorted(missing)}")
+        if any(path.lower().endswith((".html", ".htm")) for path in paths):
+            fail("per-page HTML is forbidden")
+
+        markdown = {
+            path: read(path, 2 * 1024 * 1024).decode("utf-8")
+            for path in paths
+            if path.lower().endswith(".md")
+        }
+        completeness = json.loads(read("00_completeness.json", 64 * 1024))
+        require_exact_keys(completeness, {"counts", "acquisition", "gaps", "evaluatedAt"})
+        require_exact_keys(
+            completeness["counts"],
+            {
+                "totalLeaves",
+                "verifiedFirstParty",
+                "verifiedAuthoritative",
+                "supportedThirdParty",
+                "inferred",
+                "needsVerification",
+                "notApplicable",
+            },
+        )
+        if not all(
+            type(completeness["counts"][key]) is int
+            and completeness["counts"][key] >= 0
+            for key in completeness["counts"]
+        ):
+            fail("completeness counts must be non-negative integers")
+        require_exact_keys(completeness["acquisition"], set(), {"officialPages", "images", "documents", "webQueries"})
+        for value in completeness["acquisition"].values():
+            require_exact_keys(value, {"completed", "total"})
+            if not all(isinstance(value[key], int) and value[key] >= 0 for key in ("completed", "total")) or value["completed"] > value["total"]:
+                fail("invalid acquisition count")
+
+        package_bytes = read("00_package_manifest.json", 512 * 1024)
+        package = json.loads(package_bytes)
+        require_exact_keys(package, {"schemaVersion", "profile", "documents", "assets", "counts", "imageSelection"})
+        if package["schemaVersion"] != 1 or package["profile"] != "website-lead-v1":
+            fail("invalid package manifest version/profile")
+        require_exact_keys(package["counts"], {"totalFiles", "customerVisibleCharacters", "evidenceCharacters", "packagedImages"})
+        require_exact_keys(package["imageSelection"], {"eligibleFirstPartyImages"}, {"shortfallReason"})
+        if not all(
+            type(package["counts"][key]) is int and package["counts"][key] >= 0
+            for key in package["counts"]
+        ) or type(package["imageSelection"]["eligibleFirstPartyImages"]) is not int:
+            fail("package counts must be non-negative integers")
+        if package["counts"]["totalFiles"] != len(paths):
+            fail("manifest totalFiles does not match ZIP")
+
+        documents = package["documents"]
+        assets = package["assets"]
+        if not isinstance(documents, list) or not isinstance(assets, list):
+            fail("documents/assets must be arrays")
+        for doc in documents:
+            if not isinstance(doc, dict):
+                fail("document record must be an object")
+            require_exact_keys(
+                doc,
+                {"id", "path", "kind", "title", "customerVisible"},
+                {"branchId", "order", "evidenceStatus", "sourceIds", "assetIds"},
+            )
+            if (
+                not all(
+                    isinstance(doc[key], str) and doc[key]
+                    for key in ("id", "path", "kind", "title")
+                )
+                or not ID_PATTERN.fullmatch(doc["id"])
+                or not isinstance(doc["customerVisible"], bool)
+            ):
+                fail("invalid document field type")
+            if "order" in doc and (
+                type(doc["order"]) is not int or doc["order"] < 0
+            ):
+                fail("invalid document order")
+            if "sourceIds" in doc and (
+                not isinstance(doc["sourceIds"], list)
+                or not doc["sourceIds"]
+                or not all(
+                    isinstance(value, str) and ID_PATTERN.fullmatch(value)
+                    for value in doc["sourceIds"]
+                )
+            ):
+                fail("invalid document sourceIds")
+            if "assetIds" in doc and (
+                not isinstance(doc["assetIds"], list)
+                or not all(
+                    isinstance(value, str) and ID_PATTERN.fullmatch(value)
+                    for value in doc["assetIds"]
+                )
+            ):
+                fail("invalid document assetIds")
+        for asset in assets:
+            if not isinstance(asset, dict):
+                fail("asset record must be an object")
+            require_exact_keys(
+                asset,
+                {"id", "path", "sha256", "mimeType", "bytes", "width", "height", "caption", "branchId", "documentIds", "sourcePageUrl", "ownership"},
+                {"alt", "sourceAssetUrl"},
+            )
+            if (
+                not all(
+                    isinstance(asset[key], str) and asset[key]
+                    for key in (
+                        "id",
+                        "path",
+                        "sha256",
+                        "mimeType",
+                        "caption",
+                        "ownership",
+                    )
+                )
+                or not ID_PATTERN.fullmatch(asset["id"])
+                or not re.fullmatch(r"[a-f0-9]{64}", asset["sha256"])
+                or type(asset["bytes"]) is not int
+                or asset["bytes"] <= 0
+            ):
+                fail("invalid asset field type")
+            if not all(
+                type(asset[key]) is int and asset[key] > 0
+                for key in ("width", "height")
+            ):
+                fail("asset width and height must be positive integers")
+            if (
+                asset["branchId"] not in DISPLAY_BRANCH
+                or not public_http_url(asset["sourcePageUrl"])
+                or (
+                    "sourceAssetUrl" in asset
+                    and not public_http_url(asset["sourceAssetUrl"])
+                )
+                or not isinstance(asset["documentIds"], list)
+                or not asset["documentIds"]
+                or not all(
+                    isinstance(value, str) and ID_PATTERN.fullmatch(value)
+                    for value in asset["documentIds"]
+                )
+            ):
+                fail("asset branch/source-page metadata is invalid")
+        document_ids = [doc.get("id") for doc in documents]
+        document_paths = [normalized_path(doc.get("path", "")) for doc in documents]
+        if len(document_ids) != len(set(document_ids)) or len(document_paths) != len(set(document_paths)):
+            fail("duplicate document IDs or paths")
+        if set(document_paths) != set(markdown):
+            fail("manifest must inventory every Markdown document")
+        docs_by_id = dict(zip(document_ids, documents))
+
+        leaf_paths = {
+            path for path in markdown if any(path.startswith(prefix) for prefix in CONTENT_PREFIXES)
+        }
+        visible_docs = [doc for doc in documents if doc.get("customerVisible") is True]
+        if {doc["path"] for doc in visible_docs} != leaf_paths:
+            fail("customer-visible documents must exactly match 01–08 leaves")
+        if not 40 <= len(leaf_paths) <= 56:
+            fail("content leaf count must be 40–56")
+        for prefix in CONTENT_PREFIXES:
+            if not any(path.startswith(prefix) for path in leaf_paths):
+                fail(f"missing content leaf under {prefix}")
+
+        status_counts: Counter[str] = Counter()
+        overview_counts: Counter[str] = Counter()
+        narrative_total = 0
+        fingerprints: defaultdict[str, list[str]] = defaultdict(list)
+        template_fingerprints: defaultdict[str, list[str]] = defaultdict(list)
+        status_re = re.compile(r"(?:证据\s*)?(?:状态|status)\s*[:：]\s*(?:\*\*|__)?\s*`?\s*(" + "|".join(STATUSES) + r")\b", re.I)
+        for doc in visible_docs:
+            branch = doc.get("branchId")
+            if branch not in DISPLAY_BRANCH or doc["path"].split("/", 1)[0] != branch:
+                fail(f"invalid branch metadata: {doc['path']}")
+            if doc.get("kind") not in ("overview", "leaf"):
+                fail(f"invalid visible document kind: {doc['path']}")
+            status = doc.get("evidenceStatus")
+            match = status_re.search(markdown[doc["path"]][:1600])
+            if status not in STATUSES or not match or match.group(1).lower() != status:
+                fail(f"status mismatch: {doc['path']}")
+            status_counts[status] += 1
+            if doc["kind"] == "overview":
+                overview_counts[DISPLAY_BRANCH[branch]] += 1
+            if status not in ("needs_verification", "not_applicable") and not doc.get("sourceIds"):
+                fail(f"evidence-bearing document has no source IDs: {doc['path']}")
+            text = narrative_text(markdown[doc["path"]])
+            count = meaningful_count(text)
+            narrative_total += count
+            if status not in ("needs_verification", "not_applicable") and count < 120:
+                fail(f"evidence-bearing document has fewer than 120 characters: {doc['path']}")
+            if re.search(r"第一方(?:原始)?快照|第一方页面摘录|原始快照|页面摘录", text, re.I):
+                fail(f"raw snapshot/page excerpt used as formal copy: {doc['path']}")
+            if count >= 120:
+                fingerprints[re.sub(r"\d+", "#", re.sub(r"\s+", "", text))].append(doc["path"])
+            for paragraph in re.split(r"\n\s*\n", text):
+                fingerprint = re.sub(r"\d+", "#", re.sub(r"\s+", "", paragraph)).strip()
+                if meaningful_count(fingerprint) >= 120:
+                    template_fingerprints[fingerprint].append(doc["path"])
+        if set(overview_counts) != set(DISPLAY_BRANCH.values()) or any(value != 1 for value in overview_counts.values()):
+            fail("each display branch must have exactly one overview")
+        if any(len(group) >= 3 for group in fingerprints.values()):
+            fail("same formal narrative repeated across at least three documents")
+        if any(len(group) >= 3 for group in template_fingerprints.values()):
+            fail("same formal template paragraph repeated across at least three documents")
+        if not 8000 <= narrative_total <= 18000:
+            fail("customer-visible narrative must contain 8,000–18,000 characters")
+        if package["counts"]["customerVisibleCharacters"] != narrative_total:
+            fail("customerVisibleCharacters mismatch")
+        if completeness["counts"]["totalLeaves"] != len(leaf_paths):
+            fail("00_completeness totalLeaves mismatch")
+        if sum(completeness["counts"][key] for key in STATUS_KEYS.values()) != len(leaf_paths):
+            fail("00_completeness status total mismatch")
+        for status, key in STATUS_KEYS.items():
+            if completeness["counts"][key] != status_counts[status]:
+                fail(f"00_completeness {key} mismatch")
+
+        evidence_total = sum(
+            evidence_count(markdown[doc["path"]])
+            for doc in documents
+            if doc.get("customerVisible") is False
+        )
+        if evidence_total > 300_000:
+            fail("packaged evidence exceeds 300,000 characters")
+        if package["counts"]["evidenceCharacters"] != evidence_total:
+            fail("evidenceCharacters mismatch")
+
+        image_paths = {path for path in paths if PurePosixPath(path).suffix.lower() in set(MIME_BY_SUFFIX) | {".svg"}}
+        if any(PurePosixPath(path).suffix.lower() == ".svg" for path in image_paths):
+            fail("SVG must be rasterized before packaging")
+        if len(image_paths) > 48:
+            fail("more than 48 packaged images")
+        reported_images = reported_saved_image_count(markdown["00_crawl_coverage_report.md"])
+        if reported_images is not None and reported_images != len(image_paths):
+            fail("crawl report saved-image count does not match packaged images")
+        asset_ids = [asset.get("id") for asset in assets]
+        asset_paths = [normalized_path(asset.get("path", "")) for asset in assets]
+        if len(asset_ids) != len(set(asset_ids)) or len(asset_paths) != len(set(asset_paths)):
+            fail("duplicate asset IDs or paths")
+        if set(asset_paths) != image_paths:
+            fail("manifest must inventory every packaged image")
+        assets_by_id = dict(zip(asset_ids, assets))
+        hashes: set[str] = set()
+        for asset in assets:
+            suffix = PurePosixPath(asset["path"]).suffix.lower()
+            mime = MIME_BY_SUFFIX.get(suffix)
+            data = read(asset["path"], 4 * 1024 * 1024)
+            digest = hashlib.sha256(data).hexdigest()
+            dimensions = decoded_image_dimensions(data, mime or "")
+            if mime != asset.get("mimeType") or not dimensions:
+                fail(f"invalid or undecodable image: {asset['path']}")
+            if (
+                asset.get("width") != dimensions[0]
+                or asset.get("height") != dimensions[1]
+            ):
+                fail(f"image dimensions mismatch: {asset['path']}")
+            if asset.get("bytes") != len(data) or asset.get("sha256") != digest:
+                fail(f"image bytes/SHA-256 mismatch: {asset['path']}")
+            if digest in hashes:
+                fail("packaged images are not deduplicated")
+            hashes.add(digest)
+            if asset.get("ownership") != "first_party":
+                fail("packaged image is not first-party")
+            if not asset.get("documentIds"):
+                fail("asset has no linked customer document")
+            for document_id in asset["documentIds"]:
+                doc = docs_by_id.get(document_id)
+                if not doc or not doc.get("customerVisible") or asset["id"] not in doc.get("assetIds", []):
+                    fail(f"asset/document link mismatch: {asset['id']}")
+        for doc in documents:
+            for asset_id in doc.get("assetIds", []):
+                if asset_id not in assets_by_id or doc["id"] not in assets_by_id[asset_id].get("documentIds", []):
+                    fail(f"document/asset link mismatch: {doc['id']}")
+
+        image_count = len(image_paths)
+        if package["counts"]["packagedImages"] != image_count:
+            fail("packagedImages mismatch")
+        image_acquisition = completeness["acquisition"].get("images")
+        if not image_acquisition or image_acquisition["completed"] != image_count:
+            fail("acquisition.images.completed mismatch")
+        eligible = package["imageSelection"]["eligibleFirstPartyImages"]
+        if eligible > image_acquisition["total"]:
+            fail("eligible first-party image count exceeds discovered total")
+        if eligible >= 36 and not 36 <= image_count <= min(48, eligible):
+            fail("36–48 images required when enough eligible first-party images exist")
+        if eligible < 36 and (image_count != eligible or not package["imageSelection"].get("shortfallReason")):
+            fail("all eligible images and a shortfall reason are required below 36")
+        official_pages = completeness["acquisition"].get("officialPages")
+        if official_pages and official_pages["completed"] > 120:
+            fail("more than 120 successfully parsed official pages")
+        documents_acquisition = completeness["acquisition"].get("documents")
+        if documents_acquisition and documents_acquisition["completed"] > 22:
+            fail("more than 22 parsed documents")
+        web_queries = completeness["acquisition"].get("webQueries")
+        if web_queries and (
+            web_queries["completed"] > 12 or web_queries["total"] > 12
+        ):
+            fail("more than 12 public-web queries")
+        packaged_documents = sum(
+            PurePosixPath(path).suffix.lower()
+            in {".pdf", ".ppt", ".pptx", ".doc", ".docx", ".xls", ".xlsx"}
+            for path in paths
+        )
+        if packaged_documents > 22:
+            fail("more than 22 packaged documents")
+
+        return {
+            "files": len(paths),
+            "leaves": len(leaf_paths),
+            "customerVisibleCharacters": narrative_total,
+            "evidenceCharacters": evidence_total,
+            "images": image_count,
+            "packageManifestSha256": hashlib.sha256(package_bytes).hexdigest(),
+        }
+
+
+def main() -> int:
+    parser = argparse.ArgumentParser()
+    parser.add_argument("archive", help="final knowledge-base ZIP")
+    args = parser.parse_args()
+    try:
+        result = validate(args.archive)
+    except (OSError, ValueError, zipfile.BadZipFile, UnicodeDecodeError, json.JSONDecodeError) as error:
+        print(f"INVALID: {error}", file=sys.stderr)
+        return 1
+    print("VALID " + json.dumps(result, ensure_ascii=False, sort_keys=True))
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

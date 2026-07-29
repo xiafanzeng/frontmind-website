@@ -325,6 +325,22 @@ export type GeoKnowledgeMetric = {
   detail?: string;
 };
 
+export type GeoKnowledgePresentation = {
+  summary?: string;
+  markdown?: string;
+  assetIds: string[];
+};
+
+export type GeoKnowledgeLeaf = {
+  id: string;
+  title: string;
+  summary?: string;
+  markdown?: string;
+  evidenceCount?: number;
+  status?: "verified" | "inferred" | "needs_verification" | "not_applicable";
+  assetIds: string[];
+};
+
 export type GeoKnowledgeSection = {
   id: string;
   title: string;
@@ -332,6 +348,13 @@ export type GeoKnowledgeSection = {
   markdown?: string;
   evidenceCount?: number;
   status?: "verified" | "inferred" | "needs_verification" | "not_applicable";
+  /**
+   * Customer-facing branch overview. Older archives only expose `summary` and
+   * `markdown`; consumers must keep treating those fields as the fallback.
+   */
+  overview?: GeoKnowledgePresentation;
+  leaves?: GeoKnowledgeLeaf[];
+  assetIds?: string[];
 };
 
 export type GeoKnowledgeSource = {
@@ -347,10 +370,20 @@ export type GeoKnowledgeAsset = {
   id: string;
   name: string;
   sectionId?: string;
+  leafId?: string;
   url?: string;
   previewUrl?: string;
   type?: string;
   source?: string;
+  caption?: string;
+  alt?: string;
+  /**
+   * Validated relative entry path inside the locally persisted ZIP. This is
+   * optional so historical API responses continue to use `previewUrl`.
+   */
+  archivePath?: string;
+  width?: number;
+  height?: number;
 };
 
 export type GeoKnowledgeCompletenessCounts = {
@@ -389,6 +422,7 @@ export type GeoKnowledgeBase = {
   companyName?: string;
   summary?: string;
   generatedAt?: string;
+  packageManifestSha256?: string;
   archiveName?: string;
   archiveUrl?: string;
   reportMarkdown?: string;
@@ -499,6 +533,11 @@ export type GeoProject = {
   progress: number;
   progressLabel?: string;
   knowledgeBaseRetryAvailable?: boolean;
+  knowledgeBaseValidationCategory?:
+    | "structure"
+    | "media"
+    | "content"
+    | "unsafe";
   knowledgeBaseSupportRequired?: boolean;
   questionRetryAvailable?: boolean;
   assessmentRetryAvailable?: boolean;

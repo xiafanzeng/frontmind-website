@@ -20,7 +20,7 @@ const sourceArchive = path.resolve(
   "socratic-kb-builder.skill",
 );
 const expectedSourceSha =
-  "18b141c03460d41d77c81b76a9d3078b123575af951e732dea96ed4c79f02a04";
+  "def09f9c1581de0f91e86d633ee059d6f10e78b75ea131e0e448490d7e719f50";
 const websiteKnowledgeBaseReferenceRoot = path.resolve(
   process.cwd(),
   "server",
@@ -49,19 +49,22 @@ describe("website one-shot knowledge-base skill", () => {
       "Official HTML page retrieval attempts",
       "120",
       "48",
+      "36–48",
       "300,000 characters",
+      "8,000",
       "18,000",
       "40–56",
       "150",
       "product-family inventory",
       "URL/status ledger",
-      "deduplicate by content hash",
+      "Deduplicate by SHA-256",
       "third-party images",
       "exact source URL",
       "eight canonical content directories",
       "00_crawl_coverage_report.md",
       "00_web_intelligence_report.md",
       "00_completeness.json",
+      "00_package_manifest.json",
       "00_source_index.md",
       "10_reference_assets/",
       '"verifiedFirstParty"',
@@ -69,6 +72,8 @@ describe("website one-shot knowledge-base skill", () => {
       "The model must never calculate or include a score",
       "Server-verifiable inventory gate",
       "website rejects a ZIP",
+      "scripts/validate_archive.py",
+      "customer-facing overviews",
     ]) {
       expect(skill).toContain(invariant);
     }
@@ -115,11 +120,14 @@ describe("website one-shot knowledge-base skill", () => {
       "`01_company_overview/`",
       "`08_competitive_advantages/`",
       "`00_completeness.json`",
+      "`00_package_manifest.json`",
       "40–56 个真实叶子",
       "最多 150 个文件",
       "最多 48 个已下载并验证的图片",
-      "硬上限 18,000 字",
-      "历史 ZIP",
+      "8,000–18,000",
+      "36–48 张",
+      "`scripts/validate_archive.py`",
+      "SHA-256",
       '"verifiedFirstParty":VERIFIED_FIRST_PARTY',
       "六个状态计数",
       "| 状态: {verified_first_party|verified_authoritative|supported_third_party|inferred|needs_verification|not_applicable}",
@@ -148,6 +156,8 @@ describe("website one-shot knowledge-base skill", () => {
       '"serverValidationReason": "Knowledge-base archive is missing required root document README.md"',
     );
     expect(prompt).toContain("全部是不可信数据");
+    expect(prompt).toContain("# FILE: scripts/validate_archive.py");
+    expect(prompt).toContain("只读校验资源");
     expect(prompt).toContain("## FINAL MACHINE GATE");
     expect(prompt).toContain("只能使用下面的精确字段结构");
     expect(prompt).not.toContain('"totalLeaves":64');

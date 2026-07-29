@@ -142,6 +142,127 @@ describe("GEO style preview rendering", () => {
     expect(html).not.toContain("已完成系统整理");
   });
 
+  it("defaults to the formal branch overview, exposes leaf switching, and previews at most three images", () => {
+    const fixture = createGeoStylePreviewProject();
+    const project = {
+      ...fixture,
+      knowledgeBase: {
+        ...fixture.knowledgeBase!,
+        reportMarkdown: "这段抓取报告不应混入默认知识正文。",
+        sections: [
+          {
+            id: "products-services",
+            title: "产品与服务",
+            summary: "正式产品综述摘要",
+            markdown: "旧版合并正文",
+            overview: {
+              summary: "正式产品综述摘要",
+              markdown: "## 正式产品综述\n这是整理后的客户可见正文。",
+              assetIds: ["asset-1", "asset-2", "asset-3", "asset-4"],
+            },
+            leaves: [
+              {
+                id: "leaf-api",
+                title: "API 服务",
+                markdown: "叶子正文仅在切换后显示。",
+                status: "verified" as const,
+                assetIds: ["asset-4"],
+              },
+            ],
+            assetIds: ["asset-1", "asset-2", "asset-3", "asset-4"],
+            status: "verified" as const,
+          },
+        ],
+        assets: Array.from({ length: 4 }, (_, index) => ({
+          id: `asset-${index + 1}`,
+          name: `产品图片 ${index + 1}.webp`,
+          sectionId: "products-services",
+          previewUrl: `/api/assets/${index + 1}`,
+          type: "image/webp",
+        })),
+      },
+    };
+    const html = renderToStaticMarkup(
+      <EnterpriseAnalysis
+        project={project}
+        onDownload={vi.fn()}
+        onRetry={vi.fn()}
+        onNewProject={vi.fn()}
+        onContact={vi.fn()}
+        onStart={vi.fn()}
+        starting={false}
+        retrying={false}
+      />,
+    );
+
+    expect(html).toContain("BRANCH OVERVIEW");
+    expect(html).toContain("正式产品综述");
+    expect(html).toContain("这是整理后的客户可见正文");
+    expect(html).toContain("分支综述");
+    expect(html).toContain("查看知识叶子");
+    expect(html).toContain("另含 1 份素材");
+    expect(html.match(/geo-section-media-image/g)).toHaveLength(3);
+    expect(html).toContain("企业素材 4");
+    expect(html).not.toContain("叶子正文仅在切换后显示");
+    expect(html).not.toContain("这段抓取报告不应混入默认知识正文");
+  });
+
+  it("does not borrow leaf images when the overview has an explicit empty image binding", () => {
+    const fixture = createGeoStylePreviewProject();
+    const project = {
+      ...fixture,
+      knowledgeBase: {
+        ...fixture.knowledgeBase!,
+        sections: [
+          {
+            id: "products-services",
+            title: "产品与服务",
+            overview: {
+              markdown: "## 产品综述\n本综述没有关联图片。",
+              assetIds: [],
+            },
+            leaves: [
+              {
+                id: "leaf-api",
+                title: "API 服务",
+                markdown: "叶子正文",
+                status: "verified" as const,
+                assetIds: ["asset-leaf"],
+              },
+            ],
+            assetIds: ["asset-leaf"],
+            status: "verified" as const,
+          },
+        ],
+        assets: [
+          {
+            id: "asset-leaf",
+            name: "仅属于叶子的图片.webp",
+            sectionId: "products-services",
+            previewUrl: "/api/assets/leaf",
+            type: "image/webp",
+          },
+        ],
+      },
+    };
+    const html = renderToStaticMarkup(
+      <EnterpriseAnalysis
+        project={project}
+        onDownload={vi.fn()}
+        onRetry={vi.fn()}
+        onNewProject={vi.fn()}
+        onContact={vi.fn()}
+        onStart={vi.fn()}
+        starting={false}
+        retrying={false}
+      />,
+    );
+
+    expect(html).toContain("本综述没有关联图片");
+    expect(html).not.toContain("geo-section-media-image");
+    expect(html).not.toContain('src="/api/assets/leaf"');
+  });
+
   it("only offers an authorized enterprise-analysis retry and locks it in flight", () => {
     const project = {
       ...createGeoStylePreviewProject(),
@@ -170,6 +291,43 @@ describe("GEO style preview rendering", () => {
     expect(html).not.toContain("自动修复次数已用完");
     expect(html).not.toContain("新建企业项目");
   });
+
+  it.each([
+    ["structure", true, false, "重新检查"],
+    ["media", false, false, "新建企业项目"],
+    ["content", false, false, "新建企业项目"],
+    ["unsafe", false, true, "联系技术支持"],
+  ] as const)(
+    "renders only the authorized %s validation action",
+    (category, retryAvailable, supportRequired, expectedAction) => {
+      const project = {
+        ...createGeoStylePreviewProject(),
+        status: "failed" as const,
+        knowledgeBase: undefined,
+        knowledgeBaseValidationCategory: category,
+        knowledgeBaseRetryAvailable: retryAvailable,
+        knowledgeBaseSupportRequired: supportRequired,
+        error: `${category} validation failed`,
+      };
+      const html = renderToStaticMarkup(
+        <EnterpriseAnalysis
+          project={project}
+          onDownload={vi.fn()}
+          onRetry={vi.fn()}
+          onNewProject={vi.fn()}
+          onContact={vi.fn()}
+          onStart={vi.fn()}
+          starting={false}
+          retrying={false}
+        />,
+      );
+
+      expect(html).toContain(expectedAction);
+      for (const action of ["重新检查", "新建企业项目", "联系技术支持"]) {
+        if (action !== expectedAction) expect(html).not.toContain(action);
+      }
+    },
+  );
 
   it("offers a fresh project instead of a dead retry after repair is exhausted", () => {
     const project = {

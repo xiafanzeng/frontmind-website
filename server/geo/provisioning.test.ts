@@ -1200,6 +1200,101 @@ describe("website to Agent account provisioner", () => {
     });
   });
 
+  it("binds a v3 knowledge import to its manifest hash and preserves the response version", async () => {
+    const fetchImpl = vi.fn(async (url: URL, init?: RequestInit) => {
+      expect(url.toString()).toBe(
+        "http://127.0.0.1:3001/api/internal/provisioning/projects/project-20260724/knowledge-imports",
+      );
+      expect(init?.headers).toMatchObject({
+        "Idempotency-Key": `geo-basic:project-20260724:${"a".repeat(64)}:${"b".repeat(64)}:${"c".repeat(64)}:knowledge-v3`,
+      });
+      const body = JSON.parse(String(init?.body));
+      expect(body).toEqual({
+        schemaVersion: 3,
+        archiveContractVersion: 1,
+        validationProfile: "website-lead-v1",
+        packageManifestSha256: "c".repeat(64),
+        companyName: "验收企业",
+        taskId: "task-website-kb-v3",
+        outputItemId: "output:0",
+        fileId: "file-v3",
+        descriptorHash: "a".repeat(64),
+        artifactSha256: "b".repeat(64),
+        filename: "acceptance_knowledge_base_v3.zip",
+      });
+      return new Response(
+        JSON.stringify({
+          schemaVersion: 3,
+          knowledgeImport: {
+            id: "receipt-knowledge-v3",
+            projectId: "project-20260724",
+            status: "ready",
+            updatedAt: "2026-07-29T08:07:00.000Z",
+            retryable: false,
+          },
+        }),
+        { status: 201, headers: { "Content-Type": "application/json" } },
+      );
+    });
+
+    await expect(
+      createGeoKnowledgeImporter({ env, fetchImpl })("project-20260724", {
+        schemaVersion: 3,
+        archiveContractVersion: 1,
+        validationProfile: "website-lead-v1",
+        packageManifestSha256: "c".repeat(64),
+        companyName: "验收企业",
+        taskId: "task-website-kb-v3",
+        outputItemId: "output:0",
+        fileId: "file-v3",
+        descriptorHash: "a".repeat(64),
+        artifactSha256: "b".repeat(64),
+        filename: "acceptance_knowledge_base_v3.zip",
+      }),
+    ).resolves.toMatchObject({
+      schemaVersion: 3,
+      knowledgeImport: { status: "ready" },
+    });
+  });
+
+  it("rejects a knowledge import response whose schema version differs from the request", async () => {
+    const fetchImpl = vi.fn(async () => {
+      return new Response(
+        JSON.stringify({
+          schemaVersion: 2,
+          knowledgeImport: {
+            id: "receipt-wrong-version",
+            projectId: "project-20260724",
+            status: "ready",
+            updatedAt: "2026-07-29T08:07:00.000Z",
+            retryable: false,
+          },
+        }),
+        { status: 201, headers: { "Content-Type": "application/json" } },
+      );
+    });
+
+    await expect(
+      createGeoKnowledgeImporter({ env, fetchImpl })("project-20260724", {
+        schemaVersion: 3,
+        archiveContractVersion: 1,
+        validationProfile: "website-lead-v1",
+        packageManifestSha256: "c".repeat(64),
+        companyName: "验收企业",
+        taskId: "task-website-kb-v3",
+        outputItemId: "output:0",
+        fileId: "file-v3",
+        descriptorHash: "a".repeat(64),
+        artifactSha256: "b".repeat(64),
+        filename: "acceptance_knowledge_base_v3.zip",
+      }),
+    ).rejects.toMatchObject({
+      code: "KNOWLEDGE_IMPORT_VERSION_MISMATCH",
+      status: 502,
+      message: "知识库接入接口返回了不匹配的归档合同版本",
+    });
+  });
+
   it("fails closed on cross-scope, non-30-day, secret-bearing, or premature-link contracts", () => {
     expect(
       GeoPurchaseProvisionRequestV2Schema.safeParse({

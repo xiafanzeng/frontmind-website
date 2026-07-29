@@ -30,8 +30,8 @@ Use a single breadth-first queue and stop the activity at its time or link budge
 4. Render client-side pages only when a priority page lacks server-rendered evidence. Expand tabs, accordions or galleries only when they fill a matrix gap.
 5. Parse JSON-LD, metadata, headings, tables, lists, downloadable documents, image captions and alt text.
 6. Discover images from `img`, `picture`, `source/srcset`, lazy-load attributes, CSS backgrounds, Open Graph metadata, product galleries and document-embedded media.
-7. Preserve selected highest-value first-party assets and deduplicate by content hash while retaining source-page relationships.
-8. Store for each asset: local path, source page, original URL, alt/caption, dimensions, MIME type, product/service association and verification status.
+7. Rank candidates before downloading. Preserve selected highest-value first-party assets and deduplicate by SHA-256 while retaining source-page relationships. Package 36–48 when that many qualified first-party assets exist; otherwise package every qualified asset and record the actual shortfall.
+8. Store for each packaged asset: stable ID, local path, SHA-256, actual bytes, source page, original URL, alt/caption, dimensions, MIME type, product/service association, linked document IDs and first-party ownership. SVG must be rasterized to PNG/WebP before display packaging.
 9. Keep a single URL/status ledger, deduplicated evidence excerpts and source index. Do not retain per-page HTML plus a duplicate cleaned-text file; exclude raw HTML from the final ZIP by default.
 10. Produce a quantitative coverage report with explicit selected, skipped and failed URLs. State page retrieval/parse results, cleaned and retained text, image discovery and actual downloads, content hashes and document totals.
 
@@ -61,11 +61,11 @@ Give each leaf a stable ID. Maintain totals for the six evidence statuses define
 
 ## Required Automatic Processing Format Per Leaf
 
-Write each leaf as ordinary Markdown, never inside a fenced code block and never with box-drawing separators. In the template below, replace every brace-delimited token with content and evidence observed for the current company; never copy the placeholder wording or facts from another company.
+Write each leaf as finished customer-facing enterprise knowledge in ordinary Markdown, never inside a fenced code block and never with box-drawing separators. In the template below, replace every brace-delimited token with content and evidence observed for the current company; never copy the placeholder wording or facts from another company. Do not call the formal content a first-party snapshot, page excerpt, crawl result or source summary.
 
 ### `{稳定叶节点 ID}` · `{当前叶节点标题}`
 
-`{仅由当前运行中已解析来源支持的正文内容}`
+`{仅由当前运行中已解析来源支持、经过整理并可直接面向客户展示的正式正文内容}`
 
 **证据状态：** `{该叶节点实际 evidence status}`
 
@@ -74,9 +74,9 @@ Write each leaf as ordinary Markdown, never inside a fenced code block and never
 - `{当前正文中的事实或字段}`：`{精确文件名与页码，或精确来源 URL 与来源类型}`
 - `{如有推断或对比}`：`{其输入证据及明确的推断/第三方标签}`
 
-**已收集图片**
+**展示图片**
 
-- `{当前图片用途}`：`{本次运行保存的实际相对路径与来源}`
+- `{当前图片用途}`：`{稳定 asset ID、本次运行保存的实际相对路径、准确图注与第一方来源}`
 
 After saving this leaf, continue directly to the next leaf without emitting a question.
 
@@ -128,4 +128,4 @@ Do not use ASCII trees, long separator glyphs, character progress bars, or fence
 
 ## Packaging Gate
 
-Package automatically when written leaves plus reasoned `not_applicable` leaves equal total leaves. Produce the final Markdown/ZIP without asking an extra question. Keep 40–56 leaves, at most 48 saved images, at most 18,000 customer-visible narrative characters and at most 150 ZIP files. Include both acquisition reports, first-party image inventory, URL-only third-party reference inventory and unresolved verification gaps.
+Package automatically when written leaves plus reasoned `not_applicable` leaves equal total leaves. Produce the final Markdown/ZIP without asking an extra question. Keep 40–56 leaves, 8,000–18,000 effective customer-visible narrative characters, at least 120 effective characters in every evidence-bearing formal document, at most 48 saved images and at most 150 ZIP files. Include one formal overview per display branch, `00_package_manifest.json`, both acquisition reports, first-party image inventory, URL-only third-party reference inventory and unresolved verification gaps. Run the injected deterministic validator unchanged and deliver only after it prints `VALID`.

@@ -1,5 +1,7 @@
+import { createHash } from "node:crypto";
 import type { AddressInfo } from "node:net";
 import type { Server } from "node:http";
+import { deflateSync } from "node:zlib";
 import express from "express";
 import JSZip from "jszip";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -39,6 +41,57 @@ import type {
   GeoPurchaseProvisionRequestV2,
   GeoPurchaseProvisionResponseV2,
 } from "./provisioning";
+
+function fixtureCrc32(bytes: Buffer) {
+  let crc = 0xffffffff;
+  for (const byte of bytes) {
+    crc ^= byte;
+    for (let bit = 0; bit < 8; bit += 1) {
+      crc = (crc >>> 1) ^ (crc & 1 ? 0xedb88320 : 0);
+    }
+  }
+  return (crc ^ 0xffffffff) >>> 0;
+}
+
+function fixturePngChunk(type: string, data: Buffer) {
+  const typeBytes = Buffer.from(type, "ascii");
+  const length = Buffer.alloc(4);
+  length.writeUInt32BE(data.length);
+  const checksum = Buffer.alloc(4);
+  checksum.writeUInt32BE(fixtureCrc32(Buffer.concat([typeBytes, data])));
+  return Buffer.concat([length, typeBytes, data, checksum]);
+}
+
+function fixturePng(seed = 1) {
+  const header = Buffer.alloc(13);
+  header.writeUInt32BE(1, 0);
+  header.writeUInt32BE(1, 4);
+  header[8] = 8;
+  header[9] = 2;
+  return Buffer.concat([
+    Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]),
+    fixturePngChunk("IHDR", header),
+    fixturePngChunk("IDAT", deflateSync(Buffer.from([0, seed % 256, 31, 97]))),
+    fixturePngChunk("IEND", Buffer.alloc(0)),
+  ]);
+}
+
+function fixtureEvidenceCharacterCount(markdown: string) {
+  return Array.from(
+    markdown
+      .replace(/<!--[\s\S]*?-->/g, "")
+      .replace(/!\[[^\]]*]\([^)]*\)/g, "")
+      .replace(/\[([^\]]+)]\([^)]*\)/g, "$1")
+      .replace(/https?:\/\/[^\s)>\]]+/gi, "")
+      .replace(/<[^>]+>/g, "")
+      .replace(/^#{1,6}\s+/gm, "")
+      .replace(/\s/g, "")
+      .replace(
+        /[!"#$%&'()*+,\-./:;<=>?@[\\\]^_`{|}~，。！？；：“”‘’（）【】《》…—·]/g,
+        "",
+      ),
+  ).length;
+}
 
 class MockBroker implements GeoPresalesBroker {
   tasks = new Map<string, BrokerTask>();
@@ -988,9 +1041,12 @@ describe("GEO API", () => {
     expect(
       completedPayload.project.knowledgeBase.assets[0].previewUrl,
     ).toContain("/knowledge-assets/asset-001");
+    expect(completedPayload.project.knowledgeBase.assets[0].archivePath).toBe(
+      "09_media_assets/product_images/device.png",
+    );
     expect(
-      completedPayload.project.knowledgeBase.assets[0].zipPath,
-    ).toBeUndefined();
+      completedPayload.project.knowledgeBase.packageManifestSha256,
+    ).toMatch(/^[a-f0-9]{64}$/);
     expect(completedPayload.project.archive.downloadUrl).toContain(
       "/api/geo/projects/",
     );
@@ -1001,9 +1057,7 @@ describe("GEO API", () => {
     );
     expect(assetPreview.status).toBe(200);
     expect(assetPreview.headers.get("content-type")).toBe("image/png");
-    expect(Buffer.from(await assetPreview.arrayBuffer())).toEqual(
-      Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]),
-    );
+    expect(Buffer.from(await assetPreview.arrayBuffer())).toEqual(fixturePng());
 
     const recommended = await jsonRequest(
       `/projects/${encodeURIComponent(initial.projectToken)}/questions`,
@@ -1080,10 +1134,13 @@ describe("GEO API", () => {
       kbTask: {
         status: "failed",
         error:
-          "知识库文件未通过安全与结构校验，已阻止下载及后续分析。可重新检查，由系统仅整理现有证据后再次验证。",
+          "知识库文件存在安全风险，已阻止下载及后续分析。请勿继续处理该文件，并联系技术支持。",
       },
       error:
-        "知识库文件未通过安全与结构校验，已阻止下载及后续分析。可重新检查，由系统仅整理现有证据后再次验证。",
+        "知识库文件存在安全风险，已阻止下载及后续分析。请勿继续处理该文件，并联系技术支持。",
+      knowledgeBaseRetryAvailable: false,
+      knowledgeBaseValidationCategory: "unsafe",
+      knowledgeBaseSupportRequired: true,
     });
     expect(failedProject.project.archive).toBeUndefined();
     expect(JSON.stringify(failedProject)).not.toContain("../outside");
@@ -1105,11 +1162,99 @@ describe("GEO API", () => {
       });
       expect(response.status).toBe(422);
       expect(await response.json()).toMatchObject({
-        error: { code: "ARCHIVE_VALIDATION_FAILED" },
+        error: { code: "ARCHIVE_UNSAFE_VALIDATION_FAILED" },
       });
     }
     expect(broker.questionTaskCount).toBe(0);
   });
+
+  it.each([
+    {
+      category: "structure",
+      publicError:
+        "知识库目录或清单未通过结构校验，已阻止下载及后续分析。可重新检查，由系统仅整理现有证据后再次验证。",
+      retryAvailable: true,
+    },
+    {
+      category: "media",
+      publicError:
+        "知识库未交付与报告一致的真实图片，已阻止下载及后续分析。现有证据无法补回缺失图片，请新建项目重新构建。",
+      retryAvailable: false,
+    },
+    {
+      category: "content",
+      publicError:
+        "知识库正式正文未达到交付标准，已阻止下载及后续分析。请新建项目重新构建完整正文。",
+      retryAvailable: false,
+    },
+  ] as const)(
+    "publishes the $category validation category without exposing raw archive details",
+    async ({ category, publicError, retryAvailable }) => {
+      const archive = await JSZip.loadAsync(await fixtureArchive());
+      if (category === "structure") {
+        archive.remove("Acme_knowledge_base/00_package_manifest.json");
+      } else if (category === "media") {
+        archive.file(
+          "Acme_knowledge_base/09_media_assets/product_images/device.png",
+          Buffer.from("not an image"),
+        );
+      } else {
+        archive.file(
+          "Acme_knowledge_base/01_company_overview/profile.md",
+          [
+            "# 企业概况",
+            "",
+            "> 最后更新: 2026-07-28 | 状态: verified_first_party | 来源: 企业官网",
+            "",
+            "正文过短。",
+          ].join("\n"),
+        );
+      }
+      broker.archive = Buffer.from(
+        await archive.generateAsync({ type: "uint8array" }),
+      );
+      const { cookie } = await verifyInvite();
+      const created = await jsonRequest("/projects", cookie, {
+        method: "POST",
+        body: { input: "Acme", attachments: [] },
+      });
+      const initial = created.body as Record<string, any>;
+      broker.tasks.set("kb-1", {
+        id: "kb-1",
+        status: "completed",
+        output: [
+          {
+            role: "assistant",
+            content: [
+              {
+                type: "output_file",
+                file_id: "archive-1",
+                filename: "Acme.zip",
+              },
+            ],
+          },
+        ],
+      });
+
+      const failed = await jsonRequest(
+        `/projects/${encodeURIComponent(initial.projectToken)}`,
+        cookie,
+      );
+
+      expect(failed.response.status).toBe(200);
+      expect(failed.body).toMatchObject({
+        project: {
+          status: "failed",
+          knowledgeBaseValidationCategory: category,
+          knowledgeBaseRetryAvailable: retryAvailable,
+          kbTask: { status: "failed", error: publicError },
+          error: publicError,
+        },
+      });
+      expect((failed.body as any).project.archive).toBeUndefined();
+      expect(JSON.stringify(failed.body)).not.toContain("Acme_knowledge_base/");
+    },
+  );
 
   it("rejects tampered project and upload tokens", async () => {
     const { cookie } = await verifyInvite();
@@ -1544,9 +1689,7 @@ describe("GEO API", () => {
       "test-session-secret-at-least-16-characters",
     ).open<Record<string, unknown>>(initial.projectToken, "project").value;
     expect(initialValue.knowledgeBaseAttempt).toBe(1);
-    expect(initialValue.knowledgeBaseValidationProfile).toBe(
-      "website-lead-v1",
-    );
+    expect(initialValue.knowledgeBaseValidationProfile).toBe("website-lead-v1");
 
     broker.taskResultErrors.delete("kb-1");
     broker.taskResults.set("kb-1", {
@@ -1570,9 +1713,7 @@ describe("GEO API", () => {
       "project",
     ).value;
     expect(retriedValue.knowledgeBaseAttempt).toBe(2);
-    expect(retriedValue.knowledgeBaseValidationProfile).toBe(
-      "website-lead-v1",
-    );
+    expect(retriedValue.knowledgeBaseValidationProfile).toBe("website-lead-v1");
   });
 
   it("uses a trusted completed knowledge-base snapshot when the result endpoint is temporarily unavailable", async () => {
@@ -1783,7 +1924,7 @@ describe("GEO API", () => {
       knowledgeBaseRetryAvailable: false,
       kbTask: {
         status: "failed",
-        error: expect.stringContaining("自动修复次数已用完"),
+        error: expect.stringContaining("自动整理次数已用完"),
       },
     });
     expect(exhaustedPayload.project.kbTask.error).not.toContain("可重新检查");
@@ -3721,7 +3862,10 @@ describe("GEO API", () => {
     expect(knowledgeImportCalls).toHaveLength(1);
     expect(knowledgeImportCalls[0]).toMatchObject({
       request: {
-        schemaVersion: 2,
+        schemaVersion: 3,
+        archiveContractVersion: 1,
+        validationProfile: "website-lead-v1",
+        packageManifestSha256: expect.stringMatching(/^[a-f0-9]{64}$/),
         companyName: "Acme",
         filename: "Acme.zip",
       },
@@ -4731,11 +4875,35 @@ function validForecastOutput() {
 async function fixtureArchive() {
   const zip = new JSZip();
   const root = zip.folder("Acme_knowledge_base")!;
-  root.file(
+  const packageDocuments: Array<Record<string, unknown>> = [];
+  const evidenceDocuments: string[] = [];
+  const addMarkdown = (
+    entryPath: string,
+    content: string,
+    metadata: Record<string, unknown>,
+  ) => {
+    root.file(entryPath, content);
+    packageDocuments.push({
+      path: entryPath,
+      customerVisible: false,
+      ...metadata,
+    });
+    if (metadata.customerVisible !== true) evidenceDocuments.push(content);
+  };
+  addMarkdown(
     "README.md",
     "# Acme\n\nAcme 面向科研团队提供可核验的精密设备与技术支持。",
+    {
+      id: "doc-readme",
+      kind: "report",
+      title: "知识库说明",
+    },
   );
-  root.file("00_knowledge_tree.md", "# 知识树\n\n已完成七分支。");
+  addMarkdown("00_knowledge_tree.md", "# 知识树\n\n已完成七分支。", {
+    id: "doc-tree",
+    kind: "index",
+    title: "知识树",
+  });
   root.file(
     "00_completeness.json",
     JSON.stringify({
@@ -4748,22 +4916,42 @@ async function fixtureArchive() {
         needsVerification: 8,
         notApplicable: 2,
       },
-      acquisition: {},
+      acquisition: {
+        officialPages: { completed: 18, total: 18 },
+        images: { completed: 1, total: 1 },
+        documents: { completed: 0, total: 0 },
+        webQueries: { completed: 2, total: 2 },
+      },
       gaps: ["部分团队与售后细节仍需企业核验"],
       evaluatedAt: "2026-07-28T10:00:00.000Z",
     }),
   );
-  root.file(
+  addMarkdown(
     "00_crawl_coverage_report.md",
     "# 抓取报告\n\n发现页面：18\n\n- https://example.com/acme/about",
+    {
+      id: "doc-crawl",
+      kind: "report",
+      title: "官网抓取覆盖报告",
+    },
   );
-  root.file(
+  addMarkdown(
     "00_web_intelligence_report.md",
     "# 情报报告\n\n- https://example.org/registry/acme",
+    {
+      id: "doc-web",
+      kind: "report",
+      title: "全网企业情报报告",
+    },
   );
-  root.file(
+  addMarkdown(
     "00_source_index.md",
     "# 来源\n\n- https://example.com/acme/about\n- https://example.org/registry/acme",
+    {
+      id: "doc-sources",
+      kind: "index",
+      title: "来源索引",
+    },
   );
   const statuses = [
     "verified_first_party",
@@ -4790,20 +4978,92 @@ async function fixtureArchive() {
     "07_service",
     "08_competitive_advantages",
   ];
+  const overviewGroups = new Set<string>();
+  const productDocumentId = "doc-leaf-003";
+  const assetId = "asset-001";
   statuses.forEach((status, index) => {
     const branch = branches[index % branches.length];
+    const branchId = branch.split("/")[0];
+    const displayBranch =
+      branchId === "04_technology" || branchId === "05_manufacturing"
+        ? "core-capabilities"
+        : branchId;
+    const kind = overviewGroups.has(displayBranch) ? "leaf" : "overview";
+    overviewGroups.add(displayBranch);
     const filename =
       index === 0
         ? "profile.md"
         : `leaf-${String(index + 1).padStart(2, "0")}.md`;
-    root.file(
+    const documentId = `doc-leaf-${String(index + 1).padStart(3, "0")}`;
+    addMarkdown(
       `${branch}/${filename}`,
-      `# 知识叶节点 ${index + 1}\n\n> 最后更新: 2026-07-28 | 状态: ${status} | 来源: 企业官网\n\nAcme 企业知识内容。\n\nhttps://example.com/acme/about`,
+      [
+        `# 知识叶节点 ${index + 1}`,
+        "",
+        `> 最后更新: 2026-07-28 | 状态: ${status} | 来源: 企业官网`,
+        "",
+        "## 核心内容",
+        "",
+        String.fromCodePoint(0x4e00 + index).repeat(180),
+        "",
+        "## 原始来源",
+        "",
+        "https://example.com/acme/about",
+      ].join("\n"),
+      {
+        id: documentId,
+        kind,
+        title: `知识叶节点 ${index + 1}`,
+        branchId,
+        order: index,
+        evidenceStatus: status,
+        sourceIds: ["source-official"],
+        assetIds: documentId === productDocumentId ? [assetId] : [],
+        customerVisible: true,
+      },
     );
   });
+  const imagePath = "09_media_assets/product_images/device.png";
+  const imageBytes = fixturePng();
+  root.file(imagePath, imageBytes);
   root.file(
-    "09_media_assets/product_images/device.png",
-    Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]),
+    "00_package_manifest.json",
+    JSON.stringify({
+      schemaVersion: 1,
+      profile: "website-lead-v1",
+      documents: packageDocuments,
+      assets: [
+        {
+          id: assetId,
+          path: imagePath,
+          sha256: createHash("sha256").update(imageBytes).digest("hex"),
+          mimeType: "image/png",
+          bytes: imageBytes.byteLength,
+          width: 1,
+          height: 1,
+          caption: "Acme 精密设备",
+          alt: "Acme 精密设备产品图",
+          branchId: "03_products",
+          documentIds: [productDocumentId],
+          sourcePageUrl: "https://example.com/acme/products",
+          ownership: "first_party",
+        },
+      ],
+      counts: {
+        totalFiles: packageDocuments.length + 3,
+        customerVisibleCharacters: statuses.length * 180,
+        evidenceCharacters: evidenceDocuments.reduce(
+          (total, markdown) => total + fixtureEvidenceCharacterCount(markdown),
+          0,
+        ),
+        packagedImages: 1,
+      },
+      imageSelection: {
+        eligibleFirstPartyImages: 1,
+        shortfallReason:
+          "该测试企业仅提供一张经过验证且适合展示的第一方产品图片。",
+      },
+    }),
   );
   return Buffer.from(await zip.generateAsync({ type: "uint8array" }));
 }

@@ -16,6 +16,8 @@ The tree is not a fixed manufacturing template. It adapts to the enterprise type
 
 These questions are a coverage taxonomy, not an alternative filesystem layout or seven summary nodes. The bounded inventory must cover each question, every real product family and every canonical directory. All eight canonical content directories must be present; a directory with no supported fact receives one explicit `needs_verification` gap leaf.
 
+For customer presentation, designate exactly one sufficiently substantive inventory leaf as the formal `overview` for each of the seven display branches in `00_package_manifest.json`; designate the other inventory files as `leaf`. The overview is a written synthesis backed by the branch leaves and sources, not a crawl report or raw-page excerpt. `04_technology` and `05_manufacturing` combine into one core-capabilities display branch and therefore share one overview even though both directories still contain at least one leaf.
+
 ## Universal Tree Template
 
 - **1. 企业身份**

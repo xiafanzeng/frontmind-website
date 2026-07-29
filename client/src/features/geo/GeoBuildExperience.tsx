@@ -9,6 +9,8 @@ import {
   Building2,
   Check,
   ChevronDown,
+  ChevronLeft,
+  ChevronRight,
   CircleAlert,
   Clock3,
   Cpu,
@@ -125,6 +127,11 @@ import {
   saveGeoArchive,
   saveGeoProject,
 } from "./storage";
+import {
+  geoLocalArchiveAssetRefreshKey,
+  loadLocalGeoAssetBlobs,
+  paginateGeoKnowledgeAssets,
+} from "./local-archive-assets";
 import {
   GEO_PLATFORMS,
   GEO_QUESTION_CATEGORIES,
@@ -572,7 +579,7 @@ function restorePendingGeoPayment(): PendingGeoPayment | undefined {
   }
 }
 
-type KnowledgeView = "overview" | "sources" | "report";
+type KnowledgeView = "overview" | "assets" | "sources" | "report";
 
 const KNOWLEDGE_BRANCH_ICONS = [
   Building2,
@@ -933,14 +940,90 @@ function PlatformLogo({ src, name }: { src: string; name: string }) {
 }
 
 function isPreviewableKnowledgeAsset(asset: GeoKnowledgeAsset) {
-  const value = `${asset.type || ""} ${asset.previewUrl || asset.url || asset.name}`;
-  return /图片|图像|logo|视觉|\.(?:avif|webp|png|jpe?g|gif|svg)(?:$|[?#])/i.test(
+  const value = `${asset.type || ""} ${asset.previewUrl || asset.url || ""} ${asset.name}`;
+  return /图片|图像|logo|视觉|image\/(?:avif|webp|png|jpe?g|gif)|\.(?:avif|webp|png|jpe?g|gif)(?:$|[?#\s])/i.test(
     value,
   );
 }
 
+function useLocalKnowledgeAssetPreviewUrls(
+  projectId: string,
+  assets: GeoKnowledgeAsset[],
+  archivePersistenceVersion = 0,
+) {
+  const [localUrls, setLocalUrls] = useState<Record<string, string>>({});
+  const archiveAssetSignature = assets
+    .filter((asset) => asset.archivePath)
+    .map((asset) => `${asset.id}:${asset.archivePath}`)
+    .join("|");
+  const refreshKey = geoLocalArchiveAssetRefreshKey(
+    projectId,
+    assets,
+    archivePersistenceVersion,
+  );
+
+  useEffect(() => {
+    if (
+      !archiveAssetSignature ||
+      typeof window === "undefined" ||
+      typeof URL.createObjectURL !== "function"
+    ) {
+      setLocalUrls({});
+      return;
+    }
+
+    let cancelled = false;
+    let timer: number | undefined;
+    let releaseWait: (() => void) | undefined;
+    const createdUrls: string[] = [];
+    const candidates = assets.filter((asset) => asset.archivePath);
+    setLocalUrls({});
+    const wait = (delayMs: number) =>
+      new Promise<void>((resolve) => {
+        releaseWait = resolve;
+        timer = window.setTimeout(() => {
+          timer = undefined;
+          releaseWait = undefined;
+          resolve();
+        }, delayMs);
+      });
+
+    void (async () => {
+      for (const delayMs of [0, 2_000, 6_000]) {
+        if (delayMs > 0) await wait(delayMs);
+        if (cancelled) return;
+        const blobs = await loadLocalGeoAssetBlobs(projectId, candidates).catch(
+          () => new Map<string, Blob>(),
+        );
+        if (cancelled) return;
+        if (blobs === undefined) continue;
+
+        const nextUrls: Record<string, string> = {};
+        blobs.forEach((blob, assetId) => {
+          const url = URL.createObjectURL(blob);
+          createdUrls.push(url);
+          nextUrls[assetId] = url;
+        });
+        if (!cancelled) setLocalUrls(nextUrls);
+        return;
+      }
+    })();
+
+    return () => {
+      cancelled = true;
+      if (timer !== undefined) window.clearTimeout(timer);
+      releaseWait?.();
+      createdUrls.forEach((url) => URL.revokeObjectURL(url));
+    };
+  }, [refreshKey]);
+
+  return localUrls;
+}
+
 function KnowledgeAssetPreviewImage({ asset }: { asset: GeoKnowledgeAsset }) {
   const [failed, setFailed] = useState(false);
+  const src = asset.previewUrl || asset.url;
+  useEffect(() => setFailed(false), [src]);
   if (failed) {
     return (
       <span className="geo-section-media-fallback" aria-hidden="true">
@@ -950,8 +1033,8 @@ function KnowledgeAssetPreviewImage({ asset }: { asset: GeoKnowledgeAsset }) {
   }
   return (
     <img
-      src={asset.previewUrl || asset.url}
-      alt={asset.name}
+      src={src}
+      alt={asset.alt || asset.caption || asset.name}
       loading="lazy"
       onError={() => setFailed(true)}
     />
@@ -962,19 +1045,31 @@ function KnowledgeSectionVisual({
   section,
   sectionIndex,
   assets,
+  assetIds,
+  leafId,
 }: {
   section: GeoKnowledgeSection;
   sectionIndex: number;
   assets: GeoKnowledgeAsset[];
+  assetIds?: string[];
+  leafId?: string;
 }) {
   const Icon =
     KNOWLEDGE_BRANCH_ICONS[sectionIndex % KNOWLEDGE_BRANCH_ICONS.length] ??
     BookOpenText;
-  const directlyRelated = assets.filter(
-    (asset) => asset.sectionId === section.id,
-  );
+  const hasExplicitAssetSelection = assetIds !== undefined;
+  const explicitlyRelated = new Set(assetIds ?? []);
+  const directlyRelated = hasExplicitAssetSelection
+    ? assets.filter((asset) => explicitlyRelated.has(asset.id))
+    : assets.filter(
+        (asset) =>
+          asset.sectionId === section.id &&
+          (!leafId || !asset.leafId || asset.leafId === leafId),
+      );
   const unassigned =
-    sectionIndex === 0 ? assets.filter((asset) => !asset.sectionId) : [];
+    !hasExplicitAssetSelection && sectionIndex === 0 && !leafId
+      ? assets.filter((asset) => !asset.sectionId)
+      : [];
   const relatedAssets = [...directlyRelated, ...unassigned];
   const visualAssets = relatedAssets
     .filter(isPreviewableKnowledgeAsset)
@@ -982,7 +1077,8 @@ function KnowledgeSectionVisual({
     .slice(0, 3);
   const remainingCount = Math.max(
     0,
-    relatedAssets.length - visualAssets.length,
+    relatedAssets.filter(isPreviewableKnowledgeAsset).length -
+      visualAssets.length,
   );
 
   return (
@@ -1020,7 +1116,9 @@ function KnowledgeSectionVisual({
         <span>图文知识章节</span>
         <strong>{section.title}</strong>
         <small>
-          {visualAssets[0]?.source || "本章节未关联可预览素材"}
+          {visualAssets[0]?.caption ||
+            visualAssets[0]?.source ||
+            "本章节未关联可预览素材"}
           {remainingCount > 0 ? ` · 另含 ${remainingCount} 份素材` : ""}
         </small>
       </figcaption>
@@ -1179,6 +1277,8 @@ function GeoBuildExperienceZh() {
   const [refreshingProjectIds, setRefreshingProjectIds] = useState<
     Record<string, boolean>
   >({});
+  const [archivePersistenceVersionByProject, setArchivePersistenceVersion] =
+    useState<Record<string, number>>({});
   const [geometry, setGeometry] =
     useState<GeoWorkbenchGeometry>(getInitialGeometry);
   const [compactViewport, setCompactViewport] = useState(
@@ -1843,8 +1943,13 @@ function GeoBuildExperienceZh() {
       { signal: controller.signal },
     )
       .then(() => {
-        if (!controller.signal.aborted)
+        if (!controller.signal.aborted) {
           archivePersistenceCompleted.current.add(project.id);
+          setArchivePersistenceVersion((current) => ({
+            ...current,
+            [project.id]: (current[project.id] || 0) + 1,
+          }));
+        }
       })
       .catch(() => {
         if (!controller.signal.aborted)
@@ -3616,6 +3721,9 @@ function GeoBuildExperienceZh() {
                 {activeStage === "enterprise_analysis" && (
                   <EnterpriseAnalysis
                     project={activeProject}
+                    archivePersistenceVersion={
+                      archivePersistenceVersionByProject[activeProject.id] || 0
+                    }
                     onDownload={downloadArchive}
                     onRetry={retryProject}
                     onNewProject={openNewProjectBuilder}
@@ -4071,6 +4179,7 @@ function ExecutionLogDialog({
 
 export function EnterpriseAnalysis({
   project,
+  archivePersistenceVersion = 0,
   onDownload,
   onRetry,
   onNewProject,
@@ -4080,6 +4189,7 @@ export function EnterpriseAnalysis({
   retrying,
 }: {
   project: GeoProject;
+  archivePersistenceVersion?: number;
   onDownload: () => void;
   onRetry: () => void;
   onNewProject: () => void;
@@ -4091,7 +4201,22 @@ export function EnterpriseAnalysis({
   const [view, setView] = useState<KnowledgeView>("overview");
   const knowledgeBase = project.knowledgeBase;
   const [activeSectionId, setActiveSectionId] = useState<string>();
+  const [activeLeafId, setActiveLeafId] = useState<string>();
+  const [assetPage, setAssetPage] = useState(0);
   const [completenessOpen, setCompletenessOpen] = useState(false);
+  const localAssetUrls = useLocalKnowledgeAssetPreviewUrls(
+    project.id,
+    knowledgeBase?.assets ?? [],
+    archivePersistenceVersion,
+  );
+  const knowledgeAssets = useMemo(
+    () =>
+      (knowledgeBase?.assets ?? []).map((asset) => ({
+        ...asset,
+        previewUrl: localAssetUrls[asset.id] || asset.previewUrl,
+      })),
+    [knowledgeBase?.assets, localAssetUrls],
+  );
 
   useEffect(() => {
     if (
@@ -4101,6 +4226,19 @@ export function EnterpriseAnalysis({
       setActiveSectionId(knowledgeBase.sections[0].id);
     }
   }, [activeSectionId, knowledgeBase?.sections]);
+
+  useEffect(() => {
+    const section = knowledgeBase?.sections.find(
+      (candidate) => candidate.id === activeSectionId,
+    );
+    if (
+      activeLeafId &&
+      !section?.leaves?.some((leaf) => leaf.id === activeLeafId)
+    )
+      setActiveLeafId(undefined);
+  }, [activeLeafId, activeSectionId, knowledgeBase?.sections]);
+
+  useEffect(() => setAssetPage(0), [project.id]);
 
   if (isGeoDraftProject(project)) {
     return (
@@ -4150,7 +4288,10 @@ export function EnterpriseAnalysis({
     const retryAvailable = project.knowledgeBaseRetryAvailable === true;
     const supportRequired = project.knowledgeBaseSupportRequired === true;
     const retryExhaustedGuidance =
-      "自动修复次数已用完，请新建企业项目后重新提交资料，或联系支持。";
+      !project.knowledgeBaseValidationCategory ||
+      project.knowledgeBaseValidationCategory === "structure"
+        ? "自动修复次数已用完，请新建企业项目后重新提交资料，或联系支持。"
+        : undefined;
     const failureMessage =
       project.error || "抓取过程出现异常，已保留当前项目记录。";
     return (
@@ -4162,6 +4303,7 @@ export function EnterpriseAnalysis({
         <p>{failureMessage}</p>
         {!retryAvailable &&
           !supportRequired &&
+          retryExhaustedGuidance &&
           !failureMessage.includes("自动修复次数已用完") && (
             <p>{retryExhaustedGuidance}</p>
           )}
@@ -4230,7 +4372,7 @@ export function EnterpriseAnalysis({
     knowledgeBase.metrics.length > 0
       ? knowledgeBase.metrics.slice(0, 6)
       : fallbackMetrics;
-  const sections =
+  const sections: GeoKnowledgeSection[] =
     knowledgeBase.sections.length > 0
       ? knowledgeBase.sections
       : [
@@ -4243,6 +4385,25 @@ export function EnterpriseAnalysis({
         ];
   const activeSection =
     sections.find((section) => section.id === activeSectionId) ?? sections[0];
+  const activeLeaves = activeSection?.leaves ?? [];
+  const activeLeaf = activeLeaves.find((leaf) => leaf.id === activeLeafId);
+  const activeOverview = activeSection?.overview;
+  const activeMarkdown = activeLeaf
+    ? activeLeaf.markdown
+    : activeOverview?.markdown || activeSection?.markdown;
+  const activeSummary = activeLeaf
+    ? activeLeaf.summary
+    : activeOverview?.summary || activeSection?.summary;
+  const activeAssetIds = activeLeaf
+    ? activeLeaf.assetIds
+    : activeOverview
+      ? activeOverview.assetIds
+      : activeSection?.assetIds;
+  const {
+    items: pagedAssets,
+    page: visibleAssetPage,
+    pageCount: assetPageCount,
+  } = paginateGeoKnowledgeAssets(knowledgeAssets, assetPage);
   const acquisition = knowledgeBase.completeness?.acquisition;
   type ReportScopeCard = {
     key: string;
@@ -4390,6 +4551,11 @@ export function EnterpriseAnalysis({
           [
             ["overview", "知识总览", BookOpenText],
             [
+              "assets",
+              `企业素材 ${knowledgeBase.assets.length || ""}`,
+              ImageIcon,
+            ],
+            [
               "sources",
               `证据来源 ${knowledgeBase.sources.length || ""}`,
               ShieldCheck,
@@ -4432,7 +4598,10 @@ export function EnterpriseAnalysis({
                   key={section.id}
                   type="button"
                   className={section.id === activeSection?.id ? "active" : ""}
-                  onClick={() => setActiveSectionId(section.id)}
+                  onClick={() => {
+                    setActiveSectionId(section.id);
+                    setActiveLeafId(undefined);
+                  }}
                 >
                   <span className="geo-branch-index">
                     {String(index + 1).padStart(2, "0")}
@@ -4452,11 +4621,97 @@ export function EnterpriseAnalysis({
             <article className="geo-knowledge-document">
               <header>
                 <div>
-                  <span>KNOWLEDGE NODE</span>
-                  <h3>{activeSection?.title}</h3>
+                  <span>
+                    {activeLeaf ? "KNOWLEDGE LEAF" : "BRANCH OVERVIEW"}
+                  </span>
+                  <h3>{activeLeaf?.title || activeSection?.title}</h3>
                 </div>
-                <StatusPill status={activeSection?.status} />
+                <StatusPill
+                  status={activeLeaf?.status || activeSection?.status}
+                />
               </header>
+              {activeLeaves.length > 0 && (
+                <div
+                  className="geo-knowledge-mode-switch"
+                  role="tablist"
+                  aria-label={`${activeSection?.title || "当前分支"}内容层级`}
+                >
+                  <button
+                    type="button"
+                    role="tab"
+                    aria-selected={!activeLeaf}
+                    className={!activeLeaf ? "active" : ""}
+                    onClick={() => setActiveLeafId(undefined)}
+                  >
+                    分支综述
+                  </button>
+                  <button
+                    type="button"
+                    role="tab"
+                    aria-selected={Boolean(activeLeaf)}
+                    className={activeLeaf ? "active" : ""}
+                    onClick={() => setActiveLeafId(activeLeaves[0]?.id)}
+                  >
+                    查看知识叶子
+                    <span>{activeLeaves.length}</span>
+                  </button>
+                </div>
+              )}
+              {activeLeaf && (
+                <div className="geo-leaf-switcher">
+                  <button
+                    type="button"
+                    aria-label="上一个知识叶子"
+                    onClick={() => {
+                      const index = activeLeaves.findIndex(
+                        (leaf) => leaf.id === activeLeaf.id,
+                      );
+                      setActiveLeafId(
+                        activeLeaves[
+                          (index - 1 + activeLeaves.length) %
+                            activeLeaves.length
+                        ]?.id,
+                      );
+                    }}
+                  >
+                    <ChevronLeft size={16} />
+                  </button>
+                  <label>
+                    <span>
+                      知识叶子{" "}
+                      {activeLeaves.findIndex(
+                        (leaf) => leaf.id === activeLeaf.id,
+                      ) + 1}{" "}
+                      / {activeLeaves.length}
+                    </span>
+                    <select
+                      value={activeLeaf.id}
+                      onChange={(event) => setActiveLeafId(event.target.value)}
+                      aria-label="选择知识叶子"
+                    >
+                      {activeLeaves.map((leaf) => (
+                        <option key={leaf.id} value={leaf.id}>
+                          {leaf.title}
+                        </option>
+                      ))}
+                    </select>
+                  </label>
+                  <button
+                    type="button"
+                    aria-label="下一个知识叶子"
+                    onClick={() => {
+                      const index = activeLeaves.findIndex(
+                        (leaf) => leaf.id === activeLeaf.id,
+                      );
+                      setActiveLeafId(
+                        activeLeaves[(index + 1) % activeLeaves.length]?.id,
+                      );
+                    }}
+                  >
+                    <ChevronRight size={16} />
+                  </button>
+                </div>
+              )}
               <div className="geo-knowledge-content">
                 {activeSection && (
                   <KnowledgeSectionVisual
@@ -4467,22 +4722,103 @@ export function EnterpriseAnalysis({
                         (section) => section.id === activeSection.id,
                       ),
                     )}
-                    assets={knowledgeBase.assets}
+                    assets={knowledgeAssets}
+                    assetIds={activeAssetIds}
+                    leafId={activeLeaf?.id}
                   />
                 )}
                 <div className="geo-knowledge-copy">
-                  {activeSection?.summary && (
-                    <p className="geo-document-lead">{activeSection.summary}</p>
+                  {activeSummary && (
+                    <p className="geo-document-lead">{activeSummary}</p>
                   )}
                   <LightweightMarkdown
-                    markdown={
-                      activeSection?.markdown || knowledgeBase.reportMarkdown
-                    }
+                    markdown={activeMarkdown || knowledgeBase.reportMarkdown}
                   />
                 </div>
               </div>
             </article>
           </div>
+        </div>
+      )}
+
+      {view === "assets" && (
+        <div className="geo-asset-view">
+          <div className="geo-view-intro">
+            <div>
+              <span>企业素材库</span>
+              <h3>本次知识库中的真实图文素材</h3>
+            </div>
+            <p>正文仅精选展示每个分支最多 3 张图片，其余素材在这里分页查看。</p>
+          </div>
+          {knowledgeAssets.length > 0 ? (
+            <>
+              <div className="geo-asset-grid">
+                {pagedAssets.map((asset) => {
+                  const href = asset.previewUrl || asset.url;
+                  return (
+                    <article key={asset.id}>
+                      <span className="geo-asset-preview">
+                        {isPreviewableKnowledgeAsset(asset) && href ? (
+                          <KnowledgeAssetPreviewImage asset={asset} />
+                        ) : (
+                          <FileText size={20} aria-hidden="true" />
+                        )}
+                      </span>
+                      <div>
+                        <strong>{asset.caption || asset.name}</strong>
+                        <small>
+                          {asset.source || asset.type || "企业知识素材"}
+                        </small>
+                      </div>
+                      {href && (
+                        <a
+                          href={href}
+                          target="_blank"
+                          rel="noreferrer"
+                          aria-label={`查看素材：${asset.name}`}
+                        >
+                          <ExternalLink size={15} />
+                        </a>
+                      )}
+                    </article>
+                  );
+                })}
+              </div>
+              {assetPageCount > 1 && (
+                <nav className="geo-asset-pagination" aria-label="企业素材分页">
+                  <button
+                    type="button"
+                    disabled={visibleAssetPage === 0}
+                    onClick={() =>
+                      setAssetPage((page) => Math.max(0, page - 1))
+                    }
+                  >
+                    <ChevronLeft size={15} /> 上一页
+                  </button>
+                  <span>
+                    {visibleAssetPage + 1} / {assetPageCount}
+                  </span>
+                  <button
+                    type="button"
+                    disabled={visibleAssetPage >= assetPageCount - 1}
+                    onClick={() =>
+                      setAssetPage((page) =>
+                        Math.min(assetPageCount - 1, page + 1),
+                      )
+                    }
+                  >
+                    下一页 <ChevronRight size={15} />
+                  </button>
+                </nav>
+              )}
+            </>
+          ) : (
+            <EmptyKnowledgeState
+              icon={<ImageIcon size={22} />}
+              title="暂无可展示的企业素材"
+              copy="当前归档未返回可展示的图片或文档条目。"
+            />
+          )}
         </div>
       )}
 

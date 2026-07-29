@@ -1,4 +1,4 @@
 interface:
   display_name: "官网引流知识库构建"
-  short_description: "在限定时间与素材预算内广覆盖采集企业资料并交付知识库"
-  default_prompt: "使用 $website-one-shot-kb-builder 在限定时间与素材预算内广覆盖采集企业资料，持续输出真实累计进度并生成知识库 ZIP。"
+  short_description: "限时广覆盖采集并交付经过机器校验的正式图文知识库"
+  default_prompt: "使用 $website-one-shot-kb-builder 在限定时间与预算内广覆盖采集企业资料，持续输出真实累计进度，整理正式图文知识并在机器校验通过后生成 ZIP。"

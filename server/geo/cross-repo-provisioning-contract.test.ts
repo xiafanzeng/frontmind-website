@@ -6,7 +6,7 @@ import { describe, expect, it } from "vitest";
 import { siblingDashboardRepositoryRoot } from "./cross-repo-test-path";
 import { knowledgeArchiveDescriptorHash } from "./knowledge-base-artifact";
 import {
-  GeoKnowledgeImportRequestV2Schema,
+  GeoKnowledgeImportRequestSchema,
   GeoPurchaseProvisionRequestV2Schema,
 } from "./provisioning";
 
@@ -26,7 +26,7 @@ async function fixture(filePath: string) {
   >;
 }
 
-describe("Website ↔ Agent provisioning v2 shared contract", () => {
+describe("Website ↔ Agent provisioning and archive shared contract", () => {
   it("parses the shared purchase, categories, and knowledge artifact contract", async () => {
     const value = await fixture(localFixturePath);
     const request = value.purchaseRequest as Record<string, any>;
@@ -44,7 +44,7 @@ describe("Website ↔ Agent provisioning v2 shared contract", () => {
         }).service.purchasedQuestion.category,
       ).toBe(category);
     }
-    const knowledgeImport = GeoKnowledgeImportRequestV2Schema.parse(
+    const knowledgeImport = GeoKnowledgeImportRequestSchema.parse(
       value.knowledgeImport,
     );
     expect(

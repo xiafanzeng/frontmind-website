@@ -1,6 +1,6 @@
 ---
 name: website-one-shot-kb-builder
-description: Build a breadth-first, budget-bounded enterprise knowledge base in one uninterrupted website run. Cover every business branch and real product family while limiting crawl depth, retained text, images, documents, public queries, leaf count, and ZIP size. Emit trustworthy cumulative crawl checkpoints, evidence-classify every claim, record honest verification gaps, and package the final Markdown/ZIP without asking the user to confirm or correct. Use for the FrontMind website GEO enterprise-analysis lead-generation workflow.
+description: Build a breadth-first, budget-bounded enterprise knowledge base in one uninterrupted website run. Cover every business branch and real product family while limiting crawl depth, retained text, images, documents, public queries, leaf count, and ZIP size. Produce formal customer-ready overviews and leaves, bind real first-party images, emit trustworthy cumulative crawl checkpoints, evidence-classify every claim, record honest verification gaps, and run deterministic ZIP validation without asking the user to confirm or correct. Use for the FrontMind website GEO enterprise-analysis lead-generation workflow.
 ---
 
 # Website One-Shot Enterprise Knowledge Base Builder
@@ -9,7 +9,7 @@ Build a useful, industry-adaptive enterprise knowledge base through AI-driven re
 
 ## Core Principle
 
-> **Cover Every Branch, Bound the Depth, Then Package Once.** Populate a stable 40–56-leaf tree from uploads and selected evidence. Never ask a question, request confirmation or correction, present a skip choice, or wait for user input. A truthful `needs_verification` gap is preferable to another crawl round or an invented fact.
+> **Cover Every Branch, Bound the Depth, Then Package a Real Illustrated Knowledge System.** Populate a stable 40–56-leaf tree from uploads and selected evidence, write formal customer-facing overviews and leaves, and bind real first-party images to the documents they illustrate. Never ask a question, request confirmation or correction, present a skip choice, or wait for user input. A truthful `needs_verification` gap is preferable to another crawl round, a raw-page dump, or an invented fact.
 
 ## Workflow
 
@@ -36,12 +36,12 @@ The first budget reached—time or resource—ends that collection activity:
 | --------------------------------------------------- | ------------------------------------------------------------: |
 | Official HTML page retrieval attempts               |                                                           120 |
 | All attempted links, including images and documents |                                  about 180; do not exceed 180 |
-| Validated images saved and packaged                 |                                                            48 |
+| Validated first-party images saved and packaged     |    target 36–48 when available; never exceed 48 and never pad |
 | Official linked documents parsed                    |                                                            12 |
 | User uploads                                        | the existing maximum of 10; process before external documents |
 | Public-web queries executed                         |                                                            12 |
 | Deduplicated raw evidence text retained             |                                            300,000 characters |
-| Customer-visible knowledge narrative                |         target 12,000 Chinese characters; hard maximum 18,000 |
+| Customer-visible formal knowledge narrative         |  minimum 8,000; target 12,000; hard maximum 18,000 characters |
 | Content leaves under `01`–`08`                      |                                                         40–56 |
 | Total files in the final ZIP                        |                                                           150 |
 
@@ -54,7 +54,7 @@ Budgets constrain acquisition and packaging, not truthfulness. When a budget is 
 3. Create a breadth-first URL queue from navigation, `robots.txt`, sitemap indexes and nested sitemaps. Prioritize homepage, about, product-family/service overviews, core product details, technology/manufacturing, industries/cases, cooperation/support, contact, team and certifications. Sample news, pagination, language variants and long-tail SKU pages only when they fill a missing business branch or high-impact answer.
 4. Process up to 10 user uploads before linked documents. Extract only evidence needed by the coverage matrix and deduplicate retained text blocks.
 5. Expand large SKU catalogs into a sourced product-family inventory. Every real product family must appear in the knowledge base, but only core families receive separate parameters, scenarios, cases and FAQ leaves.
-6. Save first-party images in this order: Logo/brand identity, core products or services, application scenarios, technology or manufacturing capability, certifications, then team. Deduplicate by content hash. Save no more than three preview images per content branch and about 21 preview images across the page; use remaining package capacity only for high-value first-party assets. For third-party images, record the page URL, direct asset URL, source and ownership status by default—do not download the file.
+6. Discover image candidates before downloading files. Select first-party images in this order: Logo/brand identity, core products or services, application scenarios, technology or manufacturing capability, certifications, then team. Give every core product family with a suitable official asset at least one image. Deduplicate by SHA-256. When at least 36 qualified first-party assets exist, package 36–48; when fewer than 36 exist, package every qualified asset and record the concrete shortfall reason. Save no more than three preview images per content branch and about 21 preview images across the page; retain remaining package capacity only for high-value first-party assets in the paginated media library. For third-party images, record the page URL, direct asset URL, source and ownership status—do not download the file or use it to fill the target.
 7. Parse selected official catalogs, manuals, brochures or specification sheets only when they support a priority leaf. Uploaded files take precedence within the combined document-processing window.
 8. Use public queries only for entity resolution, authoritative verification, and unanswered facts that materially affect customer Q&A. Every retained third-party fact must keep its exact source URL, source type, capture/publication date and conflict notes.
 9. Maintain one URL/status ledger, deduplicated evidence excerpts and one source index. Do not save both raw HTML and cleaned text for every page. Raw HTML is temporary working material and must not enter the final ZIP by default.
@@ -135,8 +135,9 @@ Read `references/questioning-strategy.md` for the original research workflow and
 - **One complete Markdown file per leaf.**
 - **Bounded consolidation.** Never skip a whole branch. Consolidate long-tail SKUs, repeated news, pagination and language variants into sourced family or topic leaves; do not infer facts merely to reach final packaging.
 - **Source attribution** on every fact (宣传册/官网/行业调研).
-- **Images alongside text** only when they add customer-visible value and remain within the image budget.
-- **Narrative size.** Default each business branch to about 900–1,800 Chinese characters; the products branch may reach 3,000. Source tables, status headers and machine manifests do not count toward the visible narrative budget.
+- **Formal customer copy first.** Every display branch has exactly one `overview` document written as finished enterprise knowledge, followed by detailed `leaf` documents. Do not present crawl mechanics, “第一方原始快照”, “第一方页面摘录”, raw snapshots, page excerpts or source boilerplate as the formal narrative. Move acquisition details and verbatim evidence excerpts to non-customer-visible reports or evidence documents.
+- **Images alongside text.** Bind every packaged image to one or more formal documents with stable asset IDs, meaningful captions and exact first-party provenance. Only retain images that add customer-visible value and remain within the image budget.
+- **Narrative quality and size.** Produce 8,000–18,000 effective customer-visible characters in total, targeting about 12,000. Every evidence-bearing `overview` or `leaf` must contain at least 120 effective formal-content characters after excluding headings, status, source tables, asset inventories and machine metadata. Default each business branch to about 900–1,800 Chinese characters; the products branch may reach 3,000. Do not repeat the same template paragraph across leaves.
 - **Industry benchmarks** for sparse nodes must remain clearly labelled as benchmark context or `inferred`, never as confirmed enterprise facts.
 - **100% traversal gate.** Completion is `written or reasoned-not-applicable leaf nodes / total leaf nodes`; ZIP generation is forbidden before every leaf is handled.
 - **Server-verifiable inventory gate.** The number of Markdown leaf files packaged under the eight canonical content directories must equal `counts.totalLeaves`, every canonical content directory must contain at least one non-empty leaf, and every leaf file must declare exactly one evidence status in its header using the output template. When evidence for a canonical directory is absent, write one truthful `needs_verification` gap leaf instead of leaving it empty or inventing a fact. The website rejects a ZIP when the packaged files or their status totals disagree with `00_completeness.json`.
@@ -163,9 +164,11 @@ Save progress to `/home/ubuntu/kb_build/{company_name}/progress.json` after ever
 
 Read `references/output-format.md` for ZIP structure and markdown templates.
 
-Enter this phase automatically after every stable leaf is written or reasoned `not_applicable`. Generate the bounded ZIP with hierarchical folders, Markdown files per node, selected first-party images, URL-only third-party references, README, final knowledge-tree status, both acquisition reports, the machine-readable raw `00_completeness.json`, image inventory and unresolved verification gaps. The final ZIP must contain at most 150 files, at most 48 saved images, 40–56 content leaves and at most 18,000 Chinese characters of customer-visible knowledge narrative. Do not include per-page raw HTML or duplicate cleaned-page files.
+Enter this phase automatically after every stable leaf is written or reasoned `not_applicable`. Generate the bounded ZIP with hierarchical folders, formal Markdown overviews and leaves, selected first-party images, URL-only third-party references, README, final knowledge-tree status, both acquisition reports, the unchanged raw `00_completeness.json`, the exact `00_package_manifest.json`, image inventory and unresolved verification gaps. The final ZIP must contain at most 150 files, at most 48 saved images, 40–56 content leaves and 8,000–18,000 effective customer-visible narrative characters. Do not include per-page raw HTML or duplicate cleaned-page files.
 
-`00_completeness.json` must keep its existing exact field shape and contain only status counts, acquisition completed/total pairs, gap strings and `evaluatedAt`; it must not contain a score, percentage, label, basis, caveat or derived applicable-leaf count. Budget exhaustion may create a recorded gap but must never change an evidence status or manufacture completeness. Deliver Markdown/ZIP immediately; never ask whether to generate, and never generate an interactive webpage or HTML research experience.
+`00_completeness.json` must keep its existing exact field shape and contain only status counts, acquisition completed/total pairs, gap strings and `evaluatedAt`; it must not contain a score, percentage, label, basis, caveat or derived applicable-leaf count. `acquisition.images.completed` must equal the number of valid deduplicated raster image files actually packaged. Budget exhaustion may create a recorded gap but must never change an evidence status or manufacture completeness.
+
+Materialize the injected `scripts/validate_archive.py` unchanged when it is not already available as a file, then run `python3 scripts/validate_archive.py FINAL_ZIP`. The validator must reopen every packaged raster, verify its declared dimensions, and reject a header-only or otherwise undecodable file; a matching extension and magic prefix alone are never sufficient. Correct and repackage until the command exits zero and prints `VALID`; never bypass, edit or reinterpret the validator. Deliver the validated ZIP immediately, never ask whether to generate, and never generate an interactive webpage or HTML research experience.
 
 ## Reference Files
 
@@ -173,3 +176,4 @@ Enter this phase automatically after every stable leaf is written or reasoned `n
 - **`references/questioning-strategy.md`** — Breadth-first source selection and response-free leaf processing. Read at Phase 3.
 - **`references/output-format.md`** — Bounded ZIP structure, budgets and unchanged completeness manifest. Read at Phase 4.
 - **`references/source-manifest.json`** — SHA-256 provenance for the exact `socratic-kb-builder.skill` source archive.
+- **`scripts/validate_archive.py`** — Deterministic website-lead-v1 package validator. Execute it unchanged against the final ZIP.

@@ -9,11 +9,12 @@ The final deliverable uses this canonical hierarchy. Example filenames illustrat
 ├── README.md
 ├── 00_knowledge_tree.md
 ├── 00_completeness.json
+├── 00_package_manifest.json
 ├── 00_crawl_coverage_report.md
 ├── 00_web_intelligence_report.md
 ├── 00_source_index.md
 ├── 01_company_overview/
-│   ├── profile.md
+│   ├── profile.md                 # kind=overview for 企业身份
 │   ├── history.md
 │   ├── mission_vision.md
 │   ├── certifications.md
@@ -26,7 +27,7 @@ The final deliverable uses this canonical hierarchy. Example filenames illustrat
 │   └── images/
 │       └── team_*.jpg
 ├── 03_products/
-│   ├── product_line_overview.md
+│   ├── product_line_overview.md   # kind=overview for 产品/服务
 │   └── {product_name}/
 │       ├── overview.md
 │       ├── specifications.md
@@ -75,17 +76,20 @@ The final deliverable uses this canonical hierarchy. Example filenames illustrat
 
 The package must contain Markdown, the raw `00_completeness.json` manifest and selected source assets only. Do not create an interactive research page, HTML website, webpage preview or other web deliverable. Do not include per-page raw HTML or a second cleaned-text file for every URL.
 
+Every Markdown file must appear exactly once in `00_package_manifest.json.documents`. Files under `01`–`08` are customer-visible formal documents and use kind `overview` or `leaf`; reports, indexes and evidence files are not customer-visible. Each of the seven display branches has exactly one `overview`; `04_technology` and `05_manufacturing` share the single “核心能力” display branch, so only one of those two directories declares its selected overview.
+
 ## Final Package Budgets
 
 - 40–56 counted content-leaf Markdown files across `01`–`08`.
 - No more than 150 files in the entire ZIP, including root reports and assets.
-- No more than 48 validated downloaded images.
-- Target about 12,000 Chinese characters and never exceed 18,000 customer-visible knowledge narrative characters.
+- Package 36–48 validated first-party images when at least 36 qualified assets exist. When fewer than 36 exist, package all qualified assets and state the actual reason; never pad with duplicates or third-party files.
+- Keep customer-visible formal narrative between 8,000 and 18,000 effective characters, targeting about 12,000.
+- Every evidence-bearing overview or leaf contains at least 120 effective formal-content characters after excluded metadata.
 - Default each business branch to about 900–1,800 narrative characters; `03_products/` may reach 3,000.
 - Status headers, source tables, acquisition reports, source indexes and machine manifests are excluded from the customer-visible narrative count.
 - Third-party images are URL/source/ownership records by default and do not require downloaded files.
 
-If any package budget would be exceeded, consolidate long-tail SKU/topic leaves, remove low-value duplicate assets, and retain a truthful source or gap record. Do not delete a real product family from the overview, leave a canonical directory empty, downgrade evidence, or invent completeness.
+If any package budget would be exceeded, consolidate long-tail SKU/topic leaves, remove low-value duplicate assets, and retain a truthful source or gap record. Do not delete a real product family from the overview, leave a canonical directory empty, downgrade evidence, pad an image target, or invent completeness.
 
 ## Required Crawl Coverage Metrics
 
@@ -122,7 +126,7 @@ Use exactly this object shape and no extra properties:
   },
   "acquisition": {
     "officialPages": { "completed": OFFICIAL_PAGES_COMPLETED, "total": OFFICIAL_PAGES_DISCOVERED },
-    "images": { "completed": VALIDATED_IMAGES_DOWNLOADED, "total": IMAGES_DISCOVERED },
+    "images": { "completed": VALIDATED_IMAGES_PACKAGED, "total": IMAGES_DISCOVERED },
     "documents": { "completed": DOCUMENTS_PARSED, "total": DOCUMENTS_DISCOVERED },
     "webQueries": { "completed": WEB_QUERIES_EXECUTED, "total": WEB_QUERIES_PLANNED }
   },
@@ -141,10 +145,93 @@ Rules:
 - The website counts the actual Markdown files under `01_company_overview/`, `02_team/`, `03_products/`, `04_technology/` or `05_manufacturing/`, `06_industries/`, `07_service/`, and `08_competitive_advantages/`. That packaged-file count must equal `totalLeaves`.
 - Every counted leaf file must use the Markdown header template below and declare exactly one of the six evidence statuses. The server independently recounts those headers and rejects any mismatch with the six status totals.
 - `notApplicable` remains part of `totalLeaves`; the server derives the applicable-leaf denominator.
-- `officialPages.completed` means pages successfully parsed, `images.completed` means image bodies successfully downloaded and validated, `documents.completed` means documents successfully parsed, and `webQueries.completed` means planned public-web queries actually executed.
+- `officialPages.completed` means pages successfully parsed, `images.completed` means deduplicated image bodies successfully downloaded, validated, selected and actually packaged in the final ZIP, `documents.completed` means documents successfully parsed, and `webQueries.completed` means planned public-web queries actually executed. The crawl progress counter may report more downloaded candidates than this final packaged count; never copy it without reconciling the final ZIP.
 - Every acquisition `completed` value must be no greater than its `total`. Omit an acquisition dimension when no honest denominator is available; never invent a denominator.
 - `gaps` contains concise unresolved evidence or collection gaps from this run. Do not turn it into a prioritized roadmap.
 - `evaluatedAt` is an ISO 8601 timestamp for the completed one-shot evaluation.
+
+## Required Package Manifest
+
+Write `00_package_manifest.json` at the ZIP root without changing `00_completeness.json`. This second manifest proves that the customer-visible documents and real image files in the final ZIP agree with their machine metadata.
+
+Use exactly these top-level fields:
+
+```text
+{
+  "schemaVersion": 1,
+  "profile": "website-lead-v1",
+  "documents": [DOCUMENT_RECORDS],
+  "assets": [ASSET_RECORDS],
+  "counts": {
+    "totalFiles": ACTUAL_ZIP_FILE_COUNT,
+    "customerVisibleCharacters": ACTUAL_FORMAL_NARRATIVE_CHARACTERS,
+    "evidenceCharacters": ACTUAL_PACKAGED_EVIDENCE_CHARACTERS,
+    "packagedImages": ACTUAL_VALID_IMAGE_FILES
+  },
+  "imageSelection": {
+    "eligibleFirstPartyImages": ACTUAL_QUALIFIED_FIRST_PARTY_IMAGES,
+    "shortfallReason": "REQUIRED_ONLY_WHEN_ELIGIBLE_COUNT_IS_BELOW_36"
+  }
+}
+```
+
+Every `documents` record uses only these fields:
+
+```text
+{
+  "id": "STABLE_DOCUMENT_ID",
+  "path": "EXACT_RELATIVE_MARKDOWN_PATH",
+  "kind": "overview|leaf|evidence|report|index",
+  "title": "DISPLAY_TITLE",
+  "branchId": "OPTIONAL_CANONICAL_01_TO_08_DIRECTORY_NAME",
+  "order": OPTIONAL_NON_NEGATIVE_INTEGER,
+  "evidenceStatus": "OPTIONAL_EXACT_LEAF_STATUS",
+  "sourceIds": ["OPTIONAL_STABLE_SOURCE_IDS"],
+  "assetIds": ["OPTIONAL_LINKED_ASSET_IDS"],
+  "customerVisible": true
+}
+```
+
+Rules for documents:
+
+- Inventory every Markdown file in the ZIP exactly once; IDs and paths are unique.
+- Every Markdown leaf under `01`–`08` is `customerVisible: true`, has kind `overview` or `leaf`, declares the canonical directory as `branchId`, and repeats the exact status from its Markdown status header as `evidenceStatus`. Every evidence-bearing formal document declares at least one stable `sourceIds` entry; only `needs_verification` or `not_applicable` documents may omit it.
+- Root reports, source indexes, acquisition reports and evidence excerpts are `customerVisible: false` with kind `evidence`, `report` or `index`.
+- Declare exactly one overview for each display branch. `04_technology` and `05_manufacturing` combine into the single core-capabilities display branch and therefore share one overview.
+- `assetIds` lists only images that genuinely illustrate that document. Mirror every relationship in the asset record's `documentIds`.
+
+Every `assets` record uses only these fields:
+
+```text
+{
+  "id": "STABLE_ASSET_ID",
+  "path": "EXACT_RELATIVE_IMAGE_PATH",
+  "sha256": "LOWERCASE_64_HEX_SHA256_OF_ACTUAL_FILE",
+  "mimeType": "image/avif|image/webp|image/png|image/jpeg|image/gif",
+  "bytes": ACTUAL_FILE_BYTES,
+  "width": ACTUAL_PIXEL_WIDTH,
+  "height": ACTUAL_PIXEL_HEIGHT,
+  "caption": "CUSTOMER_VISIBLE_CAPTION",
+  "alt": "OPTIONAL_ACCESSIBLE_ALT_TEXT",
+  "branchId": "CANONICAL_01_TO_08_DIRECTORY_NAME",
+  "documentIds": ["ONE_OR_MORE_LINKED_CUSTOMER_DOCUMENT_IDS"],
+  "sourcePageUrl": "PUBLIC_FIRST_PARTY_SOURCE_PAGE_URL",
+  "sourceAssetUrl": "OPTIONAL_PUBLIC_DIRECT_ASSET_URL",
+  "ownership": "first_party"
+}
+```
+
+Rules for assets and counts:
+
+- Inventory every packaged raster image exactly once; IDs, paths and SHA-256 hashes are unique.
+- Read each final file body again to calculate `bytes`, `sha256`, `width` and `height`. Its suffix, declared MIME and magic bytes must agree. SVG is not a packaged display image: rasterize an authorized SVG to PNG/WebP or keep only its URL record.
+- Package only first-party images. Third-party and unknown-ownership media remain URL/source/ownership notes in the reference inventory and never fill the target.
+- Every image declares its canonical `branchId` and exact public first-party `sourcePageUrl`. `documentIds` must reference customer-visible documents in that branch, and every linked document must contain the same asset ID in `assetIds`.
+- Set `counts.totalFiles` to all non-directory ZIP entries, including both JSON manifests. Recount it after final compression layout is fixed.
+- Set `counts.packagedImages` and `00_completeness.json.acquisition.images.completed` to the exact number of valid, deduplicated raster files in the final ZIP.
+- `eligibleFirstPartyImages` is the qualified, deduplicated selection after relevance and ownership checks, capped at 48; it is not every discovered URL. If it is at least 36, package 36–48. If it is below 36, package all of them and include a concrete `shortfallReason`; omit `shortfallReason` otherwise.
+- `customerVisibleCharacters` counts only formal narrative from customer-visible overview/leaf documents. Exclude headings, frontmatter, status headers, source/reference sections, source tables, material/machine inventories, URLs and Markdown markup. Ignore whitespace and punctuation.
+- `evidenceCharacters` applies the same whitespace/punctuation/URL/markup exclusions to all non-customer-visible Markdown documents.
 
 ## Markdown File Template
 
@@ -155,9 +242,9 @@ Each content Markdown file follows this structure:
 
 > 最后更新: [date] | 状态: [verified_first_party/verified_authoritative/supported_third_party/inferred/needs_verification/not_applicable] | 来源: [用户资料/企业官网/权威记录/第三方资料/行业调研]
 
-## 核心内容
+## 正式综述 / 核心内容
 
-[Sourced content]
+[Finished customer-facing enterprise knowledge written from sourced facts. Do not describe it as a raw snapshot, page excerpt, crawl note or source summary.]
 
 ## 关键数据
 
@@ -165,10 +252,9 @@ Each content Markdown file follows this structure:
 | ---- | ---- | ---- |
 | ...  | ...  | ...  |
 
-## 素材清单
+## 展示素材
 
-- [ ] 仍需企业授权或核验的图片/视频
-- [x] 已获取并记录来源的素材
+- [已验证图片的稳定 asset ID、准确相对路径和图注；没有图片时如实省略本节]
 
 ## 原始来源
 
@@ -176,6 +262,8 @@ Each content Markdown file follows this structure:
 - 来自企业官网: [exact URL]
 - 来自全网资料: [exact URL and source type]
 ```
+
+The server excludes `原始来源`, source/reference sections, status headers and asset inventories from the formal narrative count. Keep these audit details concise. Never use them to make a thin leaf appear to satisfy the 120-character or 8,000-character quality gate.
 
 ## Required Final Completion Report
 
@@ -196,9 +284,12 @@ Replace every brace-delimited token below with counts calculated from the packag
 
 - Package automatically only when every true leaf node contains Markdown content or a reasoned `not_applicable` record.
 - Count 40–56 content leaves and no more than 150 total ZIP files.
-- Package no more than 48 validated images and no per-page raw HTML archive.
-- Keep customer-visible knowledge narrative at or below 18,000 Chinese characters.
+- Include the exact `00_package_manifest.json`, one overview per display branch, and bidirectional document/image links.
+- Package 36–48 validated first-party images when enough qualified assets exist; otherwise package every qualified image and record the shortfall. Package no SVG, third-party image file, duplicate hash or per-page raw HTML archive.
+- Keep customer-visible formal narrative at 8,000–18,000 effective characters; require at least 120 effective characters in every evidence-bearing overview/leaf.
+- Reject repeated template prose and any formal copy framed as a raw snapshot or page excerpt.
 - Do not ask “是否生成初版成果” or offer A/B/C generation choices.
 - Include `00_completeness.json`, the official-site crawl coverage report, full-web intelligence report, source index, first-party image inventory, third-party reference-asset inventory and unresolved verification gaps.
 - Retain evidence status for every leaf in `00_knowledge_tree.md`.
 - Never include an interactive research webpage or HTML deliverable.
+- Run the injected `scripts/validate_archive.py` unchanged against the final ZIP. It must reopen and decode every raster, compare the decoded dimensions, and reject header-only or corrupt payloads even when their suffix and magic prefix match. Deliver only after it exits zero and prints `VALID`.

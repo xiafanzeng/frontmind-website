@@ -730,29 +730,125 @@ function normalizeKnowledgeCompleteness(
 }
 
 function normalizeSections(value: unknown): GeoKnowledgeSection[] {
+  const normalizeStatus = (
+    value: unknown,
+  ): GeoKnowledgeSection["status"] | undefined => {
+    const rawStatus = textValue(value)?.toLowerCase();
+    return rawStatus === "verified" ||
+      rawStatus === "inferred" ||
+      rawStatus === "needs_verification" ||
+      rawStatus === "not_applicable"
+      ? rawStatus
+      : undefined;
+  };
+  const normalizeAssetIds = (...values: unknown[]) =>
+    Array.from(
+      new Set(
+        values.flatMap((candidate) =>
+          asArray(candidate).flatMap((item) => {
+            const id =
+              typeof item === "string"
+                ? item.trim()
+                : textValue(asRecord(item).id, asRecord(item).assetId);
+            return id ? [id] : [];
+          }),
+        ),
+      ),
+    ).slice(0, 100);
+
   return asArray(value).flatMap((item, index) => {
     const record = asRecord(item);
     const title = textValue(record.title, record.name, record.label);
     if (!title) return [];
-    const rawStatus = textValue(
-      record.status,
-      record.evidenceStatus,
-    )?.toLowerCase();
-    const status =
-      rawStatus === "verified" ||
-      rawStatus === "inferred" ||
-      rawStatus === "needs_verification" ||
-      rawStatus === "not_applicable"
-        ? rawStatus
-        : undefined;
+    const overviewRecord = asRecord(record.overview);
+    const overviewMarkdown = textValue(
+      record.overviewMarkdown,
+      record.overview_markdown,
+      overviewRecord.markdown,
+      overviewRecord.content,
+      overviewRecord.body,
+      typeof record.overview === "string" ? record.overview : undefined,
+      record.markdown,
+      record.content,
+      record.body,
+    );
+    const overviewSummary = textValue(
+      overviewRecord.summary,
+      overviewRecord.description,
+      record.summary,
+      record.description,
+    );
+    const sectionAssetIds = normalizeAssetIds(
+      record.assetIds,
+      record.asset_ids,
+    );
+    const hasExplicitOverviewAssetIds =
+      record.overviewAssetIds !== undefined ||
+      record.overview_asset_ids !== undefined ||
+      overviewRecord.assetIds !== undefined ||
+      overviewRecord.asset_ids !== undefined;
+    const overviewAssetIds = normalizeAssetIds(
+      record.overviewAssetIds,
+      record.overview_asset_ids,
+      overviewRecord.assetIds,
+      overviewRecord.asset_ids,
+    );
+    const leaves = asArray(
+      record.leaves ?? record.contentLeaves ?? record.content_leaves,
+    ).flatMap((leaf, leafIndex) => {
+      const leafRecord = asRecord(leaf);
+      const id =
+        textValue(
+          leafRecord.id,
+          leafRecord.key,
+          leafRecord.nodeId,
+          leafRecord.node_id,
+        ) ?? `section-${index + 1}-leaf-${leafIndex + 1}`;
+      const leafTitle =
+        textValue(leafRecord.title, leafRecord.name, leafRecord.label) ??
+        `知识叶子 ${leafIndex + 1}`;
+      return [
+        {
+          id,
+          title: leafTitle,
+          summary: textValue(leafRecord.summary, leafRecord.description),
+          markdown: textValue(
+            leafRecord.markdown,
+            leafRecord.content,
+            leafRecord.body,
+          ),
+          evidenceCount: numberValue(
+            leafRecord.evidenceCount,
+            leafRecord.sourceCount,
+          ),
+          status: normalizeStatus(
+            leafRecord.status ?? leafRecord.evidenceStatus,
+          ),
+          assetIds: normalizeAssetIds(
+            leafRecord.assetIds,
+            leafRecord.asset_ids,
+          ),
+        },
+      ];
+    });
+    const status = normalizeStatus(record.status ?? record.evidenceStatus);
     return [
       {
         id: textValue(record.id, record.key) ?? `section-${index + 1}`,
         title,
-        summary: textValue(record.summary, record.description),
+        summary: overviewSummary,
         markdown: textValue(record.markdown, record.content, record.body),
         evidenceCount: numberValue(record.evidenceCount, record.sourceCount),
         status,
+        overview: {
+          summary: overviewSummary,
+          markdown: overviewMarkdown,
+          assetIds: hasExplicitOverviewAssetIds
+            ? overviewAssetIds
+            : sectionAssetIds,
+        },
+        leaves,
+        assetIds: sectionAssetIds,
       },
     ];
   });
@@ -781,6 +877,10 @@ function normalizeAssets(value: unknown): GeoKnowledgeAsset[] {
     const record = asRecord(item);
     const name = textValue(record.name, record.title, record.filename);
     if (!name) return [];
+    const url = safeKnowledgeAssetUrl(record.url ?? record.downloadUrl);
+    const previewUrl = safeKnowledgeAssetUrl(
+      record.previewUrl ?? record.thumbnail ?? record.url,
+    );
     return [
       {
         id: textValue(record.id, record.key) ?? `asset-${index + 1}`,
@@ -791,13 +891,48 @@ function normalizeAssets(value: unknown): GeoKnowledgeAsset[] {
           record.branchId,
           record.branch_id,
         ),
-        url: textValue(record.url, record.downloadUrl),
-        previewUrl: textValue(record.previewUrl, record.thumbnail, record.url),
-        type: textValue(record.type, record.contentType),
-        source: textValue(record.source, record.sourceUrl),
+        leafId: textValue(
+          record.leafId,
+          record.leaf_id,
+          record.documentId,
+          record.document_id,
+        ),
+        url,
+        previewUrl,
+        type: textValue(
+          record.type,
+          record.mimeType,
+          record.mime_type,
+          record.contentType,
+        ),
+        source: textValue(
+          record.source,
+          record.sourcePageUrl,
+          record.source_page_url,
+          record.sourceUrl,
+        ),
+        caption: textValue(record.caption, record.description),
+        alt: textValue(record.alt, record.altText, record.alt_text),
+        archivePath: textValue(
+          record.archivePath,
+          record.archive_path,
+          record.zipPath,
+          record.zip_path,
+          record.entryPath,
+          record.entry_path,
+        ),
+        width: numberValue(record.width),
+        height: numberValue(record.height),
       },
     ];
   });
+}
+
+function safeKnowledgeAssetUrl(value: unknown): string | undefined {
+  const candidate = textValue(value);
+  if (!candidate) return undefined;
+  if (/^\/(?!\/)/.test(candidate)) return candidate;
+  return safeHttpUrl(candidate);
 }
 
 function normalizeKnowledgeBase(
@@ -818,6 +953,9 @@ function normalizeKnowledgeBase(
     return undefined;
 
   const reports = asRecord(manifest.reports);
+  const packageManifest = asRecord(
+    manifest.packageManifest ?? manifest.package_manifest,
+  );
   const completeness = normalizeKnowledgeCompleteness(manifest.completeness);
   const normalizedMetrics = normalizeMetrics(
     manifest.metrics ?? manifest.stats ?? reports.stats,
@@ -865,6 +1003,10 @@ function normalizeKnowledgeBase(
       manifest.generated_at,
       archive.createdAt,
     ),
+    packageManifestSha256: textValue(
+      manifest.packageManifestSha256,
+      manifest.package_manifest_sha256,
+    ),
     archiveName:
       textValue(archive.filename, archive.name, manifest.archiveName) ??
       "企业知识库.zip",
@@ -872,11 +1014,17 @@ function normalizeKnowledgeBase(
     reportMarkdown: markdown ?? textValue(reports.full, reports.summary),
     metrics,
     sections: normalizeSections(
-      manifest.sections ?? manifest.branches ?? manifest.knowledgeTree,
+      manifest.sections ??
+        packageManifest.sections ??
+        manifest.branches ??
+        manifest.knowledgeTree,
     ),
     sources: normalizeSources(manifest.sources ?? manifest.sourceIndex),
     assets: normalizeAssets(
-      manifest.assets ?? manifest.media ?? manifest.images,
+      manifest.assets ??
+        packageManifest.assets ??
+        manifest.media ??
+        manifest.images,
     ),
     completeness,
   };
@@ -2524,6 +2672,17 @@ export function normalizeGeoProject(
         : clampProgress(taskForProgress.progress ?? project.progress),
     progressLabel: currentExecutionMessage,
     knowledgeBaseRetryAvailable: project.knowledgeBaseRetryAvailable === true,
+    knowledgeBaseValidationCategory: (() => {
+      const category = textValue(
+        project.knowledgeBaseValidationCategory,
+        project.knowledge_base_validation_category,
+      );
+      return ["structure", "media", "content", "unsafe"].includes(
+        category || "",
+      )
+        ? (category as GeoProject["knowledgeBaseValidationCategory"])
+        : undefined;
+    })(),
     knowledgeBaseSupportRequired: project.knowledgeBaseSupportRequired === true,
     questionRetryAvailable: project.questionRetryAvailable === true,
     assessmentRetryAvailable: project.assessmentRetryAvailable === true,

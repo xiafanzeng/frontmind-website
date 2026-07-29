@@ -368,18 +368,33 @@ export const GeoPurchaseProvisionResponseV2Schema = z
     }
   });
 
-export const GeoKnowledgeImportRequestV2Schema = z
-  .object({
+const GeoKnowledgeImportRequestBaseSchema = z.object({
+  companyName: z.string().trim().min(1).max(200),
+  taskId: z.string().trim().min(1).max(255),
+  outputItemId: z.string().trim().min(1).max(255),
+  fileId: z.string().trim().min(1).max(255).optional(),
+  descriptorHash: sha256Schema,
+  artifactSha256: sha256Schema,
+  filename: z.string().trim().min(1).max(512),
+});
+
+export const GeoKnowledgeImportRequestV2Schema =
+  GeoKnowledgeImportRequestBaseSchema.extend({
     schemaVersion: z.literal(2),
-    companyName: z.string().trim().min(1).max(200),
-    taskId: z.string().trim().min(1).max(255),
-    outputItemId: z.string().trim().min(1).max(255),
-    fileId: z.string().trim().min(1).max(255).optional(),
-    descriptorHash: sha256Schema,
-    artifactSha256: sha256Schema,
-    filename: z.string().trim().min(1).max(512),
-  })
-  .strict();
+  }).strict();
+
+export const GeoKnowledgeImportRequestV3Schema =
+  GeoKnowledgeImportRequestBaseSchema.extend({
+    schemaVersion: z.literal(3),
+    archiveContractVersion: z.literal(1),
+    validationProfile: z.literal("website-lead-v1"),
+    packageManifestSha256: sha256Schema,
+  }).strict();
+
+export const GeoKnowledgeImportRequestSchema = z.discriminatedUnion(
+  "schemaVersion",
+  [GeoKnowledgeImportRequestV2Schema, GeoKnowledgeImportRequestV3Schema],
+);
 
 const knowledgeImportStatusSchema = z.enum([
   "pending",
@@ -388,29 +403,53 @@ const knowledgeImportStatusSchema = z.enum([
   "failed",
 ]);
 
-export const GeoKnowledgeImportResponseV2Schema = z
+const GeoKnowledgeImportResponsePayloadSchema = z
   .object({
-    schemaVersion: z.literal(2),
-    knowledgeImport: z
-      .object({
-        id: identifierSchema,
-        projectId: z.string().trim().min(8).max(80),
-        status: knowledgeImportStatusSchema,
-        updatedAt: isoDateTimeSchema,
-        retryable: z.boolean().optional(),
-        message: z.string().trim().min(1).max(1000).optional(),
-        workspaceUrl: workspaceHandoffUrlSchema.optional(),
-      })
-      .strict(),
+    id: identifierSchema,
+    projectId: z.string().trim().min(8).max(80),
+    status: knowledgeImportStatusSchema,
+    updatedAt: isoDateTimeSchema,
+    retryable: z.boolean().optional(),
+    message: z.string().trim().min(1).max(1000).optional(),
+    workspaceUrl: workspaceHandoffUrlSchema.optional(),
   })
   .strict();
 
-export type GeoPurchaseProvisionRequestV2 = z.infer<
-  typeof GeoPurchaseProvisionRequestV2Schema
+export const GeoKnowledgeImportResponseV2Schema = z
+  .object({
+    schemaVersion: z.literal(2),
+    knowledgeImport: GeoKnowledgeImportResponsePayloadSchema,
+  })
+  .strict();
+
+export const GeoKnowledgeImportResponseV3Schema = z
+  .object({
+    schemaVersion: z.literal(3),
+    knowledgeImport: GeoKnowledgeImportResponsePayloadSchema,
+  })
+  .strict();
+
+export const GeoKnowledgeImportResponseSchema = z.discriminatedUnion(
+  "schemaVersion",
+  [GeoKnowledgeImportResponseV2Schema, GeoKnowledgeImportResponseV3Schema],
+);
+
+/*
+ * Keep the v2 schemas and types exported during the receiver-first rollout.
+ * Existing Website deployments can continue importing historical archives
+ * while v3 binds new archives to their validation profile and manifest hash.
+ */
+export type GeoKnowledgeImportRequest = z.infer<
+  typeof GeoKnowledgeImportRequestSchema
 >;
-export type GeoPurchaseProvisionResponseV2 = z.infer<
-  typeof GeoPurchaseProvisionResponseV2Schema
+export type GeoKnowledgeImportResponse = z.infer<
+  typeof GeoKnowledgeImportResponseSchema
 >;
+
+/*
+ * These aliases remain part of the public provisioning contract until every
+ * in-flight v2 task has settled.
+ */
 export type GeoKnowledgeImportRequestV2 = z.infer<
   typeof GeoKnowledgeImportRequestV2Schema
 >;
@@ -418,6 +457,22 @@ export type GeoKnowledgeImportResponseV2 = z.infer<
   typeof GeoKnowledgeImportResponseV2Schema
 >;
 
+/*
+ * v3 is used only for newly validated website-lead-v1 products.
+ */
+export type GeoKnowledgeImportRequestV3 = z.infer<
+  typeof GeoKnowledgeImportRequestV3Schema
+>;
+export type GeoKnowledgeImportResponseV3 = z.infer<
+  typeof GeoKnowledgeImportResponseV3Schema
+>;
+
+export type GeoPurchaseProvisionRequestV2 = z.infer<
+  typeof GeoPurchaseProvisionRequestV2Schema
+>;
+export type GeoPurchaseProvisionResponseV2 = z.infer<
+  typeof GeoPurchaseProvisionResponseV2Schema
+>;
 export const GEO_MANUAL_SERVICE_ORDER_STATUSES = [
   "pending_admin",
   "signature_required",
@@ -606,8 +661,8 @@ export type GeoPurchaseStatusReader = (
 ) => Promise<GeoPurchaseProvisionResponseV2>;
 export type GeoKnowledgeImporter = (
   projectId: string,
-  request: GeoKnowledgeImportRequestV2,
-) => Promise<GeoKnowledgeImportResponseV2>;
+  request: GeoKnowledgeImportRequest,
+) => Promise<GeoKnowledgeImportResponse>;
 
 export const GeoProjectOrderStateSchema = z.enum([
   "pending",
@@ -995,7 +1050,7 @@ export function createGeoPurchaseProvisioner(
     const request = GeoPurchaseProvisionRequestV2Schema.parse(rawRequest);
     const endpoint = provisioningBaseEndpoint(env);
     endpoint.pathname = `${endpoint.pathname}/purchases`;
-    return fetchProvisioningJson({
+    const response = await fetchProvisioningJson({
       endpoint,
       fetchImpl,
       timeoutMs,
@@ -1016,6 +1071,7 @@ export function createGeoPurchaseProvisioner(
         body: JSON.stringify(request),
       },
     });
+    return response;
   };
 }
 
@@ -1193,14 +1249,14 @@ export function createGeoKnowledgeImporter(
   const timeoutMs = options.timeoutMs ?? PROVISIONING_TIMEOUT_MS;
   return async (projectId, rawRequest) => {
     const parsedProjectId = z.string().trim().min(8).max(80).parse(projectId);
-    const request = GeoKnowledgeImportRequestV2Schema.parse(rawRequest);
+    const request = GeoKnowledgeImportRequestSchema.parse(rawRequest);
     const endpoint = provisioningBaseEndpoint(env);
     endpoint.pathname = `${endpoint.pathname}/projects/${encodeURIComponent(parsedProjectId)}/knowledge-imports`;
-    return fetchProvisioningJson({
+    const response = await fetchProvisioningJson({
       endpoint,
       fetchImpl,
       timeoutMs,
-      responseSchema: GeoKnowledgeImportResponseV2Schema,
+      responseSchema: GeoKnowledgeImportResponseSchema,
       invalidResponseMessage: "知识库接入接口返回了无效结果",
       unavailableMessage: "知识库接入接口暂时不可用，请稍后重试",
       timeoutMessage: "知识库接入超时，请稍后重试",
@@ -1211,12 +1267,30 @@ export function createGeoKnowledgeImporter(
         headers: {
           Accept: "application/json",
           "Content-Type": "application/json",
-          "Idempotency-Key": `geo-basic:${parsedProjectId}:${request.descriptorHash}:${request.artifactSha256}:knowledge-v2`,
+          "Idempotency-Key":
+            request.schemaVersion === 3
+              ? [
+                  "geo-basic",
+                  parsedProjectId,
+                  request.descriptorHash,
+                  request.artifactSha256,
+                  request.packageManifestSha256,
+                  "knowledge-v3",
+                ].join(":")
+              : `geo-basic:${parsedProjectId}:${request.descriptorHash}:${request.artifactSha256}:knowledge-v2`,
           "x-frontmind-provisioning-token": serviceToken(env),
         },
         body: JSON.stringify(request),
       },
     });
+    if (response.schemaVersion !== request.schemaVersion) {
+      throw new GeoAccountProvisioningError(
+        "知识库接入接口返回了不匹配的归档合同版本",
+        502,
+        "KNOWLEDGE_IMPORT_VERSION_MISMATCH",
+      );
+    }
+    return response;
   };
 }
 
