@@ -1,7 +1,7 @@
 # Candidate v1 格式
 
-候选包只提供文字和可选 Logo。服务端负责最终目录、完整度、manifest、
-状态、哈希和前台 schema。
+候选包固定命名为 `website-lead-candidate-v1.zip`，只提供文字和可选
+Logo。服务端负责最终目录、完整度、manifest、状态、哈希和前台 schema。
 
 ## 目录
 
@@ -15,6 +15,7 @@ candidate/
 ```
 
 `02_run.json` 和 `assets/` 可省略。不得加入其他文本、脚本、归档或图片。
+必须使用 Skill 内 `scripts/build_candidate.py` 打包；不得手工压缩目录。
 
 ## 00_brand_facts.md
 
@@ -22,17 +23,29 @@ candidate/
 
 ```markdown
 ## D01 企业基础
+
 ## D02 团队
+
 ## D03 产品服务
+
 ## D04 技术能力
+
 ## D05 客户案例
+
 ## D06 资质认证
+
 ## D07 财务融资
+
 ## D08 竞争信息
+
 ## D09 市场信息
+
 ## D10 品牌资产
+
 ## D11 渠道
+
 ## D12 公开意图
+
 ## D13 公共情报
 ```
 
@@ -45,11 +58,17 @@ candidate/
 
 ```markdown
 ## 企业与品牌
+
 ## 团队与组织
+
 ## 产品与服务
+
 ## 技术与交付
+
 ## 客户与行业
+
 ## 服务与合作
+
 ## 可信优势
 ```
 
