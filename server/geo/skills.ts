@@ -1,5 +1,7 @@
+import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
+import JSZip from "jszip";
 
 type SkillDefinition = {
   name: string;
@@ -28,6 +30,10 @@ const WEBSITE_KB_VALIDATOR: SkillDefinition = {
 };
 
 const skillCache = new Map<string, string>();
+const WEBSITE_KB_SKILL_ARCHIVE_DATE = new Date("1980-01-01T00:00:00.000Z");
+
+export const WEBSITE_KB_SKILL_ARCHIVE_FILENAME =
+  "website-one-shot-kb-builder.skill.zip";
 
 function skillRootCandidates() {
   const configuredRoot = process.env.FRONTMIND_GEO_SKILLS_DIR?.trim();
@@ -88,6 +94,44 @@ async function loadSkill(definition: SkillDefinition) {
 
 export function loadWebsiteKnowledgeBaseSkill() {
   return loadSkill(WEBSITE_KB_SKILL);
+}
+
+export async function buildWebsiteKnowledgeBaseSkillArchive() {
+  const loaded = await loadWebsiteKnowledgeBaseSkill();
+  const prefix = "# FILE: SKILL.md\n\n";
+  if (!loaded.startsWith(prefix)) {
+    throw new Error("Website knowledge-base Skill entrypoint is invalid");
+  }
+  const skill = loaded.slice(prefix.length);
+  const skillHash = createHash("sha256").update(skill).digest("hex");
+  const zip = new JSZip();
+  zip.file("SKILL.md", skill, {
+    date: WEBSITE_KB_SKILL_ARCHIVE_DATE,
+    unixPermissions: 0o100644,
+  });
+  zip.file(
+    "MANIFEST.json",
+    `${JSON.stringify(
+      {
+        schemaVersion: 1,
+        name: "website-one-shot-kb-builder",
+        entrypoint: "SKILL.md",
+        sha256: skillHash,
+      },
+      null,
+      2,
+    )}\n`,
+    {
+      date: WEBSITE_KB_SKILL_ARCHIVE_DATE,
+      unixPermissions: 0o100644,
+    },
+  );
+  return zip.generateAsync({
+    type: "nodebuffer",
+    compression: "DEFLATE",
+    compressionOptions: { level: 9 },
+    platform: "UNIX",
+  });
 }
 
 export function loadGeoQuestionRecommenderSkill() {

@@ -8,8 +8,10 @@ import {
   buildWebsiteKnowledgeBaseRepairPrompt,
 } from "./prompts";
 import {
+  buildWebsiteKnowledgeBaseSkillArchive,
   loadGeoQuestionRecommenderSkill,
   loadWebsiteKnowledgeBaseSkill,
+  WEBSITE_KB_SKILL_ARCHIVE_FILENAME,
 } from "./skills";
 import { loadGeoKnowledgeAnswerVerifierSkill } from "./assessment";
 import { siblingDashboardRepositoryRoot } from "./cross-repo-test-path";
@@ -114,6 +116,28 @@ describe("website one-shot knowledge-base skill", () => {
     }
   });
 
+  it("packages the Website knowledge-base Skill as a deterministic ZIP attachment", async () => {
+    const first = await buildWebsiteKnowledgeBaseSkillArchive();
+    const second = await buildWebsiteKnowledgeBaseSkillArchive();
+    expect(first.equals(second)).toBe(true);
+    expect(first.subarray(0, 4).toString("hex")).toBe("504b0304");
+
+    const zip = await (await import("jszip")).default.loadAsync(first);
+    const skill = await zip.file("SKILL.md")?.async("string");
+    const manifest = JSON.parse(
+      (await zip.file("MANIFEST.json")?.async("string")) || "{}",
+    ) as Record<string, unknown>;
+    expect(skill).toContain("website-one-shot-kb-builder");
+    expect(manifest).toMatchObject({
+      schemaVersion: 1,
+      name: "website-one-shot-kb-builder",
+      entrypoint: "SKILL.md",
+    });
+    expect(WEBSITE_KB_SKILL_ARCHIVE_FILENAME).toBe(
+      "website-one-shot-kb-builder.skill.zip",
+    );
+  });
+
   it("builds a one-shot prompt that treats user input as data", async () => {
     const prompt = await buildWebsiteKnowledgeBasePrompt({
       input: "https://acme.example",
@@ -128,34 +152,23 @@ describe("website one-shot knowledge-base skill", () => {
     expect(prompt).toContain("不存在后续用户对话");
     expect(prompt).toContain("不要询问、等待确认");
     expect(prompt).toContain('"rawInput": "https://acme.example"');
+    expect(prompt).toContain(WEBSITE_KB_SKILL_ARCHIVE_FILENAME);
+    expect(prompt).toContain("先解压 ZIP 并完整读取根目录 SKILL.md");
     expect(prompt).toContain("最终必须产出一个可下载的知识库 ZIP");
     expect(prompt).toContain(
       "不得开启、调用、切换或推荐 Wide Research / Deep Research",
     );
-    expect(prompt.indexOf("## website-one-shot-kb-builder")).toBeLessThan(
-      prompt.indexOf("## 最终运行门禁"),
-    );
-    expect(Buffer.byteLength(prompt, "utf8")).toBeLessThanOrEqual(20_000);
+    expect(Buffer.byteLength(prompt, "utf8")).toBeLessThanOrEqual(4_000);
     for (const invariant of [
-      "`01_company_overview/`",
-      "`08_competitive_advantages/`",
-      "`00_completeness.json`",
-      "`00_package_manifest.json`",
       "8–56",
       "schemaVersion=3",
-      "evidenceDocumentIds",
-      "source_limited",
-      "220 MiB",
-      "8 MiB",
-      "200:1",
-      "assetType",
-      "displayRole",
       "客户正文只写最终百科事实",
       "客户正文不得嵌入官网或 CDN 图片外链",
-      "verification_gaps",
     ]) {
       expect(prompt).toContain(invariant);
     }
+    expect(prompt).not.toContain("# FILE: SKILL.md");
+    expect(prompt).not.toContain("## website-one-shot-kb-builder");
     expect(prompt).not.toContain("# FILE: references/");
     expect(prompt).not.toContain("# FILE: scripts/validate_archive.py");
     expect(prompt).not.toContain("def validate_archive");

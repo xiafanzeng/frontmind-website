@@ -97,8 +97,10 @@ class MockBroker implements GeoPresalesBroker {
   tasks = new Map<string, BrokerTask>();
   prompts: string[] = [];
   uploads = new Map<string, Buffer>();
+  skillUploads = new Map<string, Buffer>();
   archive = Buffer.alloc(0);
   nextTask = 1;
+  nextSkillFile = 1;
   questionTaskCount = 0;
   assessmentTaskCount = 0;
   forecastTaskCount = 0;
@@ -130,12 +132,23 @@ class MockBroker implements GeoPresalesBroker {
   }
 
   async createFile(input: { filename: string }): Promise<BrokerFile> {
+    if (input.filename === "website-one-shot-kb-builder.skill.zip") {
+      return {
+        id: `skill-file-${this.nextSkillFile++}`,
+        filename: input.filename,
+        status: "pending",
+      };
+    }
     const id = `file-${this.uploads.size + 1}`;
     return { id, filename: input.filename, status: "pending" };
   }
 
   async uploadFile(fileId: string, body: Buffer) {
-    this.uploads.set(fileId, body);
+    if (fileId.startsWith("skill-file-")) {
+      this.skillUploads.set(fileId, body);
+    } else {
+      this.uploads.set(fileId, body);
+    }
     return { status: "uploaded" };
   }
 
@@ -961,6 +974,17 @@ describe("GEO API", () => {
     });
     expect(broker.prompts[0]).toContain("不要询问、等待确认");
     expect(broker.prompts[0]).toContain("catalog.pdf");
+    expect(broker.prompts[0]).not.toContain("# FILE: SKILL.md");
+    expect(broker.taskAttachments[0]).toEqual([
+      {
+        file_id: "skill-file-1",
+        filename: "website-one-shot-kb-builder.skill.zip",
+      },
+      { file_id: ticket.fileId, filename: "catalog.pdf" },
+    ]);
+    expect(
+      broker.skillUploads.get("skill-file-1")?.subarray(0, 4).toString("hex"),
+    ).toBe("504b0304");
   });
 
   it("binds upload tickets to the invitation session and declared size", async () => {
@@ -1323,7 +1347,7 @@ describe("GEO API", () => {
     expect(retried.body).toMatchObject({
       ok: true,
       deletedTasks: 1,
-      deletedFiles: 1,
+      deletedFiles: 2,
     });
   });
 
@@ -1845,6 +1869,10 @@ describe("GEO API", () => {
     );
     expect(broker.prompts.at(-1)).not.toContain('"rawInput": "Acme"');
     expect(broker.taskAttachments.at(-1)).toEqual([
+      {
+        file_id: "skill-file-2",
+        filename: "website-one-shot-kb-builder.skill.zip",
+      },
       { file_id: "archive-1", filename: "Acme.zip" },
     ]);
   });
@@ -1982,6 +2010,10 @@ describe("GEO API", () => {
     expect(replay.response.status).toBe(201);
     expect(broker.uploads.size).toBe(1);
     expect(broker.taskAttachments.at(-1)).toEqual([
+      {
+        file_id: "skill-file-2",
+        filename: "website-one-shot-kb-builder.skill.zip",
+      },
       { file_id: "file-1", filename: "Acme.zip" },
     ]);
     expect((replay.body as Record<string, any>).projectToken).toBe(

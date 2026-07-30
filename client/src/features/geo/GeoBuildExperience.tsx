@@ -4037,6 +4037,9 @@ function ExecutionLogDialog({
     typeof selectedEntry?.progress === "number"
       ? Math.max(0, Math.min(100, selectedEntry.progress))
       : undefined;
+  const showSelectedEntryProgress = shouldRenderExecutionProgress(
+    selectedEntry,
+  );
   const canRefresh =
     Boolean(project.remoteToken) &&
     !isGeoDraftProject(project) &&
@@ -4102,8 +4105,8 @@ function ExecutionLogDialog({
                     <strong>{entry.title}</strong>
                     <small>{executionStatusLabel(entry.status)}</small>
                   </span>
-                  {typeof entry.progress === "number" && (
-                    <b>{Math.round(entry.progress)}%</b>
+                  {shouldRenderExecutionProgress(entry) && (
+                    <b>{Math.round(entry.progress!)}%</b>
                   )}
                 </button>
               ))}
@@ -4171,7 +4174,7 @@ function ExecutionLogDialog({
                   )}
                 </div>
 
-                {progress !== undefined && (
+                {showSelectedEntryProgress && progress !== undefined && (
                   <div
                     className="geo-execution-progress"
                     role="progressbar"
@@ -4263,6 +4266,16 @@ function ExecutionLogDialog({
         )}
       </DialogContent>
     </Dialog>
+  );
+}
+
+export function shouldRenderExecutionProgress(
+  entry?: Pick<GeoExecutionLogEntry, "stage" | "progress">,
+) {
+  return (
+    entry?.stage !== "enterprise_analysis" &&
+    typeof entry?.progress === "number" &&
+    Number.isFinite(entry.progress)
   );
 }
 

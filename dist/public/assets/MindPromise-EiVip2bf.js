@@ -1,1 +1,0 @@
-import{j as r}from"./vendor-react-DcZzsDax.js";import{P as o}from"./ProductIntro-ChqmvM0X.js";import"./vendor-radix-Dc_FVRD7.js";import"./vendor-BBgHgdI5.js";import"./index-Db1UtT6J.js";import"./AnimatedWidgets-CcT9pT_T.js";function n(){return r.jsx(o,{product:"mindpromise"})}export{n as default};

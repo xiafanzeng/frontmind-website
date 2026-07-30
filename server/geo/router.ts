@@ -74,6 +74,10 @@ import {
   buildWebsiteKnowledgeBaseRepairPrompt,
 } from "./prompts";
 import {
+  buildWebsiteKnowledgeBaseSkillArchive,
+  WEBSITE_KB_SKILL_ARCHIVE_FILENAME,
+} from "./skills";
+import {
   createGeoAccountProvisioner,
   createGeoKnowledgeImporter,
   createGeoManualServiceOrderAccountSubmitter,
@@ -761,7 +765,7 @@ export function createGeoRouter(options: GeoRouterOptions = {}): Router {
         invalidTaskId,
         archive,
       );
-      const repairedTask = await broker.createTask({
+      const repaired = await createWebsiteKnowledgeBaseTaskWithSkill(broker, {
         projectId: trackedValue.projectId,
         prompt: await buildWebsiteKnowledgeBaseRepairPrompt({
           companyName: trackedValue.companyName,
@@ -777,26 +781,30 @@ export function createGeoRouter(options: GeoRouterOptions = {}): Router {
         ],
         idempotencyKey: `geo:${trackedValue.projectId}:knowledge-base-repair:2`,
       });
+      const repairedTask = repaired.task;
       const repairedTaskId = taskIdFrom(repairedTask);
-      if (!repairedTaskId)
+      if (!repairedTaskId) {
+        await broker
+          .deleteFile(repaired.skillAttachment.file_id)
+          .catch(() => undefined);
         throw new GeoHttpError(
           "重新整理企业知识库失败：缺少任务 ID",
           502,
           "TASK_ID_MISSING",
         );
+      }
       const nextValue: ProjectTokenValue = {
         ...trackedValue,
         knowledgeBaseTaskId: repairedTaskId,
         knowledgeBaseSubmittedAt: new Date().toISOString(),
         knowledgeBaseAttempt: 2,
-        temporaryFileIds: attachment.temporary
-          ? Array.from(
-              new Set([
-                ...(trackedValue.temporaryFileIds || []),
-                attachment.file_id,
-              ]),
-            )
-          : trackedValue.temporaryFileIds,
+        temporaryFileIds: Array.from(
+          new Set([
+            ...(trackedValue.temporaryFileIds || []),
+            repaired.skillAttachment.file_id,
+            ...(attachment.temporary ? [attachment.file_id] : []),
+          ]),
+        ),
         previousKnowledgeBaseTaskIds: Array.from(
           new Set([
             ...(trackedValue.previousKnowledgeBaseTaskIds || []),
@@ -1744,7 +1752,7 @@ export function createGeoRouter(options: GeoRouterOptions = {}): Router {
           )
         : crypto.randomUUID();
       const prompt = await buildWebsiteKnowledgeBasePrompt(input);
-      const task = await broker.createTask({
+      const created = await createWebsiteKnowledgeBaseTaskWithSkill(broker, {
         projectId,
         prompt,
         attachments: input.attachments.map((attachment) => ({
@@ -1753,13 +1761,18 @@ export function createGeoRouter(options: GeoRouterOptions = {}): Router {
         })),
         idempotencyKey: `geo:${projectId}:knowledge-base:1`,
       });
+      const task = created.task;
       const taskId = taskIdFrom(task);
-      if (!taskId)
+      if (!taskId) {
+        await broker
+          .deleteFile(created.skillAttachment.file_id)
+          .catch(() => undefined);
         throw new GeoHttpError(
           "创建知识库任务失败：缺少任务 ID",
           502,
           "TASK_ID_MISSING",
         );
+      }
 
       const companyIdentity = deriveCompanyIdentity(input);
       const value: ProjectTokenValue = {
@@ -1772,6 +1785,7 @@ export function createGeoRouter(options: GeoRouterOptions = {}): Router {
         knowledgeBaseValidationProfile: "website-lead-v1",
         knowledgeBaseAttempt: 1,
         uploadFileIds: uploads.map((upload) => upload.fileId),
+        temporaryFileIds: [created.skillAttachment.file_id],
       };
       const projectToken = codec.seal("project", value, PROJECT_TTL_MS);
       const project = await buildProjectView(
@@ -1946,7 +1960,7 @@ export function createGeoRouter(options: GeoRouterOptions = {}): Router {
         ...retryInput,
         attachments: retryAttachments,
       };
-      const task = await broker.createTask({
+      const created = await createWebsiteKnowledgeBaseTaskWithSkill(broker, {
         projectId: value.projectId,
         prompt: await buildWebsiteKnowledgeBasePrompt(normalizedRetryInput),
         attachments: normalizedRetryInput.attachments.map((attachment) => ({
@@ -1955,19 +1969,30 @@ export function createGeoRouter(options: GeoRouterOptions = {}): Router {
         })),
         idempotencyKey: `geo:${value.projectId}:knowledge-base:2`,
       });
+      const task = created.task;
       const taskId = taskIdFrom(task);
-      if (!taskId)
+      if (!taskId) {
+        await broker
+          .deleteFile(created.skillAttachment.file_id)
+          .catch(() => undefined);
         throw new GeoHttpError(
           "重新创建企业分析任务失败：缺少任务 ID",
           502,
           "TASK_ID_MISSING",
         );
+      }
       const nextValue: ProjectTokenValue = {
         ...trackArchiveFile(value, currentTask),
         knowledgeBaseTaskId: taskId,
         knowledgeBaseSubmittedAt: new Date().toISOString(),
         knowledgeBaseValidationProfile: "website-lead-v1",
         knowledgeBaseAttempt: 2,
+        temporaryFileIds: Array.from(
+          new Set([
+            ...(value.temporaryFileIds || []),
+            created.skillAttachment.file_id,
+          ]),
+        ),
         previousKnowledgeBaseTaskIds: Array.from(
           new Set([
             ...(value.previousKnowledgeBaseTaskIds || []),
@@ -5316,6 +5341,38 @@ async function materializeArchiveAttachment(
     filename: file.filename || archive.filename,
     temporary: true,
   };
+}
+
+async function createWebsiteKnowledgeBaseTaskWithSkill(
+  broker: GeoPresalesBroker,
+  input: {
+    projectId: string;
+    prompt: string;
+    attachments: Array<{ file_id: string; filename: string }>;
+    idempotencyKey: string;
+  },
+) {
+  const body = await buildWebsiteKnowledgeBaseSkillArchive();
+  const file = await broker.createFile({
+    filename: WEBSITE_KB_SKILL_ARCHIVE_FILENAME,
+    mimeType: "application/zip",
+    sizeBytes: body.length,
+  });
+  try {
+    await broker.uploadFile(file.id, body, "application/zip");
+    const skillAttachment = {
+      file_id: file.id,
+      filename: file.filename || WEBSITE_KB_SKILL_ARCHIVE_FILENAME,
+    };
+    const task = await broker.createTask({
+      ...input,
+      attachments: [skillAttachment, ...input.attachments],
+    });
+    return { task, skillAttachment };
+  } catch (error) {
+    await broker.deleteFile(file.id).catch(() => undefined);
+    throw error;
+  }
 }
 
 function trackArchiveFile(

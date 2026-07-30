@@ -1,7 +1,7 @@
 import type { CreateProjectRequest } from "./schemas";
 import {
   loadGeoQuestionRecommenderSkill,
-  loadWebsiteKnowledgeBaseSkill,
+  WEBSITE_KB_SKILL_ARCHIVE_FILENAME,
 } from "./skills";
 
 type WebsiteKnowledgePromptInput = Omit<CreateProjectRequest, "attachments"> & {
@@ -20,11 +20,11 @@ const KNOWLEDGE_BASE_RUNTIME_GATE = `
 export async function buildWebsiteKnowledgeBasePrompt(
   input: WebsiteKnowledgePromptInput,
 ) {
-  const skill = await loadWebsiteKnowledgeBaseSkill();
   const attachmentNames = input.attachments.map((item) => item.filename);
 
   return [
-    "严格执行下方 website-one-shot-kb-builder skill。此次任务是官网应用的一次性企业知识库构建，不存在后续用户对话。",
+    `严格执行随任务附带的 ${WEBSITE_KB_SKILL_ARCHIVE_FILENAME}。先解压 ZIP 并完整读取根目录 SKILL.md，再开始工作。该附件是本任务唯一的 website-one-shot-kb-builder 工作规约。`,
+    "此次任务是官网应用的一次性企业知识库构建，不存在后续用户对话。",
     "不要询问、等待确认、要求补充、提供跳过选项或提前交付选项；完成广度优先采集、叶子节点写入和 ZIP 打包后再结束任务。",
     "不得开启、调用、切换或推荐 Wide Research / Deep Research；只使用当前 Agent 模式下的普通浏览、搜索和文件工具。",
     "始终使用简体中文撰写知识库，来源原文和专有名词可保留原语言。",
@@ -44,10 +44,6 @@ export async function buildWebsiteKnowledgeBasePrompt(
       null,
       2,
     ),
-    "",
-    "## website-one-shot-kb-builder",
-    skill,
-    "",
     "## 最终运行门禁",
     KNOWLEDGE_BASE_RUNTIME_GATE,
   ].join("\n");
@@ -81,6 +77,7 @@ export async function buildWebsiteKnowledgeBaseRepairPrompt({
           ];
   return [
     ...repairInstructions,
+    `随任务附带 ${WEBSITE_KB_SKILL_ARCHIVE_FILENAME}。先解压并完整读取根目录 SKILL.md，再按照本次定向修复约束工作。`,
     "不得开启、调用、切换或推荐 Wide Research / Deep Research；只使用当前 Agent 模式的普通文件、浏览和搜索工具。",
     "不得把缺失证据补写成已验证事实。无法由现有证据支持的叶子必须保留为 needs_verification，确实不适用的叶子才可标为 not_applicable。",
     "客户正文只能保留中性百科事实。删除任务过程、证据判断、采购/合规建议、读者指令和模型推理；缺口与核验说明只能进入非客户证据层。",

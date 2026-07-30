@@ -2,7 +2,7 @@
 import express2 from "express";
 import compression from "compression";
 import { createServer } from "http";
-import { createHash as createHash3 } from "node:crypto";
+import { createHash as createHash4 } from "node:crypto";
 import path6 from "path";
 import { fileURLToPath } from "url";
 import { existsSync } from "fs";
@@ -8480,8 +8480,10 @@ function textValue(value) {
 }
 
 // server/geo/skills.ts
+import { createHash as createHash3 } from "node:crypto";
 import fs4 from "node:fs/promises";
 import path5 from "node:path";
+import JSZip2 from "jszip";
 var WEBSITE_KB_SKILL = {
   name: "website-one-shot-kb-builder",
   files: ["SKILL.md"]
@@ -8495,6 +8497,8 @@ var QUESTION_SKILL = {
   ]
 };
 var skillCache = /* @__PURE__ */ new Map();
+var WEBSITE_KB_SKILL_ARCHIVE_DATE = /* @__PURE__ */ new Date("1980-01-01T00:00:00.000Z");
+var WEBSITE_KB_SKILL_ARCHIVE_FILENAME = "website-one-shot-kb-builder.skill.zip";
 function skillRootCandidates3() {
   const configuredRoot = process.env.FRONTMIND_GEO_SKILLS_DIR?.trim();
   if (configuredRoot) {
@@ -8551,6 +8555,44 @@ ${content.trim()}`;
 function loadWebsiteKnowledgeBaseSkill() {
   return loadSkill(WEBSITE_KB_SKILL);
 }
+async function buildWebsiteKnowledgeBaseSkillArchive() {
+  const loaded = await loadWebsiteKnowledgeBaseSkill();
+  const prefix = "# FILE: SKILL.md\n\n";
+  if (!loaded.startsWith(prefix)) {
+    throw new Error("Website knowledge-base Skill entrypoint is invalid");
+  }
+  const skill = loaded.slice(prefix.length);
+  const skillHash = createHash3("sha256").update(skill).digest("hex");
+  const zip = new JSZip2();
+  zip.file("SKILL.md", skill, {
+    date: WEBSITE_KB_SKILL_ARCHIVE_DATE,
+    unixPermissions: 33188
+  });
+  zip.file(
+    "MANIFEST.json",
+    `${JSON.stringify(
+      {
+        schemaVersion: 1,
+        name: "website-one-shot-kb-builder",
+        entrypoint: "SKILL.md",
+        sha256: skillHash
+      },
+      null,
+      2
+    )}
+`,
+    {
+      date: WEBSITE_KB_SKILL_ARCHIVE_DATE,
+      unixPermissions: 33188
+    }
+  );
+  return zip.generateAsync({
+    type: "nodebuffer",
+    compression: "DEFLATE",
+    compressionOptions: { level: 9 },
+    platform: "UNIX"
+  });
+}
 function loadGeoQuestionRecommenderSkill() {
   return loadSkill(QUESTION_SKILL);
 }
@@ -8565,10 +8607,10 @@ var KNOWLEDGE_BASE_RUNTIME_GATE = `
 5. \u4ECE\u6700\u7EC8\u6587\u4EF6\u91CD\u7B97\u8BA1\u6570\u4E0E\u5173\u8054\u540E\u9644\u5E26\u4E00\u4E2A\u5019\u9009 ZIP\uFF1B\u6E05\u5355\u89C4\u8303\u5316\u3001\u54C8\u5E0C\u3001\u683C\u5F0F\u548C\u5BA2\u6237\u6210\u54C1\u8D28\u91CF\u7531\u670D\u52A1\u7AEF\u7EC8\u7ED3\u5668\u518D\u6B21\u6821\u9A8C\uFF0C\u4E0D\u5F97\u5047\u79F0\u6267\u884C\u8FDC\u7AEF\u73AF\u5883\u4E2D\u4E0D\u5B58\u5728\u7684\u672C\u5730\u811A\u672C\u3002
 `.trim();
 async function buildWebsiteKnowledgeBasePrompt(input) {
-  const skill = await loadWebsiteKnowledgeBaseSkill();
   const attachmentNames = input.attachments.map((item) => item.filename);
   return [
-    "\u4E25\u683C\u6267\u884C\u4E0B\u65B9 website-one-shot-kb-builder skill\u3002\u6B64\u6B21\u4EFB\u52A1\u662F\u5B98\u7F51\u5E94\u7528\u7684\u4E00\u6B21\u6027\u4F01\u4E1A\u77E5\u8BC6\u5E93\u6784\u5EFA\uFF0C\u4E0D\u5B58\u5728\u540E\u7EED\u7528\u6237\u5BF9\u8BDD\u3002",
+    `\u4E25\u683C\u6267\u884C\u968F\u4EFB\u52A1\u9644\u5E26\u7684 ${WEBSITE_KB_SKILL_ARCHIVE_FILENAME}\u3002\u5148\u89E3\u538B ZIP \u5E76\u5B8C\u6574\u8BFB\u53D6\u6839\u76EE\u5F55 SKILL.md\uFF0C\u518D\u5F00\u59CB\u5DE5\u4F5C\u3002\u8BE5\u9644\u4EF6\u662F\u672C\u4EFB\u52A1\u552F\u4E00\u7684 website-one-shot-kb-builder \u5DE5\u4F5C\u89C4\u7EA6\u3002`,
+    "\u6B64\u6B21\u4EFB\u52A1\u662F\u5B98\u7F51\u5E94\u7528\u7684\u4E00\u6B21\u6027\u4F01\u4E1A\u77E5\u8BC6\u5E93\u6784\u5EFA\uFF0C\u4E0D\u5B58\u5728\u540E\u7EED\u7528\u6237\u5BF9\u8BDD\u3002",
     "\u4E0D\u8981\u8BE2\u95EE\u3001\u7B49\u5F85\u786E\u8BA4\u3001\u8981\u6C42\u8865\u5145\u3001\u63D0\u4F9B\u8DF3\u8FC7\u9009\u9879\u6216\u63D0\u524D\u4EA4\u4ED8\u9009\u9879\uFF1B\u5B8C\u6210\u5E7F\u5EA6\u4F18\u5148\u91C7\u96C6\u3001\u53F6\u5B50\u8282\u70B9\u5199\u5165\u548C ZIP \u6253\u5305\u540E\u518D\u7ED3\u675F\u4EFB\u52A1\u3002",
     "\u4E0D\u5F97\u5F00\u542F\u3001\u8C03\u7528\u3001\u5207\u6362\u6216\u63A8\u8350 Wide Research / Deep Research\uFF1B\u53EA\u4F7F\u7528\u5F53\u524D Agent \u6A21\u5F0F\u4E0B\u7684\u666E\u901A\u6D4F\u89C8\u3001\u641C\u7D22\u548C\u6587\u4EF6\u5DE5\u5177\u3002",
     "\u59CB\u7EC8\u4F7F\u7528\u7B80\u4F53\u4E2D\u6587\u64B0\u5199\u77E5\u8BC6\u5E93\uFF0C\u6765\u6E90\u539F\u6587\u548C\u4E13\u6709\u540D\u8BCD\u53EF\u4FDD\u7559\u539F\u8BED\u8A00\u3002",
@@ -8588,10 +8630,6 @@ async function buildWebsiteKnowledgeBasePrompt(input) {
       null,
       2
     ),
-    "",
-    "## website-one-shot-kb-builder",
-    skill,
-    "",
     "## \u6700\u7EC8\u8FD0\u884C\u95E8\u7981",
     KNOWLEDGE_BASE_RUNTIME_GATE
   ].join("\n");
@@ -8614,6 +8652,7 @@ async function buildWebsiteKnowledgeBaseRepairPrompt({
   ];
   return [
     ...repairInstructions,
+    `\u968F\u4EFB\u52A1\u9644\u5E26 ${WEBSITE_KB_SKILL_ARCHIVE_FILENAME}\u3002\u5148\u89E3\u538B\u5E76\u5B8C\u6574\u8BFB\u53D6\u6839\u76EE\u5F55 SKILL.md\uFF0C\u518D\u6309\u7167\u672C\u6B21\u5B9A\u5411\u4FEE\u590D\u7EA6\u675F\u5DE5\u4F5C\u3002`,
     "\u4E0D\u5F97\u5F00\u542F\u3001\u8C03\u7528\u3001\u5207\u6362\u6216\u63A8\u8350 Wide Research / Deep Research\uFF1B\u53EA\u4F7F\u7528\u5F53\u524D Agent \u6A21\u5F0F\u7684\u666E\u901A\u6587\u4EF6\u3001\u6D4F\u89C8\u548C\u641C\u7D22\u5DE5\u5177\u3002",
     "\u4E0D\u5F97\u628A\u7F3A\u5931\u8BC1\u636E\u8865\u5199\u6210\u5DF2\u9A8C\u8BC1\u4E8B\u5B9E\u3002\u65E0\u6CD5\u7531\u73B0\u6709\u8BC1\u636E\u652F\u6301\u7684\u53F6\u5B50\u5FC5\u987B\u4FDD\u7559\u4E3A needs_verification\uFF0C\u786E\u5B9E\u4E0D\u9002\u7528\u7684\u53F6\u5B50\u624D\u53EF\u6807\u4E3A not_applicable\u3002",
     "\u5BA2\u6237\u6B63\u6587\u53EA\u80FD\u4FDD\u7559\u4E2D\u6027\u767E\u79D1\u4E8B\u5B9E\u3002\u5220\u9664\u4EFB\u52A1\u8FC7\u7A0B\u3001\u8BC1\u636E\u5224\u65AD\u3001\u91C7\u8D2D/\u5408\u89C4\u5EFA\u8BAE\u3001\u8BFB\u8005\u6307\u4EE4\u548C\u6A21\u578B\u63A8\u7406\uFF1B\u7F3A\u53E3\u4E0E\u6838\u9A8C\u8BF4\u660E\u53EA\u80FD\u8FDB\u5165\u975E\u5BA2\u6237\u8BC1\u636E\u5C42\u3002",
@@ -9052,7 +9091,7 @@ function createGeoRouter(options = {}) {
         invalidTaskId,
         archive
       );
-      const repairedTask = await broker.createTask({
+      const repaired = await createWebsiteKnowledgeBaseTaskWithSkill(broker, {
         projectId: trackedValue.projectId,
         prompt: await buildWebsiteKnowledgeBaseRepairPrompt({
           companyName: trackedValue.companyName,
@@ -9068,24 +9107,28 @@ function createGeoRouter(options = {}) {
         ],
         idempotencyKey: `geo:${trackedValue.projectId}:knowledge-base-repair:2`
       });
+      const repairedTask = repaired.task;
       const repairedTaskId = taskIdFrom(repairedTask);
-      if (!repairedTaskId)
+      if (!repairedTaskId) {
+        await broker.deleteFile(repaired.skillAttachment.file_id).catch(() => void 0);
         throw new GeoHttpError(
           "\u91CD\u65B0\u6574\u7406\u4F01\u4E1A\u77E5\u8BC6\u5E93\u5931\u8D25\uFF1A\u7F3A\u5C11\u4EFB\u52A1 ID",
           502,
           "TASK_ID_MISSING"
         );
+      }
       const nextValue = {
         ...trackedValue,
         knowledgeBaseTaskId: repairedTaskId,
         knowledgeBaseSubmittedAt: (/* @__PURE__ */ new Date()).toISOString(),
         knowledgeBaseAttempt: 2,
-        temporaryFileIds: attachment.temporary ? Array.from(
+        temporaryFileIds: Array.from(
           /* @__PURE__ */ new Set([
             ...trackedValue.temporaryFileIds || [],
-            attachment.file_id
+            repaired.skillAttachment.file_id,
+            ...attachment.temporary ? [attachment.file_id] : []
           ])
-        ) : trackedValue.temporaryFileIds,
+        ),
         previousKnowledgeBaseTaskIds: Array.from(
           /* @__PURE__ */ new Set([
             ...trackedValue.previousKnowledgeBaseTaskIds || [],
@@ -9826,7 +9869,7 @@ function createGeoRouter(options = {}) {
         input
       ) : crypto5.randomUUID();
       const prompt = await buildWebsiteKnowledgeBasePrompt(input);
-      const task = await broker.createTask({
+      const created = await createWebsiteKnowledgeBaseTaskWithSkill(broker, {
         projectId,
         prompt,
         attachments: input.attachments.map((attachment) => ({
@@ -9835,13 +9878,16 @@ function createGeoRouter(options = {}) {
         })),
         idempotencyKey: `geo:${projectId}:knowledge-base:1`
       });
+      const task = created.task;
       const taskId = taskIdFrom(task);
-      if (!taskId)
+      if (!taskId) {
+        await broker.deleteFile(created.skillAttachment.file_id).catch(() => void 0);
         throw new GeoHttpError(
           "\u521B\u5EFA\u77E5\u8BC6\u5E93\u4EFB\u52A1\u5931\u8D25\uFF1A\u7F3A\u5C11\u4EFB\u52A1 ID",
           502,
           "TASK_ID_MISSING"
         );
+      }
       const companyIdentity = deriveCompanyIdentity(input);
       const value = {
         projectId,
@@ -9852,7 +9898,8 @@ function createGeoRouter(options = {}) {
         knowledgeBaseSubmittedAt: (/* @__PURE__ */ new Date()).toISOString(),
         knowledgeBaseValidationProfile: "website-lead-v1",
         knowledgeBaseAttempt: 1,
-        uploadFileIds: uploads.map((upload) => upload.fileId)
+        uploadFileIds: uploads.map((upload) => upload.fileId),
+        temporaryFileIds: [created.skillAttachment.file_id]
       };
       const projectToken = codec.seal("project", value, PROJECT_TTL_MS);
       const project = await buildProjectView(
@@ -9997,7 +10044,7 @@ function createGeoRouter(options = {}) {
         ...retryInput,
         attachments: retryAttachments
       };
-      const task = await broker.createTask({
+      const created = await createWebsiteKnowledgeBaseTaskWithSkill(broker, {
         projectId: value.projectId,
         prompt: await buildWebsiteKnowledgeBasePrompt(normalizedRetryInput),
         attachments: normalizedRetryInput.attachments.map((attachment) => ({
@@ -10006,19 +10053,28 @@ function createGeoRouter(options = {}) {
         })),
         idempotencyKey: `geo:${value.projectId}:knowledge-base:2`
       });
+      const task = created.task;
       const taskId = taskIdFrom(task);
-      if (!taskId)
+      if (!taskId) {
+        await broker.deleteFile(created.skillAttachment.file_id).catch(() => void 0);
         throw new GeoHttpError(
           "\u91CD\u65B0\u521B\u5EFA\u4F01\u4E1A\u5206\u6790\u4EFB\u52A1\u5931\u8D25\uFF1A\u7F3A\u5C11\u4EFB\u52A1 ID",
           502,
           "TASK_ID_MISSING"
         );
+      }
       const nextValue = {
         ...trackArchiveFile(value, currentTask),
         knowledgeBaseTaskId: taskId,
         knowledgeBaseSubmittedAt: (/* @__PURE__ */ new Date()).toISOString(),
         knowledgeBaseValidationProfile: "website-lead-v1",
         knowledgeBaseAttempt: 2,
+        temporaryFileIds: Array.from(
+          /* @__PURE__ */ new Set([
+            ...value.temporaryFileIds || [],
+            created.skillAttachment.file_id
+          ])
+        ),
         previousKnowledgeBaseTaskIds: Array.from(
           /* @__PURE__ */ new Set([
             ...value.previousKnowledgeBaseTaskIds || [],
@@ -12678,6 +12734,29 @@ async function materializeArchiveAttachment(broker, taskId, archive) {
     temporary: true
   };
 }
+async function createWebsiteKnowledgeBaseTaskWithSkill(broker, input) {
+  const body = await buildWebsiteKnowledgeBaseSkillArchive();
+  const file = await broker.createFile({
+    filename: WEBSITE_KB_SKILL_ARCHIVE_FILENAME,
+    mimeType: "application/zip",
+    sizeBytes: body.length
+  });
+  try {
+    await broker.uploadFile(file.id, body, "application/zip");
+    const skillAttachment = {
+      file_id: file.id,
+      filename: file.filename || WEBSITE_KB_SKILL_ARCHIVE_FILENAME
+    };
+    const task = await broker.createTask({
+      ...input,
+      attachments: [skillAttachment, ...input.attachments]
+    });
+    return { task, skillAttachment };
+  } catch (error) {
+    await broker.deleteFile(file.id).catch(() => void 0);
+    throw error;
+  }
+}
 function trackArchiveFile(value, task) {
   const fileId = findArchiveDescriptor(task)?.fileId;
   if (!fileId || value.archiveFileIds?.includes(fileId)) return value;
@@ -13090,7 +13169,7 @@ async function getGeoRuntimeSkillReadiness() {
   return GEO_RUNTIME_SKILLS.map((skill, index) => ({
     ...skill,
     status: "ok",
-    contentHash: createHash3("sha256").update(contents[index], "utf8").digest("hex")
+    contentHash: createHash4("sha256").update(contents[index], "utf8").digest("hex")
   }));
 }
 async function startServer() {

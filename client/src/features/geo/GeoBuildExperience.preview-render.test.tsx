@@ -18,6 +18,7 @@ import {
   MonitoringResults,
   OptimizationForecastView,
   ServiceActivation,
+  shouldRenderExecutionProgress,
   StageNavigation,
 } from "./GeoBuildExperience";
 import { KnowledgeCompletenessDetails } from "./KnowledgeCompletenessDialog";
@@ -92,6 +93,21 @@ describe("GEO style preview rendering", () => {
         Date.parse("2026-07-28T09:00:00.000Z"),
       ),
     ).toBe("00:00:30");
+  });
+
+  it("never renders vendor percentage progress for enterprise analysis", () => {
+    expect(
+      shouldRenderExecutionProgress({
+        stage: "enterprise_analysis",
+        progress: 12,
+      }),
+    ).toBe(false);
+    expect(
+      shouldRenderExecutionProgress({
+        stage: "monitoring",
+        progress: 12,
+      }),
+    ).toBe(true);
   });
 
   it("keeps the active stage readable in the compact navigation", () => {
