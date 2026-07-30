@@ -544,7 +544,6 @@ export type GeoProject = {
   status: GeoProjectStatus;
   progress: number;
   progressLabel?: string;
-  knowledgeBasePipelineVersion?: 2;
   knowledgeBaseRetryAvailable?: boolean;
   knowledgeBaseValidationCategory?:
     | "structure"

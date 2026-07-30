@@ -1,7 +1,7 @@
 # Candidate v1 格式
 
-候选包是服务端 Finalizer 的内容输入，不是最终客户归档。只需确保
-两份 Markdown 完整、来源标记清楚。
+候选包只提供文字和可选 Logo。服务端负责最终目录、完整度、manifest、
+状态、哈希和前台 schema。
 
 ## 目录
 
@@ -11,9 +11,10 @@ candidate/
 ├── 01_customer_draft.md
 ├── 02_run.json
 └── assets/
+    └── logo.png
 ```
 
-`02_run.json` 与 `assets/` 可省略。允许 ZIP 只有一个外层企业目录。
+`02_run.json` 和 `assets/` 可省略。不得加入其他文本、脚本、归档或图片。
 
 ## 00_brand_facts.md
 
@@ -35,8 +36,8 @@ candidate/
 ## D13 公共情报
 ```
 
-标题下可使用段落、列表或表格。事实粒度尽量清楚，每个事实单元保留
-来源标记。缺失维度写一条中性缺口，不得补写行业常识。
+每个维度至少写一个有来源的事实段落或一个 `[待核验]` 缺口。产品族
+使用三级标题分开，避免把多个产品压缩成一段概述。
 
 ## 01_customer_draft.md
 
@@ -56,11 +57,11 @@ candidate/
 `[企业主张](URL)`、`[权威来源](URL)`、`[第三方来源](URL)` 或
 `[上传文件：filename]`。缺口使用 `[待核验]`。
 
-不要在正文中嵌入 HTTP(S) 图片。包内图片可使用相对路径。
+不得在正文中嵌入 HTTP(S) 图片。
 
 ## 02_run.json
 
-该文件为辅助元数据；保持结构简单：
+该文件仅提供可选来源和 Logo 元数据：
 
 ```json
 {
@@ -72,25 +73,20 @@ candidate/
   },
   "sources": [
     {
-      "title": "页面标题",
+      "title": "企业官网",
       "kind": "official_web",
       "status": "read",
-      "url": "https://example.com/page"
-    },
-    {
-      "title": "上传文件",
-      "kind": "user_upload",
-      "status": "read",
-      "attachmentName": "company.pdf"
+      "url": "https://example.com"
     }
   ],
-  "queries": ["搜索词"],
+  "queries": ["企业名称 产品"],
   "assets": [
     {
       "path": "assets/logo.png",
       "type": "brand_identity",
       "sourceKind": "official_web",
       "sourcePageUrl": "https://example.com",
+      "sourceAssetUrl": "https://example.com/logo.png",
       "caption": "企业 Logo"
     }
   ]
@@ -110,4 +106,7 @@ candidate/
 
 允许的 `industryCluster`：`C1`、`C2`、`C3`、`C4`、`C5`、`C6`。
 
-不要写计数、哈希、置信度、最终状态、manifest 或 canonical 引用。
+`assets` 最多一项，且必须是 `assets/logo.<extension>` 与
+`brand_identity`。没有可靠 Logo 时省略 `assets`。
+
+不要写最终计数、哈希、置信度、状态、manifest 或 canonical 引用。

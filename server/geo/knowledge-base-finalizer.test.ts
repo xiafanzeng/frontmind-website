@@ -1,8 +1,5 @@
-import { execFile } from "node:child_process";
-import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
-import os from "node:os";
+import { readFile } from "node:fs/promises";
 import path from "node:path";
-import { promisify } from "node:util";
 import { describe, expect, it } from "vitest";
 import JSZip from "jszip";
 import sharp from "sharp";
@@ -12,6 +9,7 @@ import {
 } from "./knowledge-base-candidate";
 import {
   KnowledgeBaseCompletenessInputSchema,
+  parseKnowledgeBaseArchive,
   WebsiteLeadPackageManifestV3InputSchema,
 } from "./archive";
 import {
@@ -19,8 +17,6 @@ import {
   finalizeKnowledgeBaseCandidate,
   WEBSITE_KB_FINALIZER_VERSION,
 } from "./knowledge-base-finalizer";
-
-const execFileAsync = promisify(execFile);
 
 const factHeadings = [
   ["D01 企业基础", "示例企业提供企业软件服务。[来源](https://example.com/about)"],
@@ -41,7 +37,10 @@ const factHeadings = [
 const customerSections = [
   ["企业与品牌", "示例企业面向企业客户提供软件产品。[来源](https://example.com/about)"],
   ["团队与组织", "公开资料暂未提供完整团队名单。[待核验]"],
-  ["产品与服务", "数据平台提供 API 接入能力。[来源](https://example.com/products)"],
+  [
+    "产品与服务",
+    "### 平台产品\n\n数据平台提供 API 接入能力。[来源](https://example.com/products)",
+  ],
   ["技术与交付", "官方文档介绍了标准 API 接入方式。[来源](https://example.com/docs)"],
   ["客户与行业", "官网称产品服务于研发团队。[企业主张](https://example.com/cases)"],
   ["服务与合作", "企业官网提供公开联系入口。[来源](https://example.com/contact)"],
@@ -53,27 +52,47 @@ async function candidateZip(options?: {
   wrapper?: boolean;
   missingDimension?: boolean;
   malformedRun?: boolean;
+  omitFacts?: boolean;
+  omitCustomer?: boolean;
+  headingAliases?: boolean;
   imageBytes?: Buffer;
+  nonLogoImage?: boolean;
   unsafeFile?: boolean;
 }) {
   const zip = new JSZip();
   const prefix = options?.wrapper ? "example/" : "";
-  zip.file(
-    `${prefix}00_brand_facts.md`,
-    factHeadings
-      .filter(
-        ([heading]) =>
-          !options?.missingDimension || heading !== "D13 公共情报",
-      )
-      .map(([heading, content]) => `## ${heading}\n\n${content}`)
-      .join("\n\n"),
-  );
-  zip.file(
-    `${prefix}01_customer_draft.md`,
-    customerSections
-      .map(([heading, content]) => `## ${heading}\n\n${content}`)
-      .join("\n\n"),
-  );
+  if (!options?.omitFacts) {
+    zip.file(
+      `${prefix}00_brand_facts.md`,
+      factHeadings
+        .filter(
+          ([heading]) =>
+            !options?.missingDimension || heading !== "D13 公共情报",
+        )
+        .map(([heading, content], index) => {
+          const title =
+            options?.headingAliases && index % 2 === 0
+              ? heading.replace(" ", "：")
+              : heading;
+          return `## ${title}\n\n${content}`;
+        })
+        .join("\n\n"),
+    );
+  }
+  if (!options?.omitCustomer) {
+    zip.file(
+      `${prefix}01_customer_draft.md`,
+      customerSections
+        .map(([heading, content], index) => {
+          const title =
+            options?.headingAliases && index % 2 === 0
+              ? `${heading}：`
+              : heading;
+          return `## ${title}\n\n${content}`;
+        })
+        .join("\n\n"),
+    );
+  }
   if (!options?.omitRun) {
     zip.file(
       `${prefix}02_run.json`,
@@ -98,13 +117,13 @@ async function candidateZip(options?: {
             assets: options?.imageBytes
               ? [
                   {
-                    path: "assets/product.png",
-                    type: "product_ui",
+                    path: "assets/logo.png",
+                    type: "brand_identity",
                     sourceKind: "official_web",
-                    sourcePageUrl: "https://example.com/products",
+                    sourcePageUrl: "https://example.com/",
                     sourceAssetUrl:
-                      "https://example.com/assets/product.png",
-                    caption: "示例企业产品界面",
+                      "https://example.com/assets/logo.png",
+                    caption: "示例企业 Logo",
                   },
                 ]
               : [],
@@ -112,7 +131,10 @@ async function candidateZip(options?: {
     );
   }
   if (options?.imageBytes) {
-    zip.file(`${prefix}assets/product.png`, options.imageBytes);
+    zip.file(`${prefix}assets/logo.png`, options.imageBytes);
+  }
+  if (options?.nonLogoImage) {
+    zip.file(`${prefix}assets/product.png`, Buffer.from("not-an-image"));
   }
   if (options?.unsafeFile) {
     zip.file(`${prefix}run.sh`, "echo unsafe");
@@ -131,15 +153,16 @@ describe("website knowledge-base candidate v1", () => {
     expect(parsed.run).toBeUndefined();
   });
 
-  it("reports a precise missing dimension", async () => {
-    await expect(
-      parseKnowledgeBaseCandidate(
-        await candidateZip({ missingDimension: true }),
-      ),
-    ).rejects.toMatchObject<Partial<KnowledgeBaseCandidateError>>({
-      category: "content",
-      message: expect.stringContaining("D13 公共情报"),
-    });
+  it("recovers a missing fact dimension without rejecting the candidate", async () => {
+    const parsed = await parseKnowledgeBaseCandidate(
+      await candidateZip({ missingDimension: true }),
+    );
+    expect(parsed.factSections.get("D13")).toContain(
+      "官网称产品服务于研发团队",
+    );
+    expect(parsed.diagnostics).toContain(
+      "Recovered fact heading D13 公共情报",
+    );
   });
 
   it("ignores malformed optional run metadata when both Markdown files are valid", async () => {
@@ -151,6 +174,44 @@ describe("website knowledge-base candidate v1", () => {
       "02_run.json could not be parsed and was ignored",
     );
     expect(parsed.sources.length).toBeGreaterThan(0);
+  });
+
+  it("recovers the fixed 7 sections when only the fact draft exists", async () => {
+    const parsed = await parseKnowledgeBaseCandidate(
+      await candidateZip({ omitCustomer: true }),
+    );
+    expect(parsed.factSections.size).toBe(13);
+    expect(parsed.customerSections.size).toBe(7);
+    expect(parsed.customerSections.get("产品与服务")).toContain(
+      "数据平台与 API 产品",
+    );
+    expect(parsed.diagnostics).toContain(
+      "Recovered missing 01_customer_draft.md",
+    );
+  });
+
+  it("recovers all fact dimensions when only the customer draft exists", async () => {
+    const parsed = await parseKnowledgeBaseCandidate(
+      await candidateZip({ omitFacts: true }),
+    );
+    expect(parsed.factSections.size).toBe(13);
+    expect(parsed.customerSections.size).toBe(7);
+    expect(parsed.factSections.get("D03")).toContain("数据平台提供 API");
+    expect(parsed.diagnostics).toContain(
+      "Recovered missing 00_brand_facts.md",
+    );
+  });
+
+  it("normalizes heading punctuation and ignores non-logo images", async () => {
+    const parsed = await parseKnowledgeBaseCandidate(
+      await candidateZip({ headingAliases: true, nonLogoImage: true }),
+    );
+    expect(parsed.factSections.size).toBe(13);
+    expect(parsed.customerSections.size).toBe(7);
+    expect(parsed.assets).toHaveLength(0);
+    expect(parsed.diagnostics).toContain(
+      "Ignored non-logo image: assets/product.png",
+    );
   });
 
   it("rejects scripts even when the required Markdown files are present", async () => {
@@ -231,8 +292,10 @@ describe("website knowledge-base finalizer", () => {
 
   it("reports exact contract paths for the legacy completeness key drift", () => {
     const parsed = KnowledgeBaseCompletenessInputSchema.safeParse({
-      statusCounts: {},
-      gapStrings: [],
+      documentStatusCounts: {},
+      documentTypeCounts: {},
+      mediaStatusCounts: {},
+      verification_gaps: [],
     });
     expect(parsed.success).toBe(false);
     if (parsed.success) throw new Error("expected invalid completeness");
@@ -248,7 +311,7 @@ describe("website knowledge-base finalizer", () => {
     );
   });
 
-  it("classifies rich, medium, and sparse candidates without forcing sparse filler", async () => {
+  it("classifies rich, medium, and sparse candidates without requesting content retries", async () => {
     const parsed = await parseKnowledgeBaseCandidate(await candidateZip());
     parsed.metrics = {
       citedSourceCount: 8,
@@ -258,8 +321,8 @@ describe("website knowledge-base finalizer", () => {
     };
     expect(assessKnowledgeBaseCandidate(parsed)).toMatchObject({
       tier: "rich",
-      target: "12000–18000",
-      requiresSupplement: true,
+      target: "按证据自适应",
+      requiresSupplement: false,
       missingDimensions: expect.arrayContaining(["D02 团队"]),
       allowedSources: expect.arrayContaining(["https://example.com/"]),
     });
@@ -272,8 +335,8 @@ describe("website knowledge-base finalizer", () => {
     };
     expect(assessKnowledgeBaseCandidate(parsed)).toMatchObject({
       tier: "medium",
-      target: "6000–12000",
-      requiresSupplement: true,
+      target: "按证据自适应",
+      requiresSupplement: false,
     });
 
     parsed.metrics = {
@@ -303,7 +366,7 @@ describe("website knowledge-base finalizer", () => {
     });
 
     expect(WEBSITE_KB_FINALIZER_VERSION).toBe(
-      "website-kb-finalizer-v1",
+      "website-kb-finalizer-v2",
     );
     expect(first.sha256).toBe(second.sha256);
     expect(first.packageManifestSha256).toBe(
@@ -353,28 +416,31 @@ describe("website knowledge-base finalizer", () => {
     ).toMatchObject({ evidenceStatus: "not_applicable" });
     expect(completeness.counts.inferred).toBe(0);
     expect(completeness.counts.totalLeaves).toBe(leaves.length);
-
-    const temporaryDirectory = await mkdtemp(
-      path.join(os.tmpdir(), "website-kb-finalizer-"),
+    const roundTrip = await parseKnowledgeBaseArchive(first.bytes, {
+      companyName: "示例企业",
+      validationProfile: "website-lead-v1",
+      generatedAt: "2026-07-30T01:00:00.000Z",
+    });
+    expect(roundTrip.sections.map((section) => section.title)).toEqual([
+      "企业与品牌",
+      "团队与组织",
+      "产品与服务",
+      "技术与交付",
+      "客户与行业",
+      "服务与合作",
+      "可信优势",
+    ]);
+    expect(roundTrip.sections.every((section) => section.leaves.length > 0)).toBe(
+      true,
     );
-    try {
-      const archivePath = path.join(temporaryDirectory, "knowledge-base.zip");
-      await writeFile(archivePath, first.bytes);
-      const validatorPath = path.resolve(
-        process.cwd(),
-        "server/skills/website-one-shot-kb-builder/scripts/validate_archive.py",
-      );
-      await expect(
-        execFileAsync("python3", [validatorPath, archivePath]),
-      ).resolves.toMatchObject({
-        stdout: expect.stringContaining("VALID"),
-      });
-    } finally {
-      await rm(temporaryDirectory, { recursive: true, force: true });
-    }
+    expect(
+      roundTrip.sections
+        .find((section) => section.title === "产品与服务")
+        ?.leaves.some((leaf) => leaf.title.includes("平台产品")),
+    ).toBe(true);
   });
 
-  it("normalizes and packages a traceable first-party image", async () => {
+  it("normalizes and packages one traceable first-party logo", async () => {
     const pixels = Buffer.alloc(900 * 500 * 3);
     for (let index = 0; index < pixels.length; index += 1) {
       pixels[index] = (index * 31 + Math.floor(index / 97)) % 256;
@@ -395,8 +461,8 @@ describe("website knowledge-base finalizer", () => {
     expect(finalized.metrics.packagedImages).toBe(1);
     expect(finalized.manifest.assets).toHaveLength(1);
     expect(finalized.manifest.assets[0]).toMatchObject({
-      sectionId: "products-services",
-      sourcePageUrl: "https://example.com/products",
+      sectionId: "company-identity",
+      sourcePageUrl: "https://example.com/",
     });
     const zip = await JSZip.loadAsync(finalized.bytes);
     const manifest = JSON.parse(
@@ -405,8 +471,8 @@ describe("website knowledge-base finalizer", () => {
     expect(manifest.assets[0]).toMatchObject({
       mimeType: "image/png",
       ownership: "first_party",
-      assetType: "product_ui",
-      displayRole: "inline",
+      assetType: "brand_identity",
+      displayRole: "badge",
     });
     expect(zip.file(manifest.assets[0].path)).not.toBeNull();
   });

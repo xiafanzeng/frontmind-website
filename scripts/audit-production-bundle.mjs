@@ -20,7 +20,6 @@ const forbiddenFileNames = new Set([
 ]);
 const runtimeSkillNames = [
   "website-one-shot-kb-builder",
-  "website-one-shot-kb-builder-legacy",
   "geo-question-recommender",
   "geo-knowledge-answer-verifier",
   "geo-current-state-evaluator",
@@ -250,10 +249,10 @@ for (const skillName of runtimeSkillNames) {
     });
   }
 }
-if (runtimeSkillFileCount !== 21) {
+if (runtimeSkillFileCount !== 20) {
   violations.push({
     file: "dist/skills",
-    label: `runtime Skill bundle must contain exactly 21 files, found ${runtimeSkillFileCount}`,
+    label: `runtime Skill bundle must contain exactly 20 files, found ${runtimeSkillFileCount}`,
   });
 }
 

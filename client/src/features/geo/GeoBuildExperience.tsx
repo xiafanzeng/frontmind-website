@@ -2206,15 +2206,6 @@ function GeoBuildExperienceZh() {
       setStorageNotice("当前为本地样式预览，不会重新调用企业分析接口。");
       return;
     }
-    if (
-      !activeProject.knowledgeBase &&
-      activeProject.knowledgeBaseRetryAvailable !== true
-    ) {
-      setStorageNotice(
-        "当前项目已没有可用的自动修复次数，请新建企业项目后重新提交资料。",
-      );
-      return;
-    }
     const retryingQuestions =
       Boolean(activeProject.knowledgeBase) &&
       activeProject.questions.length === 0;
@@ -3815,7 +3806,6 @@ function GeoBuildExperienceZh() {
                     }
                     onDownload={downloadArchive}
                     onRetry={retryProject}
-                    onNewProject={openNewProjectBuilder}
                     onContact={() => setContactOpen(true)}
                     onStart={startDraftAnalysis}
                     starting={startingAnalysisId === activeProject.id}
@@ -4284,7 +4274,6 @@ export function EnterpriseAnalysis({
   archivePersistenceVersion = 0,
   onDownload,
   onRetry,
-  onNewProject,
   onContact,
   onStart,
   starting,
@@ -4294,7 +4283,6 @@ export function EnterpriseAnalysis({
   archivePersistenceVersion?: number;
   onDownload: () => void;
   onRetry: () => void;
-  onNewProject: () => void;
   onContact: () => void;
   onStart: () => void;
   starting: boolean;
@@ -4399,10 +4387,7 @@ export function EnterpriseAnalysis({
         project={{
           ...project,
           status: "analyzing",
-          progressLabel:
-            project.knowledgeBasePipelineVersion === 2
-              ? "正在基于现有证据补充企业知识内容"
-              : "正在基于现有证据执行一次自动校验补救",
+          progressLabel: "正在当前项目中重新生成企业知识库",
           error: undefined,
         }}
         onContact={onContact}
@@ -4411,30 +4396,17 @@ export function EnterpriseAnalysis({
   }
 
   if (project.status === "failed" && !knowledgeBase) {
-    const retryAvailable = project.knowledgeBaseRetryAvailable === true;
-    const supportRequired = project.knowledgeBaseSupportRequired === true;
-    const retryExhaustedGuidance =
-      project.knowledgeBasePipelineVersion !== 2 &&
-      (!project.knowledgeBaseValidationCategory ||
-        project.knowledgeBaseValidationCategory === "structure")
-        ? "自动修复次数已用完，请新建企业项目后重新提交资料，或联系支持。"
-        : undefined;
+    const unsafe = project.knowledgeBaseValidationCategory === "unsafe";
     const failureMessage =
-      project.error || "抓取过程出现异常，已保留当前项目记录。";
+      project.error || "资料处理暂时中断，当前项目与原始资料均已保留。";
     return (
       <div className="geo-failure-state">
         <span>
           <CircleAlert size={24} />
         </span>
-        <h2>企业分析未能完成</h2>
+        <h2>企业资料处理暂时中断</h2>
         <p>{failureMessage}</p>
-        {!retryAvailable &&
-          !supportRequired &&
-          retryExhaustedGuidance &&
-          !failureMessage.includes("自动修复次数已用完") && (
-            <p>{retryExhaustedGuidance}</p>
-          )}
-        {retryAvailable ? (
+        {!unsafe ? (
           <button
             type="button"
             className="geo-primary-button"
@@ -4443,23 +4415,15 @@ export function EnterpriseAnalysis({
             aria-busy={retrying}
           >
             <RotateCw size={15} className={retrying ? "is-spinning" : ""} />
-            {retrying ? "正在重新检查" : "重新检查"}
+            {retrying ? "正在重新生成" : "重新生成知识库"}
           </button>
-        ) : supportRequired ? (
+        ) : (
           <button
             type="button"
             className="geo-primary-button"
             onClick={onContact}
           >
             联系技术支持 <ArrowRight size={15} />
-          </button>
-        ) : (
-          <button
-            type="button"
-            className="geo-primary-button"
-            onClick={onNewProject}
-          >
-            <Plus size={15} /> 新建企业项目
           </button>
         )}
       </div>

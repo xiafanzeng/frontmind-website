@@ -58,7 +58,6 @@ rsync -a \
   --exclude='test-results/' --exclude='playwright-report/' \
   --exclude='coverage/' --exclude='.workflow-uploads/' \
   --exclude='.frontmind-prepared-files/' \
-  --exclude='.frontmind-icp-materials/' \
   --exclude='tmp/pdfs/geo_report_review/' \
   /Users/fanzengxia/Documents/GitHub/frontmind-agent/ \
   /Users/fanzengxia/Documents/FrontMind-release-backups/dashboard-20260728-r1/agent-worktree/
@@ -269,7 +268,7 @@ ss -lntp | grep ':3001 ' || true
 ```
 
 数据库只加入私有 Docker 网络，不开放公网 `3306`。同时创建全新的
-`prepared-files`、`dashboard-assets`、`icp-materials` 持久目录；不挂载旧 Agent 目录。
+`prepared-files`、`dashboard-assets` 持久目录；不挂载旧 Agent 目录。
 
 ### 2.2 运行依赖
 
@@ -302,8 +301,6 @@ FRONTMIND_PUBLIC_URL=https://dashboard.frontmind.net
 FRONTMIND_WEBSITE_URL=https://www.frontmind.net
 FRONTMIND_MONITOR_API_KEY=...
 FRONTMIND_DASHBOARD_IMPORT_PREFLIGHT_SECRET=...
-FRONTMIND_ICP_MATERIAL_KEY=base64:<另一把新生成的32字节密钥>
-FRONTMIND_ICP_MATERIAL_DIR=/var/lib/frontmind/icp-materials
 FRONTMIND_PREPARED_FILE_DIR=/var/lib/frontmind/prepared-files
 FRONTMIND_DASHBOARD_ASSET_DIR=/var/lib/frontmind/dashboard-assets
 FRONTMIND_PDF_WORKERS=1

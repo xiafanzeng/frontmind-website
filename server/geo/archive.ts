@@ -908,14 +908,14 @@ type BranchDefinition = {
 const canonicalBranchDefinitions: readonly BranchDefinition[] = [
   {
     id: "company-identity",
-    title: "企业身份",
+    title: "企业与品牌",
     prefixes: ["01_company_overview/"],
   },
-  { id: "team", title: "团队", prefixes: ["02_team/"] },
-  { id: "products-services", title: "产品/服务", prefixes: ["03_products/"] },
+  { id: "team", title: "团队与组织", prefixes: ["02_team/"] },
+  { id: "products-services", title: "产品与服务", prefixes: ["03_products/"] },
   {
     id: "core-capabilities",
-    title: "核心能力",
+    title: "技术与交付",
     prefixes: ["04_technology/", "05_manufacturing/"],
   },
   {
@@ -924,11 +924,15 @@ const canonicalBranchDefinitions: readonly BranchDefinition[] = [
     prefixes: ["06_industries/"],
   },
   {
+    id: "cooperation",
+    title: "服务与合作",
+    prefixes: ["07_service/"],
+  },
+  {
     id: "why-frontmind",
-    title: "为什么选我们",
+    title: "可信优势",
     prefixes: ["08_competitive_advantages/"],
   },
-  { id: "cooperation", title: "合作方式", prefixes: ["07_service/"] },
 ] as const;
 
 type LegacyCompletenessInput = z.infer<

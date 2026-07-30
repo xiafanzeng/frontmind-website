@@ -61,7 +61,6 @@ describe("GEO style preview rendering", () => {
           project={project}
           onDownload={vi.fn()}
           onRetry={vi.fn()}
-          onNewProject={vi.fn()}
           onContact={vi.fn()}
           onStart={vi.fn()}
           starting={false}
@@ -69,10 +68,9 @@ describe("GEO style preview rendering", () => {
         />,
       );
 
-    expect(render(true)).toContain("正在基于现有证据执行一次自动校验补救");
-    expect(render(true)).not.toContain("企业分析未能完成");
-    expect(render(false)).toContain("企业分析未能完成");
-    expect(render(false)).toContain("重新检查");
+    expect(render(true)).toContain("正在当前项目中重新生成企业知识库");
+    expect(render(false)).toContain("企业资料处理暂时中断");
+    expect(render(false)).toContain("重新生成知识库");
   });
 
   it("starts execution timing at zero when no remote start time exists", () => {
@@ -152,7 +150,6 @@ describe("GEO style preview rendering", () => {
         project={project}
         onDownload={vi.fn()}
         onRetry={vi.fn()}
-        onNewProject={vi.fn()}
         onContact={vi.fn()}
         onStart={vi.fn()}
         starting={false}
@@ -193,7 +190,6 @@ describe("GEO style preview rendering", () => {
         project={project}
         onDownload={vi.fn()}
         onRetry={vi.fn()}
-        onNewProject={vi.fn()}
         onContact={vi.fn()}
         onStart={vi.fn()}
         starting={false}
@@ -255,7 +251,6 @@ describe("GEO style preview rendering", () => {
         project={project}
         onDownload={vi.fn()}
         onRetry={vi.fn()}
-        onNewProject={vi.fn()}
         onContact={vi.fn()}
         onStart={vi.fn()}
         starting={false}
@@ -319,7 +314,6 @@ describe("GEO style preview rendering", () => {
         project={project}
         onDownload={vi.fn()}
         onRetry={vi.fn()}
-        onNewProject={vi.fn()}
         onContact={vi.fn()}
         onStart={vi.fn()}
         starting={false}
@@ -345,7 +339,6 @@ describe("GEO style preview rendering", () => {
         project={project}
         onDownload={vi.fn()}
         onRetry={vi.fn()}
-        onNewProject={vi.fn()}
         onContact={vi.fn()}
         onStart={vi.fn()}
         starting={false}
@@ -354,17 +347,16 @@ describe("GEO style preview rendering", () => {
     );
 
     expect(html).toContain("知识库结构校验未通过");
-    expect(html).toContain("正在重新检查");
+    expect(html).toContain("正在重新生成");
     expect(html).toContain("disabled");
     expect(html).toContain('aria-busy="true"');
-    expect(html).not.toContain("自动修复次数已用完");
-    expect(html).not.toContain("新建企业项目");
+    expect(html).not.toContain("联系技术支持");
   });
 
   it.each([
-    ["structure", true, false, "重新检查"],
-    ["media", false, false, "新建企业项目"],
-    ["content", false, false, "新建企业项目"],
+    ["structure", true, false, "重新生成知识库"],
+    ["media", false, false, "重新生成知识库"],
+    ["content", false, false, "重新生成知识库"],
     ["unsafe", false, true, "联系技术支持"],
   ] as const)(
     "renders only the authorized %s validation action",
@@ -383,7 +375,6 @@ describe("GEO style preview rendering", () => {
           project={project}
           onDownload={vi.fn()}
           onRetry={vi.fn()}
-          onNewProject={vi.fn()}
           onContact={vi.fn()}
           onStart={vi.fn()}
           starting={false}
@@ -392,13 +383,13 @@ describe("GEO style preview rendering", () => {
       );
 
       expect(html).toContain(expectedAction);
-      for (const action of ["重新检查", "新建企业项目", "联系技术支持"]) {
+      for (const action of ["重新生成知识库", "联系技术支持"]) {
         if (action !== expectedAction) expect(html).not.toContain(action);
       }
     },
   );
 
-  it("offers a fresh project instead of a dead retry after repair is exhausted", () => {
+  it("keeps same-project regeneration available when a stale response omits retry authorization", () => {
     const project = {
       ...createGeoStylePreviewProject(),
       status: "failed" as const,
@@ -411,7 +402,6 @@ describe("GEO style preview rendering", () => {
         project={project}
         onDownload={vi.fn()}
         onRetry={vi.fn()}
-        onNewProject={vi.fn()}
         onContact={vi.fn()}
         onStart={vi.fn()}
         starting={false}
@@ -419,10 +409,9 @@ describe("GEO style preview rendering", () => {
       />,
     );
 
-    expect(html).toContain("自动修复次数已用完");
-    expect(html).toContain("请新建企业项目后重新提交资料");
-    expect(html).toContain("新建企业项目");
-    expect(html).not.toContain("重新检查");
+    expect(html).toContain("企业资料处理暂时中断");
+    expect(html).toContain("重新生成知识库");
+    expect(html).not.toContain("联系技术支持");
   });
 
   it("shows delayed status as non-terminal support guidance", () => {
@@ -462,7 +451,6 @@ describe("GEO style preview rendering", () => {
         project={project}
         onDownload={vi.fn()}
         onRetry={vi.fn()}
-        onNewProject={vi.fn()}
         onContact={vi.fn()}
         onStart={vi.fn()}
         starting={false}
@@ -473,10 +461,7 @@ describe("GEO style preview rendering", () => {
     expect(html).toContain("状态同步延迟");
     expect(html).toContain("联系技术支持");
     expect(html).toContain("不会重复创建任务");
-    expect(html).not.toContain("企业分析未能完成");
-    expect(html).not.toContain("自动修复次数已用完");
-    expect(html).not.toContain("新建企业项目");
-    expect(html).not.toContain("重新检查");
+    expect(html).not.toContain("重新生成知识库");
   });
 
   it("renders the latest trusted crawl checkpoint on the analysis page", () => {
@@ -519,7 +504,6 @@ describe("GEO style preview rendering", () => {
         project={project}
         onDownload={vi.fn()}
         onRetry={vi.fn()}
-        onNewProject={vi.fn()}
         onContact={vi.fn()}
         onStart={vi.fn()}
         starting={false}
@@ -548,7 +532,6 @@ describe("GEO style preview rendering", () => {
         project={project}
         onDownload={vi.fn()}
         onRetry={vi.fn()}
-        onNewProject={vi.fn()}
         onContact={vi.fn()}
         onStart={vi.fn()}
         starting={false}
@@ -577,7 +560,6 @@ describe("GEO style preview rendering", () => {
         project={project}
         onDownload={vi.fn()}
         onRetry={vi.fn()}
-        onNewProject={vi.fn()}
         onContact={vi.fn()}
         onStart={vi.fn()}
         starting={false}
@@ -1222,7 +1204,6 @@ describe("GEO style preview rendering", () => {
         project={project}
         onDownload={vi.fn()}
         onRetry={vi.fn()}
-        onNewProject={vi.fn()}
         onContact={vi.fn()}
         onStart={vi.fn()}
         starting={false}

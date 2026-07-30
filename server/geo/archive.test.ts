@@ -1,9 +1,5 @@
-import { execFile } from "node:child_process";
 import { createHash } from "node:crypto";
-import { mkdtemp, rm, writeFile } from "node:fs/promises";
-import os from "node:os";
 import path from "node:path";
-import { promisify } from "node:util";
 import { deflateSync } from "node:zlib";
 import JSZip from "jszip";
 import sharp from "sharp";
@@ -13,8 +9,6 @@ import {
   extractKnowledgeBaseAssetPreviews,
   parseKnowledgeBaseArchive,
 } from "./archive";
-
-const execFileAsync = promisify(execFile);
 
 function crc32(bytes: Buffer) {
   let crc = 0xffffffff;
@@ -1314,7 +1308,7 @@ describe("knowledge-base ZIP manifest", () => {
     );
   });
 
-  it("rejects duplicate normalized evidence content in both validators", async () => {
+  it("rejects duplicate normalized evidence content", async () => {
     const zip = await JSZip.loadAsync(
       await buildWebsiteLeadBudgetFixture({ schemaVersion: 2, imageCount: 1 }),
     );
@@ -1337,28 +1331,9 @@ describe("knowledge-base ZIP manifest", () => {
         validationProfile: "website-lead-v1",
       }),
     ).rejects.toThrow(/duplicate the same normalized content/i);
-
-    const temporaryDirectory = await mkdtemp(
-      path.join(os.tmpdir(), "website-kb-duplicate-evidence-"),
-    );
-    const archivePath = path.join(temporaryDirectory, "knowledge-base.zip");
-    try {
-      await writeFile(archivePath, archive);
-      const validatorPath = path.resolve(
-        process.cwd(),
-        "server/skills/website-one-shot-kb-builder/scripts/validate_archive.py",
-      );
-      await expect(
-        execFileAsync("python3", [validatorPath, archivePath]),
-      ).rejects.toMatchObject({
-        stderr: expect.stringContaining("duplicate normalized content"),
-      });
-    } finally {
-      await rm(temporaryDirectory, { recursive: true, force: true });
-    }
   });
 
-  it("rejects cross-branch evidence links in both validators", async () => {
+  it("rejects cross-branch evidence links", async () => {
     const zip = await JSZip.loadAsync(
       await buildWebsiteLeadBudgetFixture({ schemaVersion: 2, imageCount: 1 }),
     );
@@ -1385,28 +1360,9 @@ describe("knowledge-base ZIP manifest", () => {
         validationProfile: "website-lead-v1",
       }),
     ).rejects.toThrow(/references an invalid evidence document/i);
-
-    const temporaryDirectory = await mkdtemp(
-      path.join(os.tmpdir(), "website-kb-cross-branch-evidence-"),
-    );
-    const archivePath = path.join(temporaryDirectory, "knowledge-base.zip");
-    try {
-      await writeFile(archivePath, archive);
-      const validatorPath = path.resolve(
-        process.cwd(),
-        "server/skills/website-one-shot-kb-builder/scripts/validate_archive.py",
-      );
-      await expect(
-        execFileAsync("python3", [validatorPath, archivePath]),
-      ).rejects.toMatchObject({
-        stderr: expect.stringContaining("invalid evidenceDocumentIds"),
-      });
-    } finally {
-      await rm(temporaryDirectory, { recursive: true, force: true });
-    }
   });
 
-  it("rejects evidence links that do not share a source ID in both validators", async () => {
+  it("rejects evidence links that do not share a source ID", async () => {
     const zip = await JSZip.loadAsync(
       await buildWebsiteLeadBudgetFixture({ schemaVersion: 2, imageCount: 1 }),
     );
@@ -1430,25 +1386,6 @@ describe("knowledge-base ZIP manifest", () => {
         validationProfile: "website-lead-v1",
       }),
     ).rejects.toThrow(/invalid evidence document/i);
-
-    const temporaryDirectory = await mkdtemp(
-      path.join(os.tmpdir(), "website-kb-source-mismatch-"),
-    );
-    const archivePath = path.join(temporaryDirectory, "knowledge-base.zip");
-    try {
-      await writeFile(archivePath, archive);
-      const validatorPath = path.resolve(
-        process.cwd(),
-        "server/skills/website-one-shot-kb-builder/scripts/validate_archive.py",
-      );
-      await expect(
-        execFileAsync("python3", [validatorPath, archivePath]),
-      ).rejects.toMatchObject({
-        stderr: expect.stringContaining("invalid evidenceDocumentIds"),
-      });
-    } finally {
-      await rm(temporaryDirectory, { recursive: true, force: true });
-    }
   });
 
   it("rejects an overview document whose dynamic minimum disagrees with branchEvidence", async () => {
@@ -1478,138 +1415,7 @@ describe("knowledge-base ZIP manifest", () => {
         validationProfile: "website-lead-v1",
       }),
     ).rejects.toThrow(/evidence-adaptive overview minimum/i);
-
-    const temporaryDirectory = await mkdtemp(
-      path.join(os.tmpdir(), "website-kb-overview-minimum-"),
-    );
-    const archivePath = path.join(temporaryDirectory, "knowledge-base.zip");
-    try {
-      await writeFile(archivePath, archive);
-      const validatorPath = path.resolve(
-        process.cwd(),
-        "server/skills/website-one-shot-kb-builder/scripts/validate_archive.py",
-      );
-      await expect(
-        execFileAsync("python3", [validatorPath, archivePath]),
-      ).rejects.toMatchObject({
-        stderr: expect.stringContaining(
-          "overview document dynamic minimum does not match branch evidence",
-        ),
-      });
-    } finally {
-      await rm(temporaryDirectory, { recursive: true, force: true });
-    }
   });
-
-  it("makes the deterministic validator accept an honest sparse v2 package", async () => {
-    const temporaryDirectory = await mkdtemp(
-      path.join(os.tmpdir(), "website-kb-validator-v2-"),
-    );
-    const archivePath = path.join(temporaryDirectory, "knowledge-base.zip");
-    try {
-      await writeFile(
-        archivePath,
-        await buildWebsiteLeadBudgetFixture({
-          schemaVersion: 2,
-          imageCount: 1,
-          narrativeCharactersPerLeaf: 80,
-          v2EvidenceCharactersPerBranch: 120,
-          v2OverviewNarrativeCharacters: 140,
-        }),
-      );
-      const validatorPath = path.resolve(
-        process.cwd(),
-        "server/skills/website-one-shot-kb-builder/scripts/validate_archive.py",
-      );
-      const { stdout } = await execFileAsync("python3", [
-        validatorPath,
-        archivePath,
-      ]);
-      expect(stdout).toContain("VALID");
-      expect(stdout).toContain('"images": 1');
-    } finally {
-      await rm(temporaryDirectory, { recursive: true, force: true });
-    }
-  });
-
-  it("passes the deterministic validator bundled with the website KB skill", async () => {
-    const temporaryDirectory = await mkdtemp(
-      path.join(os.tmpdir(), "website-kb-validator-"),
-    );
-    const archivePath = path.join(temporaryDirectory, "knowledge-base.zip");
-    try {
-      await writeFile(archivePath, await buildWebsiteLeadBudgetFixture());
-      const validatorPath = path.resolve(
-        process.cwd(),
-        "server/skills/website-one-shot-kb-builder/scripts/validate_archive.py",
-      );
-      const { stdout } = await execFileAsync("python3", [
-        validatorPath,
-        archivePath,
-      ]);
-      expect(stdout).toContain("VALID");
-      expect(stdout).toContain('"customerVisibleCharacters": 8000');
-    } finally {
-      await rm(temporaryDirectory, { recursive: true, force: true });
-    }
-  });
-
-  it("makes the deterministic validator reject a prose image claim that the ZIP does not contain", async () => {
-    const temporaryDirectory = await mkdtemp(
-      path.join(os.tmpdir(), "website-kb-validator-"),
-    );
-    const archivePath = path.join(temporaryDirectory, "knowledge-base.zip");
-    try {
-      await writeFile(
-        archivePath,
-        await buildWebsiteLeadBudgetFixture({
-          imageCount: 0,
-          imageTotalOverride: 1,
-          crawlReportImageClaim: 1,
-        }),
-      );
-      const validatorPath = path.resolve(
-        process.cwd(),
-        "server/skills/website-one-shot-kb-builder/scripts/validate_archive.py",
-      );
-      await expect(
-        execFileAsync("python3", [validatorPath, archivePath]),
-      ).rejects.toMatchObject({
-        stderr: expect.stringMatching(
-          /crawl report saved-image count does not match packaged images/i,
-        ),
-      });
-    } finally {
-      await rm(temporaryDirectory, { recursive: true, force: true });
-    }
-  });
-
-  it.each(["jpeg", "webp", "avif"] as const)(
-    "makes the deterministic validator reject a header-only %s asset",
-    async (malformedRaster) => {
-      const temporaryDirectory = await mkdtemp(
-        path.join(os.tmpdir(), "website-kb-validator-"),
-      );
-      const archivePath = path.join(temporaryDirectory, "knowledge-base.zip");
-      try {
-        await writeFile(
-          archivePath,
-          await buildWebsiteLeadBudgetFixture({ malformedRaster }),
-        );
-        const validatorPath = path.resolve(
-          process.cwd(),
-          "server/skills/website-one-shot-kb-builder/scripts/validate_archive.py",
-        );
-        await expect(
-          execFileAsync("python3", [validatorPath, archivePath]),
-        ).rejects.toMatchObject({
-          stderr: expect.stringMatching(/invalid or undecodable image/i),
-        });
-      } finally {
-        await rm(temporaryDirectory, { recursive: true, force: true });
-      }
-    },
-  );
 
   it.each([
     [
@@ -1835,7 +1641,7 @@ describe("knowledge-base ZIP manifest", () => {
     });
   });
 
-  it("rejects customer-facing audit language in both website validators", async () => {
+  it("rejects customer-facing audit language", async () => {
     const archive = await buildWebsiteLeadBudgetFixture({
       schemaVersion: 2,
       imageCount: 1,
@@ -1849,27 +1655,6 @@ describe("knowledge-base ZIP manifest", () => {
         validationProfile: "website-lead-v1",
       }),
     ).rejects.toThrow(/customer-facing audit language or internal reasoning/i);
-
-    const temporaryDirectory = await mkdtemp(
-      path.join(os.tmpdir(), "website-kb-customer-leakage-"),
-    );
-    const archivePath = path.join(temporaryDirectory, "knowledge-base.zip");
-    try {
-      await writeFile(archivePath, archive);
-      const validatorPath = path.resolve(
-        process.cwd(),
-        "server/skills/website-one-shot-kb-builder/scripts/validate_archive.py",
-      );
-      await expect(
-        execFileAsync("python3", [validatorPath, archivePath]),
-      ).rejects.toMatchObject({
-        stderr: expect.stringContaining(
-          "customer-facing audit language or internal reasoning",
-        ),
-      });
-    } finally {
-      await rm(temporaryDirectory, { recursive: true, force: true });
-    }
   });
 
   it.each([

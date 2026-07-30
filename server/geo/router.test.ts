@@ -347,7 +347,7 @@ let paymentGateway: GeoPaymentGateway;
 
 beforeEach(async () => {
   broker = new MockBroker();
-  broker.archive = await fixtureArchive();
+  broker.archive = await fixtureCandidateArchive();
   paymentCalls = [];
   paymentCheckoutCalls = [];
   paymentStatusCalls = [];
@@ -673,7 +673,6 @@ beforeEach(async () => {
       projectOrderRegistry,
       env: {
         NODE_ENV: "test",
-        FRONTMIND_GEO_KB_PIPELINE_V2_ENABLED: "false",
         FRONTMIND_GEO_INVITE_CODE: "frontmind666",
         FRONTMIND_GEO_SESSION_SECRET:
           "test-session-secret-at-least-16-characters",
@@ -1026,7 +1025,7 @@ describe("GEO API", () => {
     expect(wrongSize.status).toBe(400);
   });
 
-  it("returns a rich ZIP-derived manifest and strict questions, then deletes both tasks", async () => {
+  it("finalizes a candidate, returns fixed knowledge sections and strict questions, then deletes both tasks", async () => {
     const { cookie } = await verifyInvite();
     const created = await jsonRequest("/projects", cookie, {
       method: "POST",
@@ -1057,34 +1056,28 @@ describe("GEO API", () => {
       completedPayload.project.knowledgeBase.evidencePaths,
     ).toBeUndefined();
     expect(completedPayload.project.knowledgeBase.sections).toHaveLength(7);
-    expect(completedPayload.project.knowledgeBase.sources).toHaveLength(2);
-    expect(completedPayload.project.knowledgeBase.assets[0].name).toBe(
-      "device.png",
-    );
-    expect(completedPayload.project.kbTask.output).toEqual([]);
-    expect(completedPayload.project.knowledgeBase.assets[0].sectionId).toBe(
-      "products-services",
-    );
     expect(
-      completedPayload.project.knowledgeBase.assets[0].previewUrl,
-    ).toContain("/knowledge-assets/asset-001");
-    expect(completedPayload.project.knowledgeBase.assets[0].archivePath).toBe(
-      "09_media_assets/product_images/device.png",
-    );
+      completedPayload.project.knowledgeBase.sections.map(
+        (section: { title: string }) => section.title,
+      ),
+    ).toEqual([
+      "企业与品牌",
+      "团队与组织",
+      "产品与服务",
+      "技术与交付",
+      "客户与行业",
+      "服务与合作",
+      "可信优势",
+    ]);
+    expect(completedPayload.project.knowledgeBase.sources).toEqual([]);
+    expect(completedPayload.project.knowledgeBase.assets).toEqual([]);
+    expect(completedPayload.project.kbTask.output).toEqual([]);
     expect(
       completedPayload.project.knowledgeBase.packageManifestSha256,
     ).toMatch(/^[a-f0-9]{64}$/);
     expect(completedPayload.project.archive.downloadUrl).toContain(
       "/api/geo/projects/",
     );
-
-    const assetPreview = await fetch(
-      `${new URL(baseUrl).origin}${completedPayload.project.knowledgeBase.assets[0].previewUrl}`,
-      { headers: { cookie } },
-    );
-    expect(assetPreview.status).toBe(200);
-    expect(assetPreview.headers.get("content-type")).toBe("image/png");
-    expect(Buffer.from(await assetPreview.arrayBuffer())).toEqual(fixturePng());
 
     const recommended = await jsonRequest(
       `/projects/${encodeURIComponent(initial.projectToken)}/questions`,
@@ -1114,9 +1107,14 @@ describe("GEO API", () => {
       { headers: { cookie } },
     );
     expect(archiveResponse.status).toBe(200);
-    expect(Buffer.from(await archiveResponse.arrayBuffer())).toEqual(
-      broker.archive,
-    );
+    const finalBytes = Buffer.from(await archiveResponse.arrayBuffer());
+    expect(finalBytes).not.toEqual(broker.archive);
+    await expect(
+      parseKnowledgeBaseArchive(finalBytes, {
+        companyName: "Acme",
+        validationProfile: "website-lead-v1",
+      }),
+    ).resolves.toMatchObject({ archiveContractVersion: 3 });
 
     const removed = await jsonRequest(
       `/projects/${encodeURIComponent(recommendedPayload.projectToken)}`,
@@ -1126,7 +1124,7 @@ describe("GEO API", () => {
     expect(removed.body).toMatchObject({ ok: true, deletedTasks: 2 });
   });
 
-  it("finalizes a V2 candidate once and serves the same final ZIP everywhere", async () => {
+  it("finalizes the single candidate pipeline once and serves the same final ZIP everywhere", async () => {
     const v2Broker = new MockBroker();
     v2Broker.archive = await fixtureCandidateArchive();
     const secret = "v2-test-session-secret-at-least-32-characters";
@@ -1138,8 +1136,6 @@ describe("GEO API", () => {
         projectOrderRegistry,
         env: {
           NODE_ENV: "test",
-          FRONTMIND_GEO_KB_PIPELINE_V2_ENABLED: "true",
-          FRONTMIND_GEO_KB_PIPELINE_V2_PERCENT: "100",
           FRONTMIND_GEO_INVITE_CODE: "frontmind666",
           FRONTMIND_GEO_SESSION_SECRET: secret,
         },
@@ -1201,9 +1197,8 @@ describe("GEO API", () => {
         "project",
       ).value;
       expect(value).toMatchObject({
-        knowledgeBasePipelineVersion: 2,
         knowledgeBaseArtifact: {
-          finalizerVersion: "website-kb-finalizer-v1",
+          finalizerVersion: "website-kb-finalizer-v2",
           candidate: {
             taskId: "kb-1",
             fileId: "candidate-v2",
@@ -1316,93 +1311,100 @@ describe("GEO API", () => {
     expect(broker.questionTaskCount).toBe(0);
   });
 
-  it.each([
-    {
-      category: "structure",
-      publicError:
-        "知识库目录或清单未通过结构校验，已阻止下载及后续分析。可重新检查，由系统仅整理现有证据后再次验证。",
-      retryAvailable: true,
-    },
-    {
-      category: "media",
-      publicError:
-        "知识库媒体交付未通过校验，系统将基于已发现的第一方素材执行一次定向补救。",
-      retryAvailable: true,
-    },
-    {
-      category: "content",
-      publicError:
-        "知识库正式正文未充分整理已有证据，系统将执行一次定向补救。",
-      retryAvailable: true,
-    },
-  ] as const)(
-    "publishes the $category validation category without exposing raw archive details",
-    async ({ category, publicError, retryAvailable }) => {
-      const archive = await JSZip.loadAsync(await fixtureArchive());
-      if (category === "structure") {
-        archive.remove("Acme_knowledge_base/00_package_manifest.json");
-      } else if (category === "media") {
-        archive.file(
-          "Acme_knowledge_base/09_media_assets/product_images/device.png",
-          Buffer.from("not an image"),
-        );
-      } else {
-        archive.file(
-          "Acme_knowledge_base/01_company_overview/profile.md",
-          [
-            "# 企业概况",
-            "",
-            "> 最后更新: 2026-07-28 | 状态: verified_first_party | 来源: 企业官网",
-            "",
-            "正文过短。",
-          ].join("\n"),
-        );
-      }
-      broker.archive = Buffer.from(
-        await archive.generateAsync({ type: "uint8array" }),
-      );
-      const { cookie } = await verifyInvite();
-      const created = await jsonRequest("/projects", cookie, {
-        method: "POST",
-        body: { input: "Acme", attachments: [] },
-      });
-      const initial = created.body as Record<string, any>;
-      broker.tasks.set("kb-1", {
-        id: "kb-1",
-        status: "completed",
-        output: [
-          {
-            role: "assistant",
-            content: [
-              {
-                type: "output_file",
-                file_id: "archive-1",
-                filename: "Acme.zip",
-              },
-            ],
-          },
-        ],
-      });
-
-      const failed = await jsonRequest(
-        `/projects/${encodeURIComponent(initial.projectToken)}`,
-        cookie,
-      );
-
-      expect(failed.response.status).toBe(200);
-      expect(failed.body).toMatchObject({
-        project: {
-          status: "failed",
-          knowledgeBaseValidationCategory: category,
-          knowledgeBaseRetryAvailable: retryAvailable,
-          kbTask: { status: "failed", error: publicError },
-          error: publicError,
+  it("automatically retries one structural candidate failure, then exposes same-project regeneration", async () => {
+    const archive = new JSZip();
+    archive.file(
+      "02_run.json",
+      JSON.stringify({
+        schemaVersion: 1,
+        company: { name: "Acme" },
+      }),
+    );
+    broker.archive = await archive.generateAsync({ type: "nodebuffer" });
+    const { cookie } = await verifyInvite();
+    const created = await jsonRequest("/projects", cookie, {
+      method: "POST",
+      body: { input: "Acme", attachments: [] },
+    });
+    const initial = created.body as Record<string, any>;
+    broker.tasks.set("kb-1", {
+      id: "kb-1",
+      status: "completed",
+      output: [
+        {
+          role: "assistant",
+          content: [
+            {
+              type: "output_file",
+              file_id: "archive-1",
+              filename: "Acme.zip",
+            },
+          ],
         },
-      });
-      expect((failed.body as any).project.archive).toBeUndefined();
-      expect(JSON.stringify(failed.body)).not.toContain("Acme_knowledge_base/");
-    },
-  );
+      ],
+    });
+
+    const automatic = await jsonRequest(
+      `/projects/${encodeURIComponent(initial.projectToken)}`,
+      cookie,
+    );
+    expect(automatic.response.status).toBe(200);
+    expect(automatic.body).toMatchObject({
+      project: { status: "running", kbTask: { status: "running" } },
+    });
+    expect(broker.prompts).toHaveLength(2);
+    const automaticPayload = automatic.body as Record<string, any>;
+    const automaticTokenValue = new GeoTokenCodec(
+      "test-session-secret-at-least-16-characters",
+    ).open<Record<string, unknown>>(
+      automaticPayload.projectToken,
+      "project",
+    ).value;
+    expect(automaticTokenValue).toMatchObject({
+      knowledgeBaseTaskId: "kb-2",
+      knowledgeBaseAutomaticRetryUsed: true,
+      previousKnowledgeBaseTaskIds: ["kb-1"],
+    });
+
+    broker.tasks.set("kb-2", {
+      id: "kb-2",
+      status: "completed",
+      output: [
+        {
+          role: "assistant",
+          content: [
+            {
+              type: "output_file",
+              file_id: "archive-2",
+              filename: "Acme-again.zip",
+            },
+          ],
+        },
+      ],
+    });
+    const failed = await jsonRequest(
+      `/projects/${encodeURIComponent(automaticPayload.projectToken)}`,
+      cookie,
+    );
+    expect(failed.response.status).toBe(200);
+    expect(failed.body).toMatchObject({
+      project: {
+        status: "failed",
+        knowledgeBaseValidationCategory: "structure",
+        knowledgeBaseRetryAvailable: true,
+        kbTask: {
+          status: "failed",
+          error:
+            "知识库候选文件暂未完成安全整理，可在当前项目中重新生成。",
+        },
+      },
+    });
+    expect(broker.prompts).toHaveLength(2);
+    expect((failed.body as any).project.archive).toBeUndefined();
+    expect(JSON.stringify(failed.body)).not.toContain(
+      "Candidate archive must contain",
+    );
+  });
 
   it("rejects tampered project and upload tokens", async () => {
     const { cookie } = await verifyInvite();
@@ -1836,7 +1838,6 @@ describe("GEO API", () => {
     const initialValue = new GeoTokenCodec(
       "test-session-secret-at-least-16-characters",
     ).open<Record<string, unknown>>(initial.projectToken, "project").value;
-    expect(initialValue.knowledgeBaseAttempt).toBe(1);
     expect(initialValue.knowledgeBaseValidationProfile).toBe("website-lead-v1");
 
     broker.taskResultErrors.delete("kb-1");
@@ -1860,7 +1861,6 @@ describe("GEO API", () => {
       retriedPayload.projectToken,
       "project",
     ).value;
-    expect(retriedValue.knowledgeBaseAttempt).toBe(2);
     expect(retriedValue.knowledgeBaseValidationProfile).toBe("website-lead-v1");
   });
 
@@ -1946,9 +1946,12 @@ describe("GEO API", () => {
     expect(broker.tasks.has("kb-2")).toBe(false);
   });
 
-  it("allows the single retry when a completed task returns an invalid ZIP", async () => {
+  it("regenerates in the same project when a completed task returns a structurally invalid candidate", async () => {
     const invalidArchive = new JSZip();
-    invalidArchive.file("junk.csv", "value\nnot a FrontMind knowledge base");
+    invalidArchive.file(
+      "02_run.json",
+      JSON.stringify({ schemaVersion: 1, company: { name: "Acme" } }),
+    );
     broker.archive = await invalidArchive.generateAsync({ type: "nodebuffer" });
     const { cookie } = await verifyInvite();
     const created = await jsonRequest("/projects", cookie, {
@@ -1984,26 +1987,22 @@ describe("GEO API", () => {
       "running",
     );
     expect(broker.prompts).toHaveLength(2);
-    expect(broker.prompts.at(-1)).toContain("唯一一次结构兼容修复");
-    expect(broker.prompts.at(-1)).toContain(
-      "Knowledge-base archive is missing required 00_completeness.json",
-    );
-    expect(broker.prompts.at(-1)).toContain(
-      '"knowledgeBaseArchive": "Acme.zip"',
-    );
-    expect(broker.prompts.at(-1)).not.toContain('"rawInput": "Acme"');
+    expect(broker.prompts.at(-1)).toContain('"rawInput": "Acme"');
+    expect(broker.prompts.at(-1)).toContain("website-lead-candidate-v1");
     expect(broker.taskAttachments.at(-1)).toEqual([
       {
         file_id: "skill-file-2",
         filename: "website-one-shot-kb-builder.skill.zip",
       },
-      { file_id: "archive-1", filename: "Acme.zip" },
     ]);
   });
 
-  it("exposes one knowledge-base repair, then reports exhausted without another retry claim", async () => {
+  it("keeps same-project regeneration available after repeated structural failures", async () => {
     const invalidArchive = new JSZip();
-    invalidArchive.file("junk.csv", "value\nnot a FrontMind knowledge base");
+    invalidArchive.file(
+      "02_run.json",
+      JSON.stringify({ schemaVersion: 1, company: { name: "Acme" } }),
+    );
     broker.archive = await invalidArchive.generateAsync({ type: "nodebuffer" });
     const { cookie } = await verifyInvite();
     const created = await jsonRequest("/projects", cookie, {
@@ -2028,26 +2027,15 @@ describe("GEO API", () => {
       ],
     });
 
-    const firstFailure = await jsonRequest(
+    const automatic = await jsonRequest(
       `/projects/${encodeURIComponent(initial.projectToken)}`,
       cookie,
     );
-    expect(firstFailure.response.status).toBe(200);
-    expect(firstFailure.body).toMatchObject({
-      project: {
-        status: "failed",
-        knowledgeBaseRetryAvailable: true,
-        kbTask: { status: "failed" },
-      },
+    expect(automatic.response.status).toBe(200);
+    expect(automatic.body).toMatchObject({
+      project: { status: "running", kbTask: { status: "running" } },
     });
-
-    const repaired = await jsonRequest(
-      `/projects/${encodeURIComponent(initial.projectToken)}/retry`,
-      cookie,
-      { method: "POST", body: { input: "Acme", attachments: [] } },
-    );
-    expect(repaired.response.status).toBe(201);
-    const repairedPayload = repaired.body as Record<string, any>;
+    const automaticPayload = automatic.body as Record<string, any>;
     broker.tasks.set("kb-2", {
       id: "kb-2",
       status: "completed",
@@ -2058,6 +2046,42 @@ describe("GEO API", () => {
             {
               type: "output_file",
               file_id: "archive-2",
+              filename: "Acme-automatic.zip",
+            },
+          ],
+        },
+      ],
+    });
+
+    const firstFailure = await jsonRequest(
+      `/projects/${encodeURIComponent(automaticPayload.projectToken)}`,
+      cookie,
+    );
+    expect(firstFailure.body).toMatchObject({
+      project: {
+        status: "failed",
+        knowledgeBaseRetryAvailable: true,
+      },
+    });
+    const firstFailurePayload = firstFailure.body as Record<string, any>;
+
+    const repaired = await jsonRequest(
+      `/projects/${encodeURIComponent(firstFailurePayload.projectToken)}/retry`,
+      cookie,
+      { method: "POST", body: { input: "Acme", attachments: [] } },
+    );
+    expect(repaired.response.status).toBe(201);
+    const repairedPayload = repaired.body as Record<string, any>;
+    broker.tasks.set("kb-3", {
+      id: "kb-3",
+      status: "completed",
+      output: [
+        {
+          role: "assistant",
+          content: [
+            {
+              type: "output_file",
+              file_id: "archive-3",
               filename: "Acme-repaired.zip",
             },
           ],
@@ -2065,37 +2089,37 @@ describe("GEO API", () => {
       ],
     });
 
-    const exhausted = await jsonRequest(
+    const secondFailure = await jsonRequest(
       `/projects/${encodeURIComponent(repairedPayload.projectToken)}`,
       cookie,
     );
-    expect(exhausted.response.status).toBe(200);
-    const exhaustedPayload = exhausted.body as Record<string, any>;
-    expect(exhaustedPayload.project).toMatchObject({
+    expect(secondFailure.response.status).toBe(200);
+    const secondFailurePayload = secondFailure.body as Record<string, any>;
+    expect(secondFailurePayload.project).toMatchObject({
       status: "failed",
-      knowledgeBaseRetryAvailable: false,
+      knowledgeBaseRetryAvailable: true,
       kbTask: {
         status: "failed",
-        error: expect.stringContaining("自动补救次数已用完"),
+        error:
+          "知识库候选文件暂未完成安全整理，可在当前项目中重新生成。",
       },
     });
-    expect(exhaustedPayload.project.kbTask.error).not.toContain("可重新检查");
 
-    const rejected = await jsonRequest(
-      `/projects/${encodeURIComponent(repairedPayload.projectToken)}/retry`,
+    const regeneratedAgain = await jsonRequest(
+      `/projects/${encodeURIComponent(secondFailurePayload.projectToken)}/retry`,
       cookie,
       { method: "POST", body: { input: "Acme", attachments: [] } },
     );
-    expect(rejected.response.status).toBe(409);
-    expect(rejected.body).toMatchObject({
-      error: { code: "KNOWLEDGE_BASE_RETRY_EXHAUSTED" },
-    });
-    expect(broker.prompts).toHaveLength(2);
+    expect(regeneratedAgain.response.status).toBe(201);
+    expect(broker.prompts).toHaveLength(4);
   });
 
-  it("materializes a URL-only invalid ZIP once and tracks the repair attachment for cleanup", async () => {
+  it("regenerates idempotently from original input when the invalid candidate is URL-only", async () => {
     const invalidArchive = new JSZip();
-    invalidArchive.file("junk.csv", "value\nnot a FrontMind knowledge base");
+    invalidArchive.file(
+      "02_run.json",
+      JSON.stringify({ schemaVersion: 1, company: { name: "Acme" } }),
+    );
     broker.archive = await invalidArchive.generateAsync({ type: "nodebuffer" });
     const { cookie } = await verifyInvite();
     const created = await jsonRequest("/projects", cookie, {
@@ -2132,17 +2156,17 @@ describe("GEO API", () => {
 
     expect(first.response.status).toBe(201);
     expect(replay.response.status).toBe(201);
-    expect(broker.uploads.size).toBe(1);
+    expect(broker.uploads.size).toBe(0);
     expect(broker.taskAttachments.at(-1)).toEqual([
       {
         file_id: "skill-file-2",
         filename: "website-one-shot-kb-builder.skill.zip",
       },
-      { file_id: "file-1", filename: "Acme.zip" },
     ]);
-    expect((replay.body as Record<string, any>).projectToken).toBe(
-      (first.body as Record<string, any>).projectToken,
+    expect((replay.body as Record<string, any>).project.id).toBe(
+      (first.body as Record<string, any>).project.id,
     );
+    expect(broker.tasks.has("kb-3")).toBe(false);
 
     const removed = await jsonRequest(
       `/projects/${encodeURIComponent(
@@ -2152,7 +2176,7 @@ describe("GEO API", () => {
       { method: "DELETE" },
     );
     expect(removed.response.status).toBe(200);
-    expect(broker.deletedFiles).toContain("file-1");
+    expect(broker.deletedFiles).not.toContain("file-1");
   });
 
   it("rejects retry attachments that do not belong to the project token", async () => {
@@ -2807,18 +2831,18 @@ describe("GEO API", () => {
     expect(broker.prompts.at(-1)).toContain(
       "Base 模型只提取事实四分类、schema 要求的逐项 confidence 和 0-1 原始指标",
     );
-    expect(
-      broker.taskAttachments
-        .at(-1)!
-        .map((attachment) => attachment.filename),
-    ).toEqual([
+    const assessmentAttachments = broker.taskAttachments.at(-1)!;
+    expect(assessmentAttachments.map((attachment) => attachment.filename)).toEqual([
       "geo-knowledge-answer-verifier.skill.zip",
       "geo-current-state-evaluator.skill.zip",
-      "Acme.zip",
+      "Acme_website_lead_knowledge_base.zip",
       "Acme-monitoring-records.json",
     ]);
+    const monitoringAttachment = assessmentAttachments.find(
+      (attachment) => attachment.filename === "Acme-monitoring-records.json",
+    )!;
     const parsedMonitoring = JSON.parse(
-      broker.uploads.get("file-1")!.toString("utf8"),
+      broker.uploads.get(monitoringAttachment.file_id)!.toString("utf8"),
     );
     expect(parsedMonitoring.records).toHaveLength(5);
     expect(parsedMonitoring.records[0].citations[0].title).toBe("Acme 官网");
@@ -3140,7 +3164,7 @@ describe("GEO API", () => {
     const attachments = broker.taskAttachments.at(-1)!;
     expect(attachments.map((attachment) => attachment.filename)).toEqual([
       "geo-optimization-outcome-forecaster.skill.zip",
-      "Acme.zip",
+      "Acme_website_lead_knowledge_base.zip",
       "Acme-current-assessment.json",
       "frontmind-standard-one-month-scenario.json",
     ]);
@@ -4028,12 +4052,19 @@ describe("GEO API", () => {
     expect(knowledgeImportCalls).toHaveLength(1);
     expect(knowledgeImportCalls[0]).toMatchObject({
       request: {
-        schemaVersion: 3,
-        archiveContractVersion: 1,
-        validationProfile: "website-lead-v1",
-        packageManifestSha256: expect.stringMatching(/^[a-f0-9]{64}$/),
+        schemaVersion: 4,
         companyName: "Acme",
-        filename: "Acme.zip",
+        candidate: {
+          taskId: "kb-1",
+          sha256: expect.stringMatching(/^[a-f0-9]{64}$/),
+        },
+        finalArtifact: {
+          filename: "Acme_website_lead_knowledge_base.zip",
+          archiveContractVersion: 3,
+          validationProfile: "website-lead-v1",
+          packageManifestSha256: expect.stringMatching(/^[a-f0-9]{64}$/),
+          finalizerVersion: "website-kb-finalizer-v1",
+        },
       },
     });
     const accountPoll = await jsonRequest(
@@ -4793,7 +4824,7 @@ function validQuestionSet() {
           rationale: "覆盖知识库中的真实决策意图和可核验证据。",
           evidenceRefs:
             category === "product_scenario"
-              ? [`03_products/item-${index + 1}/overview.md`]
+              ? ["03_products/overview.md"]
               : ["00_source_index.md"],
           selectable: category !== "industry_ranking",
           ...(category === "product_scenario"
@@ -4822,7 +4853,7 @@ function validAssessmentOutput(
     measurementStatus: "measured",
     confidence: 0.8,
     calculationBasis: "由五次真实回答与知识库证据逐项对照计算。",
-    evidenceRefs: ["doubao/run-01", "01_company_overview/profile.md"],
+    evidenceRefs: ["doubao/run-01", "01_company_overview/overview.md"],
     limitations: [],
   });
   return {
@@ -4917,7 +4948,7 @@ function validAssessmentOutput(
         answerExcerpt: "Acme 面向科研团队提供设备。",
         kbClaimId: "company-positioning",
         kbClaimText: "Acme 面向科研团队提供专业设备。",
-        kbEvidenceRefs: ["01_company_overview/profile.md"],
+        kbEvidenceRefs: ["01_company_overview/overview.md"],
         explanation: "回答与知识库中的企业定位一致。",
         recommendedAction: "继续在权威页面统一该企业定位。",
         confidence: 0.9,

@@ -17,7 +17,7 @@ import {
   type ParsedCandidate,
 } from "./knowledge-base-candidate";
 
-export const WEBSITE_KB_FINALIZER_VERSION = "website-kb-finalizer-v1";
+export const WEBSITE_KB_FINALIZER_VERSION = "website-kb-finalizer-v2";
 const ZIP_DATE = new Date("1980-01-01T00:00:00.000Z");
 
 type EvidenceStatus =
@@ -613,8 +613,7 @@ export type CandidateContentAssessment = {
 export function assessKnowledgeBaseCandidate(
   candidate: ParsedCandidate,
 ): CandidateContentAssessment {
-  const { citedSourceCount, factCharacters, customerCharacters } =
-    candidate.metrics;
+  const { citedSourceCount, factCharacters } = candidate.metrics;
   const covered = candidate.metrics.coveredFactDimensions;
   const tier =
     citedSourceCount >= 8 && factCharacters >= 5_000 && covered >= 6
@@ -629,11 +628,6 @@ export function assessKnowledgeBaseCandidate(
       candidate.factSections.get(id) || "",
       sourceRecords,
     ).length > 0;
-  if (tier === "rich" && customerCharacters < 10_000) {
-    reasons.push(
-      `资料丰富但客户正文仅 ${customerCharacters} 个有效字符，低于 10000`,
-    );
-  }
   if (tier === "rich" && !publishable("D01")) {
     reasons.push("D01 企业基础缺少可发布证据");
   }
@@ -680,13 +674,6 @@ export function assessKnowledgeBaseCandidate(
   if (tier === "rich" && missingCore.length) {
     reasons.push(`行业核心事实未进入客户稿：${missingCore.join("、")}`);
   }
-  if (
-    tier === "medium" &&
-    customerCharacters < 5_000 &&
-    factCharacters > customerCharacters * 1.25
-  ) {
-    reasons.push("中等资料量的客户稿明显薄于事实层");
-  }
   const dimensionTitles = new Map(FACT_DIMENSIONS);
   const missingDimensions = FACT_DIMENSIONS.filter(
     ([id]) => !publishable(id),
@@ -725,13 +712,8 @@ export function assessKnowledgeBaseCandidate(
   ).sort((left, right) => left.localeCompare(right));
   return {
     tier,
-    target:
-      tier === "rich"
-        ? "12000–18000"
-        : tier === "medium"
-          ? "6000–12000"
-          : "按证据自适应",
-    requiresSupplement: tier !== "sparse" && reasons.length > 0,
+    target: "按证据自适应",
+    requiresSupplement: false,
     reasons,
     missingDimensions,
     unwrittenFactTopics,
@@ -740,18 +722,7 @@ export function assessKnowledgeBaseCandidate(
 }
 
 function branchForAsset(type: CandidateAsset["type"]): CanonicalBranchId {
-  if (type === "team_photo") return "02_team";
-  if (
-    type === "product_ui" ||
-    type === "product_diagram" ||
-    type === "case_photo"
-  ) {
-    return "03_products";
-  }
-  if (type === "certificate_badge" || type === "document_figure") {
-    return "04_technology";
-  }
-  if (type === "environment_photo") return "06_industries";
+  void type;
   return "01_company_overview";
 }
 
@@ -802,16 +773,10 @@ async function normalizeImage(
   }).rotate();
   const metadata = await pipeline.metadata();
   if (!metadata.width || !metadata.height) throw new Error("图片没有有效尺寸");
-  const badge = ["brand_identity", "certificate_badge"].includes(
-    candidateAsset.type,
-  );
-  if (
-    (badge && (metadata.width < 256 || metadata.height < 256)) ||
-    (!badge && (metadata.width < 800 || metadata.height < 450))
-  ) {
-    throw new Error(
-      badge ? "徽标图片低于 256×256" : "展示图片低于 800×450",
-    );
+  const shortEdge = Math.min(metadata.width, metadata.height);
+  const longEdge = Math.max(metadata.width, metadata.height);
+  if (shortEdge < 32 || longEdge < 128) {
+    throw new Error("Logo 图片低于短边 32px 或长边 128px");
   }
   let output = await pipeline.png().toBuffer({ resolveWithObject: true });
   let extension = "png";
@@ -836,7 +801,7 @@ async function normalizeImage(
     height: output.info.height,
     extension,
     mimeType,
-    displayRole: (badge ? "badge" : "inline") as "badge" | "inline",
+    displayRole: "badge" as const,
   };
 }
 

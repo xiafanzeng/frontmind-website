@@ -142,8 +142,10 @@
       "industryCluster": "C3",
       "kind": "invalid_completeness",
       "invalidValue": {
-        "statusCounts": {},
-        "gapStrings": []
+        "documentStatusCounts": {},
+        "documentTypeCounts": {},
+        "mediaStatusCounts": {},
+        "verification_gaps": []
       },
       "expectedPaths": ["counts", "acquisition", "gaps", "evaluatedAt"]
     },

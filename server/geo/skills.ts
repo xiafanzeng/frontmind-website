@@ -13,14 +13,11 @@ const WEBSITE_KB_SKILL: GeoSkillArchiveDefinition = {
   name: "website-one-shot-kb-builder",
   files: [
     "SKILL.md",
+    "agents/openai.yaml",
     "references/dimensions.md",
     "references/candidate-format.md",
+    "scripts/build_candidate.py",
   ],
-};
-
-const LEGACY_WEBSITE_KB_SKILL: GeoSkillArchiveDefinition = {
-  name: "website-one-shot-kb-builder-legacy",
-  files: ["SKILL.md"],
 };
 
 const QUESTION_SKILL: GeoSkillArchiveDefinition = {
@@ -30,12 +27,6 @@ const QUESTION_SKILL: GeoSkillArchiveDefinition = {
     "references/demark-question-logic.md",
     "references/output-schema.json",
   ],
-};
-
-const WEBSITE_KB_VALIDATOR: GeoSkillArchiveDefinition = {
-  name: "website-one-shot-kb-builder",
-  cacheKey: "website-one-shot-kb-builder:validator",
-  files: ["scripts/validate_archive.py"],
 };
 
 const skillCache = new Map<string, string>();
@@ -181,20 +172,12 @@ export function buildWebsiteKnowledgeBaseSkillArchive() {
   return buildGeoSkillArchive(WEBSITE_KB_SKILL);
 }
 
-export function buildLegacyWebsiteKnowledgeBaseSkillArchive() {
-  return buildGeoSkillArchive(LEGACY_WEBSITE_KB_SKILL);
-}
-
 export function loadGeoQuestionRecommenderSkill() {
   return loadSkill(QUESTION_SKILL);
 }
 
 export function buildGeoQuestionRecommenderSkillArchive() {
   return buildGeoSkillArchive(QUESTION_SKILL);
-}
-
-export function loadWebsiteKnowledgeBaseValidator() {
-  return loadSkill(WEBSITE_KB_VALIDATOR);
 }
 
 export function clearGeoSkillCacheForTests() {

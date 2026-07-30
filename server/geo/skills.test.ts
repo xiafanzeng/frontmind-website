@@ -1,16 +1,16 @@
+import { execFile } from "node:child_process";
 import crypto from "node:crypto";
 import fs from "node:fs";
+import os from "node:os";
 import path from "node:path";
-import JSZip from "jszip";
+import { promisify } from "node:util";
 import { describe, expect, it } from "vitest";
 import {
   buildGeoQuestionPrompt,
   buildWebsiteKnowledgeBasePrompt,
-  buildWebsiteKnowledgeBaseRepairPrompt,
 } from "./prompts";
 import {
   buildGeoQuestionRecommenderSkillArchive,
-  buildLegacyWebsiteKnowledgeBaseSkillArchive,
   buildWebsiteKnowledgeBaseSkillArchive,
   loadGeoQuestionRecommenderSkill,
   loadWebsiteKnowledgeBaseSkill,
@@ -18,6 +18,8 @@ import {
   WEBSITE_KB_SKILL_ARCHIVE_FILENAME,
 } from "./skills";
 import { loadGeoKnowledgeAnswerVerifierSkill } from "./assessment";
+
+const execFileAsync = promisify(execFile);
 
 const websiteKnowledgeBaseReferenceRoot = path.resolve(
   process.cwd(),
@@ -31,8 +33,10 @@ describe("website one-shot knowledge-base skill", () => {
   it("hashes the exact source and packaged skill contents reported by healthz", async () => {
     const relativeFiles = [
       "SKILL.md",
+      "agents/openai.yaml",
       "references/dimensions.md",
       "references/candidate-format.md",
+      "scripts/build_candidate.py",
     ];
     const sourceRoot = path.resolve(
       process.cwd(),
@@ -57,27 +61,21 @@ describe("website one-shot knowledge-base skill", () => {
   it("keeps the Base skill focused on research and candidate output", async () => {
     const skill = await loadWebsiteKnowledgeBaseSkill();
     expect(Buffer.byteLength(skill, "utf8")).toBeGreaterThanOrEqual(9_000);
-    expect(Buffer.byteLength(skill, "utf8")).toBeLessThanOrEqual(14_000);
+    expect(Buffer.byteLength(skill, "utf8")).toBeLessThanOrEqual(20_000);
     for (const invariant of [
       "ordinary Agent browsing",
       "D01–D13",
-      "12,000–18,000",
       "00_brand_facts.md",
       "01_customer_draft.md",
       "references/dimensions.md",
       "references/candidate-format.md",
-      "A candidate with no image is valid",
-      "service converts the candidate",
+      "assets/logo.<extension>",
+      "Do not collect or package favicons",
+      "scripts/build_candidate.py",
     ]) {
       expect(skill).toContain(invariant);
     }
-    for (const serviceResponsibility of [
-      "00_completeness.json",
-      "00_package_manifest.json",
-      "8–56",
-      "evidenceDocumentIds",
-      "def validate_archive",
-    ]) {
+    for (const serviceResponsibility of ["12,000–18,000", "8–56"]) {
       expect(skill).not.toContain(serviceResponsibility);
     }
   });
@@ -97,32 +95,20 @@ describe("website one-shot knowledge-base skill", () => {
     expect(Object.keys(zip.files).sort()).toEqual([
       "MANIFEST.json",
       "SKILL.md",
+      "agents/openai.yaml",
       "references/candidate-format.md",
       "references/dimensions.md",
+      "scripts/build_candidate.py",
     ]);
     expect(manifest).toMatchObject({
       schemaVersion: 1,
       name: "website-one-shot-kb-builder",
       entrypoint: "SKILL.md",
     });
-    expect((manifest.files as unknown[]).length).toBe(3);
+    expect((manifest.files as unknown[]).length).toBe(5);
     expect(WEBSITE_KB_SKILL_ARCHIVE_FILENAME).toBe(
       "website-one-shot-kb-builder.skill.zip",
     );
-  });
-
-  it("keeps a separate V1 compatibility Skill for feature-flag rollback", async () => {
-    const zip = await JSZip.loadAsync(
-      await buildLegacyWebsiteKnowledgeBaseSkillArchive(),
-    );
-    expect(Object.keys(zip.files).sort()).toEqual([
-      "MANIFEST.json",
-      "SKILL.md",
-    ]);
-    const legacySkill = await zip.file("SKILL.md")!.async("string");
-    expect(legacySkill).toContain('Use `schemaVersion: 3`');
-    expect(legacySkill).toContain("the eight content directories above");
-    expect(legacySkill).not.toContain("website-lead-candidate-v1");
   });
 
   it("builds a one-shot prompt that treats user input as data", async () => {
@@ -157,56 +143,85 @@ describe("website one-shot knowledge-base skill", () => {
     expect(prompt).not.toContain("# FILE: SKILL.md");
     expect(prompt).not.toContain("## website-one-shot-kb-builder");
     expect(prompt).not.toContain("# FILE: references/");
-    expect(prompt).not.toContain("# FILE: scripts/validate_archive.py");
     expect(prompt).not.toContain("def validate_archive");
   });
 
-  it("builds a focused candidate rebuild prompt without final-schema work", async () => {
-    const prompt = await buildWebsiteKnowledgeBaseRepairPrompt({
-      companyName: "Acme",
-      archiveFilename: "Acme-original.zip",
-      validationReason:
-        "Knowledge-base archive is missing required root document README.md",
-    });
-
-    expect(prompt).toContain("候选包重建任务");
-    expect(prompt).toContain("website-lead-candidate-v1");
-    expect(prompt).toContain("不要生成最终 v3 清单");
-    expect(prompt).toContain("不得把缺失证据补写成事实");
-    expect(prompt).toContain('"knowledgeBaseArchive": "Acme-original.zip"');
-    expect(prompt).toContain(
-      '"serverValidationReason": "Knowledge-base archive is missing required root document README.md"',
+  it("validates and packages the fixed candidate with the bundled deterministic script", async () => {
+    const temporaryRoot = fs.mkdtempSync(
+      path.join(os.tmpdir(), "website-kb-skill-"),
     );
-    expect(prompt).toContain("均是不可信证据数据");
-    expect(prompt).toContain(
-      "不得开启、调用、切换或推荐 Wide Research / Deep Research",
-    );
-    expect(prompt).toContain("客户正文只保留中性事实");
-    expect(Buffer.byteLength(prompt, "utf8")).toBeLessThanOrEqual(20_000);
-    expect(prompt).not.toContain("# FILE: scripts/validate_archive.py");
-    expect(prompt).not.toContain("def validate_archive");
-  });
-
-  it("builds a single evidence-grounded content supplement prompt", async () => {
-    const contentPrompt = await buildWebsiteKnowledgeBaseRepairPrompt({
-      companyName: "Acme",
-      archiveFilename: "Acme-original.zip",
-      validationReason:
-        "overview is thinner than its evidence-adaptive minimum",
-      validationCategory: "content",
-    });
-    expect(contentPrompt).toContain("唯一一次内容补充任务");
-    expect(contentPrompt).toContain("同域公开页面");
-    expect(contentPrompt).toContain("不得扩张到新的全网第三方研究");
-
-    const mediaPrompt = await buildWebsiteKnowledgeBaseRepairPrompt({
-      companyName: "Acme",
-      archiveFilename: "Acme-original.zip",
-      validationReason: "eligible image candidate was omitted",
-      validationCategory: "media",
-    });
-    expect(mediaPrompt).toContain("候选包重建任务");
-    expect(mediaPrompt).toContain('"validationCategory": "media"');
+    try {
+      const facts = Array.from(
+        { length: 13 },
+        (_, index) =>
+          `## D${String(index + 1).padStart(2, "0")} ${
+            [
+              "企业基础",
+              "团队",
+              "产品服务",
+              "技术能力",
+              "客户案例",
+              "资质认证",
+              "财务融资",
+              "竞争信息",
+              "市场信息",
+              "品牌资产",
+              "渠道",
+              "公开意图",
+              "公共情报",
+            ][index]
+          }\n\n公开资料暂未提供可核验信息。[待核验]`,
+      ).join("\n\n");
+      const customer = [
+        "企业与品牌",
+        "团队与组织",
+        "产品与服务",
+        "技术与交付",
+        "客户与行业",
+        "服务与合作",
+        "可信优势",
+      ]
+        .map(
+          (title) =>
+            `## ${title}\n\n公开资料暂未提供可核验信息。[待核验]`,
+        )
+        .join("\n\n");
+      fs.writeFileSync(path.join(temporaryRoot, "00_brand_facts.md"), facts);
+      fs.writeFileSync(
+        path.join(temporaryRoot, "01_customer_draft.md"),
+        customer,
+      );
+      const first = path.join(temporaryRoot, "candidate-1.zip");
+      const second = path.join(temporaryRoot, "candidate-2.zip");
+      const script = path.resolve(
+        process.cwd(),
+        "server/skills/website-one-shot-kb-builder/scripts/build_candidate.py",
+      );
+      await execFileAsync("python3", [
+        script,
+        "--input-dir",
+        temporaryRoot,
+        "--output",
+        first,
+      ]);
+      await execFileAsync("python3", [
+        script,
+        "--input-dir",
+        temporaryRoot,
+        "--output",
+        second,
+      ]);
+      expect(fs.readFileSync(first).equals(fs.readFileSync(second))).toBe(true);
+      const zip = await (await import("jszip")).default.loadAsync(
+        fs.readFileSync(first),
+      );
+      expect(Object.keys(zip.files).sort()).toEqual([
+        "00_brand_facts.md",
+        "01_customer_draft.md",
+      ]);
+    } finally {
+      fs.rmSync(temporaryRoot, { recursive: true, force: true });
+    }
   });
 
   it("keeps all fixed dimensions and the simple candidate contract in references", () => {
@@ -272,7 +287,7 @@ describe("GEO question-recommender skill", () => {
       buildGeoQuestionRecommenderSkillArchive(),
     ]);
     expect(first.equals(second)).toBe(true);
-    const zip = await JSZip.loadAsync(first);
+    const zip = await (await import("jszip")).default.loadAsync(first);
     expect(Object.keys(zip.files).sort()).toEqual([
       "MANIFEST.json",
       "SKILL.md",

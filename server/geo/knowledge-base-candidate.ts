@@ -79,19 +79,7 @@ const CandidateSourceSchema = z
 const CandidateAssetSchema = z
   .object({
     path: z.string().trim().min(1).max(600),
-    type: z
-      .enum([
-        "brand_identity",
-        "product_ui",
-        "product_diagram",
-        "case_photo",
-        "team_photo",
-        "environment_photo",
-        "certificate_badge",
-        "document_figure",
-        "other",
-      ])
-      .catch("other"),
+    type: z.literal("brand_identity"),
     sourceKind: z
       .enum(["official_web", "official_document", "user_upload"])
       .catch("official_web"),
@@ -120,7 +108,7 @@ const CandidateRunSchema = z
       .max(100)
       .optional()
       .default([]),
-    assets: z.array(CandidateAssetSchema).max(24).optional().default([]),
+    assets: z.array(CandidateAssetSchema).max(1).optional().default([]),
   })
   .passthrough();
 
@@ -386,14 +374,68 @@ function requiredHeading(
   aliases: string[] = [],
 ) {
   if (sections.has(expected)) return expected;
-  const normalizedExpected = expected.replace(/\s+/g, "");
+  const normalizeHeading = (value: string) =>
+    value
+      .normalize("NFKC")
+      .replace(/[\s:：\-–—_]+/g, "")
+      .replace(/[。；;]+$/g, "")
+      .toLowerCase();
+  const normalizedExpected = normalizeHeading(expected);
   return Array.from(sections.keys()).find((title) => {
-    const normalized = title.replace(/\s+/g, "");
+    const normalized = normalizeHeading(title);
     return (
       normalized === normalizedExpected ||
-      aliases.some((alias) => normalized === alias.replace(/\s+/g, ""))
+      aliases.some((alias) => normalized === normalizeHeading(alias))
     );
   });
+}
+
+function sectionValue(
+  sections: Map<string, string>,
+  expected: string,
+  aliases: string[] = [],
+) {
+  const key = requiredHeading(sections, expected, aliases);
+  return key ? sections.get(key)?.trim() || "" : "";
+}
+
+const CUSTOMER_FACT_DIMENSIONS: Record<
+  (typeof CUSTOMER_SECTIONS)[number],
+  string[]
+> = {
+  企业与品牌: ["D01", "D10"],
+  团队与组织: ["D02"],
+  产品与服务: ["D03"],
+  技术与交付: ["D04", "D06"],
+  客户与行业: ["D05", "D09", "D13"],
+  服务与合作: ["D11", "D12"],
+  可信优势: ["D04", "D06", "D07", "D08"],
+};
+
+const FACT_CUSTOMER_SECTION = new Map(
+  Object.entries(CUSTOMER_FACT_DIMENSIONS).flatMap(([section, dimensions]) =>
+    dimensions.map((dimension) => [dimension, section]),
+  ),
+);
+
+function gapFor(title: string) {
+  return `公开资料暂未提供${title}的可核验信息。[待核验]`;
+}
+
+function canonicalMarkdown(
+  headings: readonly (readonly [string, string] | string)[],
+  sections: Map<string, string>,
+) {
+  return headings
+    .map((heading) => {
+      const key = typeof heading === "string" ? heading : heading[0];
+      const title =
+        typeof heading === "string"
+          ? heading
+          : `${heading[0]} ${heading[1]}`;
+      return `## ${title}\n\n${sections.get(key) || gapFor(title)}`;
+    })
+    .join("\n\n");
 }
 
 export async function parseKnowledgeBaseCandidate(
@@ -510,15 +552,6 @@ export async function parseKnowledgeBaseCandidate(
         "structure",
       );
     }
-    if (
-      IMAGE_EXTENSIONS.has(extension) &&
-      !file.path.startsWith("assets/")
-    ) {
-      throw new KnowledgeBaseCandidateError(
-        `Candidate image must be stored under assets/: ${file.path}`,
-        "structure",
-      );
-    }
   }
   const declaredTextBytes = normalizedFiles
     .filter((file) =>
@@ -536,15 +569,19 @@ export async function parseKnowledgeBaseCandidate(
   const byPath = new Map(normalizedFiles.map((file) => [file.path, file.entry]));
   const factsEntry = byPath.get("00_brand_facts.md");
   const customerEntry = byPath.get("01_customer_draft.md");
-  if (!factsEntry || !customerEntry) {
+  if (!factsEntry && !customerEntry) {
     throw new KnowledgeBaseCandidateError(
-      "Candidate archive must contain 00_brand_facts.md and 01_customer_draft.md",
+      "Candidate archive must contain 00_brand_facts.md or 01_customer_draft.md",
       "structure",
     );
   }
   const [factsBytes, customerBytes] = await Promise.all([
-    readLimited(factsEntry, MAX_SINGLE_TEXT_BYTES),
-    readLimited(customerEntry, MAX_SINGLE_TEXT_BYTES),
+    factsEntry
+      ? readLimited(factsEntry, MAX_SINGLE_TEXT_BYTES)
+      : Promise.resolve(Buffer.alloc(0)),
+    customerEntry
+      ? readLimited(customerEntry, MAX_SINGLE_TEXT_BYTES)
+      : Promise.resolve(Buffer.alloc(0)),
   ]);
   if (factsBytes.byteLength + customerBytes.byteLength > MAX_TEXT_BYTES) {
     throw new KnowledgeBaseCandidateError(
@@ -552,37 +589,49 @@ export async function parseKnowledgeBaseCandidate(
       "unsafe",
     );
   }
-  const factsMarkdown = factsBytes.toString("utf8");
-  const customerMarkdown = customerBytes.toString("utf8");
-  const rawFactSections = sectionMap(factsMarkdown);
-  const rawCustomerSections = sectionMap(customerMarkdown);
+  const rawFactsMarkdown = factsBytes.toString("utf8");
+  const rawCustomerMarkdown = customerBytes.toString("utf8");
+  const rawFactSections = sectionMap(rawFactsMarkdown);
+  const rawCustomerSections = sectionMap(rawCustomerMarkdown);
   const factSections = new Map<string, string>();
   const customerSections = new Map<string, string>();
+  const diagnostics: string[] = [];
+  if (!factsEntry) diagnostics.push("Recovered missing 00_brand_facts.md");
+  if (!customerEntry) diagnostics.push("Recovered missing 01_customer_draft.md");
   for (const [id, title] of FACT_DIMENSIONS) {
     const key = requiredHeading(rawFactSections, `${id} ${title}`, [
       `${id}-${title}`,
       `${id}：${title}`,
     ]);
-    if (!key) {
-      throw new KnowledgeBaseCandidateError(
-        `00_brand_facts.md is missing heading ${id} ${title}`,
-        "content",
-      );
+    const direct = key ? rawFactSections.get(key)?.trim() : "";
+    if (direct) {
+      factSections.set(id, direct);
+      continue;
     }
-    factSections.set(id, rawFactSections.get(key) || "");
+    const customerTitle = FACT_CUSTOMER_SECTION.get(id);
+    const fallback = customerTitle
+      ? sectionValue(rawCustomerSections, customerTitle)
+      : "";
+    factSections.set(id, fallback || gapFor(title));
+    diagnostics.push(`Recovered fact heading ${id} ${title}`);
   }
   for (const title of CUSTOMER_SECTIONS) {
     const key = requiredHeading(rawCustomerSections, title);
-    if (!key) {
-      throw new KnowledgeBaseCandidateError(
-        `01_customer_draft.md is missing heading ${title}`,
-        "content",
-      );
+    const direct = key ? rawCustomerSections.get(key)?.trim() : "";
+    if (direct) {
+      customerSections.set(title, direct);
+      continue;
     }
-    customerSections.set(title, rawCustomerSections.get(key) || "");
+    const fallback = CUSTOMER_FACT_DIMENSIONS[title]
+      .map((dimension) => factSections.get(dimension) || "")
+      .filter(Boolean)
+      .join("\n\n");
+    customerSections.set(title, fallback || gapFor(title));
+    diagnostics.push(`Recovered customer heading ${title}`);
   }
 
-  const diagnostics: string[] = [];
+  const factsMarkdown = canonicalMarkdown(FACT_DIMENSIONS, factSections);
+  const customerMarkdown = canonicalMarkdown(CUSTOMER_SECTIONS, customerSections);
   let run: CandidateRun | undefined;
   const runEntry = byPath.get("02_run.json");
   if (runEntry) {
@@ -616,8 +665,8 @@ export async function parseKnowledgeBaseCandidate(
   for (const file of normalizedFiles) {
     const extension = path.posix.extname(file.path).toLowerCase();
     if (!IMAGE_EXTENSIONS.has(extension)) continue;
-    if (!file.path.startsWith("assets/")) {
-      diagnostics.push(`Ignored image outside assets/: ${file.path}`);
+    if (!/^assets\/logo\.(?:avif|gif|jpe?g|png|svg|webp)$/i.test(file.path)) {
+      diagnostics.push(`Ignored non-logo image: ${file.path}`);
       continue;
     }
     const metadata = assetMetadata.get(file.path.toLowerCase());
@@ -625,8 +674,12 @@ export async function parseKnowledgeBaseCandidate(
       diagnostics.push(`Ignored image without 02_run.json metadata: ${file.path}`);
       continue;
     }
-    if (assets.length >= 6) {
-      diagnostics.push(`Ignored image beyond six-asset limit: ${file.path}`);
+    if (metadata.type !== "brand_identity") {
+      diagnostics.push(`Ignored non-logo asset metadata: ${file.path}`);
+      continue;
+    }
+    if (assets.length >= 1) {
+      diagnostics.push(`Ignored image beyond one-logo limit: ${file.path}`);
       continue;
     }
     const bytes = await readLimited(file.entry, MAX_SINGLE_ASSET_BYTES);
