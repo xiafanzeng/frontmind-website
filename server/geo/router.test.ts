@@ -132,7 +132,7 @@ class MockBroker implements GeoPresalesBroker {
   }
 
   async createFile(input: { filename: string }): Promise<BrokerFile> {
-    if (input.filename === "website-one-shot-kb-builder.skill.zip") {
+    if (input.filename.endsWith(".skill.zip")) {
       return {
         id: `skill-file-${this.nextSkillFile++}`,
         filename: input.filename,
@@ -162,13 +162,13 @@ class MockBroker implements GeoPresalesBroker {
     this.prompts.push(input.prompt);
     this.taskAttachments.push(input.attachments);
     const isQuestionTask = input.prompt.includes(
-      "geo-question-recommender skill",
+      "geo-question-recommender.skill.zip",
     );
     const isAssessmentTask = input.prompt.includes(
-      "geo-current-state-evaluator skill",
+      "geo-current-state-evaluator.skill.zip",
     );
     const isForecastTask = input.prompt.includes(
-      "geo-optimization-outcome-forecaster skill",
+      "geo-optimization-outcome-forecaster.skill.zip",
     );
     const id = isQuestionTask
       ? `question-${++this.questionTaskCount}`
@@ -2683,7 +2683,16 @@ describe("GEO API", () => {
     expect(broker.prompts.at(-1)).toContain(
       "Base 模型只提取事实四分类、schema 要求的逐项 confidence 和 0-1 原始指标",
     );
-    expect(broker.taskAttachments.at(-1)).toHaveLength(2);
+    expect(
+      broker.taskAttachments
+        .at(-1)!
+        .map((attachment) => attachment.filename),
+    ).toEqual([
+      "geo-knowledge-answer-verifier.skill.zip",
+      "geo-current-state-evaluator.skill.zip",
+      "Acme.zip",
+      "Acme-monitoring-records.json",
+    ]);
     const parsedMonitoring = JSON.parse(
       broker.uploads.get("file-1")!.toString("utf8"),
     );
@@ -3006,6 +3015,7 @@ describe("GEO API", () => {
 
     const attachments = broker.taskAttachments.at(-1)!;
     expect(attachments.map((attachment) => attachment.filename)).toEqual([
+      "geo-optimization-outcome-forecaster.skill.zip",
       "Acme.zip",
       "Acme-current-assessment.json",
       "frontmind-standard-one-month-scenario.json",

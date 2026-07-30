@@ -1,10 +1,13 @@
+import JSZip from "jszip";
 import { describe, expect, it } from "vitest";
 import {
   calculateQuestionBaselineAssessment,
   type AssessmentRawTaskOutput,
 } from "./assessment";
 import {
+  FORECAST_SKILL_ARCHIVE_FILENAME,
   ForecastRawTaskOutputSchema,
+  buildGeoOptimizationOutcomeForecasterSkillArchive,
   buildOptimizationOutcomeForecastPrompt,
   calculateOptimizationOutcomeForecast,
   parseOptimizationOutcomeForecastTaskOutput,
@@ -664,14 +667,18 @@ describe("forecast Base prompt and audited skill loader", () => {
     expect(prompt).toContain(
       '"executionScenarioAttachment": "FrontMind-full-execution-scenario.json"',
     );
-    for (const filename of [
+    expect(prompt).toContain(FORECAST_SKILL_ARCHIVE_FILENAME);
+    expect(prompt).not.toContain("# FILE:");
+    expect(Buffer.byteLength(prompt, "utf8")).toBeLessThan(4 * 1024);
+
+    const archive = await buildGeoOptimizationOutcomeForecasterSkillArchive();
+    const zip = await JSZip.loadAsync(archive);
+    expect(Object.keys(zip.files).sort()).toEqual([
+      "MANIFEST.json",
       "SKILL.md",
       "references/impact-forecast-methodology.md",
       "references/output-schema.json",
       "references/source-manifest.json",
-    ]) {
-      expect(prompt).toContain(`# FILE: ${filename}`);
-    }
-    expect(prompt).toContain("FrontMind_Report_Workflow");
+    ]);
   });
 });

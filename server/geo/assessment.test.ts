@@ -1,10 +1,15 @@
+import JSZip from "jszip";
 import { describe, expect, it } from "vitest";
 import {
+  ASSESSMENT_SKILL_ARCHIVE_FILENAME,
   AssessmentRawTaskOutputSchema,
   assertAssessmentOutputScope,
   buildAssessmentPrompt,
+  buildGeoCurrentStateEvaluatorSkillArchive,
+  buildGeoKnowledgeAnswerVerifierSkillArchive,
   calculateQuestionBaselineAssessment,
   clampRawIndicator,
+  KNOWLEDGE_VERIFIER_SKILL_ARCHIVE_FILENAME,
   parseAssessmentTaskOutput,
   type AssessmentRawTaskOutput,
 } from "./assessment";
@@ -602,19 +607,35 @@ describe("assessment prompt", () => {
     });
 
     expect(prompt).toContain("始终使用 Base 模型");
-    expect(prompt).toContain("geo-knowledge-answer-verifier");
-    expect(prompt).toContain(
-      "必须先执行下方 geo-knowledge-answer-verifier skill",
-    );
-    expect(prompt).toContain('"recommendedAction"');
+    expect(prompt).toContain(KNOWLEDGE_VERIFIER_SKILL_ARCHIVE_FILENAME);
+    expect(prompt).toContain(ASSESSMENT_SKILL_ARCHIVE_FILENAME);
+    expect(prompt).toContain("必须先执行 geo-knowledge-answer-verifier");
+    expect(prompt).not.toContain("# FILE:");
+    expect(Buffer.byteLength(prompt, "utf8")).toBeLessThan(4 * 1024);
     expect(prompt).toContain("不得自行计算或输出最终分数");
     expect(prompt).toContain("citationList 与 referenceList 必须分开保留");
     expect(prompt).toContain(
       '"monitoringRecordsFile": "FrontMind-monitoring.json"',
     );
-    expect(prompt).toContain("toneConsistency");
-    expect(prompt).toContain(
-      '"assessmentType": { "const": "question_baseline" }',
-    );
+  });
+
+  it("packages both assessment Skills with their complete reference contracts", async () => {
+    const [verifier, evaluator] = await Promise.all([
+      buildGeoKnowledgeAnswerVerifierSkillArchive(),
+      buildGeoCurrentStateEvaluatorSkillArchive(),
+    ]);
+    const verifierZip = await JSZip.loadAsync(verifier);
+    const evaluatorZip = await JSZip.loadAsync(evaluator);
+    expect(Object.keys(verifierZip.files).sort()).toEqual([
+      "MANIFEST.json",
+      "SKILL.md",
+      "references/comparison-contract.json",
+    ]);
+    expect(Object.keys(evaluatorZip.files).sort()).toEqual([
+      "MANIFEST.json",
+      "SKILL.md",
+      "references/bsas-baseline-methodology.md",
+      "references/raw-output-schema.json",
+    ]);
   });
 });

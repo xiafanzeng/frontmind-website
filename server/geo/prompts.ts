@@ -1,6 +1,6 @@
 import type { CreateProjectRequest } from "./schemas";
 import {
-  loadGeoQuestionRecommenderSkill,
+  QUESTION_SKILL_ARCHIVE_FILENAME,
   WEBSITE_KB_SKILL_ARCHIVE_FILENAME,
 } from "./skills";
 
@@ -112,10 +112,8 @@ export async function buildGeoQuestionPrompt({
   archiveFilename: string;
   retryReason?: string;
 }) {
-  const skill = await loadGeoQuestionRecommenderSkill();
-
   return [
-    "严格执行下方 geo-question-recommender skill，分析随任务附带的企业知识库 ZIP。",
+    `严格执行随任务附带的 ${QUESTION_SKILL_ARCHIVE_FILENAME}。先解压并完整读取根目录 SKILL.md 及其 references，再分析同任务附带的企业知识库 ZIP。该 Skill ZIP 是本任务唯一的 geo-question-recommender 工作规约。`,
     "最终响应只能是符合 schema 的 JSON 对象，不要输出 Markdown 代码块、说明、答案或其他文字。",
     "如果第一次内部草稿不符合数量、分类、证据或 selectable 约束，请在提交最终响应前自行修正。",
     "product_scenario 的五道题必须是该企业具体产品、服务、模块或功能的 Q&A；每题必须同时写出企业/品牌锚点与 offering 锚点，禁止无企业和产品主语的行业教育问句。",
@@ -130,8 +128,5 @@ export async function buildGeoQuestionPrompt({
       null,
       2,
     ),
-    "",
-    "## geo-question-recommender",
-    skill,
   ].join("\n");
 }

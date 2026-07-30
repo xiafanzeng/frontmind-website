@@ -20,15 +20,21 @@ import {
   type GeoAdminNotifier,
 } from "./admin-notifications";
 import {
+  ASSESSMENT_SKILL_ARCHIVE_FILENAME,
   assertAssessmentOutputScope,
+  buildGeoCurrentStateEvaluatorSkillArchive,
+  buildGeoKnowledgeAnswerVerifierSkillArchive,
   buildAssessmentPrompt,
   calculateQuestionBaselineAssessment,
   determineBsasGrade,
+  KNOWLEDGE_VERIFIER_SKILL_ARCHIVE_FILENAME,
   parseAssessmentTaskOutput,
 } from "./assessment";
 import {
+  buildGeoOptimizationOutcomeForecasterSkillArchive,
   buildOptimizationOutcomeForecastPrompt,
   calculateOptimizationOutcomeForecast,
+  FORECAST_SKILL_ARCHIVE_FILENAME,
   FORECAST_HORIZON_WEEKS,
   parseOptimizationOutcomeForecastTaskOutput,
 } from "./forecast";
@@ -74,7 +80,9 @@ import {
   buildWebsiteKnowledgeBaseRepairPrompt,
 } from "./prompts";
 import {
+  buildGeoQuestionRecommenderSkillArchive,
   buildWebsiteKnowledgeBaseSkillArchive,
+  QUESTION_SKILL_ARCHIVE_FILENAME,
   WEBSITE_KB_SKILL_ARCHIVE_FILENAME,
 } from "./skills";
 import {
@@ -873,17 +881,27 @@ export function createGeoRouter(options: GeoRouterOptions = {}): Router {
         trackedValue.knowledgeBaseTaskId,
         archive,
       );
-      const retriedTask = await broker.createTask({
-        projectId: trackedValue.projectId,
-        prompt: await buildGeoQuestionPrompt({
-          companyName: trackedValue.companyName,
-          archiveFilename: attachment.filename,
-          retryReason:
-            "必须严格返回四类各 5 题、总计 20 题，并满足 ID、证据引用和 selectable 约束",
-        }),
-        attachments: [attachment],
-        idempotencyKey: `geo:${trackedValue.projectId}:questions:2`,
-      });
+      const { task: retriedTask, skillAttachments } =
+        await createGeoTaskWithSkillPackages(
+          broker,
+          {
+            projectId: trackedValue.projectId,
+            prompt: await buildGeoQuestionPrompt({
+              companyName: trackedValue.companyName,
+              archiveFilename: attachment.filename,
+              retryReason:
+                "必须严格返回四类各 5 题、总计 20 题，并满足 ID、证据引用和 selectable 约束",
+            }),
+            attachments: [attachment],
+            idempotencyKey: `geo:${trackedValue.projectId}:questions:2`,
+          },
+          [
+            {
+              filename: QUESTION_SKILL_ARCHIVE_FILENAME,
+              body: await buildGeoQuestionRecommenderSkillArchive(),
+            },
+          ],
+        );
       const retriedTaskId = taskIdFrom(retriedTask);
       if (!retriedTaskId)
         throw new GeoHttpError(
@@ -896,14 +914,13 @@ export function createGeoRouter(options: GeoRouterOptions = {}): Router {
         questionTaskId: retriedTaskId,
         questionSubmittedAt: new Date().toISOString(),
         questionAttempt: 2,
-        temporaryFileIds: attachment.temporary
-          ? Array.from(
-              new Set([
-                ...(trackedValue.temporaryFileIds || []),
-                attachment.file_id,
-              ]),
-            )
-          : trackedValue.temporaryFileIds,
+        temporaryFileIds: Array.from(
+          new Set([
+            ...(trackedValue.temporaryFileIds || []),
+            ...skillAttachments.map((item) => item.file_id),
+            ...(attachment.temporary ? [attachment.file_id] : []),
+          ]),
+        ),
         previousQuestionTaskIds: Array.from(
           new Set([
             ...(trackedValue.previousQuestionTaskIds || []),
@@ -2094,15 +2111,25 @@ export function createGeoRouter(options: GeoRouterOptions = {}): Router {
         trackedValue.knowledgeBaseTaskId,
         archive,
       );
-      const questionTask = await broker.createTask({
-        projectId: trackedValue.projectId,
-        prompt: await buildGeoQuestionPrompt({
-          companyName: trackedValue.companyName,
-          archiveFilename: archiveAttachment.filename,
-        }),
-        attachments: [archiveAttachment],
-        idempotencyKey: `geo:${trackedValue.projectId}:questions:1`,
-      });
+      const { task: questionTask, skillAttachments } =
+        await createGeoTaskWithSkillPackages(
+          broker,
+          {
+            projectId: trackedValue.projectId,
+            prompt: await buildGeoQuestionPrompt({
+              companyName: trackedValue.companyName,
+              archiveFilename: archiveAttachment.filename,
+            }),
+            attachments: [archiveAttachment],
+            idempotencyKey: `geo:${trackedValue.projectId}:questions:1`,
+          },
+          [
+            {
+              filename: QUESTION_SKILL_ARCHIVE_FILENAME,
+              body: await buildGeoQuestionRecommenderSkillArchive(),
+            },
+          ],
+        );
       const questionTaskId = taskIdFrom(questionTask);
       if (!questionTaskId)
         throw new GeoHttpError(
@@ -2116,14 +2143,15 @@ export function createGeoRouter(options: GeoRouterOptions = {}): Router {
         questionTaskId,
         questionSubmittedAt: new Date().toISOString(),
         questionAttempt: 1,
-        temporaryFileIds: archiveAttachment.temporary
-          ? Array.from(
-              new Set([
-                ...(trackedValue.temporaryFileIds || []),
-                archiveAttachment.file_id,
-              ]),
-            )
-          : trackedValue.temporaryFileIds,
+        temporaryFileIds: Array.from(
+          new Set([
+            ...(trackedValue.temporaryFileIds || []),
+            ...skillAttachments.map((item) => item.file_id),
+            ...(archiveAttachment.temporary
+              ? [archiveAttachment.file_id]
+              : []),
+          ]),
+        ),
       };
       const projectToken = codec.seal("project", nextValue, PROJECT_TTL_MS);
       const project = await buildProjectView(
@@ -2693,21 +2721,48 @@ export function createGeoRouter(options: GeoRouterOptions = {}): Router {
         },
         retryReason: assessmentRetryReason,
       });
-      const assessmentTask = await broker.createTask({
-        projectId: value.projectId,
-        prompt,
-        attachments: [
+      let assessmentTask: BrokerTask;
+      let skillAttachments: Array<{ file_id: string; filename: string }>;
+      try {
+        const created = await createGeoTaskWithSkillPackages(
+          broker,
           {
-            file_id: archiveAttachment.file_id,
-            filename: archiveAttachment.filename,
+            projectId: value.projectId,
+            prompt,
+            attachments: [
+              {
+                file_id: archiveAttachment.file_id,
+                filename: archiveAttachment.filename,
+              },
+              {
+                file_id: monitoringFile.id,
+                filename: monitoringFile.filename || monitoringFilename,
+              },
+            ],
+            idempotencyKey: `geo:${value.projectId}:assessment:${value.monitorRunId}:${value.assessmentAttempt || 1}`,
           },
-          {
-            file_id: monitoringFile.id,
-            filename: monitoringFile.filename || monitoringFilename,
-          },
-        ],
-        idempotencyKey: `geo:${value.projectId}:assessment:${value.monitorRunId}:${value.assessmentAttempt || 1}`,
-      });
+          [
+            {
+              filename: KNOWLEDGE_VERIFIER_SKILL_ARCHIVE_FILENAME,
+              body: await buildGeoKnowledgeAnswerVerifierSkillArchive(),
+            },
+            {
+              filename: ASSESSMENT_SKILL_ARCHIVE_FILENAME,
+              body: await buildGeoCurrentStateEvaluatorSkillArchive(),
+            },
+          ],
+        );
+        assessmentTask = created.task;
+        skillAttachments = created.skillAttachments;
+      } catch (error) {
+        await Promise.allSettled([
+          broker.deleteFile(monitoringFile.id),
+          ...(archiveAttachment.temporary
+            ? [broker.deleteFile(archiveAttachment.file_id)]
+            : []),
+        ]);
+        throw error;
+      }
       const assessmentTaskId = taskIdFrom(assessmentTask);
       if (!assessmentTaskId) {
         throw new GeoHttpError(
@@ -2725,6 +2780,7 @@ export function createGeoRouter(options: GeoRouterOptions = {}): Router {
           new Set([
             ...(value.temporaryFileIds || []),
             monitoringFile.id,
+            ...skillAttachments.map((item) => item.file_id),
             ...(archiveAttachment.temporary ? [archiveAttachment.file_id] : []),
           ]),
         ),
@@ -2993,33 +3049,46 @@ export function createGeoRouter(options: GeoRouterOptions = {}): Router {
           if (archiveAttachment.temporary)
             temporaryFiles.push(archiveAttachment.file_id);
 
-          const task = await broker.createTask({
-            projectId: value.projectId,
-            prompt: await buildOptimizationOutcomeForecastPrompt({
-              currentAssessmentFilename:
-                assessmentFile.filename || assessmentFilename,
-              knowledgeBaseArchiveFilename: archiveAttachment.filename,
-              executionScenarioFilename:
-                scenarioFile.filename || scenarioFilename,
-              scenarioName: "full_execution",
-              retryReason: forecastRetryReason,
-            }),
-            attachments: [
+          const created = await createGeoTaskWithSkillPackages(
+            broker,
+            {
+              projectId: value.projectId,
+              prompt: await buildOptimizationOutcomeForecastPrompt({
+                currentAssessmentFilename:
+                  assessmentFile.filename || assessmentFilename,
+                knowledgeBaseArchiveFilename: archiveAttachment.filename,
+                executionScenarioFilename:
+                  scenarioFile.filename || scenarioFilename,
+                scenarioName: "full_execution",
+                retryReason: forecastRetryReason,
+              }),
+              attachments: [
+                {
+                  file_id: archiveAttachment.file_id,
+                  filename: archiveAttachment.filename,
+                },
+                {
+                  file_id: assessmentFile.id,
+                  filename: assessmentFile.filename || assessmentFilename,
+                },
+                {
+                  file_id: scenarioFile.id,
+                  filename: scenarioFile.filename || scenarioFilename,
+                },
+              ],
+              idempotencyKey: `geo:${value.projectId}:optimization-forecast:${value.assessmentTaskId}:standard-4w-v2:${value.optimizationForecastAttempt || 1}`,
+            },
+            [
               {
-                file_id: archiveAttachment.file_id,
-                filename: archiveAttachment.filename,
-              },
-              {
-                file_id: assessmentFile.id,
-                filename: assessmentFile.filename || assessmentFilename,
-              },
-              {
-                file_id: scenarioFile.id,
-                filename: scenarioFile.filename || scenarioFilename,
+                filename: FORECAST_SKILL_ARCHIVE_FILENAME,
+                body: await buildGeoOptimizationOutcomeForecasterSkillArchive(),
               },
             ],
-            idempotencyKey: `geo:${value.projectId}:optimization-forecast:${value.assessmentTaskId}:standard-4w-v2:${value.optimizationForecastAttempt || 1}`,
-          });
+          );
+          const task = created.task;
+          temporaryFiles.push(
+            ...created.skillAttachments.map((item) => item.file_id),
+          );
           const taskId = taskIdFrom(task);
           if (!taskId) {
             throw new GeoHttpError(
@@ -5343,6 +5412,57 @@ async function materializeArchiveAttachment(
   };
 }
 
+type GeoTaskSkillPackage = {
+  filename: string;
+  body: Buffer;
+};
+
+async function createGeoTaskWithSkillPackages(
+  broker: GeoPresalesBroker,
+  input: {
+    projectId: string;
+    prompt: string;
+    attachments: Array<{ file_id: string; filename: string }>;
+    idempotencyKey: string;
+  },
+  skillPackages: GeoTaskSkillPackage[],
+) {
+  const skillAttachments: Array<{ file_id: string; filename: string }> = [];
+  try {
+    for (const skillPackage of skillPackages) {
+      const file = await broker.createFile({
+        filename: skillPackage.filename,
+        mimeType: "application/zip",
+        sizeBytes: skillPackage.body.length,
+      });
+      skillAttachments.push({
+        file_id: file.id,
+        filename: file.filename || skillPackage.filename,
+      });
+      await broker.uploadFile(file.id, skillPackage.body, "application/zip");
+    }
+    const task = await broker.createTask({
+      ...input,
+      attachments: [...skillAttachments, ...input.attachments],
+    });
+    if (!taskIdFrom(task)) {
+      throw new GeoHttpError(
+        "创建上游任务失败：缺少任务 ID",
+        502,
+        "TASK_ID_MISSING",
+      );
+    }
+    return { task, skillAttachments };
+  } catch (error) {
+    await Promise.allSettled(
+      skillAttachments.map((attachment) =>
+        broker.deleteFile(attachment.file_id),
+      ),
+    );
+    throw error;
+  }
+}
+
 async function createWebsiteKnowledgeBaseTaskWithSkill(
   broker: GeoPresalesBroker,
   input: {
@@ -5352,27 +5472,16 @@ async function createWebsiteKnowledgeBaseTaskWithSkill(
     idempotencyKey: string;
   },
 ) {
-  const body = await buildWebsiteKnowledgeBaseSkillArchive();
-  const file = await broker.createFile({
-    filename: WEBSITE_KB_SKILL_ARCHIVE_FILENAME,
-    mimeType: "application/zip",
-    sizeBytes: body.length,
-  });
-  try {
-    await broker.uploadFile(file.id, body, "application/zip");
-    const skillAttachment = {
-      file_id: file.id,
-      filename: file.filename || WEBSITE_KB_SKILL_ARCHIVE_FILENAME,
-    };
-    const task = await broker.createTask({
-      ...input,
-      attachments: [skillAttachment, ...input.attachments],
-    });
-    return { task, skillAttachment };
-  } catch (error) {
-    await broker.deleteFile(file.id).catch(() => undefined);
-    throw error;
-  }
+  const result = await createGeoTaskWithSkillPackages(broker, input, [
+    {
+      filename: WEBSITE_KB_SKILL_ARCHIVE_FILENAME,
+      body: await buildWebsiteKnowledgeBaseSkillArchive(),
+    },
+  ]);
+  return {
+    task: result.task,
+    skillAttachment: result.skillAttachments[0],
+  };
 }
 
 function trackArchiveFile(

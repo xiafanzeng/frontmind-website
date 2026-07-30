@@ -1,6 +1,7 @@
 import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
+import JSZip from "jszip";
 import { describe, expect, it } from "vitest";
 import {
   buildGeoQuestionPrompt,
@@ -8,9 +9,11 @@ import {
   buildWebsiteKnowledgeBaseRepairPrompt,
 } from "./prompts";
 import {
+  buildGeoQuestionRecommenderSkillArchive,
   buildWebsiteKnowledgeBaseSkillArchive,
   loadGeoQuestionRecommenderSkill,
   loadWebsiteKnowledgeBaseSkill,
+  QUESTION_SKILL_ARCHIVE_FILENAME,
   WEBSITE_KB_SKILL_ARCHIVE_FILENAME,
 } from "./skills";
 import { loadGeoKnowledgeAnswerVerifierSkill } from "./assessment";
@@ -300,11 +303,37 @@ describe("GEO question-recommender skill", () => {
     });
     expect(prompt).toContain("最终响应只能是符合 schema 的 JSON 对象");
     expect(prompt).toContain("Acme.zip");
-    expect(prompt).toContain("evidenceRefs");
+    expect(prompt).toContain(QUESTION_SKILL_ARCHIVE_FILENAME);
+    expect(prompt).not.toContain("# FILE:");
+    expect(Buffer.byteLength(prompt, "utf8")).toBeLessThan(4 * 1024);
     expect(prompt).toContain(
       "product_scenario 的五道题必须是该企业具体产品、服务、模块或功能的 Q&A",
     );
     expect(prompt).toContain("禁止无企业和产品主语的行业教育问句");
+  });
+
+  it("packages the complete question recommender as a deterministic Skill ZIP", async () => {
+    const [first, second] = await Promise.all([
+      buildGeoQuestionRecommenderSkillArchive(),
+      buildGeoQuestionRecommenderSkillArchive(),
+    ]);
+    expect(first.equals(second)).toBe(true);
+    const zip = await JSZip.loadAsync(first);
+    expect(Object.keys(zip.files).sort()).toEqual([
+      "MANIFEST.json",
+      "SKILL.md",
+      "references/demark-question-logic.md",
+      "references/output-schema.json",
+    ]);
+    const manifest = JSON.parse(
+      await zip.file("MANIFEST.json")!.async("string"),
+    );
+    expect(manifest).toMatchObject({
+      schemaVersion: 1,
+      name: "geo-question-recommender",
+      entrypoint: "SKILL.md",
+    });
+    expect(manifest.files).toHaveLength(3);
   });
 });
 

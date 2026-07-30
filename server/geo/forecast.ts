@@ -10,6 +10,7 @@ import {
   trustedAssistantOutputItems,
   trustedAssistantOutputTexts,
 } from "./trusted-task-output";
+import { buildGeoSkillArchive } from "./skills";
 
 export const FORECAST_TYPE = "conditional_4_week" as const;
 export const FORECAST_HORIZON_WEEKS = 4 as const;
@@ -296,6 +297,9 @@ const FORECAST_SKILL_FILES = [
   "references/source-manifest.json",
 ] as const;
 
+export const FORECAST_SKILL_ARCHIVE_FILENAME =
+  "geo-optimization-outcome-forecaster.skill.zip";
+
 let forecastSkillCache: string | undefined;
 
 function skillRootCandidates() {
@@ -354,12 +358,18 @@ export async function loadGeoOptimizationOutcomeForecasterSkill() {
     : new Error("Could not load geo-optimization-outcome-forecaster skill");
 }
 
+export function buildGeoOptimizationOutcomeForecasterSkillArchive() {
+  return buildGeoSkillArchive({
+    name: "geo-optimization-outcome-forecaster",
+    files: FORECAST_SKILL_FILES,
+  });
+}
+
 export async function buildOptimizationOutcomeForecastPrompt(
   input: ForecastPromptInput,
 ) {
-  const skill = await loadGeoOptimizationOutcomeForecasterSkill();
   return [
-    "严格执行下方 geo-optimization-outcome-forecaster skill，读取随任务附带的现状评估 JSON、同一企业知识库 ZIP 与执行场景 JSON，生成一个月（4 周）条件目标的证据映射。",
+    `严格执行随任务附带的 ${FORECAST_SKILL_ARCHIVE_FILENAME}。先解压并完整读取根目录 SKILL.md 及 references，再读取同任务附带的现状评估 JSON、企业知识库 ZIP 与执行场景 JSON，生成一个月（4 周）条件目标的证据映射。`,
     "此任务始终使用 Base 模型。Base 只返回十三项指标的 headroom gap-closure 区间、证据、依赖与行动映射；不得计算或返回分数、等级、分数增量、营收或保证性结果。",
     "服务端会同时保留原始加权分与本题适用范围归一化分；普通 unavailable 不得被解释为结构性排除，也不得用于缩小适用范围分母。",
     "最终响应只能是符合 output-schema.json 的单个 JSON 对象，不要输出 Markdown 代码块、推理过程、解释或其他文字。",
@@ -382,9 +392,6 @@ export async function buildOptimizationOutcomeForecastPrompt(
       null,
       2,
     ),
-    "",
-    "## geo-optimization-outcome-forecaster",
-    skill,
   ].join("\n");
 }
 
