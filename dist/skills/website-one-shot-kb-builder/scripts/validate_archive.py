@@ -759,8 +759,20 @@ def validate(zip_path: str) -> dict[str, int]:
                     or len(evidence_document_ids) != len(set(evidence_document_ids))
                     or any(
                         evidence_document_id not in evidence_docs_by_id
-                        or evidence_docs_by_id[evidence_document_id].get("branchId")
-                        != doc.get("branchId")
+                        or (
+                            schema_version != 3
+                            and evidence_docs_by_id[evidence_document_id].get(
+                                "branchId"
+                            )
+                            != doc.get("branchId")
+                        )
+                        or (
+                            schema_version == 3
+                            and evidence_docs_by_id[evidence_document_id].get(
+                                "branchId"
+                            )
+                            not in (None, doc.get("branchId"))
+                        )
                         or not set(doc.get("sourceIds", [])).intersection(
                             evidence_docs_by_id[evidence_document_id].get(
                                 "sourceIds", []

@@ -11,6 +11,15 @@ export type GeoSkillArchiveDefinition = {
 
 const WEBSITE_KB_SKILL: GeoSkillArchiveDefinition = {
   name: "website-one-shot-kb-builder",
+  files: [
+    "SKILL.md",
+    "references/dimensions.md",
+    "references/candidate-format.md",
+  ],
+};
+
+const LEGACY_WEBSITE_KB_SKILL: GeoSkillArchiveDefinition = {
+  name: "website-one-shot-kb-builder-legacy",
   files: ["SKILL.md"],
 };
 
@@ -90,11 +99,21 @@ async function readSkillEntries(definition: GeoSkillArchiveDefinition) {
 }
 
 async function loadSkill(definition: GeoSkillArchiveDefinition) {
-  const cacheKey = definition.cacheKey || definition.name;
+  const entries = await readSkillEntries(definition);
+  const contentHash = createHash("sha256")
+    .update(
+      JSON.stringify(
+        entries.map(({ relativePath, content }) => ({
+          relativePath,
+          sha256: createHash("sha256").update(content).digest("hex"),
+        })),
+      ),
+    )
+    .digest("hex");
+  const cacheKey = `${definition.cacheKey || definition.name}:${contentHash}`;
   const cached = skillCache.get(cacheKey);
   if (cached) return cached;
 
-  const entries = await readSkillEntries(definition);
   const value = entries
     .map(
       ({ relativePath, content }) =>
@@ -160,6 +179,10 @@ export async function buildGeoSkillArchive(
 
 export function buildWebsiteKnowledgeBaseSkillArchive() {
   return buildGeoSkillArchive(WEBSITE_KB_SKILL);
+}
+
+export function buildLegacyWebsiteKnowledgeBaseSkillArchive() {
+  return buildGeoSkillArchive(LEGACY_WEBSITE_KB_SKILL);
 }
 
 export function loadGeoQuestionRecommenderSkill() {

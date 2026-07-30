@@ -10,6 +10,7 @@ const sourceRoot = path.join(projectRoot, "server", "skills");
 const outputRoot = path.join(projectRoot, "dist", "skills");
 const skillNames = [
   "website-one-shot-kb-builder",
+  "website-one-shot-kb-builder-legacy",
   "geo-question-recommender",
   "geo-knowledge-answer-verifier",
   "geo-current-state-evaluator",

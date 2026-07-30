@@ -18,6 +18,7 @@ import {
   type GeoAdminNotification,
 } from "./admin-notifications";
 import { createGeoRouter } from "./router";
+import { parseKnowledgeBaseArchive } from "./archive";
 import { PRODUCT_QA_INTENTS, type GeoQuestion } from "./schemas";
 import { GeoTokenCodec } from "./tokens";
 import { GeoAccountProvisioningError } from "./provisioning";
@@ -31,7 +32,7 @@ import {
 } from "./payment";
 import type {
   GeoAccountProvisionRequest,
-  GeoKnowledgeImportRequestV2,
+  GeoKnowledgeImportRequest,
   GeoManualServiceOrderAccountRequest,
   GeoManualServiceOrderCreateRequest,
   GeoManualServiceOrderPaymentRequest,
@@ -251,12 +252,13 @@ class MockBroker implements GeoPresalesBroker {
     this.uploads.delete(fileId);
   }
 
-  async downloadFile() {
-    return new Response(this.archive, {
+  async downloadFile(fileId?: string) {
+    const bytes = (fileId && this.uploads.get(fileId)) || this.archive;
+    return new Response(bytes, {
       status: 200,
       headers: {
         "content-type": "application/zip",
-        "content-length": String(this.archive.length),
+        "content-length": String(bytes.length),
       },
     });
   }
@@ -320,7 +322,7 @@ let purchaseProvisionCalls: GeoPurchaseProvisionRequestV2[];
 let purchaseStatusReads: string[];
 let knowledgeImportCalls: Array<{
   projectId: string;
-  request: GeoKnowledgeImportRequestV2;
+  request: GeoKnowledgeImportRequest;
 }>;
 let purchaseProvisionResponse: GeoPurchaseProvisionResponseV2;
 let manualOrderCreateCalls: GeoManualServiceOrderCreateRequest[];
@@ -671,6 +673,7 @@ beforeEach(async () => {
       projectOrderRegistry,
       env: {
         NODE_ENV: "test",
+        FRONTMIND_GEO_KB_PIPELINE_V2_ENABLED: "false",
         FRONTMIND_GEO_INVITE_CODE: "frontmind666",
         FRONTMIND_GEO_SESSION_SECRET:
           "test-session-secret-at-least-16-characters",
@@ -1121,6 +1124,127 @@ describe("GEO API", () => {
       { method: "DELETE" },
     );
     expect(removed.body).toMatchObject({ ok: true, deletedTasks: 2 });
+  });
+
+  it("finalizes a V2 candidate once and serves the same final ZIP everywhere", async () => {
+    const v2Broker = new MockBroker();
+    v2Broker.archive = await fixtureCandidateArchive();
+    const secret = "v2-test-session-secret-at-least-32-characters";
+    const app = express();
+    app.use(
+      "/api/geo",
+      createGeoRouter({
+        broker: v2Broker,
+        projectOrderRegistry,
+        env: {
+          NODE_ENV: "test",
+          FRONTMIND_GEO_KB_PIPELINE_V2_ENABLED: "true",
+          FRONTMIND_GEO_KB_PIPELINE_V2_PERCENT: "100",
+          FRONTMIND_GEO_INVITE_CODE: "frontmind666",
+          FRONTMIND_GEO_SESSION_SECRET: secret,
+        },
+      }),
+    );
+    const v2Server = app.listen(0);
+    await new Promise<void>((resolve) =>
+      v2Server.once("listening", resolve),
+    );
+    try {
+      const origin = `http://127.0.0.1:${(v2Server.address() as AddressInfo).port}`;
+      const invited = await fetch(`${origin}/api/geo/invite/verify`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ code: "frontmind666" }),
+      });
+      const cookie = invited.headers.get("set-cookie")!.split(";")[0]!;
+      const created = await fetch(`${origin}/api/geo/projects`, {
+        method: "POST",
+        headers: {
+          cookie,
+          "content-type": "application/json",
+        },
+        body: JSON.stringify({ input: "Acme", attachments: [] }),
+      });
+      const initial = (await created.json()) as Record<string, any>;
+      v2Broker.tasks.set("kb-1", {
+        id: "kb-1",
+        status: "completed",
+        completed_at: "2026-07-30T04:00:00.000Z",
+        output: [
+          {
+            role: "assistant",
+            content: [
+              {
+                type: "output_file",
+                file_id: "candidate-v2",
+                filename: "Acme_candidate.zip",
+              },
+            ],
+          },
+        ],
+      });
+
+      const polled = await fetch(
+        `${origin}/api/geo/projects/${encodeURIComponent(initial.projectToken)}`,
+        { headers: { cookie } },
+      );
+      expect(polled.status).toBe(200);
+      const completed = (await polled.json()) as Record<string, any>;
+      expect(completed).toMatchObject({
+        project: { archive: { downloadUrl: expect.stringContaining("/archive") } },
+      });
+      expect(completed.project.knowledgeBase.sections).toHaveLength(7);
+      expect(completed.projectToken).not.toBe(initial.projectToken);
+
+      const value = new GeoTokenCodec(secret).open<any>(
+        completed.projectToken,
+        "project",
+      ).value;
+      expect(value).toMatchObject({
+        knowledgeBasePipelineVersion: 2,
+        knowledgeBaseArtifact: {
+          finalizerVersion: "website-kb-finalizer-v1",
+          candidate: {
+            taskId: "kb-1",
+            fileId: "candidate-v2",
+            sha256: expect.stringMatching(/^[a-f0-9]{64}$/),
+          },
+          final: {
+            archiveContractVersion: 3,
+            validationProfile: "website-lead-v1",
+            sha256: expect.stringMatching(/^[a-f0-9]{64}$/),
+            packageManifestSha256: expect.stringMatching(/^[a-f0-9]{64}$/),
+          },
+        },
+      });
+      const finalBytes = v2Broker.uploads.get(
+        value.knowledgeBaseArtifact.final.fileId,
+      )!;
+      expect(finalBytes).toBeDefined();
+      await expect(
+        parseKnowledgeBaseArchive(finalBytes, {
+          companyName: "Acme",
+          validationProfile: "website-lead-v1",
+          generatedAt: "2026-07-30T04:00:00.000Z",
+        }),
+      ).resolves.toMatchObject({
+        archiveContractVersion: 3,
+        packageManifestSha256:
+          value.knowledgeBaseArtifact.final.packageManifestSha256,
+      });
+
+      const downloaded = await fetch(
+        `${origin}${completed.project.archive.downloadUrl}`,
+        { headers: { cookie } },
+      );
+      expect(downloaded.status).toBe(200);
+      expect(Buffer.from(await downloaded.arrayBuffer())).toEqual(finalBytes);
+      expect(finalBytes).not.toEqual(v2Broker.archive);
+    } finally {
+      await new Promise<void>((resolve, reject) =>
+        v2Server.close((error) => (error ? reject(error) : resolve())),
+      );
+    }
   });
 
   it("uses ZIP validation as a gate for preview, recommendation, and download", async () => {
@@ -1860,7 +1984,7 @@ describe("GEO API", () => {
       "running",
     );
     expect(broker.prompts).toHaveLength(2);
-    expect(broker.prompts.at(-1)).toContain("唯一一次产物结构修复任务");
+    expect(broker.prompts.at(-1)).toContain("唯一一次结构兼容修复");
     expect(broker.prompts.at(-1)).toContain(
       "Knowledge-base archive is missing required 00_completeness.json",
     );
@@ -4912,6 +5036,108 @@ function validForecastOutput() {
       requiresSameScopeRemeasurement: true,
     },
   };
+}
+
+async function fixtureCandidateArchive() {
+  const zip = new JSZip();
+  const source = "https://acme.example";
+  const facts = [
+    "# Acme 品牌事实",
+    "",
+    "## D01 企业基础",
+    `Acme 提供企业技术服务。[来源](${source})`,
+    "",
+    "## D02 团队",
+    "核心团队完整名单尚未发现公开资料。[待核验]",
+    "",
+    "## D03 产品服务",
+    `Acme 提供面向企业客户的平台产品与交付服务。[来源](${source})`,
+    "",
+    "## D04 技术能力",
+    `官网介绍了平台的接口集成与交付能力。[企业主张](${source})`,
+    "",
+    "## D05 客户案例",
+    "公开案例的完整客户名单尚待核验。[待核验]",
+    "",
+    "## D06 资质认证",
+    "公开资质信息尚待核验。[待核验]",
+    "",
+    "## D07 财务融资",
+    "公开财务与融资信息尚待核验。[待核验]",
+    "",
+    "## D08 竞争信息",
+    "未发布无证据的竞品优劣判断。[待核验]",
+    "",
+    "## D09 市场信息",
+    `官网将企业客户列为主要服务对象。[来源](${source})`,
+    "",
+    "## D10 品牌资产",
+    `企业以 Acme 名称对外提供服务。[来源](${source})`,
+    "",
+    "## D11 渠道",
+    `官网提供产品、文档与联系入口。[来源](${source})`,
+    "",
+    "## D12 公开意图",
+    `官网公开提供企业合作入口。[来源](${source})`,
+    "",
+    "## D13 公共情报",
+    "本次公开资料未发现需要单列的权威监管信息。[待核验]",
+  ].join("\n");
+  const customer = [
+    "# Acme 客户知识稿",
+    "",
+    "## 企业与品牌",
+    "### 企业定位",
+    `Acme 面向企业客户提供平台产品与技术服务。[来源](${source})`,
+    "",
+    "## 团队与组织",
+    "### 公开团队信息",
+    "核心团队完整名单尚未发现公开资料。[待核验]",
+    "",
+    "## 产品与服务",
+    "### 平台产品",
+    `Acme 提供平台产品、接口集成与配套交付服务。[来源](${source})`,
+    "",
+    "## 技术与交付",
+    "### 技术能力",
+    `官网称平台支持接口集成，并提供面向企业场景的交付能力。[企业主张](${source})`,
+    "",
+    "## 客户与行业",
+    "### 服务对象",
+    `官网将企业客户列为主要服务对象。[来源](${source})`,
+    "",
+    "## 服务与合作",
+    "### 联系渠道",
+    `企业官网提供产品、文档、联系与合作入口。[来源](${source})`,
+    "",
+    "## 可信优势",
+    "### 已公开能力",
+    `官网公开展示了产品、技术说明和企业合作渠道。[来源](${source})`,
+  ].join("\n");
+  zip.file("00_brand_facts.md", facts);
+  zip.file("01_customer_draft.md", customer);
+  zip.file(
+    "02_run.json",
+    JSON.stringify({
+      schemaVersion: 1,
+      company: {
+        name: "Acme",
+        officialWebsite: source,
+        industryCluster: "C3",
+      },
+      sources: [
+        {
+          title: "Acme 官网",
+          kind: "official_web",
+          status: "read",
+          url: source,
+        },
+      ],
+      queries: [],
+      assets: [],
+    }),
+  );
+  return zip.generateAsync({ type: "nodebuffer" });
 }
 
 async function fixtureArchive() {

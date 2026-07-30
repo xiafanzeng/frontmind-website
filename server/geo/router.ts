@@ -58,6 +58,15 @@ import {
   knowledgeArchiveDescriptorHash,
 } from "./knowledge-base-artifact";
 import {
+  KnowledgeBaseCandidateError,
+  parseKnowledgeBaseCandidate,
+} from "./knowledge-base-candidate";
+import {
+  assessKnowledgeBaseCandidate,
+  finalizeKnowledgeBaseCandidate,
+  WEBSITE_KB_FINALIZER_VERSION,
+} from "./knowledge-base-finalizer";
+import {
   createGeoPaymentGatewayFromEnv,
   GEO_SERVICE_MONTHLY_PRICE_FEN,
   type GeoPaymentCheckout,
@@ -76,11 +85,14 @@ import {
 import { trustedAssistantOutputTexts } from "./trusted-task-output";
 import {
   buildGeoQuestionPrompt,
+  buildLegacyWebsiteKnowledgeBaseRepairPrompt,
+  buildLegacyWebsiteKnowledgeBasePrompt,
   buildWebsiteKnowledgeBasePrompt,
   buildWebsiteKnowledgeBaseRepairPrompt,
 } from "./prompts";
 import {
   buildGeoQuestionRecommenderSkillArchive,
+  buildLegacyWebsiteKnowledgeBaseSkillArchive,
   buildWebsiteKnowledgeBaseSkillArchive,
   QUESTION_SKILL_ARCHIVE_FILENAME,
   WEBSITE_KB_SKILL_ARCHIVE_FILENAME,
@@ -197,6 +209,35 @@ type ProjectTokenValue = {
   knowledgeBaseSubmittedAt?: string;
   knowledgeBaseValidationProfile?: "website-lead-v1";
   knowledgeBaseAttempt?: 1 | 2;
+  knowledgeBasePipelineVersion?: 2;
+  knowledgeBaseRetryReason?: "candidate_invalid" | "content_thin";
+  knowledgeBaseRetryContext?: {
+    tier: "rich" | "medium" | "sparse";
+    factCharacters: number;
+    customerCharacters: number;
+    missingDimensions: string[];
+    unwrittenFactTopics: string[];
+    allowedSources: string[];
+  };
+  knowledgeBaseArtifact?: {
+    finalizerVersion: "website-kb-finalizer-v1";
+    candidate: {
+      taskId: string;
+      outputItemId: string;
+      fileId?: string;
+      descriptorHash: string;
+      sha256: string;
+    };
+    final: {
+      fileId: string;
+      filename: string;
+      sha256: string;
+      packageManifestSha256: string;
+      archiveContractVersion: 3;
+      validationProfile: "website-lead-v1";
+      finalizedAt: string;
+    };
+  };
   uploadFileIds?: string[];
   archiveFileIds?: string[];
   temporaryFileIds?: string[];
@@ -311,6 +352,17 @@ type ProjectOrderProtection = {
 export function createGeoRouter(options: GeoRouterOptions = {}): Router {
   const env = options.env ?? process.env;
   const production = env.NODE_ENV === "production";
+  const knowledgeBasePipelineV2Enabled = !["0", "false", "off"].includes(
+    (env.FRONTMIND_GEO_KB_PIPELINE_V2_ENABLED || "false").trim().toLowerCase(),
+  );
+  const configuredPipelineV2Percent = Number(
+    env.FRONTMIND_GEO_KB_PIPELINE_V2_PERCENT || "10",
+  );
+  const knowledgeBasePipelineV2Percent = Number.isFinite(
+    configuredPipelineV2Percent,
+  )
+    ? Math.max(0, Math.min(100, Math.floor(configuredPipelineV2Percent)))
+    : 10;
   const inviteCode =
     env.FRONTMIND_GEO_INVITE_CODE?.trim() || (production ? "" : "frontmind666");
   const sessionSecret =
@@ -396,7 +448,274 @@ export function createGeoRouter(options: GeoRouterOptions = {}): Router {
       }>;
     }
   >();
+  const knowledgeBaseFinalizations = new Map<
+    string,
+    {
+      expiresAt: number;
+      promise: Promise<{
+        value: ProjectTokenValue;
+        manifest?: KnowledgeBaseManifest;
+      }>;
+    }
+  >();
   const router = express.Router();
+
+  const ensureFinalizedKnowledgeBase = async (
+    value: ProjectTokenValue,
+    task: BrokerTask,
+  ): Promise<{
+    value: ProjectTokenValue;
+    manifest?: KnowledgeBaseManifest;
+  }> => {
+    if (
+      value.knowledgeBasePipelineVersion !== 2 ||
+      normalizeTaskStatus(task.status) !== "completed"
+    ) {
+      return { value };
+    }
+    const existingArtifact = value.knowledgeBaseArtifact;
+    if (
+      existingArtifact?.candidate.taskId === value.knowledgeBaseTaskId &&
+      existingArtifact.finalizerVersion === WEBSITE_KB_FINALIZER_VERSION
+    ) {
+      const descriptor = resolveKnowledgeBaseArtifact(value, task);
+      if (!descriptor) return { value };
+      return {
+        value,
+        manifest: await loadKnowledgeBaseManifest(
+          broker,
+          value.knowledgeBaseTaskId,
+          task,
+          value.companyName,
+          descriptor,
+          "website-lead-v1",
+        ),
+      };
+    }
+
+    const candidateDescriptor = collectKnowledgeArchiveDescriptors(
+      task.output,
+    )[0];
+    if (!candidateDescriptor) {
+      return {
+        value: {
+          ...value,
+          knowledgeBaseRetryReason: "candidate_invalid",
+          knowledgeBaseRetryContext: undefined,
+        },
+      };
+    }
+
+    const candidateDownloadStartedAt = Date.now();
+    const response = candidateDescriptor.fileId
+      ? await broker.downloadFile(candidateDescriptor.fileId)
+      : await broker.downloadTaskOutput(
+          value.knowledgeBaseTaskId,
+          candidateDescriptor.url || "",
+          candidateDescriptor.filename,
+        );
+    let candidateBytes: Buffer;
+    try {
+      candidateBytes = await readResponseBufferLimited(
+        response,
+        MAX_VALIDATED_ARCHIVE_BYTES,
+      );
+    } catch (error) {
+      if (!(error instanceof GeoByteLimitError)) throw error;
+      return {
+        value: {
+          ...value,
+          knowledgeBaseRetryReason: "candidate_invalid",
+          knowledgeBaseRetryContext: undefined,
+        },
+      };
+    }
+    const candidateSha = crypto
+      .createHash("sha256")
+      .update(candidateBytes)
+      .digest("hex");
+    const candidateDownloadMs = Date.now() - candidateDownloadStartedAt;
+    const descriptorHash = knowledgeArchiveDescriptorHash(candidateDescriptor);
+    const finalizationKey = [
+      value.projectId,
+      value.knowledgeBaseTaskId,
+      candidateSha,
+      WEBSITE_KB_FINALIZER_VERSION,
+    ].join(":");
+    const now = Date.now();
+    pruneExpiringMap(knowledgeBaseFinalizations, now, 200);
+    const running = knowledgeBaseFinalizations.get(finalizationKey);
+    if (running && running.expiresAt > now) return running.promise;
+
+    const promise = (async () => {
+      const parseStartedAt = Date.now();
+      let candidate;
+      try {
+        candidate = await parseKnowledgeBaseCandidate(candidateBytes);
+      } catch (error) {
+        if (!(error instanceof KnowledgeBaseCandidateError)) throw error;
+        console.warn(
+          "[GEO API] Candidate knowledge archive rejected:",
+          error.message,
+        );
+        return {
+          value: {
+            ...value,
+            knowledgeBaseRetryReason: "candidate_invalid" as const,
+            knowledgeBaseRetryContext: undefined,
+          },
+        };
+      }
+      const assessment = assessKnowledgeBaseCandidate(candidate);
+      const candidateParseMs = Date.now() - parseStartedAt;
+      console.info("[GEO KB V2] candidate parsed", {
+        pipelineVersion: 2,
+        projectId: value.projectId,
+        taskId: value.knowledgeBaseTaskId,
+        candidateSha,
+        finalizerVersion: WEBSITE_KB_FINALIZER_VERSION,
+        tier: assessment.tier,
+        citedSourceCount: candidate.metrics.citedSourceCount,
+        factCharacters: candidate.metrics.factCharacters,
+        customerCharacters: candidate.metrics.customerCharacters,
+        coveredFactDimensions: candidate.metrics.coveredFactDimensions,
+        discoveredImages: candidate.assets.length,
+        requiresSupplement: assessment.requiresSupplement,
+        supplementReasons: assessment.reasons,
+        candidateDownloadMs,
+        candidateParseMs,
+      });
+      if (
+        assessment.requiresSupplement &&
+        (value.knowledgeBaseAttempt || 1) < 2
+      ) {
+        return {
+          value: {
+            ...value,
+            knowledgeBaseRetryReason: "content_thin" as const,
+            knowledgeBaseRetryContext: {
+              tier: assessment.tier,
+              factCharacters: candidate.metrics.factCharacters,
+              customerCharacters: candidate.metrics.customerCharacters,
+              missingDimensions: assessment.missingDimensions,
+              unwrittenFactTopics: assessment.unwrittenFactTopics,
+              allowedSources: assessment.allowedSources,
+            },
+          },
+        };
+      }
+
+      const evaluatedAt =
+        typeof task.completed_at === "string"
+          ? task.completed_at
+          : typeof task.updated_at === "string"
+            ? task.updated_at
+            : value.knowledgeBaseSubmittedAt || new Date(0).toISOString();
+      let finalized;
+      const finalizeStartedAt = Date.now();
+      try {
+        finalized = await finalizeKnowledgeBaseCandidate({
+          candidate,
+          companyName: value.companyName,
+          evaluatedAt,
+        });
+      } catch (error) {
+        console.error("[GEO API] KB_FINALIZER_CONTRACT_VIOLATION", {
+          finalizerVersion: WEBSITE_KB_FINALIZER_VERSION,
+          candidateSha,
+          error: error instanceof Error ? error.message : String(error),
+        });
+        throw new GeoHttpError(
+          "知识库最终整理暂时失败，请稍后重试",
+          503,
+          "KB_FINALIZER_CONTRACT_VIOLATION",
+        );
+      }
+
+      const filename = `${sanitizeFilename(
+        value.companyName,
+        "company",
+      )}_website_lead_knowledge_base.zip`;
+      const file = await broker.createFile({
+        filename,
+        mimeType: "application/zip",
+        sizeBytes: finalized.bytes.length,
+      });
+      try {
+        const uploadStartedAt = Date.now();
+        await broker.uploadFile(
+          file.id,
+          finalized.bytes,
+          "application/zip",
+          file.proxy_upload_ticket,
+        );
+        console.info("[GEO KB V2] final archive ready", {
+          pipelineVersion: 2,
+          projectId: value.projectId,
+          taskId: value.knowledgeBaseTaskId,
+          candidateSha,
+          finalizerVersion: WEBSITE_KB_FINALIZER_VERSION,
+          finalSha: finalized.sha256,
+          packageManifestSha: finalized.packageManifestSha256,
+          tier: finalized.assessment.tier,
+          leafCount: finalized.metrics.leafCount,
+          customerCharacters: finalized.metrics.customerCharacters,
+          evidenceCharacters: finalized.metrics.evidenceCharacters,
+          discoveredImages: candidate.assets.length,
+          packagedImages: finalized.metrics.packagedImages,
+          rejectedImages:
+            candidate.assets.length - finalized.metrics.packagedImages,
+          finalizeMs: Date.now() - finalizeStartedAt,
+          uploadMs: Date.now() - uploadStartedAt,
+        });
+      } catch (error) {
+        await broker.deleteFile(file.id).catch(() => undefined);
+        throw error;
+      }
+      const nextValue: ProjectTokenValue = {
+        ...value,
+        knowledgeBaseRetryReason: undefined,
+        knowledgeBaseRetryContext: undefined,
+        archiveFileIds: Array.from(
+          new Set([
+            ...(value.archiveFileIds || []),
+            ...(candidateDescriptor.fileId ? [candidateDescriptor.fileId] : []),
+            file.id,
+          ]),
+        ),
+        knowledgeBaseArtifact: {
+          finalizerVersion: WEBSITE_KB_FINALIZER_VERSION,
+          candidate: {
+            taskId: value.knowledgeBaseTaskId,
+            outputItemId: candidateDescriptor.outputItemId,
+            ...(candidateDescriptor.fileId
+              ? { fileId: candidateDescriptor.fileId }
+              : {}),
+            descriptorHash,
+            sha256: candidateSha,
+          },
+          final: {
+            fileId: file.id,
+            filename: file.filename || filename,
+            sha256: finalized.sha256,
+            packageManifestSha256: finalized.packageManifestSha256,
+            archiveContractVersion: 3,
+            validationProfile: "website-lead-v1",
+            finalizedAt: new Date().toISOString(),
+          },
+        },
+      };
+      return { value: nextValue, manifest: finalized.manifest };
+    })().catch((error) => {
+      knowledgeBaseFinalizations.delete(finalizationKey);
+      throw error;
+    });
+    knowledgeBaseFinalizations.set(finalizationKey, {
+      expiresAt: now + 10 * 60 * 1000,
+      promise,
+    });
+    return promise;
+  };
 
   const trackProjectOrder = (
     value: ProjectTokenValue,
@@ -774,21 +1093,94 @@ export function createGeoRouter(options: GeoRouterOptions = {}): Router {
         invalidTaskId,
         archive,
       );
+      let supplementAttachment:
+        | { file_id: string; filename: string; temporary: true }
+        | undefined;
+      if (validationCategory === "content") {
+        const retryContext = trackedValue.knowledgeBaseRetryContext;
+        const listOrNone = (values: string[] | undefined) =>
+          values?.length ? values.map((value) => `  - ${value}`) : ["  - 无"];
+        const supplementBody = Buffer.from(
+          [
+            "# 官网引流版知识库内容补充说明",
+            "",
+            `- 企业：${trackedValue.companyName}`,
+            `- 当前资料档位：${retryContext?.tier || "未识别"}`,
+            `- 当前事实有效字符：${retryContext?.factCharacters ?? "未识别"}`,
+            `- 当前客户正文有效字符：${retryContext?.customerCharacters ?? "未识别"}`,
+            `- 触发原因：${validationReason}`,
+            "",
+            "## 缺少证据的维度",
+            "",
+            ...listOrNone(retryContext?.missingDimensions),
+            "",
+            "## 事实板已有但客户稿未完整写入的主题",
+            "",
+            ...listOrNone(retryContext?.unwrittenFactTopics),
+            "",
+            "## 允许重新访问的官网和权威来源",
+            "",
+            ...listOrNone(retryContext?.allowedSources),
+            "",
+            "- 仅补充已有事实、上述官网/官方文档及其同域公开页面。",
+            "- 优先把事实板已有但客户稿遗漏的产品、技术、案例、渠道与合作信息写入对应章节。",
+            "- 不生成 manifest、canonical 目录、状态、计数或哈希。",
+          ].join("\n"),
+          "utf8",
+        );
+        const supplementFile = await broker.createFile({
+          filename: "content_supplement.md",
+          mimeType: "text/markdown",
+          sizeBytes: supplementBody.length,
+        });
+        try {
+          await broker.uploadFile(
+            supplementFile.id,
+            supplementBody,
+            "text/markdown",
+            supplementFile.proxy_upload_ticket,
+          );
+        } catch (error) {
+          await broker.deleteFile(supplementFile.id).catch(() => undefined);
+          throw error;
+        }
+        supplementAttachment = {
+          file_id: supplementFile.id,
+          filename: supplementFile.filename || "content_supplement.md",
+          temporary: true,
+        };
+      }
       const repaired = await createWebsiteKnowledgeBaseTaskWithSkill(broker, {
         projectId: trackedValue.projectId,
-        prompt: await buildWebsiteKnowledgeBaseRepairPrompt({
-          companyName: trackedValue.companyName,
-          archiveFilename: attachment.filename,
-          validationReason,
-          validationCategory,
-        }),
+        prompt:
+          trackedValue.knowledgeBasePipelineVersion === 2
+            ? await buildWebsiteKnowledgeBaseRepairPrompt({
+                companyName: trackedValue.companyName,
+                archiveFilename: attachment.filename,
+                validationReason,
+                validationCategory,
+              })
+            : await buildLegacyWebsiteKnowledgeBaseRepairPrompt({
+                companyName: trackedValue.companyName,
+                archiveFilename: attachment.filename,
+                validationReason,
+              }),
         attachments: [
           {
             file_id: attachment.file_id,
             filename: attachment.filename,
           },
+          ...(supplementAttachment
+            ? [
+                {
+                  file_id: supplementAttachment.file_id,
+                  filename: supplementAttachment.filename,
+                },
+              ]
+            : []),
         ],
         idempotencyKey: `geo:${trackedValue.projectId}:knowledge-base-repair:2`,
+        pipelineVersion: trackedValue.knowledgeBasePipelineVersion,
       });
       const repairedTask = repaired.task;
       const repairedTaskId = taskIdFrom(repairedTask);
@@ -807,11 +1199,17 @@ export function createGeoRouter(options: GeoRouterOptions = {}): Router {
         knowledgeBaseTaskId: repairedTaskId,
         knowledgeBaseSubmittedAt: new Date().toISOString(),
         knowledgeBaseAttempt: 2,
+        knowledgeBaseRetryReason: undefined,
+        knowledgeBaseRetryContext: undefined,
+        knowledgeBaseArtifact: undefined,
         temporaryFileIds: Array.from(
           new Set([
             ...(trackedValue.temporaryFileIds || []),
             repaired.skillAttachment.file_id,
             ...(attachment.temporary ? [attachment.file_id] : []),
+            ...(supplementAttachment
+              ? [supplementAttachment.file_id]
+              : []),
           ]),
         ),
         previousKnowledgeBaseTaskIds: Array.from(
@@ -865,7 +1263,7 @@ export function createGeoRouter(options: GeoRouterOptions = {}): Router {
     if (existing && existing.expiresAt > now) return existing.promise;
 
     const promise = (async () => {
-      const archive = findArchiveDescriptor(knowledgeBaseTask);
+      const archive = resolveKnowledgeBaseArtifact(value, knowledgeBaseTask);
       if (!archive)
         throw new GeoHttpError(
           "知识库 ZIP 尚未就绪，无法重试问题推荐",
@@ -1031,6 +1429,7 @@ export function createGeoRouter(options: GeoRouterOptions = {}): Router {
     }
     const knowledgeEvidencePaths = await loadKnowledgeEvidencePaths(
       broker,
+      value,
       value.knowledgeBaseTaskId,
       resolved.knowledgeBaseTask,
       value.companyName,
@@ -1217,6 +1616,50 @@ export function createGeoRouter(options: GeoRouterOptions = {}): Router {
           "基础版知识库尚未生成完成，请稍后重试同步",
           409,
           "ARCHIVE_NOT_READY",
+        );
+      }
+      if (value.knowledgeBasePipelineVersion === 2) {
+        value = (
+          await ensureFinalizedKnowledgeBase(
+            trackArchiveFile(value, knowledgeBaseTask),
+            knowledgeBaseTask,
+          )
+        ).value;
+        const artifact = value.knowledgeBaseArtifact;
+        if (!artifact || value.knowledgeBaseRetryReason) {
+          throw new GeoHttpError(
+            "基础版知识库仍需完成内容补充或候选重建",
+            409,
+            "ARCHIVE_NOT_READY",
+          );
+        }
+        const idempotencyKey = [
+          "geo-basic",
+          value.projectId,
+          artifact.final.sha256,
+          artifact.final.packageManifestSha256,
+          artifact.finalizerVersion,
+          "knowledge-v4",
+        ].join(":");
+        const imported = await knowledgeImporter(value.projectId, {
+          schemaVersion: 4,
+          companyName: value.companyName,
+          candidate: artifact.candidate,
+          finalArtifact: {
+            fileId: artifact.final.fileId,
+            filename: artifact.final.filename,
+            sha256: artifact.final.sha256,
+            archiveContractVersion: 3,
+            validationProfile: "website-lead-v1",
+            packageManifestSha256: artifact.final.packageManifestSha256,
+            finalizerVersion: artifact.finalizerVersion,
+          },
+        });
+        return mergeKnowledgeImport(
+          value,
+          imported,
+          artifact.final.sha256,
+          idempotencyKey,
         );
       }
       const descriptor = collectKnowledgeArchiveDescriptors(
@@ -1771,7 +2214,24 @@ export function createGeoRouter(options: GeoRouterOptions = {}): Router {
             input,
           )
         : crypto.randomUUID();
-      const prompt = await buildWebsiteKnowledgeBasePrompt(input);
+      const pipelineV2Bucket =
+        Number.parseInt(
+          crypto
+            .createHash("sha256")
+            .update(projectId)
+            .digest("hex")
+            .slice(0, 8),
+          16,
+        ) % 100;
+      const knowledgeBasePipelineVersion =
+        knowledgeBasePipelineV2Enabled &&
+        pipelineV2Bucket < knowledgeBasePipelineV2Percent
+        ? (2 as const)
+        : undefined;
+      const prompt =
+        knowledgeBasePipelineVersion === 2
+          ? await buildWebsiteKnowledgeBasePrompt(input)
+          : await buildLegacyWebsiteKnowledgeBasePrompt(input);
       const created = await createWebsiteKnowledgeBaseTaskWithSkill(broker, {
         projectId,
         prompt,
@@ -1780,6 +2240,7 @@ export function createGeoRouter(options: GeoRouterOptions = {}): Router {
           filename: sanitizeFilename(attachment.filename, "company-material"),
         })),
         idempotencyKey: `geo:${projectId}:knowledge-base:1`,
+        pipelineVersion: knowledgeBasePipelineVersion,
       });
       const task = created.task;
       const taskId = taskIdFrom(task);
@@ -1804,6 +2265,7 @@ export function createGeoRouter(options: GeoRouterOptions = {}): Router {
         knowledgeBaseSubmittedAt: new Date().toISOString(),
         knowledgeBaseValidationProfile: "website-lead-v1",
         knowledgeBaseAttempt: 1,
+        knowledgeBasePipelineVersion,
         uploadFileIds: uploads.map((upload) => upload.fileId),
         temporaryFileIds: [created.skillAttachment.file_id],
       };
@@ -1849,18 +2311,36 @@ export function createGeoRouter(options: GeoRouterOptions = {}): Router {
           ? getResolvedTask(broker, value.optimizationForecastTaskId)
           : Promise.resolve(undefined),
       ]);
+      const previousFinalFileId = value.knowledgeBaseArtifact?.final.fileId;
+      const finalizedKnowledgeBase = await ensureFinalizedKnowledgeBase(
+        trackArchiveFile(value, knowledgeBaseTask),
+        knowledgeBaseTask,
+      );
       let currentValue = await resolveCanonicalCompanyIdentity(
         broker,
-        trackArchiveFile(value, knowledgeBaseTask),
+        finalizedKnowledgeBase.value,
         knowledgeBaseTask,
         { allowInvalidArchiveForProjectView: true },
       );
       currentValue = await syncMonitoringOrder(currentValue, rawMonitorRun);
       currentValue = await syncServiceOrder(currentValue);
-      const currentToken =
-        currentValue === value
-          ? req.params.projectToken
-          : codec.seal("project", currentValue, PROJECT_TTL_MS);
+      let currentToken: string;
+      try {
+        currentToken =
+          currentValue === value
+            ? req.params.projectToken
+            : codec.seal("project", currentValue, PROJECT_TTL_MS);
+      } catch (error) {
+        const currentFinalFileId =
+          currentValue.knowledgeBaseArtifact?.final.fileId;
+        if (
+          currentFinalFileId &&
+          currentFinalFileId !== previousFinalFileId
+        ) {
+          await broker.deleteFile(currentFinalFileId).catch(() => undefined);
+        }
+        throw error;
+      }
       const project = await buildProjectView(
         broker,
         currentValue,
@@ -1881,7 +2361,8 @@ export function createGeoRouter(options: GeoRouterOptions = {}): Router {
     requireSession,
     requireCostRate("project-retry", 4),
     asyncHandler(async (req, res) => {
-      const value = openOwnedProject(req, res);
+      let value = openOwnedProject(req, res);
+      const originalValue = value;
       const retryInput = RetryProjectRequestSchema.parse(req.body);
       const retryAttachments = validateRetryProjectAttachments(
         retryInput,
@@ -1901,44 +2382,68 @@ export function createGeoRouter(options: GeoRouterOptions = {}): Router {
         filename: string;
       } | null = null;
       if (currentStatus === "completed") {
-        try {
-          completedArchiveDescriptor = findArchiveDescriptor(currentTask);
-          if (!completedArchiveDescriptor)
-            throw new KnowledgeBaseArchiveValidationError(
-              "completed task does not contain a ZIP artifact",
-              "structure",
-            );
-          await loadKnowledgeBaseManifest(
-            broker,
-            value.knowledgeBaseTaskId,
+        if (value.knowledgeBasePipelineVersion === 2) {
+          const finalized = await ensureFinalizedKnowledgeBase(
+            trackArchiveFile(value, currentTask),
             currentTask,
-            value.companyName,
-            completedArchiveDescriptor,
-            value.knowledgeBaseValidationProfile,
           );
-        } catch (error) {
-          if (!(error instanceof KnowledgeBaseArchiveValidationError))
-            throw error;
-          invalidCompletedOutput = error;
+          value = finalized.value;
+          completedArchiveDescriptor = findArchiveDescriptor(currentTask);
+          if (value.knowledgeBaseRetryReason) {
+            invalidCompletedOutput = new KnowledgeBaseArchiveValidationError(
+              value.knowledgeBaseRetryReason === "content_thin"
+                ? "Candidate content requires supplement"
+                : "Candidate archive is invalid",
+              value.knowledgeBaseRetryReason === "content_thin"
+                ? "content"
+                : "structure",
+            );
+          }
+        } else {
+          try {
+            completedArchiveDescriptor = findArchiveDescriptor(currentTask);
+            if (!completedArchiveDescriptor)
+              throw new KnowledgeBaseArchiveValidationError(
+                "completed task does not contain a ZIP artifact",
+                "structure",
+              );
+            await loadKnowledgeBaseManifest(
+              broker,
+              value.knowledgeBaseTaskId,
+              currentTask,
+              value.companyName,
+              completedArchiveDescriptor,
+              value.knowledgeBaseValidationProfile,
+            );
+          } catch (error) {
+            if (!(error instanceof KnowledgeBaseArchiveValidationError))
+              throw error;
+            invalidCompletedOutput = error;
+          }
         }
       }
       if (
         !["failed", "cancelled"].includes(currentStatus) &&
         !invalidCompletedOutput
       ) {
+        const currentToken =
+          value === originalValue
+            ? req.params.projectToken
+            : codec.seal("project", value, PROJECT_TTL_MS);
         const project = await buildProjectView(
           broker,
           value,
-          req.params.projectToken,
+          currentToken,
           currentTask,
           undefined,
         );
-        res.json({ projectToken: req.params.projectToken, project });
+        res.json({ projectToken: currentToken, project });
         return;
       }
       if (
         invalidCompletedOutput &&
-        invalidCompletedOutput.category === "unsafe"
+        invalidCompletedOutput.category === "unsafe" &&
+        value.knowledgeBasePipelineVersion !== 2
       ) {
         throw new GeoHttpError(
           KNOWLEDGE_BASE_VALIDATION_PUBLIC_ERRORS[
@@ -1950,12 +2455,22 @@ export function createGeoRouter(options: GeoRouterOptions = {}): Router {
       }
       if ((value.knowledgeBaseAttempt || 1) >= 2) {
         throw new GeoHttpError(
-          "企业分析自动重试次数已用完，请新建项目后重试",
+          value.knowledgeBasePipelineVersion === 2 &&
+            value.knowledgeBaseRetryReason === "candidate_invalid"
+            ? "候选知识库连续两次未能安全生成，请新建项目后重新提交资料"
+            : "企业分析内容补充次数已用完，请新建项目后重试",
           409,
-          "KNOWLEDGE_BASE_RETRY_EXHAUSTED",
+          value.knowledgeBasePipelineVersion === 2 &&
+            value.knowledgeBaseRetryReason === "candidate_invalid"
+            ? "KB_CANDIDATE_GENERATION_FAILED"
+            : "KNOWLEDGE_BASE_RETRY_EXHAUSTED",
         );
       }
-      if (invalidCompletedOutput && completedArchiveDescriptor) {
+      if (
+        invalidCompletedOutput &&
+        completedArchiveDescriptor &&
+        value.knowledgeBaseRetryReason !== "candidate_invalid"
+      ) {
         const repaired = await repairInvalidKnowledgeBaseTask(
           value,
           currentTask,
@@ -1982,12 +2497,18 @@ export function createGeoRouter(options: GeoRouterOptions = {}): Router {
       };
       const created = await createWebsiteKnowledgeBaseTaskWithSkill(broker, {
         projectId: value.projectId,
-        prompt: await buildWebsiteKnowledgeBasePrompt(normalizedRetryInput),
+        prompt:
+          value.knowledgeBasePipelineVersion === 2
+            ? await buildWebsiteKnowledgeBasePrompt(normalizedRetryInput)
+            : await buildLegacyWebsiteKnowledgeBasePrompt(
+                normalizedRetryInput,
+              ),
         attachments: normalizedRetryInput.attachments.map((attachment) => ({
           file_id: attachment.fileId,
           filename: attachment.filename,
         })),
         idempotencyKey: `geo:${value.projectId}:knowledge-base:2`,
+        pipelineVersion: value.knowledgeBasePipelineVersion,
       });
       const task = created.task;
       const taskId = taskIdFrom(task);
@@ -2007,6 +2528,9 @@ export function createGeoRouter(options: GeoRouterOptions = {}): Router {
         knowledgeBaseSubmittedAt: new Date().toISOString(),
         knowledgeBaseValidationProfile: "website-lead-v1",
         knowledgeBaseAttempt: 2,
+        knowledgeBaseRetryReason: undefined,
+        knowledgeBaseRetryContext: undefined,
+        knowledgeBaseArtifact: undefined,
         temporaryFileIds: Array.from(
           new Set([
             ...(value.temporaryFileIds || []),
@@ -2038,7 +2562,7 @@ export function createGeoRouter(options: GeoRouterOptions = {}): Router {
     requireSession,
     requireCostRate("question-create", 12),
     asyncHandler(async (req, res) => {
-      const value = openOwnedProject(req, res);
+      let value = openOwnedProject(req, res);
       if (value.questionTaskId) {
         const [knowledgeBaseTask, initialQuestionTask] = await Promise.all([
           getResolvedTask(broker, value.knowledgeBaseTaskId),
@@ -2097,7 +2621,19 @@ export function createGeoRouter(options: GeoRouterOptions = {}): Router {
           "KNOWLEDGE_BASE_NOT_READY",
         );
       }
-      const archive = findArchiveDescriptor(knowledgeBaseTask);
+      const finalizedKnowledgeBase = await ensureFinalizedKnowledgeBase(
+        trackArchiveFile(value, knowledgeBaseTask),
+        knowledgeBaseTask,
+      );
+      value = finalizedKnowledgeBase.value;
+      if (value.knowledgeBaseRetryReason) {
+        throw new GeoHttpError(
+          "企业知识库需要先完成一次内容补充或候选重建",
+          409,
+          "KNOWLEDGE_BASE_RETRY_REQUIRED",
+        );
+      }
+      const archive = resolveKnowledgeBaseArtifact(value, knowledgeBaseTask);
       if (!archive)
         throw new GeoHttpError(
           "知识库任务尚未返回 ZIP 文件",
@@ -2522,6 +3058,7 @@ export function createGeoRouter(options: GeoRouterOptions = {}): Router {
       }
       const knowledgeEvidencePaths = await loadKnowledgeEvidencePaths(
         broker,
+        value,
         value.knowledgeBaseTaskId,
         knowledgeBaseTask,
         value.companyName,
@@ -2614,7 +3151,7 @@ export function createGeoRouter(options: GeoRouterOptions = {}): Router {
         );
       }
 
-      const archive = findArchiveDescriptor(knowledgeBaseTask);
+      const archive = resolveKnowledgeBaseArtifact(value, knowledgeBaseTask);
       if (!archive) {
         throw new GeoHttpError(
           "企业知识库 ZIP 尚未就绪",
@@ -2847,6 +3384,7 @@ export function createGeoRouter(options: GeoRouterOptions = {}): Router {
       }
       const knowledgeEvidencePaths = await loadKnowledgeEvidencePaths(
         broker,
+        value,
         value.knowledgeBaseTaskId,
         knowledgeBaseTask,
         value.companyName,
@@ -2951,7 +3489,7 @@ export function createGeoRouter(options: GeoRouterOptions = {}): Router {
         }
       }
 
-      const archive = findArchiveDescriptor(knowledgeBaseTask);
+      const archive = resolveKnowledgeBaseArtifact(value, knowledgeBaseTask);
       if (!archive) {
         throw new GeoHttpError(
           "企业知识库 ZIP 尚未就绪",
@@ -3938,12 +4476,15 @@ export function createGeoRouter(options: GeoRouterOptions = {}): Router {
     requireSession,
     requireSessionRate("archive-download", 12),
     asyncHandler(async (req, res, next) => {
-      const value = openOwnedProject(req, res);
+      let value = openOwnedProject(req, res);
       const task = await getResolvedTask(broker, value.knowledgeBaseTaskId);
       if (normalizeTaskStatus(task.status) !== "completed") {
         throw new GeoHttpError("知识库 ZIP 尚未生成", 409, "ARCHIVE_NOT_READY");
       }
-      const archive = findArchiveDescriptor(task);
+      value = (
+        await ensureFinalizedKnowledgeBase(trackArchiveFile(value, task), task)
+      ).value;
+      const archive = resolveKnowledgeBaseArtifact(value, task);
       if (!archive)
         throw new GeoHttpError(
           "知识库任务未返回 ZIP 文件",
@@ -4011,12 +4552,15 @@ export function createGeoRouter(options: GeoRouterOptions = {}): Router {
     requireSession,
     requireSessionRate("knowledge-asset-preview", 60),
     asyncHandler(async (req, res) => {
-      const value = openOwnedProject(req, res);
+      let value = openOwnedProject(req, res);
       const task = await getResolvedTask(broker, value.knowledgeBaseTaskId);
       if (normalizeTaskStatus(task.status) !== "completed") {
         throw new GeoHttpError("企业素材尚未生成", 409, "ASSET_NOT_READY");
       }
-      const archive = findArchiveDescriptor(task);
+      value = (
+        await ensureFinalizedKnowledgeBase(trackArchiveFile(value, task), task)
+      ).value;
+      const archive = resolveKnowledgeBaseArtifact(value, task);
       if (!archive) {
         throw new GeoHttpError(
           "知识库任务未返回素材归档",
@@ -4349,13 +4893,26 @@ async function buildProjectView(
     : questionsTaskView;
   const archiveDescriptor =
     knowledgeBase.status === "completed"
-      ? findArchiveDescriptor(knowledgeBaseTask)
+      ? resolveKnowledgeBaseArtifact(value, knowledgeBaseTask)
       : null;
   let knowledgeBaseValidationFailure:
     | KnowledgeBaseArchiveValidationError
     | undefined;
   let knowledgeBaseManifest: KnowledgeBaseManifest | undefined;
-  if (knowledgeBase.status === "completed" && !archiveDescriptor) {
+  if (
+    knowledgeBase.status === "completed" &&
+    value.knowledgeBasePipelineVersion === 2 &&
+    value.knowledgeBaseRetryReason
+  ) {
+    knowledgeBaseValidationFailure = new KnowledgeBaseArchiveValidationError(
+      value.knowledgeBaseRetryReason === "content_thin"
+        ? "Candidate content requires one evidence-grounded supplement"
+        : "Candidate archive could not be parsed safely",
+      value.knowledgeBaseRetryReason === "content_thin"
+        ? "content"
+        : "structure",
+    );
+  } else if (knowledgeBase.status === "completed" && !archiveDescriptor) {
     knowledgeBaseValidationFailure = new KnowledgeBaseArchiveValidationError(
       "completed task does not contain a ZIP artifact",
       "structure",
@@ -4381,9 +4938,15 @@ async function buildProjectView(
       knowledgeBaseValidationFailure?.category !== "unsafe") ||
       ["failed", "cancelled"].includes(knowledgeBase.status));
   const knowledgeBaseValidationPublicError = knowledgeBaseValidationFailure
-    ? knowledgeBaseValidationFailure.category === "structure" &&
+    ? value.knowledgeBasePipelineVersion !== 2 &&
+      knowledgeBaseValidationFailure.category === "structure" &&
       (value.knowledgeBaseAttempt || 1) >= 2
       ? KNOWLEDGE_BASE_VALIDATION_EXHAUSTED_PUBLIC_ERROR
+      : value.knowledgeBasePipelineVersion === 2 &&
+          value.knowledgeBaseRetryReason === "candidate_invalid"
+        ? (value.knowledgeBaseAttempt || 1) >= 2
+          ? "候选知识库连续两次未能安全生成，请新建项目后重新提交资料。"
+          : "候选知识库未能安全生成，系统可使用原始企业资料重新生成一次。"
       : KNOWLEDGE_BASE_VALIDATION_PUBLIC_ERRORS[
           knowledgeBaseValidationFailure.category
         ]
@@ -4701,6 +5264,7 @@ async function buildProjectView(
     questions,
     selectedQuestionId: value.monitorQuestionId,
     selectedPlatformIds: value.monitorPlatformIds || [],
+    knowledgeBasePipelineVersion: value.knowledgeBasePipelineVersion,
     knowledgeBaseRetryAvailable,
     knowledgeBaseValidationCategory: knowledgeBaseValidationFailure?.category,
     knowledgeBaseSupportRequired:
@@ -5111,12 +5675,13 @@ function omitKnowledgeEvidencePaths(manifest: KnowledgeBaseManifest) {
 
 async function loadKnowledgeEvidencePaths(
   broker: GeoPresalesBroker,
+  value: ProjectTokenValue,
   taskId: string,
   task: BrokerTask,
   companyName: string,
   validationProfile?: "website-lead-v1",
 ) {
-  const archive = findArchiveDescriptor(task);
+  const archive = resolveKnowledgeBaseArtifact(value, task);
   if (!archive) {
     throw new GeoHttpError("知识库 ZIP 尚未准备完成", 409, "ARCHIVE_NOT_READY");
   }
@@ -5484,12 +6049,17 @@ async function createWebsiteKnowledgeBaseTaskWithSkill(
     prompt: string;
     attachments: Array<{ file_id: string; filename: string }>;
     idempotencyKey: string;
+    pipelineVersion?: 2;
   },
 ) {
-  const result = await createGeoTaskWithSkillPackages(broker, input, [
+  const { pipelineVersion, ...taskInput } = input;
+  const result = await createGeoTaskWithSkillPackages(broker, taskInput, [
     {
       filename: WEBSITE_KB_SKILL_ARCHIVE_FILENAME,
-      body: await buildWebsiteKnowledgeBaseSkillArchive(),
+      body:
+        pipelineVersion === 2
+          ? await buildWebsiteKnowledgeBaseSkillArchive()
+          : await buildLegacyWebsiteKnowledgeBaseSkillArchive(),
     },
   ]);
   return {
@@ -5510,6 +6080,21 @@ function trackArchiveFile(
       new Set([...(value.archiveFileIds || []), fileId]),
     ),
   };
+}
+
+function resolveKnowledgeBaseArtifact(
+  value: ProjectTokenValue,
+  task: BrokerTask,
+): { fileId?: string; url?: string; filename: string } | null {
+  if (value.knowledgeBasePipelineVersion === 2) {
+    const finalArtifact = value.knowledgeBaseArtifact?.final;
+    if (!finalArtifact) return null;
+    return {
+      fileId: finalArtifact.fileId,
+      filename: finalArtifact.filename,
+    };
+  }
+  return findArchiveDescriptor(task);
 }
 
 function validateProjectAttachments(
@@ -5566,7 +6151,7 @@ async function resolveCanonicalCompanyIdentity(
 ): Promise<ProjectTokenValue> {
   if (normalizeTaskStatus(knowledgeBaseTask.status) !== "completed")
     return value;
-  const archive = findArchiveDescriptor(knowledgeBaseTask);
+  const archive = resolveKnowledgeBaseArtifact(value, knowledgeBaseTask);
   if (!archive) return value;
   let manifest: KnowledgeBaseManifest;
   try {

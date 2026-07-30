@@ -2682,6 +2682,8 @@ export function normalizeGeoProject(
         ? 100
         : clampProgress(taskForProgress.progress ?? project.progress),
     progressLabel: currentExecutionMessage,
+    knowledgeBasePipelineVersion:
+      Number(project.knowledgeBasePipelineVersion) === 2 ? 2 : undefined,
     knowledgeBaseRetryAvailable: project.knowledgeBaseRetryAvailable === true,
     knowledgeBaseValidationCategory: (() => {
       const category = textValue(

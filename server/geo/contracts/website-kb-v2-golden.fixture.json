@@ -1,0 +1,164 @@
+{
+  "schemaVersion": 1,
+  "cases": [
+    {
+      "id": "siliconflow-c3-rich",
+      "companyName": "硅基流动",
+      "industryCluster": "C3",
+      "kind": "candidate",
+      "metrics": {
+        "citedSourceCount": 12,
+        "factCharacters": 7200,
+        "customerCharacters": 12800,
+        "coveredFactDimensions": 9
+      },
+      "expectedTier": "rich",
+      "expectedManufacturingStatus": "not_applicable",
+      "traits": ["multiple_products", "technology_pages", "service_channels"]
+    },
+    {
+      "id": "homepage-only-small-business",
+      "companyName": "首页样本企业",
+      "industryCluster": "C3",
+      "kind": "candidate",
+      "metrics": {
+        "citedSourceCount": 1,
+        "factCharacters": 600,
+        "customerCharacters": 420,
+        "coveredFactDimensions": 2
+      },
+      "expectedTier": "sparse",
+      "expectedManufacturingStatus": "not_applicable",
+      "traits": ["homepage_only", "honest_gaps"]
+    },
+    {
+      "id": "manufacturing-c4",
+      "companyName": "制造样本企业",
+      "industryCluster": "C4",
+      "kind": "candidate",
+      "metrics": {
+        "citedSourceCount": 5,
+        "factCharacters": 3600,
+        "customerCharacters": 6200,
+        "coveredFactDimensions": 7
+      },
+      "expectedTier": "medium",
+      "expectedManufacturingStatus": "evidence_required",
+      "traits": ["manufacturing_facts"]
+    },
+    {
+      "id": "local-service-c1",
+      "companyName": "本地服务样本企业",
+      "industryCluster": "C1",
+      "kind": "candidate",
+      "metrics": {
+        "citedSourceCount": 4,
+        "factCharacters": 2600,
+        "customerCharacters": 5400,
+        "coveredFactDimensions": 6
+      },
+      "expectedTier": "medium",
+      "expectedManufacturingStatus": "not_applicable",
+      "traits": ["public_intelligence_enabled"]
+    },
+    {
+      "id": "regulated-c6",
+      "companyName": "强监管样本企业",
+      "industryCluster": "C6",
+      "kind": "candidate",
+      "metrics": {
+        "citedSourceCount": 6,
+        "factCharacters": 4200,
+        "customerCharacters": 6800,
+        "coveredFactDimensions": 7
+      },
+      "expectedTier": "medium",
+      "expectedManufacturingStatus": "not_applicable",
+      "traits": ["strict_certification_evidence"]
+    },
+    {
+      "id": "no-team-no-financing",
+      "companyName": "公开资料有限企业",
+      "industryCluster": "C3",
+      "kind": "candidate",
+      "metrics": {
+        "citedSourceCount": 3,
+        "factCharacters": 2100,
+        "customerCharacters": 5100,
+        "coveredFactDimensions": 5
+      },
+      "expectedTier": "medium",
+      "expectedManufacturingStatus": "not_applicable",
+      "traits": ["team_needs_verification", "financing_needs_verification"]
+    },
+    {
+      "id": "no-downloadable-images",
+      "companyName": "无图片样本企业",
+      "industryCluster": "C3",
+      "kind": "candidate",
+      "metrics": {
+        "citedSourceCount": 3,
+        "factCharacters": 2200,
+        "customerCharacters": 5200,
+        "coveredFactDimensions": 5
+      },
+      "expectedTier": "medium",
+      "expectedManufacturingStatus": "not_applicable",
+      "traits": ["zero_images_valid"]
+    },
+    {
+      "id": "svg-logo-only",
+      "companyName": "SVG 品牌样本企业",
+      "industryCluster": "C2",
+      "kind": "candidate",
+      "metrics": {
+        "citedSourceCount": 4,
+        "factCharacters": 2800,
+        "customerCharacters": 6000,
+        "coveredFactDimensions": 6
+      },
+      "expectedTier": "medium",
+      "expectedManufacturingStatus": "not_applicable",
+      "traits": ["safe_svg_logo"]
+    },
+    {
+      "id": "first-third-party-conflict",
+      "companyName": "冲突信息样本企业",
+      "industryCluster": "C3",
+      "kind": "candidate",
+      "metrics": {
+        "citedSourceCount": 5,
+        "factCharacters": 3400,
+        "customerCharacters": 6200,
+        "coveredFactDimensions": 6
+      },
+      "expectedTier": "medium",
+      "expectedManufacturingStatus": "not_applicable",
+      "traits": ["source_conflict_preserved"]
+    },
+    {
+      "id": "legacy-completeness-drift",
+      "companyName": "旧包完整度漂移",
+      "industryCluster": "C3",
+      "kind": "invalid_completeness",
+      "invalidValue": {
+        "statusCounts": {},
+        "gapStrings": []
+      },
+      "expectedPaths": ["counts", "acquisition", "gaps", "evaluatedAt"]
+    },
+    {
+      "id": "legacy-package-manifest-drift",
+      "companyName": "旧包清单漂移",
+      "industryCluster": "C3",
+      "kind": "invalid_manifest",
+      "invalidValue": {
+        "schemaVersion": 3,
+        "profile": "website-lead-v1",
+        "statusCounts": {},
+        "gapStrings": []
+      },
+      "expectedPaths": ["documents", "assets", "counts", "branchEvidence", "imageSelection", ""]
+    }
+  ]
+}

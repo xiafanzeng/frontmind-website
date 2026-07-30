@@ -470,7 +470,7 @@ const WebsiteLeadPackageManifestV2InputSchema = z
   })
   .strict();
 
-const WebsiteLeadPackageManifestV3InputSchema =
+export const WebsiteLeadPackageManifestV3InputSchema =
   WebsiteLeadPackageManifestV2InputSchema.extend({
     schemaVersion: z.literal(3),
   }).strict();
@@ -570,7 +570,7 @@ const KnowledgeBaseAcquisitionInputSchema = z
     }
   });
 
-const KnowledgeBaseCompletenessInputSchema = z
+export const KnowledgeBaseCompletenessInputSchema = z
   .object({
     counts: KnowledgeBaseCompletenessCountsInputSchema,
     acquisition: z
@@ -2435,7 +2435,10 @@ async function validateWebsiteLeadPackageBudgets(
             !evidenceDocument ||
             evidenceDocument.kind !== "evidence" ||
             evidenceDocument.customerVisible ||
-            evidenceDocument.branchId !== document.branchId ||
+            (packageManifest.schemaVersion !== 3
+              ? evidenceDocument.branchId !== document.branchId
+              : Boolean(evidenceDocument.branchId) &&
+                evidenceDocument.branchId !== document.branchId) ||
             !evidenceCharactersById.has(evidenceDocumentId) ||
             !(document.sourceIds || []).some((sourceId) =>
               (evidenceDocument.sourceIds || []).includes(sourceId),

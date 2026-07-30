@@ -391,9 +391,40 @@ export const GeoKnowledgeImportRequestV3Schema =
     packageManifestSha256: sha256Schema,
   }).strict();
 
+export const GeoKnowledgeImportRequestV4Schema = z
+  .object({
+    schemaVersion: z.literal(4),
+    companyName: z.string().trim().min(1).max(200),
+    candidate: z
+      .object({
+        taskId: z.string().trim().min(1).max(255),
+        outputItemId: z.string().trim().min(1).max(255),
+        fileId: z.string().trim().min(1).max(255).optional(),
+        descriptorHash: sha256Schema,
+        sha256: sha256Schema,
+      })
+      .strict(),
+    finalArtifact: z
+      .object({
+        fileId: z.string().trim().min(1).max(255),
+        filename: z.string().trim().min(1).max(512),
+        sha256: sha256Schema,
+        archiveContractVersion: z.literal(3),
+        validationProfile: z.literal("website-lead-v1"),
+        packageManifestSha256: sha256Schema,
+        finalizerVersion: z.literal("website-kb-finalizer-v1"),
+      })
+      .strict(),
+  })
+  .strict();
+
 export const GeoKnowledgeImportRequestSchema = z.discriminatedUnion(
   "schemaVersion",
-  [GeoKnowledgeImportRequestV2Schema, GeoKnowledgeImportRequestV3Schema],
+  [
+    GeoKnowledgeImportRequestV2Schema,
+    GeoKnowledgeImportRequestV3Schema,
+    GeoKnowledgeImportRequestV4Schema,
+  ],
 );
 
 const knowledgeImportStatusSchema = z.enum([
@@ -429,9 +460,20 @@ export const GeoKnowledgeImportResponseV3Schema = z
   })
   .strict();
 
+export const GeoKnowledgeImportResponseV4Schema = z
+  .object({
+    schemaVersion: z.literal(4),
+    knowledgeImport: GeoKnowledgeImportResponsePayloadSchema,
+  })
+  .strict();
+
 export const GeoKnowledgeImportResponseSchema = z.discriminatedUnion(
   "schemaVersion",
-  [GeoKnowledgeImportResponseV2Schema, GeoKnowledgeImportResponseV3Schema],
+  [
+    GeoKnowledgeImportResponseV2Schema,
+    GeoKnowledgeImportResponseV3Schema,
+    GeoKnowledgeImportResponseV4Schema,
+  ],
 );
 
 /*
@@ -465,6 +507,12 @@ export type GeoKnowledgeImportRequestV3 = z.infer<
 >;
 export type GeoKnowledgeImportResponseV3 = z.infer<
   typeof GeoKnowledgeImportResponseV3Schema
+>;
+export type GeoKnowledgeImportRequestV4 = z.infer<
+  typeof GeoKnowledgeImportRequestV4Schema
+>;
+export type GeoKnowledgeImportResponseV4 = z.infer<
+  typeof GeoKnowledgeImportResponseV4Schema
 >;
 
 export type GeoPurchaseProvisionRequestV2 = z.infer<
@@ -1268,7 +1316,16 @@ export function createGeoKnowledgeImporter(
           Accept: "application/json",
           "Content-Type": "application/json",
           "Idempotency-Key":
-            request.schemaVersion === 3
+            request.schemaVersion === 4
+              ? [
+                  "geo-basic",
+                  parsedProjectId,
+                  request.finalArtifact.sha256,
+                  request.finalArtifact.packageManifestSha256,
+                  request.finalArtifact.finalizerVersion,
+                  "knowledge-v4",
+                ].join(":")
+              : request.schemaVersion === 3
               ? [
                   "geo-basic",
                   parsedProjectId,

@@ -1257,6 +1257,73 @@ describe("website to Agent account provisioner", () => {
     });
   });
 
+  it("sends v4 candidate lineage separately from the finalized archive", async () => {
+    const fetchImpl = vi.fn(async (_url: URL, init?: RequestInit) => {
+      expect(init?.headers).toMatchObject({
+        "Idempotency-Key": `geo-basic:project-20260724:${"c".repeat(64)}:${"d".repeat(64)}:website-kb-finalizer-v1:knowledge-v4`,
+      });
+      const request = {
+        schemaVersion: 4,
+        companyName: "验收企业",
+        candidate: {
+          taskId: "task-website-kb-v4",
+          outputItemId: "output:0",
+          fileId: "candidate-file-v4",
+          descriptorHash: "a".repeat(64),
+          sha256: "b".repeat(64),
+        },
+        finalArtifact: {
+          fileId: "final-file-v4",
+          filename: "acceptance_knowledge_base_v4.zip",
+          sha256: "c".repeat(64),
+          archiveContractVersion: 3,
+          validationProfile: "website-lead-v1",
+          packageManifestSha256: "d".repeat(64),
+          finalizerVersion: "website-kb-finalizer-v1",
+        },
+      };
+      expect(JSON.parse(String(init?.body))).toEqual(request);
+      return new Response(
+        JSON.stringify({
+          schemaVersion: 4,
+          knowledgeImport: {
+            id: "receipt-knowledge-v4",
+            projectId: "project-20260724",
+            status: "ready",
+            updatedAt: "2026-07-29T08:07:00.000Z",
+          },
+        }),
+        { status: 201, headers: { "Content-Type": "application/json" } },
+      );
+    });
+
+    await expect(
+      createGeoKnowledgeImporter({ env, fetchImpl })("project-20260724", {
+        schemaVersion: 4,
+        companyName: "验收企业",
+        candidate: {
+          taskId: "task-website-kb-v4",
+          outputItemId: "output:0",
+          fileId: "candidate-file-v4",
+          descriptorHash: "a".repeat(64),
+          sha256: "b".repeat(64),
+        },
+        finalArtifact: {
+          fileId: "final-file-v4",
+          filename: "acceptance_knowledge_base_v4.zip",
+          sha256: "c".repeat(64),
+          archiveContractVersion: 3,
+          validationProfile: "website-lead-v1",
+          packageManifestSha256: "d".repeat(64),
+          finalizerVersion: "website-kb-finalizer-v1",
+        },
+      }),
+    ).resolves.toMatchObject({
+      schemaVersion: 4,
+      knowledgeImport: { status: "ready" },
+    });
+  });
+
   it("rejects a knowledge import response whose schema version differs from the request", async () => {
     const fetchImpl = vi.fn(async () => {
       return new Response(

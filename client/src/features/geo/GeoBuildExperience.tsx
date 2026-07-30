@@ -4399,7 +4399,10 @@ export function EnterpriseAnalysis({
         project={{
           ...project,
           status: "analyzing",
-          progressLabel: "正在基于现有证据执行一次自动校验补救",
+          progressLabel:
+            project.knowledgeBasePipelineVersion === 2
+              ? "正在基于现有证据补充企业知识内容"
+              : "正在基于现有证据执行一次自动校验补救",
           error: undefined,
         }}
         onContact={onContact}
@@ -4411,8 +4414,9 @@ export function EnterpriseAnalysis({
     const retryAvailable = project.knowledgeBaseRetryAvailable === true;
     const supportRequired = project.knowledgeBaseSupportRequired === true;
     const retryExhaustedGuidance =
-      !project.knowledgeBaseValidationCategory ||
-      project.knowledgeBaseValidationCategory === "structure"
+      project.knowledgeBasePipelineVersion !== 2 &&
+      (!project.knowledgeBaseValidationCategory ||
+        project.knowledgeBaseValidationCategory === "structure")
         ? "自动修复次数已用完，请新建企业项目后重新提交资料，或联系支持。"
         : undefined;
     const failureMessage =
