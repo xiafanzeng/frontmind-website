@@ -1041,6 +1041,21 @@ describe("knowledge-base ZIP manifest", () => {
     });
   });
 
+  it("accepts a legacy YYYY-MM-DD completeness date and normalizes it", async () => {
+    const archive = await buildFixtureZip({
+      ...validCompletenessInput,
+      evaluatedAt: "2026-07-29",
+    });
+
+    await expect(
+      parseKnowledgeBaseArchive(archive, { companyName: "DateCompatibleCo" }),
+    ).resolves.toMatchObject({
+      completeness: {
+        evaluatedAt: "2026-07-29T00:00:00.000Z",
+      },
+    });
+  });
+
   it("applies current website budgets only when the new-build profile is explicit", async () => {
     const archive = await buildWebsiteLeadBudgetFixture({
       leafCount: 57,
@@ -1633,17 +1648,12 @@ describe("knowledge-base ZIP manifest", () => {
     [
       "an image without a declared first-party source page",
       { omitImageSourcePage: true },
-      /package manifest is invalid.*sourcePageUrl/i,
+      /no traceable source page or uploaded document/i,
     ],
     [
       "duplicate image bodies",
       { imageCount: 2, duplicateImageBytes: true },
       /deduplicated by SHA-256/i,
-    ],
-    [
-      "an unrecorded image shortfall",
-      { omitImageShortfallReason: true },
-      /record a shortfall reason/i,
     ],
   ] as const)("rejects %s", async (_label, options, expectedError) => {
     const archive = await buildWebsiteLeadBudgetFixture(options);
@@ -1653,6 +1663,19 @@ describe("knowledge-base ZIP manifest", () => {
         validationProfile: "website-lead-v1",
       }),
     ).rejects.toThrow(expectedError);
+  });
+
+  it("accepts a source-limited image set without inventing a quota shortfall", async () => {
+    const result = await parseKnowledgeBaseArchive(
+      await buildWebsiteLeadBudgetFixture({
+        omitImageShortfallReason: true,
+      }),
+      {
+        companyName: "SparseMediaCo",
+        validationProfile: "website-lead-v1",
+      },
+    );
+    expect(result.assets).toHaveLength(1);
   });
 
   it.each(["jpeg", "webp", "avif"] as const)(
@@ -1717,16 +1740,6 @@ describe("knowledge-base ZIP manifest", () => {
 
   it.each([
     [
-      "formal narrative below 8,000 characters",
-      { narrativeCharactersPerLeaf: 199 },
-      /fewer than 8000 customer-visible characters/i,
-    ],
-    [
-      "an evidence-bearing leaf below 120 characters",
-      { narrativeCharactersPerLeaf: 119 },
-      /fewer than 120 customer-visible characters/i,
-    ],
-    [
       "an evidence-bearing leaf without a source binding",
       { omitLeafSourceIds: true },
       /evidence-bearing document.*has no source IDs/i,
@@ -1760,8 +1773,32 @@ describe("knowledge-base ZIP manifest", () => {
       "这些内容属于企业自我定义，适合说明组织意图与品牌取向，不宜直接转换为已经量化达成的社会影响。对客户而言，可将其落实为开放模型生态。",
       "客户或采购建议",
     ],
+    ["补充说明：这是第 3 个内容节点的本轮整理结果。", "过程性或批量填充表达"],
   ] as const)("detects customer-facing semantic leakage", (text, label) => {
     expect(customerFacingNarrativeViolation(text)).toBe(label);
+  });
+
+  it("accepts an honest sparse company with eight leaves and no useful images", async () => {
+    const archive = await buildWebsiteLeadBudgetFixture({
+      schemaVersion: 2,
+      leafCount: 8,
+      imageCount: 0,
+      eligibleFirstPartyImages: 0,
+      narrativeCharactersPerLeaf: 80,
+      v2EvidenceCharactersPerBranch: 120,
+      v2OverviewNarrativeCharacters: 140,
+      officialPagesCompleted: 0,
+    });
+
+    await expect(
+      parseKnowledgeBaseArchive(archive, {
+        companyName: "BrochureOnlyCo",
+        validationProfile: "website-lead-v1",
+      }),
+    ).resolves.toMatchObject({
+      completeness: { counts: { totalLeaves: 8 } },
+      assets: [],
+    });
   });
 
   it("allows neutral negative facts and internal verification gaps", async () => {

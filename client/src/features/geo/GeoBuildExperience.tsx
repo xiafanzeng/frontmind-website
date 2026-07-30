@@ -5034,10 +5034,6 @@ function AnalysisProgress({
   const executionEntry = project.executionLog?.entries.find(
     (entry) => entry.id === "enterprise-analysis",
   );
-  const progress = Math.max(
-    executionEntry?.progress ?? project.progress,
-    project.status === "uploading" ? 8 : 12,
-  );
   const visibleEvents =
     executionEntry?.events.filter((event) => event.kind === "status") ?? [];
   const activityRows = visibleEvents.length
@@ -5080,18 +5076,7 @@ function AnalysisProgress({
           FrontMind
           正在按业务分支进行广度优先、深度受控的资料采集。此阶段无需逐项确认，完成后将直接生成可核验知识库。
         </p>
-        <div
-          className="geo-progress-bar"
-          role="progressbar"
-          aria-label="企业分析进度"
-          aria-valuemin={0}
-          aria-valuemax={100}
-          aria-valuenow={progress}
-        >
-          <span style={{ width: `${progress}%` }} />
-        </div>
         <div className="geo-progress-meta">
-          <strong>{progress}%</strong>
           <span>{project.progressLabel || "正在调度企业信息采集任务"}</span>
         </div>
         {project.knowledgeBaseSupportRequired && (

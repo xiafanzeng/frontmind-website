@@ -1216,5 +1216,7 @@ describe("GEO style preview rendering", () => {
 
     expect(html).toContain("后台任务正在执行");
     expect(html).not.toContain("仅允许在执行日志中展示的模型对话");
+    expect(html).not.toContain('role="progressbar"');
+    expect(html).not.toContain("42%");
   });
 });

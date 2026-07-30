@@ -20,7 +20,7 @@ const sourceArchive = path.resolve(
   "socratic-kb-builder.skill",
 );
 const expectedSourceSha =
-  "e002a3216dfcce1f13ad44e11fee86de0ef093f5ecf7eb7985862b2d2df3c571";
+  "dd1de8c8b37f38c14d7a89b2b48dbc51d9d6dd35bd0050bd4c1b96f68e3a185d";
 const websiteKnowledgeBaseReferenceRoot = path.resolve(
   process.cwd(),
   "server",
@@ -58,6 +58,13 @@ describe("website one-shot knowledge-base skill", () => {
     expect(crypto.createHash("sha256").update(source).digest("hex")).toBe(
       expectedSourceSha,
     );
+    const sourceManifest = JSON.parse(
+      fs.readFileSync(
+        path.join(websiteKnowledgeBaseReferenceRoot, "source-manifest.json"),
+        "utf8",
+      ),
+    ) as { sourceArchiveSha256?: string };
+    expect(sourceManifest.sourceArchiveSha256).toBe(expectedSourceSha);
   });
 
   it("keeps the Base skill compact while preserving the customer and archive contract", async () => {
@@ -66,7 +73,7 @@ describe("website one-shot knowledge-base skill", () => {
     expect(Buffer.byteLength(skill, "utf8")).toBeLessThanOrEqual(8_000);
     for (const invariant of [
       "Do not enable, invoke, switch to, or recommend Wide Research or Deep",
-      "40–56",
+      "8–56",
       "Customer-visible overview and leaf prose is a finished encyclopedia",
       "Objective negative facts may remain",
       "verification_gaps",
@@ -80,6 +87,7 @@ describe("website one-shot knowledge-base skill", () => {
       "target_met",
       "source_limited",
       "budget_limited",
+      "Never expose origin/CDN image URLs",
       "00_crawl_coverage_report.md",
       "00_web_intelligence_report.md",
       "00_completeness.json",
@@ -91,7 +99,7 @@ describe("website one-shot knowledge-base skill", () => {
       "8 MiB",
       "200:1",
       "Unicode",
-      "VALID",
+      "service-side finalizer",
     ]) {
       expect(skill).toContain(invariant);
     }
@@ -133,8 +141,8 @@ describe("website one-shot knowledge-base skill", () => {
       "`08_competitive_advantages/`",
       "`00_completeness.json`",
       "`00_package_manifest.json`",
-      "40–56",
-      "schemaVersion=2",
+      "8–56",
+      "schemaVersion=3",
       "evidenceDocumentIds",
       "source_limited",
       "220 MiB",
@@ -142,7 +150,8 @@ describe("website one-shot knowledge-base skill", () => {
       "200:1",
       "assetType",
       "displayRole",
-      "客户正文只写百科事实",
+      "客户正文只写最终百科事实",
+      "客户正文不得嵌入官网或 CDN 图片外链",
       "verification_gaps",
     ]) {
       expect(prompt).toContain(invariant);

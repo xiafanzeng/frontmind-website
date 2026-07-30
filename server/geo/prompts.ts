@@ -11,10 +11,10 @@ type WebsiteKnowledgePromptInput = Omit<CreateProjectRequest, "attachments"> & {
 const KNOWLEDGE_BASE_RUNTIME_GATE = `
 交付前执行以下最终检查：
 1. 只使用普通 Agent 浏览/搜索；禁止开启、调用、切换或推荐 Wide Research / Deep Research。
-2. ZIP 使用 schemaVersion=2、profile=website-lead-v1，包含 40–56 个叶子、七篇综述、八个 canonical 内容目录及规定的根文件。
-3. 客户正文只写百科事实，不得出现任务过程、核验说明、采购/合规建议、读者指令或模型推理；缺口只进入内部 evidence、reports 和 verification_gaps。
-4. 图片按覆盖与质量选择，不按数量凑图。每个资产填写 assetType 和 displayRole；扫描页数等于成功解析官网页数，并满足 hero 1200×600、普通 inline 800×450、badge 256×256 的最低尺寸。
-5. 从最终文件重算计数、哈希、尺寸、证据关联和候选台账；运行仓库提供的 validate_archive.py，只有输出 VALID 才能附带最终 ZIP。
+2. 候选 ZIP 使用 schemaVersion=3、profile=website-lead-v1，并按真实资料量自适应为 8–56 个叶子；不得为数量、字数或图片数填充内容。
+3. 客户正文只写最终百科事实或简短明确的资料缺口，不得出现过程、推理、补充说明或批量模板。
+4. 图片只保留可追溯且具有明确用途的有效素材；允许来源为官网页面、官方文档或用户上传宣传单。客户正文不得嵌入官网或 CDN 图片外链；必须下载真实字节、解码校验并打入 ZIP 后，以包内相对路径引用。无法下载的防盗链、签名或过期地址只能进入内部来源记录，不得作为客户图片返回。
+5. 从最终文件重算计数与关联后附带一个候选 ZIP；清单规范化、哈希、格式和客户成品质量由服务端终结器再次校验，不得假称执行远端环境中不存在的本地脚本。
 `.trim();
 
 export async function buildWebsiteKnowledgeBasePrompt(

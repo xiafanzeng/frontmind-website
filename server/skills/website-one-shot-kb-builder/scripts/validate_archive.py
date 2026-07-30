@@ -14,6 +14,7 @@ import sys
 import unicodedata
 import zipfile
 from collections import Counter, defaultdict
+from datetime import date, datetime
 from pathlib import Path, PurePosixPath
 from urllib.parse import urlsplit
 
@@ -91,6 +92,10 @@ ASSET_TYPES = {
 }
 DISPLAY_ROLES = {"hero", "inline", "badge"}
 CUSTOMER_NARRATIVE_LEAKAGE = (
+    (
+        "intermediate or bulk filler wording",
+        re.compile(r"补充说明|第\s*[一二三四五六七八九十百\d]+\s*个内容节点|本轮整理结果", re.I),
+    ),
     (
         "task or collection process",
         re.compile(
@@ -495,6 +500,22 @@ def validate(zip_path: str) -> dict[str, int]:
         }
         completeness = json.loads(read("00_completeness.json", 64 * 1024))
         require_exact_keys(completeness, {"counts", "acquisition", "gaps", "evaluatedAt"})
+        evaluated_at = completeness["evaluatedAt"]
+        if not isinstance(evaluated_at, str) or not (
+            re.fullmatch(r"\d{4}-\d{2}-\d{2}", evaluated_at)
+            or re.fullmatch(
+                r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:\d{2})",
+                evaluated_at,
+            )
+        ):
+            fail("evaluatedAt must be an RFC3339 timestamp or YYYY-MM-DD")
+        try:
+            if re.fullmatch(r"\d{4}-\d{2}-\d{2}", evaluated_at):
+                date.fromisoformat(evaluated_at)
+            else:
+                datetime.fromisoformat(evaluated_at.replace("Z", "+00:00"))
+        except ValueError:
+            fail("evaluatedAt must be a real RFC3339 date or timestamp")
         require_exact_keys(
             completeness["counts"],
             {
@@ -523,10 +544,10 @@ def validate(zip_path: str) -> dict[str, int]:
         package = json.loads(package_bytes)
         schema_version = package.get("schemaVersion")
         required_package_keys = {"schemaVersion", "profile", "documents", "assets", "counts", "imageSelection"}
-        if schema_version == 2:
+        if schema_version in (2, 3):
             required_package_keys.add("branchEvidence")
         require_exact_keys(package, required_package_keys)
-        if schema_version not in (1, 2) or package["profile"] != "website-lead-v1":
+        if schema_version not in (1, 2, 3) or package["profile"] != "website-lead-v1":
             fail("invalid package manifest version/profile")
         require_exact_keys(package["counts"], {"totalFiles", "customerVisibleCharacters", "evidenceCharacters", "packagedImages"})
         if schema_version == 1:
@@ -573,12 +594,12 @@ def validate(zip_path: str) -> dict[str, int]:
                     "assetIds",
                     *(
                         {"evidenceCharacters", "dynamicMinimumCharacters"}
-                        if schema_version == 2
+                        if schema_version in (2, 3)
                         else set()
                     ),
                     *(
                         {"evidenceDocumentIds", "productFamilyIds"}
-                        if schema_version == 2
+                        if schema_version in (2, 3)
                         else set()
                     ),
                 },
@@ -618,14 +639,20 @@ def validate(zip_path: str) -> dict[str, int]:
                 fail("asset record must be an object")
             asset_required_keys = {
                 "id", "path", "sha256", "mimeType", "bytes", "width", "height",
-                "caption", "branchId", "documentIds", "sourcePageUrl", "ownership",
+                "caption", "branchId", "documentIds", "ownership",
             }
-            if schema_version == 2:
+            if schema_version in (2, 3):
                 asset_required_keys |= {"assetType", "displayRole"}
             require_exact_keys(
                 asset,
                 asset_required_keys,
-                {"alt", "sourceAssetUrl"},
+                {
+                    "alt",
+                    "sourceAssetUrl",
+                    "sourcePageUrl",
+                    "sourceDocumentPath",
+                    "sourceKind",
+                },
             )
             if (
                 not all(
@@ -650,14 +677,20 @@ def validate(zip_path: str) -> dict[str, int]:
                 for key in ("width", "height")
             ):
                 fail("asset width and height must be positive integers")
-            if schema_version == 2 and (
+            if schema_version in (2, 3) and (
                 asset.get("assetType") not in ASSET_TYPES
                 or asset.get("displayRole") not in DISPLAY_ROLES
             ):
                 fail("assetType or displayRole is invalid")
             if (
                 asset["branchId"] not in DISPLAY_BRANCH
-                or not public_http_url(asset["sourcePageUrl"])
+                or (
+                    not public_http_url(asset.get("sourcePageUrl"))
+                    and not (
+                        isinstance(asset.get("sourceDocumentPath"), str)
+                        and asset["sourceDocumentPath"] in paths
+                    )
+                )
                 or (
                     "sourceAssetUrl" in asset
                     and not public_http_url(asset["sourceAssetUrl"])
@@ -709,15 +742,15 @@ def validate(zip_path: str) -> dict[str, int]:
         overview_docs = [doc for doc in visible_docs if doc.get("kind") == "overview"]
         counted_leaf_paths = (
             {doc["path"] for doc in leaf_docs}
-            if schema_version == 2
+            if schema_version in (2, 3)
             else content_paths
         )
-        if not 40 <= len(counted_leaf_paths) <= 56:
-            fail("content leaf count must be 40–56")
+        if not 8 <= len(counted_leaf_paths) <= 56:
+            fail("content leaf count must be 8–56")
         for prefix in CONTENT_PREFIXES:
             if not any(path.startswith(prefix) for path in counted_leaf_paths):
                 fail(f"missing content leaf under {prefix}")
-        if schema_version == 2:
+        if schema_version in (2, 3):
             referenced_evidence_ids: set[str] = set()
             for doc in visible_docs:
                 evidence_document_ids = doc.get("evidenceDocumentIds")
@@ -784,7 +817,12 @@ def validate(zip_path: str) -> dict[str, int]:
                     type(evidence_characters) is not int
                     or evidence_characters < 0
                     or type(declared_minimum) is not int
-                    or declared_minimum != v2_leaf_minimum(evidence_characters)
+                    or declared_minimum
+                    != (
+                        8
+                        if schema_version == 3
+                        else v2_leaf_minimum(evidence_characters)
+                    )
                 ):
                     fail(f"invalid evidence-adaptive leaf minimum: {doc['path']}")
                 if status not in ("needs_verification", "not_applicable") and evidence_characters == 0:
@@ -808,7 +846,7 @@ def validate(zip_path: str) -> dict[str, int]:
                     template_fingerprints[fingerprint].append(doc["path"])
         if set(overview_counts) != set(DISPLAY_BRANCH.values()) or any(value != 1 for value in overview_counts.values()):
             fail("each display branch must have exactly one overview")
-        if schema_version == 2:
+        if schema_version in (2, 3):
             if len(overview_docs) != 7:
                 fail("schema v2 requires seven overviews in addition to true leaves")
             branch_evidence = package.get("branchEvidence")
@@ -839,7 +877,7 @@ def validate(zip_path: str) -> dict[str, int]:
                     or type(evidence_characters) is not int
                     or evidence_characters < 0
                     or type(entry.get("checkedSourceCount")) is not int
-                    or entry["checkedSourceCount"] < 1
+                    or entry["checkedSourceCount"] < 0
                     or not overview
                     or DISPLAY_BRANCH.get(overview.get("branchId")) != branch_id
                 ):
@@ -856,8 +894,12 @@ def validate(zip_path: str) -> dict[str, int]:
                 )
                 if evidence_characters != actual_branch_evidence_characters:
                     fail(f"branch evidence count does not match linked evidence: {branch_id}")
-                expected_minimum = v2_overview_minimum(
-                    actual_branch_evidence_characters, branch_id
+                expected_minimum = (
+                    8
+                    if schema_version == 3
+                    else v2_overview_minimum(
+                        actual_branch_evidence_characters, branch_id
+                    )
                 )
                 if declared_minimum != expected_minimum:
                     fail(f"invalid evidence-adaptive overview minimum: {branch_id}")
@@ -879,9 +921,7 @@ def validate(zip_path: str) -> dict[str, int]:
             fail("same formal narrative repeated across at least three documents")
         if any(len(group) >= 3 for group in template_fingerprints.values()):
             fail("same formal template paragraph repeated across at least three documents")
-        if schema_version == 1 and not 8000 <= narrative_total <= 18000:
-            fail("customer-visible narrative must contain 8,000–18,000 characters")
-        if schema_version == 2 and narrative_total > 40000:
+        if schema_version in (2, 3) and narrative_total > 40000:
             fail("customer-visible narrative exceeds 40,000 characters")
         if package["counts"]["customerVisibleCharacters"] != narrative_total:
             fail("customerVisibleCharacters mismatch")
@@ -911,7 +951,7 @@ def validate(zip_path: str) -> dict[str, int]:
         reported_images = reported_saved_image_count(markdown["00_crawl_coverage_report.md"])
         if reported_images is not None and reported_images != len(image_paths):
             fail("crawl report saved-image count does not match packaged images")
-        if schema_version == 2:
+        if schema_version in (2, 3):
             discovered_match = re.search(
                 r"(?:发现|discovered)[^\n|]{0,30}(?:图片|图像|images?|assets?)[^\d]{0,12}([\d,]+)",
                 markdown["00_crawl_coverage_report.md"],
@@ -950,7 +990,7 @@ def validate(zip_path: str) -> dict[str, int]:
                 or asset.get("height") != dimensions[1]
             ):
                 fail(f"image dimensions mismatch: {asset['path']}")
-            if schema_version == 2:
+            if schema_version in (2, 3):
                 asset_type = asset.get("assetType")
                 display_role = asset.get("displayRole")
                 badge_type = asset_type in {"brand_identity", "certificate_badge"}
@@ -1003,10 +1043,8 @@ def validate(zip_path: str) -> dict[str, int]:
         if schema_version == 1:
             if eligible > image_acquisition["total"]:
                 fail("eligible first-party image count exceeds discovered total")
-            if eligible >= 36 and not 36 <= image_count <= min(48, eligible):
-                fail("36–48 images required when enough eligible first-party images exist")
-            if eligible < 36 and (image_count != eligible or not package["imageSelection"].get("shortfallReason")):
-                fail("all eligible images and a shortfall reason are required below 36")
+            if image_count != min(48, eligible):
+                fail("eligible first-party images were omitted from the package")
         else:
             selection = package["imageSelection"]
             discovered = selection.get("discoveredCandidateImages")
@@ -1018,7 +1056,15 @@ def validate(zip_path: str) -> dict[str, int]:
             families = selection.get("productFamilies")
             if not isinstance(candidates, list):
                 fail("image candidates must be an array")
-            candidate_urls = [candidate.get("url") for candidate in candidates if isinstance(candidate, dict)]
+            candidate_keys = [
+                candidate.get("url")
+                or (
+                    f"{candidate.get('sourceDocumentPath', 'unknown')}:"
+                    f"{candidate.get('assetId') or candidate.get('rejectionReason') or candidate.get('status')}"
+                )
+                for candidate in candidates
+                if isinstance(candidate, dict)
+            ]
             eligible_candidates = [
                 candidate
                 for candidate in candidates
@@ -1039,9 +1085,9 @@ def validate(zip_path: str) -> dict[str, int]:
                 or type(inspected) is not int
                 or type(rejected) is not int
                 or type(scanned_source_pages) is not int
-                or scanned_source_pages < 1
+                or scanned_source_pages < 0
                 or discovered != len(candidates)
-                or len(candidate_urls) != len(set(candidate_urls))
+                or len(candidate_keys) != len(set(candidate_keys))
                 or inspected != len(eligible_candidates) + len(rejected_candidates)
                 or eligible != len(eligible_candidates)
                 or rejected != len(rejected_candidates)
@@ -1069,12 +1115,31 @@ def validate(zip_path: str) -> dict[str, int]:
             for candidate in candidates:
                 require_exact_keys(
                     candidate,
-                    {"url", "sourcePageUrl", "method", "status"},
-                    {"assetId", "rejectionReason"},
+                    {"method", "status"},
+                    {
+                        "url",
+                        "sourcePageUrl",
+                        "sourceDocumentPath",
+                        "sourceKind",
+                        "assetId",
+                        "rejectionReason",
+                    },
                 )
                 if (
-                    not public_http_url(candidate["url"])
-                    or not public_http_url(candidate["sourcePageUrl"])
+                    (
+                        not public_http_url(candidate.get("url"))
+                        and not (
+                            isinstance(candidate.get("sourceDocumentPath"), str)
+                            and candidate["sourceDocumentPath"] in paths
+                        )
+                    )
+                    or (
+                        not public_http_url(candidate.get("sourcePageUrl"))
+                        and not (
+                            isinstance(candidate.get("sourceDocumentPath"), str)
+                            and candidate["sourceDocumentPath"] in paths
+                        )
+                    )
                     or candidate["method"] not in allowed_methods
                 ):
                     fail("invalid image candidate URL or method")
@@ -1082,8 +1147,10 @@ def validate(zip_path: str) -> dict[str, int]:
                     asset = assets_by_id.get(candidate.get("assetId"))
                     if (
                         not asset
-                        or asset.get("sourceAssetUrl") != candidate["url"]
-                        or asset.get("sourcePageUrl") != candidate["sourcePageUrl"]
+                        or asset.get("sourceAssetUrl") != candidate.get("url")
+                        or asset.get("sourcePageUrl") != candidate.get("sourcePageUrl")
+                        or asset.get("sourceDocumentPath")
+                        != candidate.get("sourceDocumentPath")
                     ):
                         fail("eligible image candidate does not match a packaged asset")
                 elif candidate["status"] == "rejected":
@@ -1101,7 +1168,7 @@ def validate(zip_path: str) -> dict[str, int]:
                 fail("packaged image is missing from the candidate ledger")
             if (
                 not isinstance(methods, list)
-                or set(methods) != allowed_methods
+                or not set(methods) <= allowed_methods
                 or len(methods) != len(set(methods))
             ):
                 fail("invalid image discovery methods")

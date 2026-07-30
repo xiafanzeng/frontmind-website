@@ -155,8 +155,7 @@ const KNOWLEDGE_BASE_VALIDATION_PUBLIC_ERRORS: Record<
     "知识库目录或清单未通过结构校验，已阻止下载及后续分析。可重新检查，由系统仅整理现有证据后再次验证。",
   media:
     "知识库媒体交付未通过校验，系统将基于已发现的第一方素材执行一次定向补救。",
-  content:
-    "知识库正式正文未充分整理已有证据，系统将执行一次定向补救。",
+  content: "知识库正式正文未充分整理已有证据，系统将执行一次定向补救。",
   unsafe:
     "知识库文件存在安全风险，已阻止下载及后续分析。请勿继续处理该文件，并联系技术支持。",
 };
@@ -1256,9 +1255,11 @@ export function createGeoRouter(options: GeoRouterOptions = {}): Router {
           ? {
               schemaVersion: 3 as const,
               archiveContractVersion:
-                manifest.archiveContractVersion === 2
-                  ? (2 as const)
-                  : (1 as const),
+                manifest.archiveContractVersion === 3
+                  ? (3 as const)
+                  : manifest.archiveContractVersion === 2
+                    ? (2 as const)
+                    : (1 as const),
               validationProfile: "website-lead-v1" as const,
               packageManifestSha256: manifest.packageManifestSha256,
             }
@@ -4586,17 +4587,15 @@ async function buildProjectView(
     knowledgeBase: knowledgeBaseManifest
       ? {
           ...omitKnowledgeEvidencePaths(knowledgeBaseManifest),
-          assets: knowledgeBaseManifest.assets.map(
-            ({ zipPath, ...asset }) => ({
-              ...asset,
-              archivePath: zipPath,
-              previewUrl: /\.(?:avif|webp|png|jpe?g|gif)$/i.test(asset.name)
-                ? `/api/geo/projects/${encodeURIComponent(
-                    projectToken,
-                  )}/knowledge-assets/${encodeURIComponent(asset.id)}`
-                : undefined,
-            }),
-          ),
+          assets: knowledgeBaseManifest.assets.map(({ zipPath, ...asset }) => ({
+            ...asset,
+            archivePath: zipPath,
+            previewUrl: /\.(?:avif|webp|png|jpe?g|gif)$/i.test(asset.name)
+              ? `/api/geo/projects/${encodeURIComponent(
+                  projectToken,
+                )}/knowledge-assets/${encodeURIComponent(asset.id)}`
+              : undefined,
+          })),
           archiveName: archiveDescriptor?.filename,
           archiveUrl,
         }

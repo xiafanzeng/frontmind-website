@@ -1,6 +1,6 @@
 {
   "source": "frontmind-dashboard/private-workflows/socratic-kb-builder.skill",
-  "sourceArchiveSha256": "e002a3216dfcce1f13ad44e11fee86de0ef093f5ecf7eb7985862b2d2df3c571",
+  "sourceArchiveSha256": "dd1de8c8b37f38c14d7a89b2b48dbc51d9d6dd35bd0050bd4c1b96f68e3a185d",
   "copiedEntries": [
     "SKILL.md",
     "references/knowledge-tree.md",
@@ -8,5 +8,5 @@
     "references/output-format.md"
   ],
   "addedEntries": ["agents/openai.yaml", "scripts/validate_archive.py"],
-  "transformation": "The website lead-generation variant replaces the Pro multi-turn confirmation protocol with unattended Base execution while preserving the 40–56 leaf encyclopedia, seven formal overviews, evidence separation, archive contract v2 and deterministic validation. Runtime injection is reduced to the compact website SKILL.md; Wide Research and Deep Research are prohibited; customer prose leakage is a hard error; and image selection is coverage-first with assetType/displayRole, complete candidate accounting, source-page scan equality and role-specific quality gates."
+  "transformation": "The website lead-generation variant replaces the Pro multi-turn confirmation protocol with unattended Base execution, an evidence-adaptive 8–56 leaf encyclopedia, seven formal overviews, evidence separation and archive contract v3 with v2 compatibility. Runtime injection is reduced to the compact website SKILL.md; Wide Research and Deep Research are prohibited; the model returns a candidate ZIP; and the service-side finalizer owns deterministic validation, hashes, format and customer-content quality."
 }

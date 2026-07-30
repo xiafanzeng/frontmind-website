@@ -2960,18 +2960,6 @@
   font-size: 15px;
   line-height: 1.7;
 }
-.geo-progress-bar {
-  height: 4px;
-  overflow: hidden;
-  margin-top: 24px;
-  background: #e2dde5;
-}
-.geo-progress-bar span {
-  display: block;
-  height: 100%;
-  background: linear-gradient(90deg, #3d1560, #805291, #b38d34);
-  transition: width 500ms ease;
-}
 .geo-progress-meta {
   display: flex;
   align-items: baseline;
@@ -11986,7 +11974,6 @@
     transform: none !important;
   }
   .geo-launcher,
-  .geo-progress-bar span,
   .geo-capture-track span,
   .geo-platform-grid > button,
   .geo-agent-sidebar {

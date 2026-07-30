@@ -1251,6 +1251,8 @@ describe("uploadGeoFile", () => {
   });
 
   it("accepts an empty successful response from direct storage", async () => {
+    const signedUrl =
+      "https://storage.example/upload?X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Credential=AKIAEXAMPLE%2F20260730%2Fcn-north-1%2Fs3%2Faws4_request&X-Amz-Signature=abcdef0123456789";
     const fetchMock = vi
       .fn<typeof fetch>()
       .mockResolvedValueOnce(
@@ -1259,7 +1261,7 @@ describe("uploadGeoFile", () => {
             fileId: "file-1",
             filename: "企业资料.pdf",
             uploadToken: "signed-upload-token",
-            directUploadUrl: "https://storage.example/upload",
+            directUploadUrl: signedUrl,
           }),
           { status: 201, headers: { "content-type": "application/json" } },
         ),
@@ -1276,6 +1278,7 @@ describe("uploadGeoFile", () => {
       uploadToken: "signed-upload-token",
     });
     expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(fetchMock.mock.calls[1][0]).toBe(signedUrl);
   });
 
   it("falls back to the authenticated website proxy when direct storage upload fails", async () => {
