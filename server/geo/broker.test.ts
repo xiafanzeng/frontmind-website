@@ -58,11 +58,19 @@ describe("HttpGeoPresalesBroker", () => {
       serviceToken: "private-token",
       fetchImpl: fetchMock as typeof fetch,
     });
-    await broker.uploadFile("file-1", Buffer.from("pdf"), "application/pdf");
+    await broker.uploadFile(
+      "file-1",
+      Buffer.from("pdf"),
+      "application/pdf",
+      "signed-upload-ticket",
+    );
     const [, init] = fetchMock.mock.calls[0];
     const headers = new Headers(init?.headers);
     expect(headers.get("content-type")).toBe("application/octet-stream");
     expect(headers.get("x-original-content-type")).toBe("application/pdf");
+    expect(headers.get("x-frontmind-upload-ticket")).toBe(
+      "signed-upload-ticket",
+    );
   });
 
   it("submits monitoring as one fixed text-search batch", async () => {

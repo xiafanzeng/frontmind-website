@@ -3533,12 +3533,13 @@ var HttpGeoPresalesBroker = class {
       body: JSON.stringify(input)
     });
   }
-  async uploadFile(fileId, body, contentType) {
+  async uploadFile(fileId, body, contentType, uploadTicket) {
     return this.requestJson(`/files/${encodeURIComponent(fileId)}/content`, {
       method: "PUT",
       headers: {
         "Content-Type": "application/octet-stream",
-        "x-original-content-type": contentType || "application/octet-stream"
+        "x-original-content-type": contentType || "application/octet-stream",
+        ...uploadTicket ? { "x-frontmind-upload-ticket": uploadTicket } : {}
       },
       body
     });
@@ -9724,7 +9725,8 @@ function createGeoRouter(options = {}) {
       const result = await broker.uploadFile(
         payload.fileId,
         body,
-        String(originalContentType)
+        String(originalContentType),
+        payload.upstreamUploadTicket
       );
       res.json({
         ok: true,
@@ -9872,7 +9874,8 @@ function createGeoRouter(options = {}) {
           filename: file.filename || filename,
           sessionId: String(res.locals.geoSessionId || ""),
           sizeBytes: input.sizeBytes,
-          contentType: input.contentType
+          contentType: input.contentType,
+          upstreamUploadTicket: file.proxy_upload_ticket
         },
         UPLOAD_TTL_MS
       );
@@ -10712,7 +10715,8 @@ function createGeoRouter(options = {}) {
         await broker.uploadFile(
           monitoringFile.id,
           monitoringBytes,
-          "application/json"
+          "application/json",
+          monitoringFile.proxy_upload_ticket
         );
       } catch (error) {
         await broker.deleteFile(monitoringFile.id).catch(() => void 0);
@@ -11015,7 +11019,8 @@ function createGeoRouter(options = {}) {
           await broker.uploadFile(
             assessmentFile.id,
             assessmentBytes,
-            "application/json"
+            "application/json",
+            assessmentFile.proxy_upload_ticket
           );
           const scenarioFile = await broker.createFile({
             filename: scenarioFilename,
@@ -11026,7 +11031,8 @@ function createGeoRouter(options = {}) {
           await broker.uploadFile(
             scenarioFile.id,
             scenarioBytes,
-            "application/json"
+            "application/json",
+            scenarioFile.proxy_upload_ticket
           );
           const archiveAttachment = await materializeArchiveAttachment(
             broker,
@@ -12810,7 +12816,12 @@ async function materializeArchiveAttachment(broker, taskId, archive) {
     mimeType: "application/zip",
     sizeBytes: body.length
   });
-  await broker.uploadFile(file.id, body, "application/zip");
+  await broker.uploadFile(
+    file.id,
+    body,
+    "application/zip",
+    file.proxy_upload_ticket
+  );
   return {
     file_id: file.id,
     filename: file.filename || archive.filename,
@@ -12830,7 +12841,12 @@ async function createGeoTaskWithSkillPackages(broker, input, skillPackages) {
         file_id: file.id,
         filename: file.filename || skillPackage.filename
       });
-      await broker.uploadFile(file.id, skillPackage.body, "application/zip");
+      await broker.uploadFile(
+        file.id,
+        skillPackage.body,
+        "application/zip",
+        file.proxy_upload_ticket
+      );
     }
     const task = await broker.createTask({
       ...input,

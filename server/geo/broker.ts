@@ -18,6 +18,7 @@ export type BrokerFile = {
   status: string;
   upload_url?: string;
   upload_expires_at?: string;
+  proxy_upload_ticket?: string;
 };
 
 export type BrokerTask = Record<string, unknown> & {
@@ -104,6 +105,7 @@ export interface GeoPresalesBroker {
     fileId: string,
     body: Buffer,
     contentType: string,
+    uploadTicket?: string,
   ): Promise<unknown>;
   createTask(input: {
     projectId?: string;
@@ -267,12 +269,18 @@ export class HttpGeoPresalesBroker implements GeoPresalesBroker {
     });
   }
 
-  async uploadFile(fileId: string, body: Buffer, contentType: string) {
+  async uploadFile(
+    fileId: string,
+    body: Buffer,
+    contentType: string,
+    uploadTicket?: string,
+  ) {
     return this.requestJson(`/files/${encodeURIComponent(fileId)}/content`, {
       method: "PUT",
       headers: {
         "Content-Type": "application/octet-stream",
         "x-original-content-type": contentType || "application/octet-stream",
+        ...(uploadTicket ? { "x-frontmind-upload-ticket": uploadTicket } : {}),
       },
       body,
     });
