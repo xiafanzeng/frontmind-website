@@ -32,7 +32,7 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
 const GEO_RUNTIME_SKILLS = [
-  { name: "website-one-shot-kb-builder", version: 4 },
+  { name: "website-one-shot-kb-builder", version: 5 },
   { name: "geo-question-recommender", version: 1 },
   { name: "geo-knowledge-answer-verifier", version: 1 },
   { name: "geo-current-state-evaluator", version: 1 },

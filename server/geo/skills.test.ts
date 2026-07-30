@@ -18,6 +18,7 @@ import {
   WEBSITE_KB_SKILL_ARCHIVE_FILENAME,
 } from "./skills";
 import { loadGeoKnowledgeAnswerVerifierSkill } from "./assessment";
+import { parseKnowledgeBaseCandidate } from "./knowledge-base-candidate";
 
 const execFileAsync = promisify(execFile);
 
@@ -61,7 +62,7 @@ describe("website one-shot knowledge-base skill", () => {
   it("keeps the Base skill focused on research and candidate output", async () => {
     const skill = await loadWebsiteKnowledgeBaseSkill();
     expect(Buffer.byteLength(skill, "utf8")).toBeGreaterThanOrEqual(9_000);
-    expect(Buffer.byteLength(skill, "utf8")).toBeLessThanOrEqual(20_000);
+    expect(Buffer.byteLength(skill, "utf8")).toBeLessThanOrEqual(30_000);
     for (const invariant of [
       "ordinary Agent browsing",
       "D01–D13",
@@ -181,18 +182,19 @@ describe("website one-shot knowledge-base skill", () => {
         "服务与合作",
         "可信优势",
       ]
-        .map(
-          (title) =>
-            `## ${title}\n\n公开资料暂未提供可核验信息。[待核验]`,
-        )
+        .map((title) => `## ${title}\n\n公开资料暂未提供可核验信息。[待核验]`)
         .join("\n\n");
       fs.writeFileSync(path.join(temporaryRoot, "00_brand_facts.md"), facts);
       fs.writeFileSync(
         path.join(temporaryRoot, "01_customer_draft.md"),
         customer,
       );
-      const first = path.join(temporaryRoot, "candidate-1.zip");
-      const second = path.join(temporaryRoot, "candidate-2.zip");
+      const firstRoot = path.join(temporaryRoot, "first");
+      const secondRoot = path.join(temporaryRoot, "second");
+      fs.mkdirSync(firstRoot);
+      fs.mkdirSync(secondRoot);
+      const first = path.join(firstRoot, "website-lead-candidate-v1.zip");
+      const second = path.join(secondRoot, "website-lead-candidate-v1.zip");
       const script = path.resolve(
         process.cwd(),
         "server/skills/website-one-shot-kb-builder/scripts/build_candidate.py",
@@ -212,13 +214,16 @@ describe("website one-shot knowledge-base skill", () => {
         second,
       ]);
       expect(fs.readFileSync(first).equals(fs.readFileSync(second))).toBe(true);
-      const zip = await (await import("jszip")).default.loadAsync(
-        fs.readFileSync(first),
-      );
+      const zip = await (
+        await import("jszip")
+      ).default.loadAsync(fs.readFileSync(first));
       expect(Object.keys(zip.files).sort()).toEqual([
         "00_brand_facts.md",
         "01_customer_draft.md",
       ]);
+      const parsed = await parseKnowledgeBaseCandidate(fs.readFileSync(first));
+      expect(parsed.factSections.size).toBe(13);
+      expect(parsed.customerSections.size).toBe(7);
     } finally {
       fs.rmSync(temporaryRoot, { recursive: true, force: true });
     }

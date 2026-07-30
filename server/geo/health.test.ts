@@ -33,7 +33,9 @@ describe("GEO dependency health", () => {
     expect(geoPublicBuildSha({ FRONTMIND_BUILD_SHA: "AbCdEf1234567" })).toBe(
       "abcdef1234567",
     );
-    expect(geoPublicBuildSha({ FRONTMIND_BUILD_SHA: "deploy-secret" })).toBeNull();
+    expect(
+      geoPublicBuildSha({ FRONTMIND_BUILD_SHA: "deploy-secret" }),
+    ).toBeNull();
     expect(geoPublicBuildSha({})).toBeNull();
   });
 

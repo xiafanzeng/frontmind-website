@@ -346,7 +346,17 @@ describe("RetryProjectRequestSchema", () => {
   it("accepts a local project input without attachments", () => {
     expect(
       RetryProjectRequestSchema.parse({ input: "Acme", attachments: [] }),
-    ).toEqual({ input: "Acme", attachments: [] });
+    ).toEqual({ input: "Acme", attachments: [], trigger: "manual" });
+  });
+
+  it("accepts the explicit automatic recovery trigger", () => {
+    expect(
+      RetryProjectRequestSchema.parse({
+        input: "Acme",
+        attachments: [],
+        trigger: "automatic",
+      }).trigger,
+    ).toBe("automatic");
   });
 
   it("reuses public URL validation for retry input", () => {

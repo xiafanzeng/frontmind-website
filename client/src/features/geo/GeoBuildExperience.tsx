@@ -111,6 +111,7 @@ import {
   isGeoStylePreviewProject,
 } from "./preview-mode";
 import { MonitoringMarkdown } from "./MonitoringMarkdown";
+import { SafeMarkdown, safePublicMarkdownUrl } from "./SafeMarkdown";
 import {
   canRunGeoAutoRefresh,
   geoAutoRefreshDelayLabel,
@@ -580,6 +581,45 @@ function restorePendingGeoPayment(): PendingGeoPayment | undefined {
 }
 
 type KnowledgeView = "overview" | "assets" | "sources" | "report";
+const FIXED_KNOWLEDGE_SECTIONS = [
+  ["company-identity", "企业与品牌"],
+  ["team", "团队与组织"],
+  ["products-services", "产品与服务"],
+  ["core-capabilities", "技术与交付"],
+  ["customers-industries", "客户与行业"],
+  ["cooperation", "服务与合作"],
+  ["why-frontmind", "可信优势"],
+] as const;
+
+export function completeKnowledgeBaseSections(
+  sections: GeoKnowledgeSection[],
+): GeoKnowledgeSection[] {
+  const exactMatches = FIXED_KNOWLEDGE_SECTIONS.map(([id, title]) =>
+    sections.find((section) => section.id === id || section.title === title),
+  );
+  return FIXED_KNOWLEDGE_SECTIONS.map(([id, title], index) => {
+    const existing = exactMatches[index];
+    const positional =
+      sections[index] && !exactMatches.includes(sections[index])
+        ? sections[index]
+        : undefined;
+    return (
+      existing ??
+      (positional
+        ? { ...positional, id, title }
+        : {
+            id,
+            title,
+            summary: `${title}的公开资料仍在核验中。`,
+            markdown: `公开资料暂未提供${title}的可核验信息。[待核验]`,
+            status: "needs_verification" as const,
+            evidenceCount: 0,
+            assetIds: [],
+            leaves: [],
+          })
+    );
+  });
+}
 
 const KNOWLEDGE_BRANCH_ICONS = [
   Building2,
@@ -729,6 +769,7 @@ export function claimKnowledgeBaseAutoRetry(
     project.status !== "failed" ||
     Boolean(project.knowledgeBase) ||
     project.knowledgeBaseRetryAvailable !== true ||
+    project.knowledgeBaseAutoRetryAvailable !== true ||
     project.knowledgeBaseValidationCategory === "unsafe" ||
     attempted.has(project.id) ||
     inFlight.has(project.id)
@@ -876,54 +917,16 @@ function normalizeFiles(files: FileList | File[]): {
 }
 
 function LightweightMarkdown({ markdown }: { markdown?: string }) {
-  if (!markdown)
-    return (
-      <p className="geo-empty-copy">
-        暂无可展示的正文内容，请下载完整知识库查看。
-      </p>
-    );
-  const lines = markdown.split(/\r?\n/);
-
   return (
-    <div className="geo-markdown">
-      {lines.map((rawLine, index) => {
-        const line = rawLine.trim();
-        if (!line)
-          return (
-            <div
-              key={index}
-              className="geo-markdown-space"
-              aria-hidden="true"
-            />
-          );
-        const heading = line.match(/^(#{1,4})\s+(.+)$/);
-        if (heading) {
-          const Level = Math.min(4, heading[1].length + 1) as 2 | 3 | 4;
-          const Tag = `h${Level}` as "h2" | "h3" | "h4";
-          return <Tag key={index}>{heading[2]}</Tag>;
-        }
-        if (/^[-*]\s+/.test(line))
-          return (
-            <div key={index} className="geo-markdown-list">
-              {line.replace(/^[-*]\s+/, "")}
-            </div>
-          );
-        if (/^\d+[.)]\s+/.test(line))
-          return (
-            <div
-              key={index}
-              className="geo-markdown-list geo-markdown-numbered"
-            >
-              {line}
-            </div>
-          );
-        if (line.startsWith(">"))
-          return (
-            <blockquote key={index}>{line.replace(/^>\s?/, "")}</blockquote>
-          );
-        return <p key={index}>{line}</p>;
-      })}
-    </div>
+    <SafeMarkdown
+      markdown={markdown}
+      className="geo-markdown"
+      empty={
+        <p className="geo-empty-copy">
+          暂无可展示的正文内容，请下载完整知识库查看。
+        </p>
+      }
+    />
   );
 }
 
@@ -1079,6 +1082,7 @@ function KnowledgeAssetPreviewImage({ asset }: { asset: GeoKnowledgeAsset }) {
       src={src}
       alt={asset.alt || asset.caption || asset.name}
       loading="lazy"
+      decoding="async"
       onError={() => setFailed(true)}
     />
   );
@@ -1189,11 +1193,12 @@ function KnowledgeBuildTree({
 }: {
   knowledgeBase: GeoKnowledgeBase;
 }) {
+  const sections = completeKnowledgeBaseSections(knowledgeBase.sections);
   const archiveItems = [
     {
       number: "01",
       title: "知识树",
-      detail: `当前 ZIP 返回 ${knowledgeBase.sections.length} 个主题分支。`,
+      detail: `当前知识库固定展示 ${sections.length} 个主题分支。`,
     },
     {
       number: "02",
@@ -1234,9 +1239,9 @@ function KnowledgeBuildTree({
               <span>ITEM {item.number}</span>
               <strong>{item.title}</strong>
               <p>{item.detail}</p>
-              {index === 0 && knowledgeBase.sections.length > 0 && (
+              {index === 0 && (
                 <div className="geo-build-branches" aria-label="知识库主题分支">
-                  {knowledgeBase.sections.map((section) => (
+                  {sections.map((section) => (
                     <span key={section.id}>
                       <Check size={11} /> {section.title}
                     </span>
@@ -1883,7 +1888,7 @@ function GeoBuildExperienceZh() {
     analysisRetryInFlight.current.add(projectId);
     setRetryingAnalysisId(projectId);
     setStorageNotice("知识库正在进行一次自动校验补救，无需重复操作。");
-    void retryGeoEnterpriseAnalysis(activeProject)
+    void retryGeoEnterpriseAnalysis(activeProject, "automatic")
       .then((updated) => {
         commitProject({ ...updated, error: undefined });
       })
@@ -4027,9 +4032,8 @@ function ExecutionLogDialog({
     typeof selectedEntry?.progress === "number"
       ? Math.max(0, Math.min(100, selectedEntry.progress))
       : undefined;
-  const showSelectedEntryProgress = shouldRenderExecutionProgress(
-    selectedEntry,
-  );
+  const showSelectedEntryProgress =
+    shouldRenderExecutionProgress(selectedEntry);
   const canRefresh =
     Boolean(project.remoteToken) &&
     !isGeoDraftProject(project) &&
@@ -4395,12 +4399,29 @@ export function EnterpriseAnalysis({
     );
   }
 
+  if (
+    !knowledgeBase &&
+    project.knowledgeBaseRecoveryState === "automatic_in_progress"
+  ) {
+    return (
+      <AnalysisProgress
+        project={{
+          ...project,
+          status: "analyzing",
+          progressLabel: "正在原项目中重新整理企业知识库",
+          error: undefined,
+        }}
+        onContact={onContact}
+      />
+    );
+  }
+
   if (project.status === "failed" && !knowledgeBase) {
     const unsafe = project.knowledgeBaseValidationCategory === "unsafe";
     const failureMessage =
       project.error || "资料处理暂时中断，当前项目与原始资料均已保留。";
     return (
-      <div className="geo-failure-state">
+      <div className="geo-failure-state" role="alert" aria-live="assertive">
         <span>
           <CircleAlert size={24} />
         </span>
@@ -4437,8 +4458,8 @@ export function EnterpriseAnalysis({
     {
       key: "branches",
       label: "知识分支",
-      value: knowledgeBase.sections.length,
-      detail: "自适应企业知识树",
+      value: FIXED_KNOWLEDGE_SECTIONS.length,
+      detail: "固定企业知识树",
     },
     {
       key: "sources",
@@ -4463,19 +4484,15 @@ export function EnterpriseAnalysis({
     knowledgeBase.metrics.length > 0
       ? knowledgeBase.metrics.slice(0, 6)
       : fallbackMetrics;
-  const sections: GeoKnowledgeSection[] =
-    knowledgeBase.sections.length > 0
-      ? knowledgeBase.sections
-      : [
-          {
-            id: "full-report",
-            title: "企业知识库总览",
-            summary: knowledgeBase.summary,
-            markdown: knowledgeBase.reportMarkdown,
-          },
-        ];
+  const sections = completeKnowledgeBaseSections(knowledgeBase.sections);
   const activeSection =
-    sections.find((section) => section.id === activeSectionId) ?? sections[0];
+    sections.find((section) => section.id === activeSectionId) ??
+    sections.find(
+      (section) =>
+        section.id === knowledgeBase.sections[0]?.id ||
+        section.title === knowledgeBase.sections[0]?.title,
+    ) ??
+    sections[0];
   const activeLeaves = activeSection?.leaves ?? [];
   const activeLeaf = activeLeaves.find((leaf) => leaf.id === activeLeafId);
   const activeOverview = activeSection?.overview;
@@ -4860,7 +4877,11 @@ export function EnterpriseAnalysis({
                   const href = asset.previewUrl || asset.url;
                   return (
                     <article key={asset.id}>
-                      <span className="geo-asset-preview">
+                      <span
+                        className={`geo-asset-preview ${
+                          knowledgeAssetUsesContain(asset) ? "is-contain" : ""
+                        }`}
+                      >
                         {isPreviewableKnowledgeAsset(asset) && href ? (
                           <KnowledgeAssetPreviewImage asset={asset} />
                         ) : (
@@ -4953,11 +4974,11 @@ export function EnterpriseAnalysis({
                         : ""}
                     </p>
                   </div>
-                  {source.url && (
+                  {safePublicMarkdownUrl(source.url) && (
                     <a
-                      href={source.url}
+                      href={safePublicMarkdownUrl(source.url)}
                       target="_blank"
-                      rel="noreferrer"
+                      rel="noopener noreferrer"
                       aria-label={`打开来源：${source.title}`}
                     >
                       <ExternalLink size={15} />
@@ -5034,7 +5055,7 @@ function AnalysisProgress({
       ];
 
   return (
-    <div className="geo-progress-layout">
+    <div className="geo-progress-layout" role="status" aria-live="polite">
       <section className="geo-progress-visual" aria-hidden="true">
         <div className="geo-orbit orbit-one" />
         <div className="geo-orbit orbit-two" />

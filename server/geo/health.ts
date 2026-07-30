@@ -4,6 +4,8 @@ import type {
   GeoProjectOrderRegistry,
 } from "./provisioning";
 
+declare const __FRONTMIND_BUILD_SHA__: string | undefined;
+
 export type GeoDependencyReadiness = {
   status: "ok";
   agent: {
@@ -18,6 +20,11 @@ export type GeoDependencyReadiness = {
 export function geoPublicBuildSha(
   env: Record<string, string | undefined> = process.env,
 ) {
+  const embedded =
+    typeof __FRONTMIND_BUILD_SHA__ === "string"
+      ? __FRONTMIND_BUILD_SHA__.trim()
+      : "";
+  if (/^[a-f0-9]{7,64}$/i.test(embedded)) return embedded.toLowerCase();
   const candidate = (
     env.FRONTMIND_BUILD_SHA ||
     env.GITHUB_SHA ||

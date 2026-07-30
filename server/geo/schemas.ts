@@ -380,6 +380,7 @@ export type CreateProjectRequest = z.infer<typeof CreateProjectRequestSchema>;
 export const RetryProjectRequestSchema = z
   .object({
     input: z.string().trim().max(4000).default(""),
+    trigger: z.enum(["automatic", "manual"]).optional().default("manual"),
     attachments: z
       .array(ProjectAttachmentSchema.pick({ fileId: true, filename: true }))
       .max(10)

@@ -104,8 +104,9 @@ git -C /Users/fanzengxia/Documents/GitHub/frontmind-website ls-files --others --
 ```
 
 确认大量删除、新迁移、新 Skill、测试与构建文件全部符合本次发布后，才允许暂存。
-此时先不要 commit：继续完成下方“0. 发布前安全门”和“1. 本地双仓发布门”，让最终
-构建更新两个仓库中受跟踪的 `dist/`。全部通过后再回到这里执行暂存与提交。
+此时先不要 commit：继续完成下方“0. 发布前安全门”和本地检查、测试。Website 的
+服务器 bundle 会内嵌当前 `git rev-parse HEAD`，所以预提交工作区产生的 `dist/` 只用于
+本地验证，禁止作为最终发布产物提交；最终产物必须在 push 后从远端提交的干净克隆构建。
 
 最终 `git add -A` 依赖已经验证的 `.gitignore`，不再手动排除临时目录：
 
@@ -118,7 +119,7 @@ git diff --cached --name-status
 git status --short
 
 cd /Users/fanzengxia/Documents/GitHub/frontmind-website
-git add -A
+git add -A -- . ':!dist'
 git diff --cached --check
 git diff --cached --stat
 git diff --cached --name-status
@@ -214,12 +215,14 @@ SITE_URL=https://www.frontmind.net \
 BUILD_DATE=2026-07-28 \
 pnpm build
 
-test "$(find dist/skills -type f | wc -l | tr -d ' ')" = "22"
+test "$(find dist/skills -type f | wc -l | tr -d ' ')" = "21"
 node scripts/audit-production-bundle.mjs
 ```
 
-发布必须使用以上已验证提交。服务器只允许 `git pull --ff-only`；不要在服务器上
-临时修改源码或 Skill。
+Website 的上述本地构建只验证源码可构建，不作为最终 release 产物。发布必须使用
+push 后干净克隆里生成的 `dist/`，这样内嵌 `buildSha` 才等于发布提交。不要在构建完成后
+再提交 `dist/`，否则新提交会再次让内嵌 SHA 落后一个版本。服务器只允许部署记录的
+远端提交；不要在服务器上临时修改源码或 Skill。
 
 ### 1.1 推送后必须做干净克隆复验
 
@@ -240,6 +243,16 @@ git clone \
 确认两个克隆的 `HEAD` 分别等于记录的 release SHA，然后在这两个干净目录完整重跑
 “1. 本地双仓发布门”。任何缺文件、测试失败或构建差异都要回原仓修复、重新提交、
 重新 push，再删除该临时验证目录并从头克隆；不能把临时目录中的修补直接带上服务器。
+Website 最终交给 1Panel 的必须是这个干净克隆或由同一提交构建的镜像，不得使用原开发
+工作区中预提交生成的 `dist/`。
+
+Website 干净克隆中的最终构建必须改用：
+
+```bash
+pnpm build:release
+```
+
+该命令会先确认 Git 工作区完全干净，再生成内嵌当前提交 SHA 的生产产物。
 
 ## 2. 先发布 Dashboard
 
@@ -415,6 +428,18 @@ geo-knowledge-answer-verifier
 geo-current-state-evaluator
 geo-optimization-outcome-forecaster
 ```
+
+其中 `website-one-shot-kb-builder.version` 必须为 `5`，`buildSha` 必须
+等于本次部署提交。完成公网切流后执行自动发布验证门：
+
+```bash
+pnpm verify:production -- \
+  --url https://www.frontmind.net \
+  --sha "$(git rev-parse HEAD)"
+```
+
+该命令同时核对公网构建 SHA、五个 Skill、website Skill 源码哈希、依赖
+就绪状态以及首页入口 JS 的文件名和内容哈希；任一不一致都视为未部署成功。
 
 同时必须包含以下依赖就绪结果；任一项缺失或不为 `true` 都不得继续切流：
 

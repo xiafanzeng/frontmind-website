@@ -182,6 +182,8 @@ describe("normalizeGeoProject", () => {
         id: "retry-allowed",
         status: "failed",
         knowledgeBaseRetryAvailable: true,
+        knowledgeBaseAutoRetryAvailable: true,
+        knowledgeBaseRecoveryState: "automatic_in_progress",
         knowledgeBaseSupportRequired: true,
         questionRetryAvailable: true,
         assessmentRetryAvailable: true,
@@ -236,6 +238,8 @@ describe("normalizeGeoProject", () => {
     });
 
     expect(allowed.knowledgeBaseRetryAvailable).toBe(true);
+    expect(allowed.knowledgeBaseAutoRetryAvailable).toBe(true);
+    expect(allowed.knowledgeBaseRecoveryState).toBe("automatic_in_progress");
     expect(allowed.knowledgeBaseSupportRequired).toBe(true);
     expect(allowed.questionRetryAvailable).toBe(true);
     expect(allowed.assessmentRetryAvailable).toBe(true);
@@ -1516,6 +1520,7 @@ describe("retryGeoEnterpriseAnalysis", () => {
     expect(retried.remoteToken).toBe("next-token");
     expect(JSON.parse(String(fetchMock.mock.calls[0][1]?.body))).toEqual({
       input: "Acme",
+      trigger: "manual",
       attachments: [{ fileId: "file-1", filename: "catalog.pdf" }],
     });
   });

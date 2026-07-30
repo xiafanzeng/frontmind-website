@@ -32,6 +32,7 @@ describe("GEO style preview rendering", () => {
       status: "failed" as const,
       knowledgeBase: undefined,
       knowledgeBaseRetryAvailable: true,
+      knowledgeBaseAutoRetryAvailable: true,
       knowledgeBaseValidationCategory: "content" as const,
     };
     const attempted = new Set<string>();
@@ -52,6 +53,7 @@ describe("GEO style preview rendering", () => {
       status: "failed" as const,
       knowledgeBase: undefined,
       knowledgeBaseRetryAvailable: true,
+      knowledgeBaseAutoRetryAvailable: true,
       knowledgeBaseValidationCategory: "content" as const,
       error: "知识库正式正文未充分整理已有证据。",
     };

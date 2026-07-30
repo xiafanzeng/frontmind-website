@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import {
   collectKnowledgeArchiveDescriptors,
   knowledgeArchiveDescriptorHash,
+  rankedKnowledgeArchiveDescriptors,
 } from "./knowledge-base-artifact";
 
 describe("website/Agent knowledge artifact contract fixture", () => {
@@ -81,5 +82,36 @@ describe("website/Agent knowledge artifact contract fixture", () => {
         },
       ]),
     ).toEqual([]);
+  });
+
+  it("ranks the fixed candidate name ahead of other assistant ZIP files", () => {
+    const descriptors = rankedKnowledgeArchiveDescriptors([
+      {
+        type: "output_file",
+        file_id: "generic",
+        filename: "research.zip",
+      },
+      {
+        type: "output_file",
+        file_id: "named",
+        filename: "knowledge-base-candidate-recovered.zip",
+      },
+      {
+        type: "output_file",
+        file_id: "exact",
+        filename: "website-lead-candidate-v1.zip",
+      },
+      {
+        type: "output_file",
+        file_id: "fourth",
+        filename: "other.zip",
+      },
+    ]);
+
+    expect(descriptors.map((descriptor) => descriptor.fileId)).toEqual([
+      "exact",
+      "named",
+      "generic",
+    ]);
   });
 });

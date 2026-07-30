@@ -4,6 +4,11 @@ const MAX_ARCHIVE_CANDIDATES = 32;
 const MAX_FILE_ID_LENGTH = 255;
 const MAX_FILENAME_LENGTH = 512;
 const MAX_URL_LENGTH = 8_192;
+export const MAX_KNOWLEDGE_ARCHIVE_CANDIDATES_TO_INSPECT = 3;
+export const MAX_KNOWLEDGE_ARCHIVE_CANDIDATE_BYTES = 100 * 1024 * 1024;
+export const MAX_KNOWLEDGE_ARCHIVE_TOTAL_BYTES = 150 * 1024 * 1024;
+export const WEBSITE_KNOWLEDGE_CANDIDATE_FILENAME =
+  "website-lead-candidate-v1.zip";
 
 export interface KnowledgeArchiveDescriptor {
   outputItemId: string;
@@ -115,6 +120,43 @@ export function collectKnowledgeArchiveDescriptors(
   }
 
   return descriptors;
+}
+
+function descriptorRank(descriptor: KnowledgeArchiveDescriptor) {
+  const filename = descriptor.filename.trim().toLowerCase();
+  if (filename === WEBSITE_KNOWLEDGE_CANDIDATE_FILENAME) return 0;
+  if (
+    filename.includes("website-lead-candidate") ||
+    filename.includes("knowledge-base-candidate")
+  ) {
+    return 1;
+  }
+  return 2;
+}
+
+/**
+ * Prefer the fixed candidate contract name while preserving Agent output
+ * order inside each rank. The router applies the download-count and byte
+ * budgets because only it has access to response sizes.
+ */
+export function rankedKnowledgeArchiveDescriptors(
+  output: unknown,
+): KnowledgeArchiveDescriptor[] {
+  return collectKnowledgeArchiveDescriptors(output)
+    .map((descriptor, index) => ({ descriptor, index }))
+    .sort(
+      (left, right) =>
+        descriptorRank(left.descriptor) - descriptorRank(right.descriptor) ||
+        left.index - right.index,
+    )
+    .slice(0, MAX_KNOWLEDGE_ARCHIVE_CANDIDATES_TO_INSPECT)
+    .map(({ descriptor }) => descriptor);
+}
+
+export function isExplicitKnowledgeCandidateDescriptor(
+  descriptor: KnowledgeArchiveDescriptor,
+) {
+  return descriptorRank(descriptor) < 2;
 }
 
 export function knowledgeArchiveDescriptorHash(

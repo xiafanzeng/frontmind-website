@@ -93,4 +93,30 @@ describe("MonitoringMarkdown", () => {
 
     expect(html).toContain("本轮没有返回可展示的文字。");
   });
+
+  it("renders GFM tables, task lists, strikethrough, and code safely", () => {
+    const html = renderToStaticMarkup(
+      <MonitoringMarkdown
+        markdown={`| 产品 | 状态 |
+| --- | --- |
+| Agent | **可用** |
+
+- [x] 已核验
+- ~~旧口径~~
+
+\`inline\`
+
+\`\`\`json
+{"ready":true}
+\`\`\``}
+      />,
+    );
+
+    expect(html).toContain("geo-markdown-table-scroll");
+    expect(html).toContain("<table");
+    expect(html).toContain('type="checkbox"');
+    expect(html).toContain("<del>旧口径</del>");
+    expect(html).toContain("<pre>");
+    expect(html).toContain("&quot;ready&quot;:true");
+  });
 });

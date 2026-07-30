@@ -5,10 +5,12 @@
   "license": "MIT",
   "scripts": {
     "dev": "vite --host --port 8888",
-    "build": "tsx scripts/generate-geo-community-summary.ts --check && vite build && tsx scripts/generate-seo-assets.ts && esbuild server/index.ts --platform=node --packages=external --bundle --format=esm --outdir=dist && node scripts/copy-server-skills.mjs && node scripts/audit-production-bundle.mjs",
+    "build": "tsx scripts/generate-geo-community-summary.ts --check && vite build && tsx scripts/generate-seo-assets.ts && node scripts/build-server.mjs && node scripts/copy-server-skills.mjs && node scripts/audit-production-bundle.mjs",
+    "build:release": "node scripts/assert-clean-release.mjs && pnpm build",
     "start": "NODE_ENV=production node dist/index.js",
     "preview": "vite preview --host --port 8888",
     "check": "tsx scripts/generate-geo-community-summary.ts --check && tsc --noEmit",
+    "verify:production": "node scripts/verify-production-release.mjs",
     "generate:community-summary": "tsx scripts/generate-geo-community-summary.ts",
     "test": "pnpm test:server && pnpm test:client",
     "test:server": "vitest run --config vitest.server.config.ts",

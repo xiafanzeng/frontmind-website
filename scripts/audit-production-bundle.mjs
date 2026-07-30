@@ -10,6 +10,7 @@ const textExtensions = new Set([
   ".json",
   ".md",
   ".mjs",
+  ".py",
   ".txt",
   ".yaml",
   ".yml",
@@ -249,10 +250,10 @@ for (const skillName of runtimeSkillNames) {
     });
   }
 }
-if (runtimeSkillFileCount !== 20) {
+if (runtimeSkillFileCount !== 21) {
   violations.push({
     file: "dist/skills",
-    label: `runtime Skill bundle must contain exactly 20 files, found ${runtimeSkillFileCount}`,
+    label: `runtime Skill bundle must contain exactly 21 files, found ${runtimeSkillFileCount}`,
   });
 }
 

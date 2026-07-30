@@ -1,4 +1,4 @@
-import { collectKnowledgeArchiveDescriptors } from "./knowledge-base-artifact";
+import { rankedKnowledgeArchiveDescriptors } from "./knowledge-base-artifact";
 import { GeoQuestionSetSchema, type GeoQuestionSet } from "./schemas";
 import {
   trustedAssistantOutputItems,
@@ -82,7 +82,7 @@ export function findArchiveDescriptor(
   value: unknown,
 ): ArchiveDescriptor | null {
   const task = asRecord(value);
-  const descriptor = collectKnowledgeArchiveDescriptors(task?.output)[0];
+  const descriptor = rankedKnowledgeArchiveDescriptors(task?.output)[0];
   return descriptor
     ? {
         fileId: descriptor.fileId,

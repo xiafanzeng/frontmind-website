@@ -19,31 +19,58 @@ import {
 } from "./knowledge-base-finalizer";
 
 const factHeadings = [
-  ["D01 企业基础", "示例企业提供企业软件服务。[来源](https://example.com/about)"],
+  [
+    "D01 企业基础",
+    "示例企业提供企业软件服务。[来源](https://example.com/about)",
+  ],
   ["D02 团队", "公开资料暂未提供完整团队名单。[待核验]"],
-  ["D03 产品服务", "企业提供数据平台与 API 产品。[来源](https://example.com/products)"],
+  [
+    "D03 产品服务",
+    "企业提供数据平台与 API 产品。[来源](https://example.com/products)",
+  ],
   ["D04 技术能力", "平台支持标准 API 接入。[来源](https://example.com/docs)"],
-  ["D05 客户案例", "官网披露服务对象包括研发团队。[企业主张](https://example.com/cases)"],
+  [
+    "D05 客户案例",
+    "官网披露服务对象包括研发团队。[企业主张](https://example.com/cases)",
+  ],
   ["D06 资质认证", "公开资料暂未提供资质清单。[待核验]"],
   ["D07 财务融资", "公开资料暂未提供当前财务数据。[待核验]"],
   ["D08 竞争信息", "公开资料暂未提供可核验竞品比较。[待核验]"],
-  ["D09 市场信息", "产品面向企业软件市场。[来源](https://example.com/industries)"],
+  [
+    "D09 市场信息",
+    "产品面向企业软件市场。[来源](https://example.com/industries)",
+  ],
   ["D10 品牌资产", "品牌使用“示例企业”名称。[来源](https://example.com/)"],
-  ["D11 渠道", "开发者可以通过官方文档了解接入方式。[来源](https://example.com/docs)"],
+  [
+    "D11 渠道",
+    "开发者可以通过官方文档了解接入方式。[来源](https://example.com/docs)",
+  ],
   ["D12 公开意图", "官网公开合作联系入口。[来源](https://example.com/contact)"],
   ["D13 公共情报", "公开资料暂未提供额外权威信息。[待核验]"],
 ] as const;
 
 const customerSections = [
-  ["企业与品牌", "示例企业面向企业客户提供软件产品。[来源](https://example.com/about)"],
+  [
+    "企业与品牌",
+    "示例企业面向企业客户提供软件产品。[来源](https://example.com/about)",
+  ],
   ["团队与组织", "公开资料暂未提供完整团队名单。[待核验]"],
   [
     "产品与服务",
     "### 平台产品\n\n数据平台提供 API 接入能力。[来源](https://example.com/products)",
   ],
-  ["技术与交付", "官方文档介绍了标准 API 接入方式。[来源](https://example.com/docs)"],
-  ["客户与行业", "官网称产品服务于研发团队。[企业主张](https://example.com/cases)"],
-  ["服务与合作", "企业官网提供公开联系入口。[来源](https://example.com/contact)"],
+  [
+    "技术与交付",
+    "官方文档介绍了标准 API 接入方式。[来源](https://example.com/docs)",
+  ],
+  [
+    "客户与行业",
+    "官网称产品服务于研发团队。[企业主张](https://example.com/cases)",
+  ],
+  [
+    "服务与合作",
+    "企业官网提供公开联系入口。[来源](https://example.com/contact)",
+  ],
   ["可信优势", "公开资料暂未提供可独立核验的竞品优势结论。[待核验]"],
 ] as const;
 
@@ -58,39 +85,49 @@ async function candidateZip(options?: {
   imageBytes?: Buffer;
   nonLogoImage?: boolean;
   unsafeFile?: boolean;
+  outsideReadme?: boolean;
+  multipleRoots?: boolean;
+  invalidFactsUtf8?: boolean;
+  invalidCustomerUtf8?: boolean;
+  duplicateNormalizedPaths?: boolean;
+  symbolicLink?: boolean;
 }) {
   const zip = new JSZip();
   const prefix = options?.wrapper ? "example/" : "";
   if (!options?.omitFacts) {
     zip.file(
       `${prefix}00_brand_facts.md`,
-      factHeadings
-        .filter(
-          ([heading]) =>
-            !options?.missingDimension || heading !== "D13 公共情报",
-        )
-        .map(([heading, content], index) => {
-          const title =
-            options?.headingAliases && index % 2 === 0
-              ? heading.replace(" ", "：")
-              : heading;
-          return `## ${title}\n\n${content}`;
-        })
-        .join("\n\n"),
+      options?.invalidFactsUtf8
+        ? Buffer.from([0xff, 0xfe, 0xfd])
+        : factHeadings
+            .filter(
+              ([heading]) =>
+                !options?.missingDimension || heading !== "D13 公共情报",
+            )
+            .map(([heading, content], index) => {
+              const title =
+                options?.headingAliases && index % 2 === 0
+                  ? heading.replace(" ", "：")
+                  : heading;
+              return `## ${title}\n\n${content}`;
+            })
+            .join("\n\n"),
     );
   }
   if (!options?.omitCustomer) {
     zip.file(
       `${prefix}01_customer_draft.md`,
-      customerSections
-        .map(([heading, content], index) => {
-          const title =
-            options?.headingAliases && index % 2 === 0
-              ? `${heading}：`
-              : heading;
-          return `## ${title}\n\n${content}`;
-        })
-        .join("\n\n"),
+      options?.invalidCustomerUtf8
+        ? Buffer.from([0xff, 0xfe, 0xfd])
+        : customerSections
+            .map(([heading, content], index) => {
+              const title =
+                options?.headingAliases && index % 2 === 0
+                  ? `${heading}：`
+                  : heading;
+              return `## ${title}\n\n${content}`;
+            })
+            .join("\n\n"),
     );
   }
   if (!options?.omitRun) {
@@ -121,8 +158,7 @@ async function candidateZip(options?: {
                     type: "brand_identity",
                     sourceKind: "official_web",
                     sourcePageUrl: "https://example.com/",
-                    sourceAssetUrl:
-                      "https://example.com/assets/logo.png",
+                    sourceAssetUrl: "https://example.com/assets/logo.png",
                     caption: "示例企业 Logo",
                   },
                 ]
@@ -139,7 +175,34 @@ async function candidateZip(options?: {
   if (options?.unsafeFile) {
     zip.file(`${prefix}run.sh`, "echo unsafe");
   }
-  return zip.generateAsync({ type: "nodebuffer" });
+  if (options?.duplicateNormalizedPaths) {
+    zip.file(`${prefix}notes/A.txt`, "first");
+    zip.file(`${prefix}notes/Ａ.txt`, "second");
+  }
+  if (options?.symbolicLink) {
+    zip.file(`${prefix}assets/logo-link.png`, "assets/logo.png", {
+      unixPermissions: 0o120777,
+    });
+  }
+  if (options?.outsideReadme) {
+    zip.file("README.md", "harmless packaging note");
+    zip.file("__MACOSX/._candidate", "metadata");
+  }
+  if (options?.multipleRoots) {
+    zip.file(
+      "other/00_brand_facts.md",
+      factHeadings
+        .map(([heading, content]) => `## ${heading}\n\n${content}`)
+        .join("\n\n"),
+    );
+    zip.file(
+      "other/01_customer_draft.md",
+      customerSections
+        .map(([heading, content]) => `## ${heading}\n\n${content}`)
+        .join("\n\n"),
+    );
+  }
+  return zip.generateAsync({ type: "nodebuffer", platform: "UNIX" });
 }
 
 describe("website knowledge-base candidate v1", () => {
@@ -160,9 +223,7 @@ describe("website knowledge-base candidate v1", () => {
     expect(parsed.factSections.get("D13")).toContain(
       "官网称产品服务于研发团队",
     );
-    expect(parsed.diagnostics).toContain(
-      "Recovered fact heading D13 公共情报",
-    );
+    expect(parsed.diagnostics).toContain("Recovered fact heading D13 公共情报");
   });
 
   it("ignores malformed optional run metadata when both Markdown files are valid", async () => {
@@ -197,9 +258,7 @@ describe("website knowledge-base candidate v1", () => {
     expect(parsed.factSections.size).toBe(13);
     expect(parsed.customerSections.size).toBe(7);
     expect(parsed.factSections.get("D03")).toContain("数据平台提供 API");
-    expect(parsed.diagnostics).toContain(
-      "Recovered missing 00_brand_facts.md",
-    );
+    expect(parsed.diagnostics).toContain("Recovered missing 00_brand_facts.md");
   });
 
   it("normalizes heading punctuation and ignores non-logo images", async () => {
@@ -214,12 +273,78 @@ describe("website knowledge-base candidate v1", () => {
     );
   });
 
+  it("finds the candidate root even when harmless wrapper files are present", async () => {
+    const parsed = await parseKnowledgeBaseCandidate(
+      await candidateZip({ wrapper: true, outsideReadme: true }),
+    );
+    expect(parsed.factSections.size).toBe(13);
+    expect(parsed.diagnostics).toContain("Selected candidate root: example");
+    expect(parsed.diagnostics).toContain(
+      "Ignored 1 file(s) outside candidate root",
+    );
+  });
+
+  it("rejects two complete candidate roots as ambiguous", async () => {
+    await expect(
+      parseKnowledgeBaseCandidate(
+        await candidateZip({ wrapper: true, multipleRoots: true }),
+      ),
+    ).rejects.toMatchObject<Partial<KnowledgeBaseCandidateError>>({
+      category: "structure",
+      message: expect.stringContaining("multiple complete candidate roots"),
+    });
+  });
+
+  it("recovers one unreadable Markdown document from the other draft", async () => {
+    const parsed = await parseKnowledgeBaseCandidate(
+      await candidateZip({ invalidFactsUtf8: true }),
+    );
+    expect(parsed.factSections.get("D03")).toContain("数据平台提供 API");
+    expect(parsed.diagnostics).toContain(
+      "Recovered unreadable 00_brand_facts.md",
+    );
+  });
+
+  it("rejects the candidate when both Markdown documents are unreadable", async () => {
+    await expect(
+      parseKnowledgeBaseCandidate(
+        await candidateZip({
+          invalidFactsUtf8: true,
+          invalidCustomerUtf8: true,
+        }),
+      ),
+    ).rejects.toMatchObject<Partial<KnowledgeBaseCandidateError>>({
+      category: "content",
+      message: expect.stringContaining("readable Markdown"),
+    });
+  });
+
   it("rejects scripts even when the required Markdown files are present", async () => {
     await expect(
       parseKnowledgeBaseCandidate(await candidateZip({ unsafeFile: true })),
     ).rejects.toMatchObject<Partial<KnowledgeBaseCandidateError>>({
       category: "unsafe",
-      message: expect.stringContaining("unsupported file"),
+      message: expect.stringContaining("unsafe executable file"),
+    });
+  });
+
+  it("rejects paths that collide after NFKC and case normalization", async () => {
+    await expect(
+      parseKnowledgeBaseCandidate(
+        await candidateZip({ duplicateNormalizedPaths: true }),
+      ),
+    ).rejects.toMatchObject<Partial<KnowledgeBaseCandidateError>>({
+      category: "unsafe",
+      message: expect.stringContaining("duplicate normalized paths"),
+    });
+  });
+
+  it("rejects symbolic links during the full archive scan", async () => {
+    await expect(
+      parseKnowledgeBaseCandidate(await candidateZip({ symbolicLink: true })),
+    ).rejects.toMatchObject<Partial<KnowledgeBaseCandidateError>>({
+      category: "unsafe",
+      message: expect.stringContaining("symbolic link"),
     });
   });
 });
@@ -271,9 +396,9 @@ describe("website knowledge-base finalizer", () => {
         );
         expect(parsed.success).toBe(false);
         if (!parsed.success) {
-          expect(parsed.error.issues.map((issue) => issue.path.join("."))).toEqual(
-            expect.arrayContaining(golden.expectedPaths),
-          );
+          expect(
+            parsed.error.issues.map((issue) => issue.path.join(".")),
+          ).toEqual(expect.arrayContaining(golden.expectedPaths));
         }
       }
       if (golden.kind === "invalid_manifest") {
@@ -282,9 +407,9 @@ describe("website knowledge-base finalizer", () => {
         );
         expect(parsed.success).toBe(false);
         if (!parsed.success) {
-          expect(parsed.error.issues.map((issue) => issue.path.join("."))).toEqual(
-            expect.arrayContaining(golden.expectedPaths),
-          );
+          expect(
+            parsed.error.issues.map((issue) => issue.path.join(".")),
+          ).toEqual(expect.arrayContaining(golden.expectedPaths));
         }
       }
     }
@@ -299,15 +424,8 @@ describe("website knowledge-base finalizer", () => {
     });
     expect(parsed.success).toBe(false);
     if (parsed.success) throw new Error("expected invalid completeness");
-    expect(
-      parsed.error.issues.map((issue) => issue.path.join(".")),
-    ).toEqual(
-      expect.arrayContaining([
-        "counts",
-        "acquisition",
-        "gaps",
-        "evaluatedAt",
-      ]),
+    expect(parsed.error.issues.map((issue) => issue.path.join("."))).toEqual(
+      expect.arrayContaining(["counts", "acquisition", "gaps", "evaluatedAt"]),
     );
   });
 
@@ -365,9 +483,7 @@ describe("website knowledge-base finalizer", () => {
       evaluatedAt: "2026-07-30T01:00:00.000Z",
     });
 
-    expect(WEBSITE_KB_FINALIZER_VERSION).toBe(
-      "website-kb-finalizer-v2",
-    );
+    expect(WEBSITE_KB_FINALIZER_VERSION).toBe("website-kb-finalizer-v2");
     expect(first.sha256).toBe(second.sha256);
     expect(first.packageManifestSha256).toBe(
       first.manifest.packageManifestSha256,
@@ -410,9 +526,7 @@ describe("website knowledge-base finalizer", () => {
       leaves.find((document: any) => document.branchId === "02_team"),
     ).toMatchObject({ evidenceStatus: "needs_verification" });
     expect(
-      leaves.find(
-        (document: any) => document.branchId === "05_manufacturing",
-      ),
+      leaves.find((document: any) => document.branchId === "05_manufacturing"),
     ).toMatchObject({ evidenceStatus: "not_applicable" });
     expect(completeness.counts.inferred).toBe(0);
     expect(completeness.counts.totalLeaves).toBe(leaves.length);
@@ -430,9 +544,9 @@ describe("website knowledge-base finalizer", () => {
       "服务与合作",
       "可信优势",
     ]);
-    expect(roundTrip.sections.every((section) => section.leaves.length > 0)).toBe(
-      true,
-    );
+    expect(
+      roundTrip.sections.every((section) => section.leaves.length > 0),
+    ).toBe(true);
     expect(
       roundTrip.sections
         .find((section) => section.title === "产品与服务")

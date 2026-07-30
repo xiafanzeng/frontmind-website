@@ -545,6 +545,12 @@ export type GeoProject = {
   progress: number;
   progressLabel?: string;
   knowledgeBaseRetryAvailable?: boolean;
+  knowledgeBaseAutoRetryAvailable?: boolean;
+  knowledgeBaseRecoveryState?:
+    | "none"
+    | "automatic_in_progress"
+    | "manual_required"
+    | "recovered";
   knowledgeBaseValidationCategory?:
     | "structure"
     | "media"

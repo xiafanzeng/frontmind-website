@@ -2683,6 +2683,22 @@ export function normalizeGeoProject(
         : clampProgress(taskForProgress.progress ?? project.progress),
     progressLabel: currentExecutionMessage,
     knowledgeBaseRetryAvailable: project.knowledgeBaseRetryAvailable === true,
+    knowledgeBaseAutoRetryAvailable:
+      project.knowledgeBaseAutoRetryAvailable === true,
+    knowledgeBaseRecoveryState: (() => {
+      const state = textValue(
+        project.knowledgeBaseRecoveryState,
+        project.knowledge_base_recovery_state,
+      );
+      return [
+        "none",
+        "automatic_in_progress",
+        "manual_required",
+        "recovered",
+      ].includes(state || "")
+        ? (state as GeoProject["knowledgeBaseRecoveryState"])
+        : undefined;
+    })(),
     knowledgeBaseValidationCategory: (() => {
       const category = textValue(
         project.knowledgeBaseValidationCategory,
@@ -3014,6 +3030,7 @@ export async function createGeoCustomQuestion(
 
 export async function retryGeoEnterpriseAnalysis(
   project: GeoProject,
+  trigger: "automatic" | "manual" = "manual",
 ): Promise<GeoProject> {
   const payload = await requestJson(
     `/projects/${encodeURIComponent(project.remoteToken)}/retry`,
@@ -3021,6 +3038,7 @@ export async function retryGeoEnterpriseAnalysis(
       method: "POST",
       body: JSON.stringify({
         input: project.input,
+        trigger,
         attachments: project.files.map((file) => ({
           fileId: file.id,
           filename: file.name,

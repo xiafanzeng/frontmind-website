@@ -9,17 +9,23 @@ const MAX_DECLARED_UNCOMPRESSED_BYTES = 220 * 1024 * 1024;
 const MAX_TEXT_BYTES = 12 * 1024 * 1024;
 const MAX_SINGLE_TEXT_BYTES = 2 * 1024 * 1024;
 const MAX_SINGLE_ASSET_BYTES = 8 * 1024 * 1024;
+const MAX_SINGLE_ENTRY_BYTES = 100 * 1024 * 1024;
 const MAX_COMPRESSION_RATIO = 200;
-const ALLOWED_EXTENSIONS = new Set([
-  ".md",
-  ".json",
-  ".avif",
-  ".gif",
-  ".jpeg",
-  ".jpg",
-  ".png",
-  ".svg",
-  ".webp",
+const UNSAFE_EXTRA_EXTENSIONS = new Set([
+  ".app",
+  ".bat",
+  ".bin",
+  ".cmd",
+  ".com",
+  ".dll",
+  ".dylib",
+  ".exe",
+  ".jar",
+  ".msi",
+  ".ps1",
+  ".scr",
+  ".sh",
+  ".so",
 ]);
 const IMAGE_EXTENSIONS = new Set([
   ".avif",
@@ -192,14 +198,6 @@ function normalizeEntryPath(value: string) {
   return normalized.replace(/\/+$/, "");
 }
 
-function commonWrapper(paths: string[]) {
-  if (!paths.length) return "";
-  const firstSegments = new Set(paths.map((value) => value.split("/")[0]));
-  if (firstSegments.size !== 1) return "";
-  const first = paths[0]!.split("/")[0]!;
-  return paths.every((value) => value.includes("/")) ? `${first}/` : "";
-}
-
 function readLimited(
   entry: JSZip.JSZipObject,
   maxBytes: number,
@@ -219,6 +217,79 @@ function readLimited(
     }
     return bytes;
   });
+}
+
+function decodeUtf8(bytes: Buffer, filename: string) {
+  try {
+    return new TextDecoder("utf-8", { fatal: true }).decode(bytes);
+  } catch {
+    throw new KnowledgeBaseCandidateError(
+      `Candidate text file is not valid UTF-8: ${filename}`,
+      "content",
+    );
+  }
+}
+
+const CORE_CANDIDATE_FILENAMES = new Set([
+  "00_brand_facts.md",
+  "01_customer_draft.md",
+  "02_run.json",
+]);
+
+function candidateRootFor(filePath: string) {
+  const basename = path.posix.basename(filePath).toLowerCase();
+  if (!CORE_CANDIDATE_FILENAMES.has(basename)) return undefined;
+  const dirname = path.posix.dirname(filePath);
+  return dirname === "." ? "" : dirname;
+}
+
+function selectCandidateRoot(files: Array<{ path: string }>) {
+  const roots = new Map<
+    string,
+    { facts: boolean; customer: boolean; run: boolean }
+  >();
+  for (const file of files) {
+    const root = candidateRootFor(file.path);
+    if (root === undefined) continue;
+    const basename = path.posix.basename(file.path).toLowerCase();
+    const current = roots.get(root) || {
+      facts: false,
+      customer: false,
+      run: false,
+    };
+    if (basename === "00_brand_facts.md") current.facts = true;
+    if (basename === "01_customer_draft.md") current.customer = true;
+    if (basename === "02_run.json") current.run = true;
+    roots.set(root, current);
+  }
+  const complete = Array.from(roots.entries()).filter(
+    ([, value]) => value.facts && value.customer,
+  );
+  if (complete.length === 1) return complete[0]![0];
+  if (complete.length > 1) {
+    throw new KnowledgeBaseCandidateError(
+      "Candidate archive contains multiple complete candidate roots",
+      "structure",
+    );
+  }
+  const recoverable = Array.from(roots.entries()).filter(
+    ([, value]) => value.facts || value.customer,
+  );
+  if (recoverable.length === 1) return recoverable[0]![0];
+  if (recoverable.length > 1) {
+    throw new KnowledgeBaseCandidateError(
+      "Candidate archive contains multiple ambiguous candidate roots",
+      "structure",
+    );
+  }
+  throw new KnowledgeBaseCandidateError(
+    "Candidate archive must contain 00_brand_facts.md or 01_customer_draft.md",
+    "structure",
+  );
+}
+
+function relativeCandidatePath(filePath: string, root: string) {
+  return root ? filePath.slice(root.length + 1) : filePath;
 }
 
 function sectionMap(markdown: string) {
@@ -256,7 +327,11 @@ function publicHttpUrl(value: string | undefined) {
   if (!value) return undefined;
   try {
     const url = new URL(value);
-    if (!["http:", "https:"].includes(url.protocol) || url.username || url.password)
+    if (
+      !["http:", "https:"].includes(url.protocol) ||
+      url.username ||
+      url.password
+    )
       return undefined;
     const hostname = url.hostname
       .toLowerCase()
@@ -331,9 +406,7 @@ function sourcesFromMarkdown(markdown: string) {
       normalizedUrl,
     });
   }
-  for (const match of Array.from(
-    markdown.matchAll(/\[上传文件：([^\]]+)]/g),
-  )) {
+  for (const match of Array.from(markdown.matchAll(/\[上传文件：([^\]]+)]/g))) {
     sources.push({
       title: match[1]!.trim(),
       kind: "user_upload",
@@ -430,9 +503,7 @@ function canonicalMarkdown(
     .map((heading) => {
       const key = typeof heading === "string" ? heading : heading[0];
       const title =
-        typeof heading === "string"
-          ? heading
-          : `${heading[0]} ${heading[1]}`;
+        typeof heading === "string" ? heading : `${heading[0]} ${heading[1]}`;
       return `## ${title}\n\n${sections.get(key) || gapFor(title)}`;
     })
     .join("\n\n");
@@ -478,51 +549,42 @@ export async function parseKnowledgeBaseCandidate(
       "unsafe",
     );
   }
-  const files = entries
-    .filter((entry) => !entry.dir)
-    .map((entry) => {
-      const originalName = (
-        entry as JSZip.JSZipObject & { unsafeOriginalName?: string }
-      ).unsafeOriginalName;
-      const normalizedPath = normalizeEntryPath(originalName || entry.name);
-      const permissions =
-        typeof entry.unixPermissions === "number"
-          ? entry.unixPermissions
-          : Number.parseInt(String(entry.unixPermissions || ""), 8);
-      if (
-        Number.isFinite(permissions) &&
-        (permissions & 0o170000) === 0o120000
-      ) {
-        throw new KnowledgeBaseCandidateError(
-          `Candidate archive contains a symbolic link: ${normalizedPath}`,
-          "unsafe",
-        );
-      }
-      const uncompressed = declaredEntrySize(entry);
-      const compressed = declaredCompressedEntrySize(entry);
-      if (
-        uncompressed > 1024 * 1024 &&
-        compressed > 0 &&
-        uncompressed / compressed > MAX_COMPRESSION_RATIO
-      ) {
-        throw new KnowledgeBaseCandidateError(
-          `Candidate entry has an unsafe compression ratio: ${normalizedPath}`,
-          "unsafe",
-        );
-      }
-      return { entry, path: normalizedPath };
-    })
-    .filter(
-      (file) =>
-        !file.path.startsWith("__MACOSX/") &&
-        path.posix.basename(file.path) !== ".DS_Store",
-    );
-  const wrapper = commonWrapper(files.map((file) => file.path));
-  const normalizedFiles = files.map((file) => ({
-    ...file,
-    path: wrapper ? file.path.slice(wrapper.length) : file.path,
-  }));
-  const pathKeys = normalizedFiles.map((file) =>
+  const scannedEntries = entries.map((entry) => {
+    const originalName = (
+      entry as JSZip.JSZipObject & { unsafeOriginalName?: string }
+    ).unsafeOriginalName;
+    const normalizedPath = normalizeEntryPath(originalName || entry.name);
+    const permissions =
+      typeof entry.unixPermissions === "number"
+        ? entry.unixPermissions
+        : Number.parseInt(String(entry.unixPermissions || ""), 8);
+    if (Number.isFinite(permissions) && (permissions & 0o170000) === 0o120000) {
+      throw new KnowledgeBaseCandidateError(
+        `Candidate archive contains a symbolic link: ${normalizedPath}`,
+        "unsafe",
+      );
+    }
+    const uncompressed = declaredEntrySize(entry);
+    const compressed = declaredCompressedEntrySize(entry);
+    if (uncompressed > MAX_SINGLE_ENTRY_BYTES) {
+      throw new KnowledgeBaseCandidateError(
+        `Candidate entry is too large: ${normalizedPath}`,
+        "unsafe",
+      );
+    }
+    if (
+      uncompressed > 1024 * 1024 &&
+      compressed > 0 &&
+      uncompressed / compressed > MAX_COMPRESSION_RATIO
+    ) {
+      throw new KnowledgeBaseCandidateError(
+        `Candidate entry has an unsafe compression ratio: ${normalizedPath}`,
+        "unsafe",
+      );
+    }
+    return { entry, path: normalizedPath };
+  });
+  const pathKeys = scannedEntries.map((file) =>
     file.path.normalize("NFKC").toLowerCase(),
   );
   if (new Set(pathKeys).size !== pathKeys.length) {
@@ -531,33 +593,26 @@ export async function parseKnowledgeBaseCandidate(
       "unsafe",
     );
   }
-  for (const file of normalizedFiles) {
+  for (const file of scannedEntries) {
+    if (file.entry.dir) continue;
     const extension = path.posix.extname(file.path).toLowerCase();
-    if (!ALLOWED_EXTENSIONS.has(extension)) {
+    if (UNSAFE_EXTRA_EXTENSIONS.has(extension)) {
       throw new KnowledgeBaseCandidateError(
-        `Candidate archive contains an unsupported file: ${file.path}`,
+        `Candidate archive contains an unsafe executable file: ${file.path}`,
         "unsafe",
       );
     }
-    if (
-      [".md", ".json"].includes(extension) &&
-      ![
-        "00_brand_facts.md",
-        "01_customer_draft.md",
-        "02_run.json",
-      ].includes(file.path)
-    ) {
-      throw new KnowledgeBaseCandidateError(
-        `Candidate archive contains an unexpected text file: ${file.path}`,
-        "structure",
-      );
-    }
   }
-  const declaredTextBytes = normalizedFiles
+  const files = scannedEntries
+    .filter((file) => !file.entry.dir)
+    .filter(
+      (file) =>
+        !file.path.startsWith("__MACOSX/") &&
+        path.posix.basename(file.path) !== ".DS_Store",
+    );
+  const declaredTextBytes = files
     .filter((file) =>
-      [".md", ".json"].includes(
-        path.posix.extname(file.path).toLowerCase(),
-      ),
+      [".md", ".json"].includes(path.posix.extname(file.path).toLowerCase()),
     )
     .reduce((total, file) => total + declaredEntrySize(file.entry), 0);
   if (declaredTextBytes > MAX_TEXT_BYTES) {
@@ -566,15 +621,20 @@ export async function parseKnowledgeBaseCandidate(
       "unsafe",
     );
   }
-  const byPath = new Map(normalizedFiles.map((file) => [file.path, file.entry]));
+  const candidateRoot = selectCandidateRoot(files);
+  const candidateFiles = files
+    .filter((file) =>
+      candidateRoot ? file.path.startsWith(`${candidateRoot}/`) : true,
+    )
+    .map((file) => ({
+      ...file,
+      path: relativeCandidatePath(file.path, candidateRoot),
+    }));
+  const byPath = new Map(
+    candidateFiles.map((file) => [file.path.toLowerCase(), file.entry]),
+  );
   const factsEntry = byPath.get("00_brand_facts.md");
   const customerEntry = byPath.get("01_customer_draft.md");
-  if (!factsEntry && !customerEntry) {
-    throw new KnowledgeBaseCandidateError(
-      "Candidate archive must contain 00_brand_facts.md or 01_customer_draft.md",
-      "structure",
-    );
-  }
   const [factsBytes, customerBytes] = await Promise.all([
     factsEntry
       ? readLimited(factsEntry, MAX_SINGLE_TEXT_BYTES)
@@ -589,15 +649,47 @@ export async function parseKnowledgeBaseCandidate(
       "unsafe",
     );
   }
-  const rawFactsMarkdown = factsBytes.toString("utf8");
-  const rawCustomerMarkdown = customerBytes.toString("utf8");
+  const diagnostics: string[] = [];
+  let rawFactsMarkdown = "";
+  let rawCustomerMarkdown = "";
+  if (factsEntry) {
+    try {
+      rawFactsMarkdown = decodeUtf8(factsBytes, "00_brand_facts.md");
+    } catch {
+      diagnostics.push("Recovered unreadable 00_brand_facts.md");
+    }
+  }
+  if (customerEntry) {
+    try {
+      rawCustomerMarkdown = decodeUtf8(customerBytes, "01_customer_draft.md");
+    } catch {
+      diagnostics.push("Recovered unreadable 01_customer_draft.md");
+    }
+  }
+  if (!rawFactsMarkdown.trim() && !rawCustomerMarkdown.trim()) {
+    throw new KnowledgeBaseCandidateError(
+      "Candidate archive does not contain readable Markdown content",
+      "content",
+    );
+  }
   const rawFactSections = sectionMap(rawFactsMarkdown);
   const rawCustomerSections = sectionMap(rawCustomerMarkdown);
   const factSections = new Map<string, string>();
   const customerSections = new Map<string, string>();
-  const diagnostics: string[] = [];
+  diagnostics.push(
+    candidateRoot
+      ? `Selected candidate root: ${candidateRoot}`
+      : "Selected candidate root: /",
+  );
+  const ignoredFileCount = files.length - candidateFiles.length;
+  if (ignoredFileCount > 0) {
+    diagnostics.push(
+      `Ignored ${ignoredFileCount} file(s) outside candidate root`,
+    );
+  }
   if (!factsEntry) diagnostics.push("Recovered missing 00_brand_facts.md");
-  if (!customerEntry) diagnostics.push("Recovered missing 01_customer_draft.md");
+  if (!customerEntry)
+    diagnostics.push("Recovered missing 01_customer_draft.md");
   for (const [id, title] of FACT_DIMENSIONS) {
     const key = requiredHeading(rawFactSections, `${id} ${title}`, [
       `${id}-${title}`,
@@ -631,14 +723,17 @@ export async function parseKnowledgeBaseCandidate(
   }
 
   const factsMarkdown = canonicalMarkdown(FACT_DIMENSIONS, factSections);
-  const customerMarkdown = canonicalMarkdown(CUSTOMER_SECTIONS, customerSections);
+  const customerMarkdown = canonicalMarkdown(
+    CUSTOMER_SECTIONS,
+    customerSections,
+  );
   let run: CandidateRun | undefined;
   const runEntry = byPath.get("02_run.json");
   if (runEntry) {
     try {
       const runBytes = await readLimited(runEntry, MAX_SINGLE_TEXT_BYTES);
       const parsed = CandidateRunSchema.safeParse(
-        JSON.parse(runBytes.toString("utf8")),
+        JSON.parse(decodeUtf8(runBytes, "02_run.json")),
       );
       if (parsed.success) run = parsed.data;
       else diagnostics.push("02_run.json did not match candidate schema");
@@ -655,14 +750,16 @@ export async function parseKnowledgeBaseCandidate(
     ...sourcesFromMarkdown(factsMarkdown),
     ...sourcesFromMarkdown(customerMarkdown),
   ]);
-  const assetMetadata = new Map(
-    (run?.assets || []).map((asset) => [
-      normalizeEntryPath(asset.path).toLowerCase(),
-      asset,
-    ]),
-  );
+  const assetMetadata = new Map<string, CandidateAsset>();
+  for (const asset of run?.assets || []) {
+    try {
+      assetMetadata.set(normalizeEntryPath(asset.path).toLowerCase(), asset);
+    } catch {
+      diagnostics.push("Ignored invalid logo path in 02_run.json");
+    }
+  }
   const assets: ParsedCandidate["assets"] = [];
-  for (const file of normalizedFiles) {
+  for (const file of candidateFiles) {
     const extension = path.posix.extname(file.path).toLowerCase();
     if (!IMAGE_EXTENSIONS.has(extension)) continue;
     if (!/^assets\/logo\.(?:avif|gif|jpe?g|png|svg|webp)$/i.test(file.path)) {
@@ -671,7 +768,9 @@ export async function parseKnowledgeBaseCandidate(
     }
     const metadata = assetMetadata.get(file.path.toLowerCase());
     if (!metadata) {
-      diagnostics.push(`Ignored image without 02_run.json metadata: ${file.path}`);
+      diagnostics.push(
+        `Ignored image without 02_run.json metadata: ${file.path}`,
+      );
       continue;
     }
     if (metadata.type !== "brand_identity") {

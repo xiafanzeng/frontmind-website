@@ -1142,9 +1142,7 @@ describe("GEO API", () => {
       }),
     );
     const v2Server = app.listen(0);
-    await new Promise<void>((resolve) =>
-      v2Server.once("listening", resolve),
-    );
+    await new Promise<void>((resolve) => v2Server.once("listening", resolve));
     try {
       const origin = `http://127.0.0.1:${(v2Server.address() as AddressInfo).port}`;
       const invited = await fetch(`${origin}/api/geo/invite/verify`, {
@@ -1187,7 +1185,9 @@ describe("GEO API", () => {
       expect(polled.status).toBe(200);
       const completed = (await polled.json()) as Record<string, any>;
       expect(completed).toMatchObject({
-        project: { archive: { downloadUrl: expect.stringContaining("/archive") } },
+        project: {
+          archive: { downloadUrl: expect.stringContaining("/archive") },
+        },
       });
       expect(completed.project.knowledgeBase.sections).toHaveLength(7);
       expect(completed.projectToken).not.toBe(initial.projectToken);
@@ -1240,6 +1240,161 @@ describe("GEO API", () => {
         v2Server.close((error) => (error ? reject(error) : resolve())),
       );
     }
+  });
+
+  it("selects the fixed candidate ZIP when the assistant returns multiple archives", async () => {
+    const wrong = new JSZip();
+    wrong.file("notes.md", "not a candidate");
+    broker.uploads.set(
+      "generic-archive",
+      await wrong.generateAsync({ type: "nodebuffer" }),
+    );
+    broker.uploads.set("fixed-candidate", broker.archive);
+    const { cookie } = await verifyInvite();
+    const created = await jsonRequest("/projects", cookie, {
+      method: "POST",
+      body: { input: "Acme", attachments: [] },
+    });
+    const initial = created.body as Record<string, any>;
+    broker.tasks.set("kb-1", {
+      id: "kb-1",
+      status: "completed",
+      output: [
+        {
+          role: "assistant",
+          content: [
+            {
+              type: "output_file",
+              file_id: "generic-archive",
+              filename: "research-workspace.zip",
+            },
+            {
+              type: "output_file",
+              file_id: "fixed-candidate",
+              filename: "website-lead-candidate-v1.zip",
+            },
+          ],
+        },
+      ],
+    });
+
+    const completed = await jsonRequest(
+      `/projects/${encodeURIComponent(initial.projectToken)}`,
+      cookie,
+    );
+    expect(completed.response.status).toBe(200);
+    expect((completed.body as any).project.knowledgeBase.sections).toHaveLength(
+      7,
+    );
+    const tokenValue = new GeoTokenCodec(
+      "test-session-secret-at-least-16-characters",
+    ).open<any>((completed.body as any).projectToken, "project").value;
+    expect(tokenValue.knowledgeBaseArtifact.candidate.fileId).toBe(
+      "fixed-candidate",
+    );
+  });
+
+  it("fails closed when the explicitly named candidate ZIP is unsafe", async () => {
+    const unsafe = new JSZip();
+    unsafe.file("../outside.md", "unsafe");
+    broker.uploads.set(
+      "unsafe-candidate",
+      await unsafe.generateAsync({ type: "nodebuffer" }),
+    );
+    broker.uploads.set("generic-valid", broker.archive);
+    const { cookie } = await verifyInvite();
+    const created = await jsonRequest("/projects", cookie, {
+      method: "POST",
+      body: { input: "Acme", attachments: [] },
+    });
+    const initial = created.body as Record<string, any>;
+    broker.tasks.set("kb-1", {
+      id: "kb-1",
+      status: "completed",
+      output: [
+        {
+          role: "assistant",
+          content: [
+            {
+              type: "output_file",
+              file_id: "generic-valid",
+              filename: "fallback.zip",
+            },
+            {
+              type: "output_file",
+              file_id: "unsafe-candidate",
+              filename: "website-lead-candidate-v1.zip",
+            },
+          ],
+        },
+      ],
+    });
+
+    const rejected = await jsonRequest(
+      `/projects/${encodeURIComponent(initial.projectToken)}`,
+      cookie,
+    );
+    expect(rejected.response.status).toBe(200);
+    expect(rejected.body).toMatchObject({
+      project: {
+        status: "failed",
+        knowledgeBaseValidationCategory: "unsafe",
+        knowledgeBaseRetryAvailable: false,
+      },
+    });
+    expect((rejected.body as any).project.knowledgeBase).toBeUndefined();
+  });
+
+  it("continues to a generic ZIP after a named candidate has only a structural mismatch", async () => {
+    const structurallyInvalid = new JSZip();
+    structurallyInvalid.file("02_run.json", '{"schemaVersion":1}');
+    broker.uploads.set(
+      "named-invalid",
+      await structurallyInvalid.generateAsync({ type: "nodebuffer" }),
+    );
+    broker.uploads.set("generic-valid", broker.archive);
+    const { cookie } = await verifyInvite();
+    const created = await jsonRequest("/projects", cookie, {
+      method: "POST",
+      body: { input: "Acme", attachments: [] },
+    });
+    const initial = created.body as Record<string, any>;
+    broker.tasks.set("kb-1", {
+      id: "kb-1",
+      status: "completed",
+      output: [
+        {
+          role: "assistant",
+          content: [
+            {
+              type: "output_file",
+              file_id: "named-invalid",
+              filename: "knowledge-base-candidate-draft.zip",
+            },
+            {
+              type: "output_file",
+              file_id: "generic-valid",
+              filename: "final-output.zip",
+            },
+          ],
+        },
+      ],
+    });
+
+    const completed = await jsonRequest(
+      `/projects/${encodeURIComponent(initial.projectToken)}`,
+      cookie,
+    );
+    expect(completed.response.status).toBe(200);
+    expect((completed.body as any).project.knowledgeBase.sections).toHaveLength(
+      7,
+    );
+    const tokenValue = new GeoTokenCodec(
+      "test-session-secret-at-least-16-characters",
+    ).open<any>((completed.body as any).projectToken, "project").value;
+    expect(tokenValue.knowledgeBaseArtifact.candidate.fileId).toBe(
+      "generic-valid",
+    );
   });
 
   it("uses ZIP validation as a gate for preview, recommendation, and download", async () => {
@@ -1350,7 +1505,12 @@ describe("GEO API", () => {
     );
     expect(automatic.response.status).toBe(200);
     expect(automatic.body).toMatchObject({
-      project: { status: "running", kbTask: { status: "running" } },
+      project: {
+        status: "running",
+        kbTask: { status: "running" },
+        knowledgeBaseAutoRetryAvailable: false,
+        knowledgeBaseRecoveryState: "automatic_in_progress",
+      },
     });
     expect(broker.prompts).toHaveLength(2);
     const automaticPayload = automatic.body as Record<string, any>;
@@ -1363,6 +1523,11 @@ describe("GEO API", () => {
     expect(automaticTokenValue).toMatchObject({
       knowledgeBaseTaskId: "kb-2",
       knowledgeBaseAutomaticRetryUsed: true,
+      knowledgeBaseRecovery: {
+        automaticSourceTaskId: "kb-1",
+        automaticResult: "submitted",
+        automaticAttemptedAt: expect.any(String),
+      },
       previousKnowledgeBaseTaskIds: ["kb-1"],
     });
 
@@ -1392,10 +1557,11 @@ describe("GEO API", () => {
         status: "failed",
         knowledgeBaseValidationCategory: "structure",
         knowledgeBaseRetryAvailable: true,
+        knowledgeBaseAutoRetryAvailable: false,
+        knowledgeBaseRecoveryState: "manual_required",
         kbTask: {
           status: "failed",
-          error:
-            "知识库候选文件暂未完成安全整理，可在当前项目中重新生成。",
+          error: "知识库候选文件暂未完成安全整理，可在当前项目中重新生成。",
         },
       },
     });
@@ -1404,6 +1570,81 @@ describe("GEO API", () => {
     expect(JSON.stringify(failed.body)).not.toContain(
       "Candidate archive must contain",
     );
+    const failedTokenValue = new GeoTokenCodec(
+      "test-session-secret-at-least-16-characters",
+    ).open<Record<string, any>>(
+      (failed.body as Record<string, any>).projectToken,
+      "project",
+    ).value;
+    expect(failedTokenValue.knowledgeBaseRecovery).toMatchObject({
+      automaticSourceTaskId: "kb-1",
+      automaticResult: "failed",
+      automaticAttemptedAt: expect.any(String),
+    });
+  });
+
+  it("persists one automatic retry decision and requires manual recovery after it fails", async () => {
+    const { cookie } = await verifyInvite();
+    const created = await jsonRequest("/projects", cookie, {
+      method: "POST",
+      body: { input: "Acme", attachments: [] },
+    });
+    const initial = created.body as Record<string, any>;
+    broker.tasks.set("kb-1", {
+      id: "kb-1",
+      status: "failed",
+      error: { message: "upstream failed" },
+    });
+
+    const automatic = await jsonRequest(
+      `/projects/${encodeURIComponent(initial.projectToken)}/retry`,
+      cookie,
+      {
+        method: "POST",
+        body: {
+          input: "Acme",
+          attachments: [],
+          trigger: "automatic",
+        },
+      },
+    );
+    expect(automatic.response.status).toBe(201);
+    const automaticPayload = automatic.body as Record<string, any>;
+    expect(automaticPayload.project).toMatchObject({
+      status: "running",
+      knowledgeBaseAutoRetryAvailable: false,
+      knowledgeBaseRecoveryState: "automatic_in_progress",
+    });
+    expect(broker.prompts).toHaveLength(2);
+
+    broker.tasks.set("kb-2", {
+      id: "kb-2",
+      status: "failed",
+      error: { message: "automatic retry failed" },
+    });
+    const replay = await jsonRequest(
+      `/projects/${encodeURIComponent(automaticPayload.projectToken)}/retry`,
+      cookie,
+      {
+        method: "POST",
+        body: {
+          input: "Acme",
+          attachments: [],
+          trigger: "automatic",
+        },
+      },
+    );
+    expect(replay.response.status).toBe(200);
+    expect(replay.body).toMatchObject({
+      project: {
+        status: "failed",
+        knowledgeBaseRetryAvailable: true,
+        knowledgeBaseAutoRetryAvailable: false,
+        knowledgeBaseRecoveryState: "manual_required",
+      },
+    });
+    expect(broker.prompts).toHaveLength(2);
+    expect(broker.tasks.has("kb-3")).toBe(false);
   });
 
   it("rejects tampered project and upload tokens", async () => {
@@ -2100,8 +2341,7 @@ describe("GEO API", () => {
       knowledgeBaseRetryAvailable: true,
       kbTask: {
         status: "failed",
-        error:
-          "知识库候选文件暂未完成安全整理，可在当前项目中重新生成。",
+        error: "知识库候选文件暂未完成安全整理，可在当前项目中重新生成。",
       },
     });
 
@@ -2832,7 +3072,9 @@ describe("GEO API", () => {
       "Base 模型只提取事实四分类、schema 要求的逐项 confidence 和 0-1 原始指标",
     );
     const assessmentAttachments = broker.taskAttachments.at(-1)!;
-    expect(assessmentAttachments.map((attachment) => attachment.filename)).toEqual([
+    expect(
+      assessmentAttachments.map((attachment) => attachment.filename),
+    ).toEqual([
       "geo-knowledge-answer-verifier.skill.zip",
       "geo-current-state-evaluator.skill.zip",
       "Acme_website_lead_knowledge_base.zip",

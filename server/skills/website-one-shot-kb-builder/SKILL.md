@@ -26,7 +26,7 @@ creates the final schema-v3 archive and all frontend manifests.
 2. Research the company breadth-first, prioritizing official company and
    product text.
 3. Write the two fixed Markdown files.
-4. Run `scripts/build_candidate.py` and attach its single output ZIP.
+4. Run `scripts/build_candidate.py` and attach its single validated output ZIP.
 
 Read `references/dimensions.md` completely before research. It defines the S1
 fact checklist, product-depth requirements, source priority, and publication
@@ -92,13 +92,15 @@ metadata/logo, then run:
 ```bash
 python3 scripts/build_candidate.py \
   --input-dir ./candidate \
-  --output ./company_knowledge_base_candidate.zip
+  --output ./website-lead-candidate-v1.zip
 ```
 
 The script validates all 13 fact headings, all seven customer headings,
-evidence markers, optional metadata, and the logo-only rule. Fix any reported
-error and rerun it.
+evidence markers, optional metadata, the logo-only rule, deterministic ZIP
+metadata, and the written ZIP by reopening it. Fix any reported error and
+rerun it. Never hand-compress the working directory.
 
-Return exactly one candidate ZIP. Do not create final directories, completeness
-files, package manifests, status counts, hashes, evidence-document links, or a
-schema-v3 archive.
+Return exactly one file named `website-lead-candidate-v1.zip`. Do not attach a
+Skill ZIP, working directory, cache, source-page export, log, or second archive.
+Do not create final directories, completeness files, package manifests, status
+counts, hashes, evidence-document links, or a schema-v3 archive.
