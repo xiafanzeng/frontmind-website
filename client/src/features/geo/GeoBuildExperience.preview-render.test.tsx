@@ -656,7 +656,7 @@ describe("GEO style preview rendering", () => {
     expect(html.match(/已访问 12 个链接/g)).toHaveLength(1);
   });
 
-  it("only offers an authorized question retry and locks it in flight", () => {
+  it("does not offer a question retry even for a legacy retry flag", () => {
     const project = {
       ...createGeoStylePreviewProject(),
       preview: undefined,
@@ -678,13 +678,12 @@ describe("GEO style preview rendering", () => {
     );
 
     expect(html).toContain("问题推荐未能完成");
-    expect(html).toContain("正在重新生成");
-    expect(html).toContain("disabled");
-    expect(html).toContain('aria-busy="true"');
-    expect(html).not.toContain("联系技术支持");
+    expect(html).toContain("联系技术支持");
+    expect(html).not.toContain(">重新生成<");
+    expect(html).not.toContain("正在重新生成");
   });
 
-  it("replaces an exhausted question retry with technical support", () => {
+  it("offers technical support for a failed single question run", () => {
     const project = {
       ...createGeoStylePreviewProject(),
       preview: undefined,

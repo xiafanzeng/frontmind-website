@@ -3,7 +3,6 @@ import {
   findArchiveDescriptor,
   normalizeTask,
   parseQuestionSetFromTask,
-  questionSetValidationSummaryFromTask,
 } from "./output";
 import { buildValidQuestionSet } from "./question-set.test-fixture";
 
@@ -67,11 +66,11 @@ describe("GEO task output normalization", () => {
 
   it("parses strict question JSON from a fenced assistant response", () => {
     const parsed = parseQuestionSetFromTask({
-        output: [
-          {
-            role: "assistant",
-            content: [
-              { text: `\`\`\`json\n${JSON.stringify(questionSet())}\n\`\`\`` },
+      output: [
+        {
+          role: "assistant",
+          content: [
+            { text: `\`\`\`json\n${JSON.stringify(questionSet())}\n\`\`\`` },
           ],
         },
       ],
@@ -103,25 +102,167 @@ describe("GEO task output normalization", () => {
     ).toBeNull();
   });
 
-  it("reports exact safe schema issues for a completed but invalid recommendation", () => {
-    const invalid = questionSet();
-    invalid.questions[0] = {
-      ...invalid.questions[0],
-      question: "Acme 未来准备做什么？",
-    };
-    const task = {
-      output: [
-        {
-          role: "assistant",
-          content: [{ text: JSON.stringify(invalid) }],
-        },
-      ],
+  it("rejects generated questions containing a comma", () => {
+    const indirect = questionSet();
+    indirect.questions[0] = {
+      ...indirect.questions[0],
+      question: "Acme 的企业背景如何，团队是否可靠？",
     };
 
-    expect(parseQuestionSetFromTask(task)).toBeNull();
-    expect(questionSetValidationSummaryFromTask(task)).toContain(
-      "questions[0].question: reputation question must express",
+    expect(
+      parseQuestionSetFromTask({
+        output: [
+          {
+            role: "assistant",
+            content: [{ text: JSON.stringify(indirect) }],
+          },
+        ],
+      }),
+    ).toBeNull();
+  });
+
+  it("requires all five explicit competitor-brand comparisons", () => {
+    const genericComparisons = questionSet();
+    for (const item of genericComparisons.questions.filter(
+      (question) => question.category === "competitor_comparison",
+    )) {
+      delete item.competitorAnchor;
+    }
+
+    expect(
+      parseQuestionSetFromTask({
+        output: [
+          {
+            role: "assistant",
+            content: [{ text: JSON.stringify(genericComparisons) }],
+          },
+        ],
+      }),
+    ).toBeNull();
+  });
+
+  it("requires the declared competitor brand in the visible question", () => {
+    const missingAnchor = questionSet();
+    const comparison = missingAnchor.questions.find(
+      (question) => question.category === "competitor_comparison",
     );
+    if (!comparison) throw new Error("missing comparison fixture");
+    comparison.competitorAnchor = "未出现在题面中的品牌";
+
+    expect(
+      parseQuestionSetFromTask({
+        output: [
+          {
+            role: "assistant",
+            content: [{ text: JSON.stringify(missingAnchor) }],
+          },
+        ],
+      }),
+    ).toBeNull();
+  });
+
+  it("accepts a natural 有何不同 competitor question", () => {
+    const naturalComparison = questionSet();
+    const comparison = naturalComparison.questions.find(
+      (question) => question.category === "competitor_comparison",
+    );
+    if (!comparison) throw new Error("missing comparison fixture");
+    comparison.question = comparison.question.replace(
+      "有什么区别",
+      "有何不同",
+    );
+
+    expect(
+      parseQuestionSetFromTask({
+        output: [
+          {
+            role: "assistant",
+            content: [{ text: JSON.stringify(naturalComparison) }],
+          },
+        ],
+      }),
+    ).not.toBeNull();
+  });
+
+  it("requires a competitor brand in every comparison", () => {
+    const missingCompetitor = questionSet();
+    const comparison = missingCompetitor.questions.find(
+      (question) => question.category === "competitor_comparison",
+    );
+    if (!comparison) throw new Error("missing comparison fixture");
+    delete comparison.competitorAnchor;
+
+    expect(
+      parseQuestionSetFromTask({
+        output: [
+          {
+            role: "assistant",
+            content: [{ text: JSON.stringify(missingCompetitor) }],
+          },
+        ],
+      }),
+    ).toBeNull();
+  });
+
+  it("requires the current enterprise in every competitor comparison", () => {
+    const missingEnterprise = questionSet();
+    const comparison = missingEnterprise.questions.find(
+      (question) => question.category === "competitor_comparison",
+    );
+    if (!comparison) throw new Error("missing comparison fixture");
+    delete comparison.enterpriseAnchor;
+
+    expect(
+      parseQuestionSetFromTask({
+        output: [
+          {
+            role: "assistant",
+            content: [{ text: JSON.stringify(missingEnterprise) }],
+          },
+        ],
+      }),
+    ).toBeNull();
+  });
+
+  it("rejects the current enterprise as its own competitor", () => {
+    const selfComparison = questionSet();
+    const comparison = selfComparison.questions.find(
+      (question) => question.category === "competitor_comparison",
+    );
+    if (!comparison) throw new Error("missing comparison fixture");
+    comparison.competitorAnchor = comparison.enterpriseAnchor;
+
+    expect(
+      parseQuestionSetFromTask({
+        output: [
+          {
+            role: "assistant",
+            content: [{ text: JSON.stringify(selfComparison) }],
+          },
+        ],
+      }),
+    ).toBeNull();
+  });
+
+  it("does not count a generic alternative as a competitor brand", () => {
+    const genericAnchor = questionSet();
+    const comparison = genericAnchor.questions.find(
+      (question) => question.category === "competitor_comparison",
+    );
+    if (!comparison) throw new Error("missing comparison fixture");
+    comparison.question = comparison.question.replace("云杉科技", "同类平台");
+    comparison.competitorAnchor = "同类平台";
+
+    expect(
+      parseQuestionSetFromTask({
+        output: [
+          {
+            role: "assistant",
+            content: [{ text: JSON.stringify(genericAnchor) }],
+          },
+        ],
+      }),
+    ).toBeNull();
   });
 
   it("does not parse question JSON injected through user output or metadata", () => {

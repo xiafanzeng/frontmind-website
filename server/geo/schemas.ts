@@ -28,12 +28,16 @@ export const GeoQuestionSchema = z
       .string()
       .min(4)
       .max(120)
+      .refine((value) => !/[,，]/.test(value), {
+        message: "question must be one direct sentence without commas",
+      })
       .refine((value) => value.endsWith("？"), {
         message: "question must end with a Chinese question mark",
       }),
     rationale: z.string().min(8).max(240),
     enterpriseAnchor: z.string().trim().min(2).max(120).optional(),
     offeringAnchor: z.string().trim().min(2).max(120).optional(),
+    competitorAnchor: z.string().trim().min(2).max(120).optional(),
     qaIntent: ProductQaIntentSchema.optional(),
     evidenceRefs: z.array(z.string().min(3).max(300)).min(1).max(8),
     selectable: z.boolean(),
@@ -71,12 +75,23 @@ function questionContainsAnchor(question: string, anchor: string) {
   );
 }
 
+const GENERIC_COMPETITOR_ANCHOR_PATTERN =
+  /^(?:竞品[甲乙丙丁一二三四五\d]*|(?:同类|其他|传统|原生|自建|替代|第三方|开源|主流|类似)(?:产品|平台|方案|工具|接口|集群|服务|厂商|品牌|公司)?|竞品|对手|友商)$/i;
+
+function isExplicitCompetitorBrand(anchor: string) {
+  return !GENERIC_COMPETITOR_ANCHOR_PATTERN.test(
+    anchor.normalize("NFKC").replace(/\s+/g, "").trim(),
+  );
+}
+
 const FORBIDDEN_GENERATED_QUESTION_PATTERN =
   /\b(?:reputation|product_scenario|industry_ranking|competitor_comparison)\b|第\s*(?:\d+|[一二三四五六七八九十]+)\s*个(?:问题|问句)|测试问题|值得优化吗/i;
-const REPUTATION_INTENT_PATTERN =
-  /(?:背景|团队|资质|认证|专利|合规|安全|可靠|稳定|口碑|评价|声誉|客户|案例|交付|售后|服务|风险|投诉|正规|官方|认可|信任|可信|质量|融资|荣誉|实力|核验|证据|证书|奖项|主办方|隐私|个人信息|联系表单|cookie|数据处理|同意|访问|更正|删除|法定主体|注册地|办公所在地|身份)/i;
+const REPUTATION_JUDGMENT_PATTERN =
+  /(?:怎么样|好不好|好吗|靠谱吗|靠不靠谱|可靠吗|稳不稳定|稳定吗|安全(?:吗|性如何)|正规吗|可信(?:吗|度如何)|值得信赖吗|是否(?:值得信赖|可信|可靠|稳定|安全|正规)|是不是(?:正规|官方|正品|可信|可靠|安全)|口碑(?:如何|怎么样|好吗)|评价(?:如何|怎么样)|如何评价|售后(?:服务)?(?:如何|怎么样|好吗)|投诉(?:多吗|严重吗)|风险(?:高吗|大吗)|满意(?:吗|度如何))/;
+const REPUTATION_FACT_RETRIEVAL_PATTERN =
+  /(?:背景是什么|什么背景|成立时间|创立时间|有哪些(?:资质|认证|专利|奖项|渠道)|获得了哪些|如何验证|如何核验|怎么验证|怎么核验|提供哪些(?:渠道|服务|支持))/;
 const COMPETITOR_COMPARISON_PATTERN =
-  /(?:对比|相比|比较|区别|差异|相较|取舍|还是|同类|传统方案|传统工具|自建|替代|(?:与|和|跟).+(?:哪个|哪种更适合|分别适合|分别用于|各自适合|适合什么(?:样的)?需求|如何选择)|vs)/i;
+  /(?:对比|相比|比较|区别|差异|不同|相较|取舍|还是|同类|传统方案|传统工具|自建|替代|与.+哪个|和.+哪个|vs)/i;
 
 function normalizeGeneratedQuestion(value: string) {
   return value
@@ -88,11 +103,13 @@ function normalizeGeneratedQuestion(value: string) {
     );
 }
 
-function questionTemplateSkeleton(
-  item: z.infer<typeof GeoQuestionSchema>,
-) {
+function questionTemplateSkeleton(item: z.infer<typeof GeoQuestionSchema>) {
   let skeleton = normalizeGeneratedQuestion(item.question);
-  for (const anchor of [item.enterpriseAnchor, item.offeringAnchor]) {
+  for (const anchor of [
+    item.enterpriseAnchor,
+    item.offeringAnchor,
+    item.competitorAnchor,
+  ]) {
     if (!anchor) continue;
     const normalizedAnchor = normalizeGeneratedQuestion(anchor);
     if (normalizedAnchor) skeleton = skeleton.split(normalizedAnchor).join("");
@@ -203,16 +220,35 @@ export const GeoQuestionSetSchema = z
         });
       }
 
-      if (
-        item.category === "reputation" &&
-        !REPUTATION_INTENT_PATTERN.test(item.question)
-      ) {
-        context.addIssue({
-          code: "custom",
-          message:
-            "reputation question must express a trust, credibility, delivery, service, or risk-check intent",
-          path: ["questions", index, "question"],
-        });
+      if (item.category === "reputation") {
+        if (!item.enterpriseAnchor) {
+          context.addIssue({
+            code: "custom",
+            message:
+              "reputation question must declare the current enterprise or brand anchor",
+            path: ["questions", index, "enterpriseAnchor"],
+          });
+        } else if (
+          !questionContainsAnchor(item.question, item.enterpriseAnchor)
+        ) {
+          context.addIssue({
+            code: "custom",
+            message: "reputation question must contain its enterpriseAnchor",
+            path: ["questions", index, "question"],
+          });
+        }
+
+        if (
+          !REPUTATION_JUDGMENT_PATTERN.test(item.question) ||
+          REPUTATION_FACT_RETRIEVAL_PATTERN.test(item.question)
+        ) {
+          context.addIssue({
+            code: "custom",
+            message:
+              "reputation question must be a direct reputation judgment such as reliable, stable, safe, service quality, or customer reputation",
+            path: ["questions", index, "question"],
+          });
+        }
       }
 
       if (
@@ -236,6 +272,77 @@ export const GeoQuestionSetSchema = z
           message:
             "competitor_comparison question must express a concrete comparison or trade-off",
           path: ["questions", index, "question"],
+        });
+      }
+
+      if (item.category === "competitor_comparison") {
+        if (!item.enterpriseAnchor) {
+          context.addIssue({
+            code: "custom",
+            message:
+              "competitor comparison must declare the current enterprise or brand anchor",
+            path: ["questions", index, "enterpriseAnchor"],
+          });
+        } else if (
+          !questionContainsAnchor(item.question, item.enterpriseAnchor)
+        ) {
+          context.addIssue({
+            code: "custom",
+            message:
+              "competitor comparison must contain its declared enterpriseAnchor",
+            path: ["questions", index, "question"],
+          });
+        }
+
+        if (!item.competitorAnchor) {
+          context.addIssue({
+            code: "custom",
+            message:
+              "competitor comparison must declare an explicit competitor company or brand anchor",
+            path: ["questions", index, "competitorAnchor"],
+          });
+        } else if (
+          !questionContainsAnchor(item.question, item.competitorAnchor)
+        ) {
+          context.addIssue({
+            code: "custom",
+            message:
+              "competitor comparison must contain its declared competitorAnchor",
+            path: ["questions", index, "question"],
+          });
+        }
+
+        if (
+          item.competitorAnchor &&
+          !isExplicitCompetitorBrand(item.competitorAnchor)
+        ) {
+          context.addIssue({
+            code: "custom",
+            message:
+              "competitorAnchor must be an explicit company or brand name rather than a generic alternative",
+            path: ["questions", index, "competitorAnchor"],
+          });
+        }
+
+        if (
+          item.enterpriseAnchor &&
+          item.competitorAnchor &&
+          normalizeQuestionAnchor(item.enterpriseAnchor) ===
+            normalizeQuestionAnchor(item.competitorAnchor)
+        ) {
+          context.addIssue({
+            code: "custom",
+            message:
+              "competitorAnchor must identify a brand other than enterpriseAnchor",
+            path: ["questions", index, "competitorAnchor"],
+          });
+        }
+      } else if (item.competitorAnchor) {
+        context.addIssue({
+          code: "custom",
+          message:
+            "competitorAnchor is allowed only for competitor comparisons",
+          path: ["questions", index, "competitorAnchor"],
         });
       }
 
@@ -316,6 +423,21 @@ export const GeoQuestionSetSchema = z
         });
       }
     }
+
+    const namedCompetitorComparisons = questions.filter(
+      (item) =>
+        item.category === "competitor_comparison" &&
+        item.competitorAnchor &&
+        isExplicitCompetitorBrand(item.competitorAnchor),
+    );
+    if (namedCompetitorComparisons.length < 5) {
+      context.addIssue({
+        code: "custom",
+        message:
+          "all five competitor comparisons must name a sourced competitor brand",
+        path: ["questions"],
+      });
+    }
   });
 
 export type GeoQuestion = z.infer<typeof GeoQuestionSchema>;
@@ -393,8 +515,6 @@ export function isIndustryRankingQuestion(question: string) {
     /(?:品牌|产品|公司|企业|平台|机构|服务商|供应商|厂家|工具|方案).{0,10}(?:有推荐|有哪些推荐|推荐哪些|推荐哪)/,
     /哪(?:一)?(?:家|个|款|种).{0,12}(?:好|比较好|更好|好用|靠谱|专业|值得选)/,
     /(?:做|采购|选择).{0,12}(?:找谁|选哪(?:一)?家)/,
-    /优先(?:比较|考察|了解|评估|筛选).{0,16}(?:哪些|哪几).{0,20}(?:品牌|产品|公司|企业|平台|机构|服务商|供应商|厂家|工具|解决方案|方案)/,
-    /(?:哪些|哪几).{0,16}(?:品牌|产品|公司|企业|平台|机构|服务商|供应商|厂家|工具|解决方案|方案|类型).{0,24}(?:值得)?(?:纳入|进入|放进|列入).{0,20}(?:名单|清单|候选|考察|筛选|评估|选型|比较)/,
   ];
   return openRecommendationPatterns.some((pattern) => pattern.test(normalized));
 }

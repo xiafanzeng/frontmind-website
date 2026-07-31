@@ -1,4 +1,9 @@
 export const FRONTMIND_BASE_PROFILE = "frontmind-base" as const;
+export const FRONTMIND_PRO_PROFILE = "frontmind-pro" as const;
+
+export type FrontMindAgentProfile =
+  | typeof FRONTMIND_BASE_PROFILE
+  | typeof FRONTMIND_PRO_PROFILE;
 
 export class GeoBrokerError extends Error {
   constructor(
@@ -112,6 +117,7 @@ export interface GeoPresalesBroker {
     prompt: string;
     attachments: Array<{ file_id: string; filename: string }>;
     idempotencyKey: string;
+    agentProfile?: FrontMindAgentProfile;
   }): Promise<BrokerTask>;
   getTask(taskId: string): Promise<BrokerTask>;
   getTaskResult(taskId: string): Promise<BrokerTask>;
@@ -291,6 +297,7 @@ export class HttpGeoPresalesBroker implements GeoPresalesBroker {
     prompt: string;
     attachments: Array<{ file_id: string; filename: string }>;
     idempotencyKey: string;
+    agentProfile?: FrontMindAgentProfile;
   }) {
     return this.requestJson<BrokerTask>("/tasks", {
       method: "POST",
@@ -300,7 +307,7 @@ export class HttpGeoPresalesBroker implements GeoPresalesBroker {
         prompt: input.prompt,
         attachments: input.attachments,
         idempotencyKey: input.idempotencyKey,
-        agentProfile: FRONTMIND_BASE_PROFILE,
+        agentProfile: input.agentProfile ?? FRONTMIND_BASE_PROFILE,
         taskMode: "agent",
       }),
     });

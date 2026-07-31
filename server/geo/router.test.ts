@@ -6,12 +6,14 @@ import express from "express";
 import JSZip from "jszip";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
+  FRONTMIND_PRO_PROFILE,
   GeoBrokerError,
   type BrokerFile,
   type BrokerMonitorRun,
   type BrokerTask,
   type GeoMonitorPlatformId,
   type GeoPresalesBroker,
+  type FrontMindAgentProfile,
 } from "./broker";
 import {
   GeoAdminNotificationConfigurationError,
@@ -99,6 +101,7 @@ function fixtureEvidenceCharacterCount(markdown: string) {
 class MockBroker implements GeoPresalesBroker {
   tasks = new Map<string, BrokerTask>();
   prompts: string[] = [];
+  taskAgentProfiles: Array<FrontMindAgentProfile | undefined> = [];
   uploads = new Map<string, Buffer>();
   skillUploads = new Map<string, Buffer>();
   archive = Buffer.alloc(0);
@@ -173,10 +176,12 @@ class MockBroker implements GeoPresalesBroker {
     prompt: string;
     attachments: Array<{ file_id: string; filename: string }>;
     idempotencyKey: string;
+    agentProfile?: FrontMindAgentProfile;
   }) {
     const existing = this.idempotentTasks.get(input.idempotencyKey);
     if (existing) return existing;
     this.prompts.push(input.prompt);
+    this.taskAgentProfiles.push(input.agentProfile);
     this.taskAttachments.push(input.attachments);
     const isQuestionTask = input.prompt.includes(
       "geo-question-recommender.skill.zip",
@@ -5058,7 +5063,7 @@ describe("GEO API", () => {
     expect(servicePaymentCheckoutCalls).toHaveLength(0);
   });
 
-  it("does not consume the question retry until an invalid result has actually been retrieved", async () => {
+  it("keeps one Pro question task after a transient result read failure", async () => {
     const ready = await createReadyProject();
     broker.tasks.set("question-1", {
       id: "question-1",
@@ -5086,14 +5091,7 @@ describe("GEO API", () => {
     });
     expect(broker.questionTaskCount).toBe(1);
     expect(broker.prompts).toHaveLength(2);
-    const codec = new GeoTokenCodec(
-      "test-session-secret-at-least-16-characters",
-    );
-    const initialValue = codec.open<Record<string, unknown>>(
-      ready.projectToken,
-      "project",
-    ).value;
-    expect(initialValue.questionAttempt).toBe(1);
+    expect(broker.taskAgentProfiles.at(-1)).toBe(FRONTMIND_PRO_PROFILE);
 
     broker.taskResultErrors.delete("question-1");
     broker.taskResults.set("question-1", {
@@ -5113,17 +5111,19 @@ describe("GEO API", () => {
     );
 
     expect(structurallyInvalid.response.status).toBe(200);
-    expect(broker.questionTaskCount).toBe(2);
-    expect(broker.prompts).toHaveLength(3);
-    const retriedPayload = structurallyInvalid.body as Record<string, any>;
-    const retriedValue = codec.open<Record<string, unknown>>(
-      retriedPayload.projectToken,
-      "project",
-    ).value;
-    expect(retriedValue.questionAttempt).toBe(2);
+    expect(structurallyInvalid.body).toMatchObject({
+      project: {
+        status: "failed",
+        questionRetryAvailable: false,
+        questionValidationError:
+          "推荐结果未通过四类各五题的结构校验，请联系技术支持",
+      },
+    });
+    expect(broker.questionTaskCount).toBe(1);
+    expect(broker.prompts).toHaveLength(2);
   });
 
-  it("retries one invalid question result only through an idempotent POST", async () => {
+  it("never creates a second task for an invalid question result", async () => {
     broker.invalidFirstQuestionTask = true;
     const { cookie } = await verifyInvite();
     const created = await jsonRequest("/projects", cookie, {
@@ -5160,28 +5160,26 @@ describe("GEO API", () => {
     expect(readOnlyPayload.project.questionValidationError).toBeTruthy();
     expect(broker.questionTaskCount).toBe(1);
 
-    const retried = await jsonRequest(
+    const replayed = await jsonRequest(
       `/projects/${encodeURIComponent(firstPayload.projectToken)}/questions`,
       cookie,
       { method: "POST", body: {} },
     );
-    const retriedPayload = retried.body as Record<string, any>;
-    expect(retriedPayload.project.questions).toHaveLength(20);
-    expect(retriedPayload.projectToken).not.toBe(firstPayload.projectToken);
-    expect(broker.questionTaskCount).toBe(2);
-    expect(broker.prompts.at(-1)).toContain("这是唯一一次结构校验重试");
-    expect(broker.prompts.at(-1)).toContain(
-      "上一次返回已解析为 JSON，但未通过以下字段校验：questions:",
-    );
-
-    await jsonRequest(
-      `/projects/${encodeURIComponent(retriedPayload.projectToken)}`,
-      cookie,
-    );
-    expect(broker.questionTaskCount).toBe(2);
+    expect(replayed.response.status).toBe(200);
+    expect(replayed.body).toMatchObject({
+      project: {
+        status: "failed",
+        questionRetryAvailable: false,
+      },
+    });
+    expect(broker.questionTaskCount).toBe(1);
+    expect(broker.taskAgentProfiles).toEqual([
+      undefined,
+      FRONTMIND_PRO_PROFILE,
+    ]);
   });
 
-  it("retries one cancelled question task and keeps the retry idempotent", async () => {
+  it("does not retry a cancelled question task", async () => {
     const ready = await createReadyProject();
     broker.tasks.set("question-1", {
       id: "question-1",
@@ -5189,58 +5187,20 @@ describe("GEO API", () => {
       output: [],
     });
 
-    const retried = await jsonRequest(
+    const replayed = await jsonRequest(
       `/projects/${encodeURIComponent(ready.projectToken)}/questions`,
       ready.cookie,
       { method: "POST", body: {} },
     );
 
-    expect(retried.response.status).toBe(200);
-    expect(broker.questionTaskCount).toBe(2);
-    expect(broker.prompts.at(-1)).toContain("唯一一次结构校验重试");
-    const retriedPayload = retried.body as Record<string, any>;
-    expect(retriedPayload.project.questions).toHaveLength(20);
-    const retriedValue = new GeoTokenCodec(
-      "test-session-secret-at-least-16-characters",
-    ).open<Record<string, unknown>>(
-      retriedPayload.projectToken,
-      "project",
-    ).value;
-    expect(retriedValue).toMatchObject({
-      questionTaskId: "question-2",
-      questionAttempt: 2,
-      previousQuestionTaskIds: ["question-1"],
-    });
-
-    const replayed = await jsonRequest(
-      `/projects/${encodeURIComponent(retriedPayload.projectToken)}/questions`,
-      ready.cookie,
-      { method: "POST", body: {} },
-    );
     expect(replayed.response.status).toBe(200);
-    expect(broker.questionTaskCount).toBe(2);
-    broker.tasks.set("question-2", {
-      id: "question-2",
-      status: "cancelled",
-      output: [],
+    expect(replayed.body).toMatchObject({
+      project: {
+        status: "failed",
+        questionRetryAvailable: false,
+      },
     });
-    const exhaustedView = await jsonRequest(
-      `/projects/${encodeURIComponent(retriedPayload.projectToken)}`,
-      ready.cookie,
-    );
-    expect((exhaustedView.body as any).project.questionRetryAvailable).toBe(
-      false,
-    );
-    const exhausted = await jsonRequest(
-      `/projects/${encodeURIComponent(retriedPayload.projectToken)}/questions`,
-      ready.cookie,
-      { method: "POST", body: {} },
-    );
-    expect(exhausted.response.status).toBe(409);
-    expect(exhausted.body).toMatchObject({
-      error: { code: "QUESTION_RETRY_EXHAUSTED" },
-    });
-    expect(broker.questionTaskCount).toBe(2);
+    expect(broker.questionTaskCount).toBe(1);
   });
 
   it("keeps a create response without status waiting and reuses the original task", async () => {
@@ -5651,7 +5611,7 @@ function validAssessmentOutput(
   question: Pick<GeoQuestion, "id" | "category" | "question"> = {
     id: "product-scenario-01",
     category: "product_scenario",
-    question: "Acme 的服务模块 1 是什么，主要解决哪些业务问题？",
+    question: "Acme 的服务模块 1 主要解决哪些业务问题？",
   },
 ) {
   const rankingMetricEligible = question.category !== "reputation";

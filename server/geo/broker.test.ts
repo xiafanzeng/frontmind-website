@@ -2,11 +2,12 @@ import { describe, expect, it, vi } from "vitest";
 import {
   createGeoPresalesBrokerFromEnv,
   FRONTMIND_BASE_PROFILE,
+  FRONTMIND_PRO_PROFILE,
   HttpGeoPresalesBroker,
 } from "./broker";
 
 describe("HttpGeoPresalesBroker", () => {
-  it("always sends Base and the private service token", async () => {
+  it("defaults to Base and sends the private service token", async () => {
     const fetchMock = vi.fn(
       async (_url: string | URL | Request, init?: RequestInit) => {
         return new Response(
@@ -42,6 +43,35 @@ describe("HttpGeoPresalesBroker", () => {
       taskMode: "agent",
       idempotencyKey: "geo:project:test",
       projectId: "project-1",
+    });
+  });
+
+  it("allows only an explicit task to use Pro", async () => {
+    const fetchMock = vi.fn(
+      async () =>
+        new Response(JSON.stringify({ id: "task-pro", status: "running" }), {
+          status: 201,
+          headers: { "content-type": "application/json" },
+        }),
+    );
+    const broker = new HttpGeoPresalesBroker({
+      baseUrl: "https://agent.example/api/internal/presales",
+      serviceToken: "private-token",
+      fetchImpl: fetchMock as typeof fetch,
+    });
+
+    await broker.createTask({
+      projectId: "project-1",
+      prompt: "recommend questions",
+      attachments: [],
+      idempotencyKey: "geo:project:questions",
+      agentProfile: FRONTMIND_PRO_PROFILE,
+    });
+
+    const [, init] = fetchMock.mock.calls[0];
+    expect(JSON.parse(String(init?.body))).toMatchObject({
+      agentProfile: FRONTMIND_PRO_PROFILE,
+      taskMode: "agent",
     });
   });
 

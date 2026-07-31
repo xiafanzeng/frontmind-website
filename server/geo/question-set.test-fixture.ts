@@ -6,32 +6,39 @@ import {
 
 export function buildValidQuestionSet(companyName = "Acme") {
   const reputation = [
-    `${companyName}的企业背景和团队能力有哪些公开依据？`,
-    `${companyName}具备哪些资质、认证或行业认可？`,
-    `${companyName}的技术和项目交付能力是否可靠？`,
-    `${companyName}如何说明数据安全与合规边界？`,
-    `${companyName}的持续服务和客户口碑怎么样？`,
+    `${companyName}值得信赖吗？`,
+    `${companyName}的产品和服务稳定吗？`,
+    `${companyName}保护客户数据安全吗？`,
+    `${companyName}的售后服务好吗？`,
+    `客户对${companyName}的口碑怎么样？`,
   ];
   const product = [
-    `${companyName} 的服务模块 1 是什么，主要解决哪些业务问题？`,
-    `${companyName} 的服务模块 2 包含哪些关键功能和工作机制？`,
-    `${companyName} 的服务模块 3 适合哪些客户与应用场景？`,
-    `${companyName} 的服务模块 4 通常如何部署和完成交付？`,
-    `${companyName} 的服务模块 5 有哪些使用限制与支持边界？`,
+    `${companyName} 的服务模块 1 主要解决哪些业务问题？`,
+    `${companyName} 的服务模块 2 的关键功能如何工作？`,
+    `${companyName} 的服务模块 3 适合哪些客户场景？`,
+    `${companyName} 的服务模块 4 如何部署交付？`,
+    `${companyName} 的服务模块 5 的支持边界是什么？`,
   ];
   const industry = [
     "科研企业 GEO 服务商有哪些值得推荐？",
     "企业知识库建设服务商有哪些推荐？",
     "品牌 AI 认知优化领域有哪些代表性公司？",
-    "企业级 AI 工作流部署方案怎么选，头部厂商有哪些？",
+    "企业级 AI 工作流部署有哪些头部服务商？",
     "提供持续 GEO 监测服务的平台有哪些推荐？",
   ];
+  const competitorAnchors = [
+    "云杉科技",
+    "星河智能",
+    "青峰云",
+    "海岳数据",
+    "云岚科技",
+  ];
   const comparison = [
-    `${companyName}与传统 SEO 服务在交付目标上有什么区别？`,
-    `${companyName}和同类方案相比，分别适合哪些客户场景？`,
-    `${companyName}与通用 AI 平台在部署方式上有什么差异？`,
-    `企业自建团队还是选择${companyName}的交付服务更合适？`,
-    `${companyName}与同类企业服务相比，持续支持边界有何不同？`,
+    `${companyName}与云杉科技在核心功能上有什么区别？`,
+    `${companyName}与星河智能在客户场景上有什么区别？`,
+    `${companyName}与青峰云在部署方式上有什么差异？`,
+    `${companyName}与海岳数据在服务边界上有什么差异？`,
+    `${companyName}与云岚科技在长期运维服务上有什么差异？`,
   ];
 
   const questions: GeoQuestion[] = [
@@ -40,6 +47,7 @@ export function buildValidQuestionSet(companyName = "Acme") {
       category: "reputation" as const,
       question,
       rationale: `核验企业可信度维度 ${index + 1} 的独立客户决策与证据基础。`,
+      enterpriseAnchor: companyName,
       evidenceRefs: [`01_company_overview/item-${index + 1}.md`],
       selectable: true,
     })),
@@ -67,6 +75,8 @@ export function buildValidQuestionSet(companyName = "Acme") {
       category: "competitor_comparison" as const,
       question,
       rationale: `比较采购维度 ${index + 1} 的方案差异和客户取舍依据。`,
+      enterpriseAnchor: companyName,
+      competitorAnchor: competitorAnchors[index],
       evidenceRefs: [`08_competitive_advantages/item-${index + 1}.md`],
       selectable: true,
     })),

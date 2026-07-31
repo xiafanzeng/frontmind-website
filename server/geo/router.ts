@@ -41,10 +41,12 @@ import {
 import { buildGeoExecutionLog } from "./execution";
 import {
   createGeoPresalesBrokerFromEnv,
+  FRONTMIND_PRO_PROFILE,
   type BrokerMonitorRun,
   GEO_MONITOR_PLATFORM_IDS,
   GeoBrokerError,
   type BrokerTask,
+  type FrontMindAgentProfile,
   type GeoPresalesBroker,
   type GeoMonitorPlatformId,
 } from "./broker";
@@ -84,7 +86,6 @@ import {
   normalizeTask,
   normalizeTaskStatus,
   parseQuestionSetFromTask,
-  questionSetValidationSummaryFromTask,
 } from "./output";
 import {
   parseCustomQuestionClassificationTaskOutput,
@@ -281,7 +282,6 @@ type ProjectTokenValue = {
   temporaryFileIds?: string[];
   questionTaskId?: string;
   questionSubmittedAt?: string;
-  questionAttempt?: 1 | 2;
   previousKnowledgeBaseTaskIds?: string[];
   previousQuestionTaskIds?: string[];
   customQuestion?: GeoQuestion;
@@ -524,17 +524,6 @@ export function createGeoRouter(options: GeoRouterOptions = {}): Router {
   const projectOrderProtections = new Map<string, ProjectOrderProtection>();
   const activeUploadsBySession = new Map<string, number>();
   let activeUploads = 0;
-  const questionRetries = new Map<
-    string,
-    {
-      expiresAt: number;
-      promise: Promise<{
-        value: ProjectTokenValue;
-        projectToken: string;
-        questionTask: BrokerTask;
-      }>;
-    }
-  >();
   const knowledgeBaseFinalizations = new Map<
     string,
     {
@@ -1530,112 +1519,6 @@ export function createGeoRouter(options: GeoRouterOptions = {}): Router {
     res.setHeader("Cache-Control", "private, no-store");
     next();
   });
-
-  const retryInvalidQuestionTask = async (
-    value: ProjectTokenValue,
-    knowledgeBaseTask: BrokerTask,
-    questionTask: BrokerTask | undefined,
-  ) => {
-    const invalidQuestionTaskId = value.questionTaskId;
-    const questionStatus = normalizeTaskStatus(questionTask?.status);
-    const retryableFailure =
-      ["failed", "cancelled"].includes(questionStatus) ||
-      (questionStatus === "completed" &&
-        Boolean(questionTask) &&
-        !parseQuestionSetFromTask(questionTask));
-    if (
-      !invalidQuestionTaskId ||
-      !questionTask ||
-      !retryableFailure ||
-      (value.questionAttempt || 1) >= 2
-    ) {
-      return null;
-    }
-
-    const now = Date.now();
-    pruneExpiringMap(questionRetries, now, 200);
-    const retryKey = `${value.projectId}:${invalidQuestionTaskId}`;
-    const existing = questionRetries.get(retryKey);
-    if (existing && existing.expiresAt > now) return existing.promise;
-
-    const promise = (async () => {
-      const archive = resolveKnowledgeBaseArtifact(value, knowledgeBaseTask);
-      if (!archive)
-        throw new GeoHttpError(
-          "知识库 ZIP 尚未就绪，无法重试问题推荐",
-          409,
-          "ARCHIVE_NOT_READY",
-        );
-      const trackedValue = await resolveCanonicalCompanyIdentity(
-        broker,
-        trackArchiveFile(value, knowledgeBaseTask),
-        knowledgeBaseTask,
-      );
-      const attachment = await materializeArchiveAttachment(
-        broker,
-        trackedValue.knowledgeBaseTaskId,
-        archive,
-      );
-      const { task: retriedTask, skillAttachments } =
-        await createGeoTaskWithSkillPackages(
-          broker,
-          {
-            projectId: trackedValue.projectId,
-            prompt: await buildGeoQuestionPrompt({
-              companyName: trackedValue.companyName,
-              archiveFilename: attachment.filename,
-              retryReason:
-                questionSetValidationSummaryFromTask(questionTask) ||
-                "必须严格返回四类各 5 题、总计 20 题，并满足 ID、证据引用和 selectable 约束",
-            }),
-            attachments: [attachment],
-            idempotencyKey: `geo:${trackedValue.projectId}:questions:2`,
-          },
-          [
-            {
-              filename: QUESTION_SKILL_ARCHIVE_FILENAME,
-              body: await buildGeoQuestionRecommenderSkillArchive(),
-            },
-          ],
-        );
-      const retriedTaskId = taskIdFrom(retriedTask);
-      if (!retriedTaskId)
-        throw new GeoHttpError(
-          "重试问题推荐失败：缺少任务 ID",
-          502,
-          "TASK_ID_MISSING",
-        );
-      const nextValue: ProjectTokenValue = {
-        ...trackedValue,
-        questionTaskId: retriedTaskId,
-        questionSubmittedAt: new Date().toISOString(),
-        questionAttempt: 2,
-        temporaryFileIds: Array.from(
-          new Set([
-            ...(trackedValue.temporaryFileIds || []),
-            ...skillAttachments.map((item) => item.file_id),
-            ...(attachment.temporary ? [attachment.file_id] : []),
-          ]),
-        ),
-        previousQuestionTaskIds: Array.from(
-          new Set([
-            ...(trackedValue.previousQuestionTaskIds || []),
-            invalidQuestionTaskId,
-          ]),
-        ),
-      };
-      return {
-        value: nextValue,
-        projectToken: codec.seal("project", nextValue, PROJECT_TTL_MS),
-        questionTask: retriedTask,
-      };
-    })().catch((error) => {
-      questionRetries.delete(retryKey);
-      throw error;
-    });
-    questionRetries.set(retryKey, { expiresAt: now + 10 * 60 * 1000, promise });
-    return promise;
-  };
 
   const resolveMonitorQuestion = async (
     value: ProjectTokenValue,
@@ -2822,41 +2705,15 @@ export function createGeoRouter(options: GeoRouterOptions = {}): Router {
     asyncHandler(async (req, res) => {
       let value = openOwnedProject(req, res);
       if (value.questionTaskId) {
-        const [knowledgeBaseTask, initialQuestionTask] = await Promise.all([
+        const [knowledgeBaseTask, questionTask] = await Promise.all([
           getResolvedTask(broker, value.knowledgeBaseTaskId),
           getResolvedTask(broker, value.questionTaskId),
         ]);
-        const retried = await retryInvalidQuestionTask(
-          value,
-          knowledgeBaseTask,
-          initialQuestionTask,
-        );
-        const initialQuestionStatus = normalizeTaskStatus(
-          initialQuestionTask.status,
-        );
-        const questionStillInvalid =
-          initialQuestionStatus === "completed" &&
-          !parseQuestionSetFromTask(initialQuestionTask);
-        if (
-          !retried &&
-          (value.questionAttempt || 1) >= 2 &&
-          (["failed", "cancelled"].includes(initialQuestionStatus) ||
-            questionStillInvalid)
-        ) {
-          throw new GeoHttpError(
-            "推荐问题自动重试次数已用完，请联系技术支持",
-            409,
-            "QUESTION_RETRY_EXHAUSTED",
-          );
-        }
-        const currentValue =
-          retried?.value || trackArchiveFile(value, knowledgeBaseTask);
+        const currentValue = trackArchiveFile(value, knowledgeBaseTask);
         const currentToken =
-          retried?.projectToken ||
-          (currentValue === value
+          currentValue === value
             ? req.params.projectToken
-            : codec.seal("project", currentValue, PROJECT_TTL_MS));
-        const questionTask = retried?.questionTask || initialQuestionTask;
+            : codec.seal("project", currentValue, PROJECT_TTL_MS);
         const project = await buildProjectView(
           broker,
           currentValue,
@@ -2926,6 +2783,7 @@ export function createGeoRouter(options: GeoRouterOptions = {}): Router {
             }),
             attachments: [archiveAttachment],
             idempotencyKey: `geo:${trackedValue.projectId}:questions:1`,
+            agentProfile: FRONTMIND_PRO_PROFILE,
           },
           [
             {
@@ -2946,7 +2804,6 @@ export function createGeoRouter(options: GeoRouterOptions = {}): Router {
         ...trackedValue,
         questionTaskId,
         questionSubmittedAt: new Date().toISOString(),
-        questionAttempt: 1,
         temporaryFileIds: Array.from(
           new Set([
             ...(trackedValue.temporaryFileIds || []),
@@ -5500,11 +5357,7 @@ async function buildProjectView(
           knowledgeBaseManifest?.evidencePaths,
         )
       : undefined;
-  const questionRetryAvailable =
-    Boolean(questionTask) &&
-    (value.questionAttempt || 1) < 2 &&
-    (Boolean(invalidQuestionResult) ||
-      ["failed", "cancelled"].includes(questionsTaskView?.status || ""));
+  const questionRetryAvailable = false;
   const assessmentRetryAvailable =
     Boolean(assessmentTask) &&
     (value.assessmentAttempt || 1) < 2 &&
@@ -5753,9 +5606,7 @@ async function buildProjectView(
               }
             : undefined,
     questionValidationError: invalidQuestionResult
-      ? questionRetryAvailable
-        ? "推荐结果未通过四类各五题的结构校验，可重新生成一次"
-        : "推荐结果未通过四类各五题的结构校验，自动重试次数已用完，请联系技术支持"
+      ? "推荐结果未通过四类各五题的结构校验，请联系技术支持"
       : undefined,
     error: knowledgeBaseFinalizationFailure
       ? KNOWLEDGE_BASE_FINALIZATION_PUBLIC_ERROR
@@ -6571,6 +6422,7 @@ async function createGeoTaskWithSkillPackages(
     prompt: string;
     attachments: Array<{ file_id: string; filename: string }>;
     idempotencyKey: string;
+    agentProfile?: FrontMindAgentProfile;
   },
   skillPackages: GeoTaskSkillPackage[],
 ) {

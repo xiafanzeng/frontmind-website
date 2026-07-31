@@ -1425,7 +1425,6 @@ function GeoBuildExperienceZh() {
   );
   const dragOperation = useRef<DragOperation | undefined>(undefined);
   const questionStartInFlight = useRef(new Set<string>());
-  const questionRetryInFlight = useRef(new Set<string>());
   const analysisRetryInFlight = useRef(new Set<string>());
   const analysisAutoRetryAttempted = useRef(new Set<string>());
   const questionStageAutoOpened = useRef(new Set<string>());
@@ -2020,37 +2019,6 @@ function GeoBuildExperienceZh() {
   }, [activeProject, commitProject]);
 
   useEffect(() => {
-    if (isGeoStylePreviewProject(activeProject)) return;
-    if (
-      !activeProject?.knowledgeBase ||
-      activeProject.questions.length > 0 ||
-      activeProject.status !== "failed" ||
-      activeProject.questionRetryAvailable !== true ||
-      questionRetryInFlight.current.has(activeProject.id)
-    )
-      return;
-    const projectId = activeProject.id;
-    questionRetryInFlight.current.add(activeProject.id);
-    analysisRetryInFlight.current.add(projectId);
-    setRetryingAnalysisId(projectId);
-    void startGeoQuestionRecommendation(activeProject)
-      .then((updated) => {
-        commitProject(updated);
-        if (updated.status !== "failed")
-          questionRetryInFlight.current.delete(activeProject.id);
-      })
-      .catch((error) => {
-        setStorageNotice(`问题推荐自动重试未完成：${errorMessage(error)}`);
-      })
-      .finally(() => {
-        analysisRetryInFlight.current.delete(projectId);
-        setRetryingAnalysisId((current) =>
-          current === projectId ? undefined : current,
-        );
-      });
-  }, [activeProject, commitProject]);
-
-  useEffect(() => {
     if (!activeProject) return;
     if (
       activeProject.questions.length > 0 ||
@@ -2287,47 +2255,31 @@ function GeoBuildExperienceZh() {
       setStorageNotice("当前为本地样式预览，不会重新调用企业分析接口。");
       return;
     }
-    const retryingQuestions =
-      Boolean(activeProject.knowledgeBase) &&
-      activeProject.questions.length === 0;
+    if (activeProject.knowledgeBase && activeProject.questions.length === 0) {
+      setStorageNotice("问题推荐只生成一轮，请联系技术支持。");
+      return;
+    }
     const retryingFinalization =
       !activeProject.knowledgeBase &&
       activeProject.knowledgeBaseFinalization?.finalizationState ===
         "failed_internal" &&
       activeProject.knowledgeBaseFinalization.retryAvailable === true;
-    if (retryingQuestions && activeProject.questionRetryAvailable !== true) {
-      setStorageNotice("问题推荐自动重试次数已用完，请联系技术支持。");
-      return;
-    }
     if (analysisRetryInFlight.current.has(activeProject.id)) return;
     const projectId = activeProject.id;
     analysisRetryInFlight.current.add(projectId);
     setRetryingAnalysisId(projectId);
     setStorageNotice("");
     try {
-      const updated = retryingQuestions
-        ? await startGeoQuestionRecommendation(activeProject)
-        : retryingFinalization
-          ? await retryGeoKnowledgeBaseFinalization(activeProject)
-          : await retryGeoEnterpriseAnalysis(activeProject);
-      if (retryingQuestions && updated.status === "failed") {
-        commitProject(updated);
+      const updated = retryingFinalization
+        ? await retryGeoKnowledgeBaseFinalization(activeProject)
+        : await retryGeoEnterpriseAnalysis(activeProject);
+      commitProject({ ...updated, error: undefined });
+      if (retryingFinalization) {
         setStorageNotice(
-          updated.questionRetryAvailable === true
-            ? "问题推荐仍未完成，请稍后重试。"
-            : "问题推荐自动重试次数已用完，请联系技术支持。",
+          updated.knowledgeBase
+            ? "知识库最终整理已完成。"
+            : "候选资料仍已安全保留，最终整理校验尚未通过，可稍后再次重试。",
         );
-      } else {
-        commitProject({ ...updated, error: undefined });
-        if (retryingQuestions) {
-          setStorageNotice("问题推荐已重新提交，完成后会自动更新。");
-        } else if (retryingFinalization) {
-          setStorageNotice(
-            updated.knowledgeBase
-              ? "知识库最终整理已完成。"
-              : "候选资料仍已安全保留，最终整理校验尚未通过，可稍后再次重试。",
-          );
-        }
       }
     } catch (error) {
       setStorageNotice(errorMessage(error));
@@ -4685,29 +4637,12 @@ export function EnterpriseAnalysis({
             <strong>问题推荐未能完成</strong>
             <p>
               {project.error ||
-                (project.questionRetryAvailable === true
-                  ? "知识库已经安全保留，可重新生成推荐问题。"
-                  : "自动重新生成次数已用完，知识库仍已安全保留，请联系技术支持。")}
+                "推荐结果未通过校验，知识库仍已安全保留，请联系技术支持。"}
             </p>
           </div>
-          {project.questionRetryAvailable === true ? (
-            <button
-              type="button"
-              onClick={onRetry}
-              disabled={retrying}
-              aria-busy={retrying}
-            >
-              <RotateCw
-                size={14}
-                className={retrying ? "is-spinning" : undefined}
-              />{" "}
-              {retrying ? "正在重新生成" : "重新生成"}
-            </button>
-          ) : (
-            <button type="button" onClick={onContact}>
-              联系技术支持 <ArrowRight size={14} />
-            </button>
-          )}
+          <button type="button" onClick={onContact}>
+            联系技术支持 <ArrowRight size={14} />
+          </button>
         </section>
       )}
 

@@ -268,6 +268,19 @@ describe("GEO question-recommender skill", () => {
     expect(skill).toContain('"minItems": 20');
     expect(skill).toContain('"industry_ranking"');
     expect(skill).toContain("enterpriseAnchor");
+    expect(skill).toContain("Every item must be phrased as a real reputation judgment");
+    expect(skill).toContain("这些题不属于美誉与舆情");
+    expect(skill).toContain("Never use the Chinese comma `，`");
+    expect(skill).toContain("`frontmind-pro` model profile");
+    expect(skill).toContain(
+      "Every item must also declare a different `competitorAnchor`",
+    );
+    expect(skill).toContain('"minContains": 5');
+    expect(skill).toContain("competitorAnchor");
+    expect(skill).toContain("All five questions must explicitly name the current enterprise");
+    expect(skill).toContain(
+      '"required": ["enterpriseAnchor", "competitorAnchor"]',
+    );
     expect(skill).toContain("offeringAnchor");
     expect(skill).toContain("offering_definition");
     expect(skill).toContain("support_boundary");
