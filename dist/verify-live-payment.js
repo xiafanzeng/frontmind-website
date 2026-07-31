@@ -993,7 +993,9 @@ async function verifyGeoPaymentProviderFromEnv(env, fetchImpl = fetch) {
   if (!response.ok) throw paymentProviderReadinessError();
   let result2;
   try {
-    result2 = asRecord(JSON.parse(await readBoundedResponseText(response)));
+    result2 = parseZpayResponseRecord(
+      await readBoundedResponseText(response)
+    );
   } catch (error) {
     if (error instanceof GeoPaymentVerificationError) throw error;
     throw paymentProviderReadinessError();
@@ -1096,6 +1098,11 @@ function paymentProviderReadinessError() {
 }
 function asRecord(value) {
   return value && typeof value === "object" && !Array.isArray(value) ? value : {};
+}
+function parseZpayResponseRecord(body) {
+  const parsed = JSON.parse(body);
+  const unwrapped = typeof parsed === "string" ? JSON.parse(parsed) : parsed;
+  return asRecord(unwrapped);
 }
 
 // scripts/verify-live-payment.ts

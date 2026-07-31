@@ -10246,8 +10246,7 @@ var ZpayGeoPaymentGateway = class {
     }
     let order;
     try {
-      const parsed = JSON.parse(body);
-      order = asRecord5(parsed);
+      order = parseZpayResponseRecord(body);
     } catch {
       throw new GeoPaymentVerificationError(
         "\u652F\u4ED8\u7ED3\u679C\u683C\u5F0F\u5F02\u5E38",
@@ -10825,6 +10824,11 @@ function callbackError() {
 }
 function asRecord5(value) {
   return value && typeof value === "object" && !Array.isArray(value) ? value : {};
+}
+function parseZpayResponseRecord(body) {
+  const parsed = JSON.parse(body);
+  const unwrapped = typeof parsed === "string" ? JSON.parse(parsed) : parsed;
+  return asRecord5(unwrapped);
 }
 function textValue(value) {
   if (typeof value === "string" && value.trim()) return value.trim();
@@ -16398,7 +16402,7 @@ function normalizeError(error) {
 
 // server/geo/health.ts
 function geoPublicBuildSha(env = process.env) {
-  const embedded = true ? "bb407e049849d6663200a52516fb5f4b94b50b88".trim() : "";
+  const embedded = true ? "817d2da48979ffc135cbdb13e286368637a88668".trim() : "";
   if (/^[a-f0-9]{7,64}$/i.test(embedded)) return embedded.toLowerCase();
   const candidate = (env.FRONTMIND_BUILD_SHA || env.GITHUB_SHA || env.RAILWAY_GIT_COMMIT_SHA || "").trim();
   return /^[a-f0-9]{7,64}$/i.test(candidate) ? candidate.toLowerCase() : null;
