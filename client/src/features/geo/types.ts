@@ -557,6 +557,13 @@ export type GeoProject = {
     | "content"
     | "unsafe";
   knowledgeBaseSupportRequired?: boolean;
+  knowledgeBaseFinalization?: {
+    finalizationState: "pending" | "failed_internal" | "completed";
+    finalizerVersion: string;
+    candidateSha256?: string;
+    errorCode?: "KB_FINALIZER_CONTRACT_VIOLATION";
+    retryAvailable: boolean;
+  };
   questionRetryAvailable?: boolean;
   assessmentRetryAvailable?: boolean;
   optimizationForecastRetryAvailable?: boolean;

@@ -416,6 +416,40 @@ describe("GEO style preview rendering", () => {
     expect(html).not.toContain("联系技术支持");
   });
 
+  it("offers finalizer-only retry without telling the customer to regenerate or re-upload", () => {
+    const project = {
+      ...createGeoStylePreviewProject(),
+      status: "failed" as const,
+      knowledgeBase: undefined,
+      knowledgeBaseRetryAvailable: false,
+      knowledgeBaseFinalization: {
+        finalizationState: "failed_internal" as const,
+        finalizerVersion: "website-kb-finalizer-v3",
+        candidateSha256: "a".repeat(64),
+        errorCode: "KB_FINALIZER_CONTRACT_VIOLATION" as const,
+        retryAvailable: true,
+      },
+      error:
+        "候选资料已安全保留，系统最终整理校验异常；修复后可直接重试整理，无需重新上传。",
+    };
+    const html = renderToStaticMarkup(
+      <EnterpriseAnalysis
+        project={project}
+        onDownload={vi.fn()}
+        onRetry={vi.fn()}
+        onContact={vi.fn()}
+        onStart={vi.fn()}
+        starting={false}
+        retrying={false}
+      />,
+    );
+
+    expect(html).toContain("知识库最终整理需要重试");
+    expect(html).toContain("重试最终整理");
+    expect(html).toContain("无需重新上传");
+    expect(html).not.toContain("重新生成知识库");
+  });
+
   it("shows delayed status as non-terminal support guidance", () => {
     const project = {
       ...createGeoStylePreviewProject(),

@@ -2711,6 +2711,48 @@ export function normalizeGeoProject(
         : undefined;
     })(),
     knowledgeBaseSupportRequired: project.knowledgeBaseSupportRequired === true,
+    knowledgeBaseFinalization: (() => {
+      const finalization = asRecord(
+        project.knowledgeBaseFinalization ??
+          project.knowledge_base_finalization,
+      );
+      const finalizationState = textValue(
+        finalization.finalizationState,
+        finalization.finalization_state,
+      );
+      const finalizerVersion = textValue(
+        finalization.finalizerVersion,
+        finalization.finalizer_version,
+      );
+      if (
+        !["pending", "failed_internal", "completed"].includes(
+          finalizationState || "",
+        ) ||
+        !finalizerVersion
+      ) {
+        return undefined;
+      }
+      const errorCode = textValue(
+        finalization.errorCode,
+        finalization.error_code,
+      );
+      return {
+        finalizationState:
+          finalizationState as NonNullable<
+            GeoProject["knowledgeBaseFinalization"]
+          >["finalizationState"],
+        finalizerVersion,
+        candidateSha256: textValue(
+          finalization.candidateSha256,
+          finalization.candidate_sha256,
+        ),
+        errorCode:
+          errorCode === "KB_FINALIZER_CONTRACT_VIOLATION"
+            ? errorCode
+            : undefined,
+        retryAvailable: finalization.retryAvailable === true,
+      };
+    })(),
     questionRetryAvailable: project.questionRetryAvailable === true,
     assessmentRetryAvailable: project.assessmentRetryAvailable === true,
     optimizationForecastRetryAvailable:
@@ -3044,6 +3086,21 @@ export async function retryGeoEnterpriseAnalysis(
           filename: file.name,
         })),
       }),
+    },
+  );
+  return normalizeRequiredProjectResponse(payload, project);
+}
+
+export async function retryGeoKnowledgeBaseFinalization(
+  project: GeoProject,
+): Promise<GeoProject> {
+  const payload = await requestJson(
+    `/projects/${encodeURIComponent(
+      project.remoteToken,
+    )}/knowledge-base/finalization/retry`,
+    {
+      method: "POST",
+      body: JSON.stringify({}),
     },
   );
   return normalizeRequiredProjectResponse(payload, project);

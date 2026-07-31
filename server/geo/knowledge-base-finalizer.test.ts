@@ -483,7 +483,7 @@ describe("website knowledge-base finalizer", () => {
       evaluatedAt: "2026-07-30T01:00:00.000Z",
     });
 
-    expect(WEBSITE_KB_FINALIZER_VERSION).toBe("website-kb-finalizer-v2");
+    expect(WEBSITE_KB_FINALIZER_VERSION).toBe("website-kb-finalizer-v3");
     expect(first.sha256).toBe(second.sha256);
     expect(first.packageManifestSha256).toBe(
       first.manifest.packageManifestSha256,
@@ -522,6 +522,20 @@ describe("website knowledge-base finalizer", () => {
     const leaves = manifest.documents.filter(
       (document: any) => document.kind === "leaf",
     );
+    const companyOverview = await zip
+      .file("01_company_overview/overview.md")!
+      .async("string");
+    const companyLeaf = await zip
+      .file(
+        leaves.find(
+          (document: any) => document.branchId === "01_company_overview",
+        ).path,
+      )!
+      .async("string");
+    expect(companyOverview).not.toContain(
+      "示例企业面向企业客户提供软件产品",
+    );
+    expect(companyOverview).not.toBe(companyLeaf);
     expect(
       leaves.find((document: any) => document.branchId === "02_team"),
     ).toMatchObject({ evidenceStatus: "needs_verification" });

@@ -17,7 +17,7 @@ import {
   type ParsedCandidate,
 } from "./knowledge-base-candidate";
 
-export const WEBSITE_KB_FINALIZER_VERSION = "website-kb-finalizer-v2";
+export const WEBSITE_KB_FINALIZER_VERSION = "website-kb-finalizer-v3";
 const ZIP_DATE = new Date("1980-01-01T00:00:00.000Z");
 
 type EvidenceStatus =
@@ -467,7 +467,10 @@ function splitByHeading(sectionTitle: string, markdown: string) {
       {
         title: sectionTitle,
         markdown: markdown.trim(),
-        intro: markdown.trim(),
+        // A heading-free section is one leaf. Reusing its entire body as the
+        // branch introduction would duplicate the same customer narrative in
+        // both overview.md and the leaf document.
+        intro: "",
       },
     ];
   }
@@ -481,6 +484,95 @@ function splitByHeading(sectionTitle: string, markdown: string) {
       intro: index === 0 ? intro : "",
     };
   });
+}
+
+function normalizedNarrativeShingles(value: string) {
+  const normalized = value
+    .normalize("NFKC")
+    .toLowerCase()
+    .replace(/\d+/g, "#")
+    .replace(/\s+/g, "")
+    .replace(
+      /[!"#$%&'()*+,\-./:;<=>?@[\\\]^_`{|}~，。！？；：“”‘’（）【】《》…—·]/g,
+      "",
+    );
+  const shingles = new Set<string>();
+  for (let index = 0; index <= normalized.length - 5; index += 1) {
+    shingles.add(normalized.slice(index, index + 5));
+  }
+  return shingles;
+}
+
+function normalizedNarrativeSimilarity(left: string, right: string) {
+  const leftShingles = normalizedNarrativeShingles(left);
+  const rightShingles = normalizedNarrativeShingles(right);
+  if (!leftShingles.size || !rightShingles.size) return 0;
+  let intersection = 0;
+  leftShingles.forEach((shingle) => {
+    if (rightShingles.has(shingle)) intersection += 1;
+  });
+  return intersection / (leftShingles.size + rightShingles.size - intersection);
+}
+
+function shortenOverviewNarrative(value: string, maximum = 72) {
+  const compact = value.replace(/\s+/g, " ").trim();
+  if (Array.from(compact).length <= maximum) return compact;
+  const shortened = Array.from(compact).slice(0, maximum).join("").trim();
+  return `${shortened.replace(/[，、；：,.!?。！？]+$/, "")}。`;
+}
+
+function structuralOverviewNarrative(
+  display: (typeof DISPLAY_BRANCHES)[number],
+  leaves: LeafDraft[],
+) {
+  const leafTitles = Array.from(
+    new Set(
+      leaves
+        .map((leaf) => leaf.title.trim())
+        .filter((title) => title && title !== display.customerTitle),
+    ),
+  ).slice(0, 3);
+  return leafTitles.length
+    ? `${display.title}分支涵盖${leafTitles.join("、")}，详细事实与来源已按条目分别整理。`
+    : `${display.title}分支的事实、来源与待核验边界已按条目分别整理。`;
+}
+
+function buildOverviewNarrative(input: {
+  display: (typeof DISPLAY_BRANCHES)[number];
+  intro: string;
+  leaves: LeafDraft[];
+  hasEvidence: boolean;
+  sourceRecords: SourceRecord[];
+}) {
+  const fallback = structuralOverviewNarrative(input.display, input.leaves);
+  if (!input.hasEvidence) {
+    return `公开资料暂未提供${input.display.title}的充分可核验信息。`;
+  }
+  const introSourceIds = sourceIdsForMarkdown(
+    input.intro,
+    input.sourceRecords,
+  );
+  let narrative = introSourceIds.length
+    ? shortenOverviewNarrative(sanitizeSupportedNarrative(input.intro))
+    : "";
+  if (
+    !narrative ||
+    input.leaves.some(
+      (leaf) =>
+        normalizedNarrativeSimilarity(narrative, leaf.narrative) >= 0.55,
+    )
+  ) {
+    narrative = fallback;
+  }
+  if (
+    input.leaves.some(
+      (leaf) =>
+        normalizedNarrativeSimilarity(narrative, leaf.narrative) >= 0.55,
+    )
+  ) {
+    narrative = `${input.display.title}：${input.leaves.length} 个独立条目已完成来源关联。`;
+  }
+  return shortenOverviewNarrative(narrative);
 }
 
 function splitLargeChunk(title: string, markdown: string) {
@@ -767,9 +859,10 @@ async function normalizeImage(
       throw new Error("SVG 包含脚本、外部实体或外部资源引用");
     }
   }
-  const pipeline = sharp(candidateAsset.bytes, {
+  let pipeline = sharp(candidateAsset.bytes, {
     animated: false,
     limitInputPixels: 40_000_000,
+    ...(isSvg ? { density: 300 } : {}),
   }).rotate();
   const metadata = await pipeline.metadata();
   if (!metadata.width || !metadata.height) throw new Error("图片没有有效尺寸");
@@ -777,6 +870,17 @@ async function normalizeImage(
   const longEdge = Math.max(metadata.width, metadata.height);
   if (shortEdge < 32 || longEdge < 128) {
     throw new Error("Logo 图片低于短边 32px 或长边 128px");
+  }
+  if (isSvg) {
+    // Vector logos can be rendered losslessly. Place wide or tall marks on a
+    // transparent badge canvas so both package dimensions and visible-density
+    // validation remain meaningful without stretching the artwork.
+    pipeline = pipeline.resize(512, 256, {
+      fit: "contain",
+      background: { r: 0, g: 0, b: 0, alpha: 0 },
+    });
+  } else if (metadata.width < 256 || metadata.height < 256) {
+    throw new Error("Logo 位图低于 256×256，不能作为正式品牌徽标");
   }
   let output = await pipeline.png().toBuffer({ resolveWithObject: true });
   let extension = "png";
@@ -1314,34 +1418,19 @@ export async function finalizeKnowledgeBaseCandidate(input: {
           Boolean(entry),
       );
     const sourceIds = Array.from(
-      new Set(
-        branchLeaves
-          .filter((leaf) => leaf.branchId === display.overviewBranch)
-          .flatMap((leaf) => leaf.sourceIds),
-      ),
+      new Set(branchLeaves.flatMap((leaf) => leaf.sourceIds)),
     );
     const status = evidenceForOverview.length
       ? sourceStatus(sourceIds, sourceRecords)
       : "needs_verification";
     const intro = introByDisplay.get(display.id) || "";
-    const introSourceIds = sourceIdsForMarkdown(intro, sourceRecords);
-    let narrative =
-      evidenceForOverview.length && introSourceIds.length
-        ? sanitizeSupportedNarrative(intro)
-        : "";
-    if (!narrative && evidenceForOverview.length) {
-      const first = branchLeaves.find(
-        (leaf) =>
-          leaf.branchId === display.overviewBranch &&
-          leaf.status !== "needs_verification" &&
-          leaf.status !== "not_applicable",
-      );
-      narrative = first?.narrative.split(/[。！？]\s*/)[0]?.slice(0, 90) || "";
-      if (narrative && !/[。！？]$/.test(narrative)) narrative += "。";
-    }
-    if (!narrative) {
-      narrative = `公开资料暂未提供${display.title}的充分可核验信息。`;
-    }
+    const narrative = buildOverviewNarrative({
+      display,
+      intro,
+      leaves: branchLeaves,
+      hasEvidence: evidenceForOverview.length > 0,
+      sourceRecords,
+    });
     const documentId = `doc-overview-${display.id}`;
     const documentPath = `${display.overviewBranch}/overview.md`;
     overviewIds.set(display.id, documentId);

@@ -92,6 +92,7 @@ import {
   type GeoPaymentMethod,
   type GeoServicePaymentCheckout,
   retryGeoEnterpriseAnalysis,
+  retryGeoKnowledgeBaseFinalization,
   startGeoCurrentAssessment,
   startGeoMonitoring,
   startGeoOptimizationForecast,
@@ -2214,6 +2215,11 @@ function GeoBuildExperienceZh() {
     const retryingQuestions =
       Boolean(activeProject.knowledgeBase) &&
       activeProject.questions.length === 0;
+    const retryingFinalization =
+      !activeProject.knowledgeBase &&
+      activeProject.knowledgeBaseFinalization?.finalizationState ===
+        "failed_internal" &&
+      activeProject.knowledgeBaseFinalization.retryAvailable === true;
     if (retryingQuestions && activeProject.questionRetryAvailable !== true) {
       setStorageNotice("问题推荐自动重试次数已用完，请联系技术支持。");
       return;
@@ -2226,7 +2232,9 @@ function GeoBuildExperienceZh() {
     try {
       const updated = retryingQuestions
         ? await startGeoQuestionRecommendation(activeProject)
-        : await retryGeoEnterpriseAnalysis(activeProject);
+        : retryingFinalization
+          ? await retryGeoKnowledgeBaseFinalization(activeProject)
+          : await retryGeoEnterpriseAnalysis(activeProject);
       if (retryingQuestions && updated.status === "failed") {
         commitProject(updated);
         setStorageNotice(
@@ -2238,6 +2246,12 @@ function GeoBuildExperienceZh() {
         commitProject({ ...updated, error: undefined });
         if (retryingQuestions) {
           setStorageNotice("问题推荐已重新提交，完成后会自动更新。");
+        } else if (retryingFinalization) {
+          setStorageNotice(
+            updated.knowledgeBase
+              ? "知识库最终整理已完成。"
+              : "候选资料仍已安全保留，最终整理校验尚未通过，可稍后再次重试。",
+          );
         }
       }
     } catch (error) {
@@ -4400,6 +4414,25 @@ export function EnterpriseAnalysis({
   }
 
   if (
+    project.status === "failed" &&
+    !knowledgeBase &&
+    retrying &&
+    project.knowledgeBaseFinalization?.finalizationState === "failed_internal"
+  ) {
+    return (
+      <AnalysisProgress
+        project={{
+          ...project,
+          status: "analyzing",
+          progressLabel: "正在使用已保留的候选资料重试最终整理",
+          error: undefined,
+        }}
+        onContact={onContact}
+      />
+    );
+  }
+
+  if (
     !knowledgeBase &&
     project.knowledgeBaseRecoveryState === "automatic_in_progress"
   ) {
@@ -4418,6 +4451,9 @@ export function EnterpriseAnalysis({
 
   if (project.status === "failed" && !knowledgeBase) {
     const unsafe = project.knowledgeBaseValidationCategory === "unsafe";
+    const finalizationFailed =
+      project.knowledgeBaseFinalization?.finalizationState ===
+      "failed_internal";
     const failureMessage =
       project.error || "资料处理暂时中断，当前项目与原始资料均已保留。";
     return (
@@ -4425,7 +4461,11 @@ export function EnterpriseAnalysis({
         <span>
           <CircleAlert size={24} />
         </span>
-        <h2>企业资料处理暂时中断</h2>
+        <h2>
+          {finalizationFailed
+            ? "知识库最终整理需要重试"
+            : "企业资料处理暂时中断"}
+        </h2>
         <p>{failureMessage}</p>
         {!unsafe ? (
           <button
@@ -4436,7 +4476,13 @@ export function EnterpriseAnalysis({
             aria-busy={retrying}
           >
             <RotateCw size={15} className={retrying ? "is-spinning" : ""} />
-            {retrying ? "正在重新生成" : "重新生成知识库"}
+            {retrying
+              ? finalizationFailed
+                ? "正在重试整理"
+                : "正在重新生成"
+              : finalizationFailed
+                ? "重试最终整理"
+                : "重新生成知识库"}
           </button>
         ) : (
           <button
@@ -5076,7 +5122,7 @@ function AnalysisProgress({
         </h2>
         <p>
           FrontMind
-          正在按业务分支进行广度优先、深度受控的资料采集。此阶段无需逐项确认，完成后将直接生成可核验知识库。
+          正在按业务分支进行资料采集。此阶段无需逐项确认，完成后将直接生成可核验知识库。
         </p>
         <div className="geo-progress-meta">
           <span>{project.progressLabel || "正在调度企业信息采集任务"}</span>

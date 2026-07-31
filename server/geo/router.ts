@@ -180,6 +180,8 @@ const KNOWLEDGE_BASE_VALIDATION_PUBLIC_ERRORS: Record<
   unsafe:
     "知识库文件存在安全风险，已阻止下载及后续分析。请勿继续处理该文件，并联系技术支持。",
 };
+const KNOWLEDGE_BASE_FINALIZATION_PUBLIC_ERROR =
+  "候选资料已安全保留，系统最终整理校验异常；修复后可直接重试整理，无需重新上传。";
 
 function knowledgeCandidateDiagnosticCode(value: string) {
   if (value.startsWith("Selected candidate root:"))
@@ -236,8 +238,18 @@ type ProjectTokenValue = {
     category: "unsafe" | "structure" | "content";
     message: string;
   };
+  knowledgeBaseFinalization?: {
+    state: "pending" | "failed_internal" | "completed";
+    finalizerVersion: string;
+    candidateSha256?: string;
+    errorCode?: "KB_FINALIZER_CONTRACT_VIOLATION";
+    retryAvailable: boolean;
+    updatedAt: string;
+  };
   knowledgeBaseArtifact?: {
-    finalizerVersion: typeof WEBSITE_KB_FINALIZER_VERSION;
+    finalizerVersion:
+      | "website-kb-finalizer-v2"
+      | typeof WEBSITE_KB_FINALIZER_VERSION;
     candidate: {
       taskId: string;
       outputItemId: string;
@@ -341,6 +353,7 @@ type GeoRouterOptions = {
   adminNotifier?: GeoAdminNotifier;
   knowledgeImporter?: GeoKnowledgeImporter;
   projectOrderRegistry?: GeoProjectOrderRegistry;
+  knowledgeBaseFinalizer?: typeof finalizeKnowledgeBaseCandidate;
   env?: NodeJS.ProcessEnv;
 };
 
@@ -420,6 +433,8 @@ export function createGeoRouter(options: GeoRouterOptions = {}): Router {
     options.knowledgeImporter ?? createGeoKnowledgeImporter({ env });
   const projectOrderRegistry =
     options.projectOrderRegistry ?? createGeoProjectOrderRegistry({ env });
+  const knowledgeBaseFinalizer =
+    options.knowledgeBaseFinalizer ?? finalizeKnowledgeBaseCandidate;
   const failedInvites = new Map<string, FailedInviteWindow>();
   const sessionRates = new Map<string, RateWindow>();
   const identityRates = new Map<string, RateWindow>();
@@ -447,11 +462,16 @@ export function createGeoRouter(options: GeoRouterOptions = {}): Router {
     string,
     {
       expiresAt: number;
+      settled: boolean;
       promise: Promise<{
         value: ProjectTokenValue;
         manifest?: KnowledgeBaseManifest;
       }>;
     }
+  >();
+  const knowledgeBaseFinalizationBackoffs = new Map<
+    string,
+    { attempts: number; retryAt: number }
   >();
   const knowledgeBaseAutomaticRetries = new Map<
     string,
@@ -481,6 +501,7 @@ export function createGeoRouter(options: GeoRouterOptions = {}): Router {
   const ensureFinalizedKnowledgeBase = async (
     value: ProjectTokenValue,
     task: BrokerTask,
+    options: { force?: boolean } = {},
   ): Promise<{
     value: ProjectTokenValue;
     manifest?: KnowledgeBaseManifest;
@@ -491,20 +512,35 @@ export function createGeoRouter(options: GeoRouterOptions = {}): Router {
     const existingArtifact = value.knowledgeBaseArtifact;
     if (
       existingArtifact?.candidate.taskId === value.knowledgeBaseTaskId &&
-      existingArtifact.finalizerVersion === WEBSITE_KB_FINALIZER_VERSION
+      [
+        "website-kb-finalizer-v2",
+        WEBSITE_KB_FINALIZER_VERSION,
+      ].includes(existingArtifact.finalizerVersion)
     ) {
       const descriptor = resolveKnowledgeBaseArtifact(value, task);
       if (!descriptor) return { value };
+      const manifest = await loadKnowledgeBaseManifest(
+        broker,
+        value.knowledgeBaseTaskId,
+        task,
+        value.companyName,
+        descriptor,
+        "website-lead-v1",
+      );
       return {
-        value,
-        manifest: await loadKnowledgeBaseManifest(
-          broker,
-          value.knowledgeBaseTaskId,
-          task,
-          value.companyName,
-          descriptor,
-          "website-lead-v1",
-        ),
+        value: value.knowledgeBaseFinalization
+          ? value
+          : {
+              ...value,
+              knowledgeBaseFinalization: {
+                state: "completed",
+                finalizerVersion: existingArtifact.finalizerVersion,
+                candidateSha256: existingArtifact.candidate.sha256,
+                retryAvailable: false,
+                updatedAt: existingArtifact.final.finalizedAt,
+              },
+            },
+        manifest,
       };
     }
 
@@ -519,6 +555,15 @@ export function createGeoRouter(options: GeoRouterOptions = {}): Router {
           },
         },
       };
+    }
+    if (
+      value.knowledgeBaseFinalization?.state === "failed_internal" &&
+      value.knowledgeBaseFinalization.finalizerVersion ===
+        WEBSITE_KB_FINALIZER_VERSION &&
+      value.knowledgeBaseFinalization.candidateSha256 &&
+      !options.force
+    ) {
+      return { value };
     }
 
     const candidateDownloadStartedAt = Date.now();
@@ -666,6 +711,27 @@ export function createGeoRouter(options: GeoRouterOptions = {}): Router {
       .createHash("sha256")
       .update(candidateBytes)
       .digest("hex");
+    const recordedFinalization = value.knowledgeBaseFinalization;
+    if (
+      recordedFinalization?.state === "failed_internal" &&
+      recordedFinalization.finalizerVersion === WEBSITE_KB_FINALIZER_VERSION &&
+      recordedFinalization.candidateSha256 === candidateSha &&
+      !options.force
+    ) {
+      return { value };
+    }
+    if (
+      options.force &&
+      recordedFinalization?.state === "failed_internal" &&
+      recordedFinalization.candidateSha256 &&
+      recordedFinalization.candidateSha256 !== candidateSha
+    ) {
+      throw new GeoHttpError(
+        "候选资料版本已变化，请刷新项目状态后重试",
+        409,
+        "KB_FINALIZATION_CANDIDATE_CHANGED",
+      );
+    }
     const candidateDownloadMs = Date.now() - candidateDownloadStartedAt;
     const descriptorHash = knowledgeArchiveDescriptorHash(candidateDescriptor);
     const selectedCandidate = candidate;
@@ -678,10 +744,33 @@ export function createGeoRouter(options: GeoRouterOptions = {}): Router {
     ].join(":");
     const now = Date.now();
     pruneExpiringMap(knowledgeBaseFinalizations, now, 200);
+    const transientBackoff = knowledgeBaseFinalizationBackoffs.get(
+      finalizationKey,
+    );
+    if (
+      transientBackoff &&
+      transientBackoff.retryAt > now &&
+      !options.force
+    ) {
+      throw new GeoHttpError(
+        "知识库最终整理文件传输暂时不可用，请稍后重试",
+        503,
+        "KB_FINALIZATION_TRANSIENT_BACKOFF",
+      );
+    }
     const running = knowledgeBaseFinalizations.get(finalizationKey);
-    if (running && running.expiresAt > now) return running.promise;
+    // Manual retries bypass a recorded failure/backoff, but concurrent retries
+    // for the same candidate must still share one finalization/upload promise.
+    if (running && running.expiresAt > now) {
+      if (!options.force || !running.settled) return running.promise;
+      knowledgeBaseFinalizations.delete(finalizationKey);
+    }
 
-    const promise = (async () => {
+    let promise: Promise<{
+      value: ProjectTokenValue;
+      manifest?: KnowledgeBaseManifest;
+    }>;
+    promise = (async () => {
       const assessment = assessKnowledgeBaseCandidate(selectedCandidate);
       const recoveredHeadingCount = selectedCandidate.diagnostics.filter(
         (item) => item.startsWith("Recovered "),
@@ -742,7 +831,7 @@ export function createGeoRouter(options: GeoRouterOptions = {}): Router {
       let finalized;
       const finalizeStartedAt = Date.now();
       try {
-        finalized = await finalizeKnowledgeBaseCandidate({
+        finalized = await knowledgeBaseFinalizer({
           candidate: selectedCandidate,
           companyName: finalCompanyName,
           evaluatedAt,
@@ -753,11 +842,20 @@ export function createGeoRouter(options: GeoRouterOptions = {}): Router {
           candidateSha,
           error: error instanceof Error ? error.message : String(error),
         });
-        throw new GeoHttpError(
-          "知识库最终整理暂时失败，请稍后重试",
-          503,
-          "KB_FINALIZER_CONTRACT_VIOLATION",
-        );
+        return {
+          value: {
+            ...value,
+            knowledgeBaseCandidateFailure: undefined,
+            knowledgeBaseFinalization: {
+              state: "failed_internal" as const,
+              finalizerVersion: WEBSITE_KB_FINALIZER_VERSION,
+              candidateSha256: candidateSha,
+              errorCode: "KB_FINALIZER_CONTRACT_VIOLATION" as const,
+              retryAvailable: true,
+              updatedAt: new Date().toISOString(),
+            },
+          },
+        };
       }
 
       const filename = `${sanitizeFilename(
@@ -807,6 +905,13 @@ export function createGeoRouter(options: GeoRouterOptions = {}): Router {
           ? { companyNameSource: "input" as const }
           : {}),
         knowledgeBaseCandidateFailure: undefined,
+        knowledgeBaseFinalization: {
+          state: "completed",
+          finalizerVersion: WEBSITE_KB_FINALIZER_VERSION,
+          candidateSha256: candidateSha,
+          retryAvailable: false,
+          updatedAt: new Date().toISOString(),
+        },
         archiveFileIds: Array.from(
           new Set([
             ...(value.archiveFileIds || []),
@@ -839,12 +944,31 @@ export function createGeoRouter(options: GeoRouterOptions = {}): Router {
         },
       };
       return { value: nextValue, manifest: finalized.manifest };
-    })().catch((error) => {
-      knowledgeBaseFinalizations.delete(finalizationKey);
-      throw error;
-    });
+    })()
+      .then((result) => {
+        knowledgeBaseFinalizationBackoffs.delete(finalizationKey);
+        return result;
+      })
+      .catch((error) => {
+        knowledgeBaseFinalizations.delete(finalizationKey);
+        const attempts =
+          (knowledgeBaseFinalizationBackoffs.get(finalizationKey)?.attempts ??
+            0) + 1;
+        knowledgeBaseFinalizationBackoffs.set(finalizationKey, {
+          attempts,
+          retryAt:
+            Date.now() +
+            Math.min(60_000, 2_000 * Math.pow(2, Math.min(attempts - 1, 5))),
+        });
+        throw error;
+      })
+      .finally(() => {
+        const current = knowledgeBaseFinalizations.get(finalizationKey);
+        if (current?.promise === promise) current.settled = true;
+      });
     knowledgeBaseFinalizations.set(finalizationKey, {
       expiresAt: now + 10 * 60 * 1000,
+      settled: false,
       promise,
     });
     return promise;
@@ -909,6 +1033,7 @@ export function createGeoRouter(options: GeoRouterOptions = {}): Router {
               automaticResult: "submitted" as const,
             },
             knowledgeBaseCandidateFailure: undefined,
+            knowledgeBaseFinalization: undefined,
             knowledgeBaseArtifact: undefined,
             temporaryFileIds: Array.from(
               new Set([
@@ -2371,6 +2496,71 @@ export function createGeoRouter(options: GeoRouterOptions = {}): Router {
   );
 
   router.post(
+    "/projects/:projectToken/knowledge-base/finalization/retry",
+    requireConfiguration,
+    requireSession,
+    requireSessionRate("knowledge-base-finalization-retry", 8, 60 * 1000),
+    asyncHandler(async (req, res) => {
+      const value = openOwnedProject(req, res);
+      if (
+        value.knowledgeBaseFinalization?.state !== "failed_internal" ||
+        value.knowledgeBaseFinalization.retryAvailable !== true
+      ) {
+        throw new GeoHttpError(
+          "当前项目没有可重试的知识库最终整理任务",
+          409,
+          "KB_FINALIZATION_RETRY_NOT_AVAILABLE",
+        );
+      }
+      const knowledgeBaseTask = await getResolvedTask(
+        broker,
+        value.knowledgeBaseTaskId,
+      );
+      if (normalizeTaskStatus(knowledgeBaseTask.status) !== "completed") {
+        throw new GeoHttpError(
+          "候选资料尚未生成完成，暂不能重试最终整理",
+          409,
+          "KB_FINALIZATION_CANDIDATE_NOT_READY",
+        );
+      }
+      const previousFinalFileId = value.knowledgeBaseArtifact?.final.fileId;
+      const finalized = await ensureFinalizedKnowledgeBase(
+        trackArchiveFile(value, knowledgeBaseTask),
+        knowledgeBaseTask,
+        { force: true },
+      );
+      const nextValue = await resolveCanonicalCompanyIdentity(
+        broker,
+        finalized.value,
+        knowledgeBaseTask,
+        { allowInvalidArchiveForProjectView: true },
+      );
+      let projectToken: string;
+      try {
+        projectToken = codec.seal("project", nextValue, PROJECT_TTL_MS);
+      } catch (error) {
+        const currentFinalFileId =
+          nextValue.knowledgeBaseArtifact?.final.fileId;
+        if (currentFinalFileId && currentFinalFileId !== previousFinalFileId) {
+          await broker.deleteFile(currentFinalFileId).catch(() => undefined);
+        }
+        throw error;
+      }
+      const questionTask = nextValue.questionTaskId
+        ? await getResolvedTask(broker, nextValue.questionTaskId)
+        : undefined;
+      const project = await buildProjectView(
+        broker,
+        nextValue,
+        projectToken,
+        knowledgeBaseTask,
+        questionTask,
+      );
+      res.json({ projectToken, project });
+    }),
+  );
+
+  router.post(
     "/projects/:projectToken/retry",
     requireConfiguration,
     requireSession,
@@ -2503,6 +2693,7 @@ export function createGeoRouter(options: GeoRouterOptions = {}): Router {
                 }
               : undefined,
         knowledgeBaseCandidateFailure: undefined,
+        knowledgeBaseFinalization: undefined,
         knowledgeBaseArtifact: undefined,
         temporaryFileIds: Array.from(
           new Set([
@@ -4882,6 +5073,11 @@ async function buildProjectView(
     knowledgeBase.status === "completed"
       ? resolveKnowledgeBaseArtifact(value, knowledgeBaseTask)
       : null;
+  const knowledgeBaseFinalizationFailure =
+    knowledgeBase.status === "completed" &&
+    value.knowledgeBaseFinalization?.state === "failed_internal"
+      ? value.knowledgeBaseFinalization
+      : undefined;
   let knowledgeBaseValidationFailure:
     | KnowledgeBaseArchiveValidationError
     | undefined;
@@ -4894,7 +5090,11 @@ async function buildProjectView(
       value.knowledgeBaseCandidateFailure.message,
       value.knowledgeBaseCandidateFailure.category,
     );
-  } else if (knowledgeBase.status === "completed" && !archiveDescriptor) {
+  } else if (
+    knowledgeBase.status === "completed" &&
+    !archiveDescriptor &&
+    !knowledgeBaseFinalizationFailure
+  ) {
     knowledgeBaseValidationFailure = new KnowledgeBaseArchiveValidationError(
       "completed task does not contain a ZIP artifact",
       "structure",
@@ -4915,9 +5115,10 @@ async function buildProjectView(
     }
   }
   const knowledgeBaseRetryAvailable =
-    (Boolean(knowledgeBaseValidationFailure) &&
+    !knowledgeBaseFinalizationFailure &&
+    ((Boolean(knowledgeBaseValidationFailure) &&
       knowledgeBaseValidationFailure?.category !== "unsafe") ||
-    ["failed", "cancelled"].includes(knowledgeBase.status);
+      ["failed", "cancelled"].includes(knowledgeBase.status));
   const knowledgeBaseAutoRetryAvailable =
     knowledgeBaseRetryAvailable &&
     knowledgeBaseValidationFailure?.category !== "unsafe" &&
@@ -4947,7 +5148,14 @@ async function buildProjectView(
     archiveDescriptor && knowledgeBaseManifest
       ? `/api/geo/projects/${encodeURIComponent(projectToken)}/archive`
       : undefined;
-  const publicKnowledgeBaseTask = knowledgeBaseValidationFailure
+  const publicKnowledgeBaseTask = knowledgeBaseFinalizationFailure
+    ? {
+        ...knowledgeBase,
+        status: "failed" as const,
+        progress: 100,
+        error: KNOWLEDGE_BASE_FINALIZATION_PUBLIC_ERROR,
+      }
+    : knowledgeBaseValidationFailure
     ? {
         ...knowledgeBase,
         status: "failed" as const,
@@ -4961,7 +5169,14 @@ async function buildProjectView(
           error: undefined,
         }
       : knowledgeBase;
-  const executionKnowledgeBaseTask = knowledgeBaseValidationFailure
+  const executionKnowledgeBaseTask = knowledgeBaseFinalizationFailure
+    ? {
+        ...knowledgeBaseTask,
+        status: "failed",
+        output: [],
+        error: { message: KNOWLEDGE_BASE_FINALIZATION_PUBLIC_ERROR },
+      }
+    : knowledgeBaseValidationFailure
     ? {
         ...knowledgeBaseTask,
         status: "failed",
@@ -5261,9 +5476,26 @@ async function buildProjectView(
     knowledgeBaseRecoveryState,
     knowledgeBaseValidationCategory: knowledgeBaseValidationFailure?.category,
     knowledgeBaseSupportRequired:
-      knowledgeBaseValidationFailure?.category === "unsafe" ||
+      !knowledgeBaseFinalizationFailure &&
+      (knowledgeBaseValidationFailure?.category === "unsafe" ||
       (statusSyncPending(knowledgeBase.status) &&
-        hasElapsed(value.knowledgeBaseSubmittedAt, 15 * 60 * 1_000)),
+          hasElapsed(value.knowledgeBaseSubmittedAt, 15 * 60 * 1_000))),
+    knowledgeBaseFinalization: {
+      finalizationState:
+        value.knowledgeBaseFinalization?.state ??
+        (knowledgeBaseManifest ? "completed" : "pending"),
+      finalizerVersion:
+        value.knowledgeBaseFinalization?.finalizerVersion ??
+        value.knowledgeBaseArtifact?.finalizerVersion ??
+        WEBSITE_KB_FINALIZER_VERSION,
+      candidateSha256:
+        value.knowledgeBaseFinalization?.candidateSha256 ??
+        value.knowledgeBaseArtifact?.candidate.sha256,
+      errorCode: value.knowledgeBaseFinalization?.errorCode,
+      retryAvailable:
+        value.knowledgeBaseFinalization?.state === "failed_internal" &&
+        value.knowledgeBaseFinalization.retryAvailable === true,
+    },
     questionRetryAvailable,
     assessmentRetryAvailable,
     optimizationForecastRetryAvailable,
@@ -5393,9 +5625,11 @@ async function buildProjectView(
         ? "推荐结果未通过四类各五题的结构校验，可重新生成一次"
         : "推荐结果未通过四类各五题的结构校验，自动重试次数已用完，请联系技术支持"
       : undefined,
-    error: knowledgeBaseValidationFailure
-      ? knowledgeBaseValidationPublicError
-      : undefined,
+    error: knowledgeBaseFinalizationFailure
+      ? KNOWLEDGE_BASE_FINALIZATION_PUBLIC_ERROR
+      : knowledgeBaseValidationFailure
+        ? knowledgeBaseValidationPublicError
+        : undefined,
   };
 }
 

@@ -1192,13 +1192,14 @@ describe("GEO API", () => {
       expect(completed.project.knowledgeBase.sections).toHaveLength(7);
       expect(completed.projectToken).not.toBe(initial.projectToken);
 
-      const value = new GeoTokenCodec(secret).open<any>(
+      const codec = new GeoTokenCodec(secret);
+      const value = codec.open<any>(
         completed.projectToken,
         "project",
       ).value;
       expect(value).toMatchObject({
         knowledgeBaseArtifact: {
-          finalizerVersion: "website-kb-finalizer-v2",
+          finalizerVersion: "website-kb-finalizer-v3",
           candidate: {
             taskId: "kb-1",
             fileId: "candidate-v2",
@@ -1235,9 +1236,163 @@ describe("GEO API", () => {
       expect(downloaded.status).toBe(200);
       expect(Buffer.from(await downloaded.arrayBuffer())).toEqual(finalBytes);
       expect(finalBytes).not.toEqual(v2Broker.archive);
+
+      const uploadCount = v2Broker.uploads.size;
+      const legacyV2Token = codec.seal(
+        "project",
+        {
+          ...value,
+          knowledgeBaseFinalization: undefined,
+          knowledgeBaseArtifact: {
+            ...value.knowledgeBaseArtifact,
+            finalizerVersion: "website-kb-finalizer-v2",
+          },
+        },
+        60_000,
+      );
+      const legacyV2 = await fetch(
+        `${origin}/api/geo/projects/${encodeURIComponent(legacyV2Token)}`,
+        { headers: { cookie } },
+      );
+      expect(legacyV2.status).toBe(200);
+      const legacyV2Payload = (await legacyV2.json()) as Record<string, any>;
+      expect(legacyV2Payload.project.knowledgeBaseFinalization).toMatchObject({
+        finalizationState: "completed",
+        finalizerVersion: "website-kb-finalizer-v2",
+        retryAvailable: false,
+      });
+      expect(v2Broker.uploads.size).toBe(uploadCount);
     } finally {
       await new Promise<void>((resolve, reject) =>
         v2Server.close((error) => (error ? reject(error) : resolve())),
+      );
+    }
+  });
+
+  it("keeps deterministic finalizer failures stable and retries the same candidate without a new upstream task", async () => {
+    const failureBroker = new MockBroker();
+    failureBroker.archive = await fixtureCandidateArchive();
+    const finalizer = vi.fn(async () => {
+      throw new Error("deterministic contract failure");
+    });
+    const secret = "finalizer-failure-secret-at-least-32-characters";
+    const app = express();
+    app.use(
+      "/api/geo",
+      createGeoRouter({
+        broker: failureBroker,
+        knowledgeBaseFinalizer: finalizer,
+        projectOrderRegistry,
+        env: {
+          NODE_ENV: "test",
+          FRONTMIND_GEO_INVITE_CODE: "frontmind666",
+          FRONTMIND_GEO_SESSION_SECRET: secret,
+        },
+      }),
+    );
+    const failureServer = app.listen(0);
+    await new Promise<void>((resolve) =>
+      failureServer.once("listening", resolve),
+    );
+    try {
+      const origin = `http://127.0.0.1:${
+        (failureServer.address() as AddressInfo).port
+      }`;
+      const invited = await fetch(`${origin}/api/geo/invite/verify`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ code: "frontmind666" }),
+      });
+      const cookie = invited.headers.get("set-cookie")!.split(";")[0]!;
+      const created = await fetch(`${origin}/api/geo/projects`, {
+        method: "POST",
+        headers: { cookie, "content-type": "application/json" },
+        body: JSON.stringify({ input: "Acme", attachments: [] }),
+      });
+      const initial = (await created.json()) as Record<string, any>;
+      failureBroker.tasks.set("kb-1", {
+        id: "kb-1",
+        status: "completed",
+        completed_at: "2026-07-30T04:00:00.000Z",
+        output: [
+          {
+            role: "assistant",
+            content: [
+              {
+                type: "output_file",
+                file_id: "candidate-finalization-failure",
+                filename: "website-lead-candidate-v1.zip",
+              },
+            ],
+          },
+        ],
+      });
+
+      const firstPoll = await fetch(
+        `${origin}/api/geo/projects/${encodeURIComponent(
+          initial.projectToken,
+        )}`,
+        { headers: { cookie } },
+      );
+      expect(firstPoll.status).toBe(200);
+      const first = (await firstPoll.json()) as Record<string, any>;
+      expect(first.project).toMatchObject({
+        status: "failed",
+        error:
+          "候选资料已安全保留，系统最终整理校验异常；修复后可直接重试整理，无需重新上传。",
+        knowledgeBaseFinalization: {
+          finalizationState: "failed_internal",
+          finalizerVersion: "website-kb-finalizer-v3",
+          candidateSha256: expect.stringMatching(/^[a-f0-9]{64}$/),
+          errorCode: "KB_FINALIZER_CONTRACT_VIOLATION",
+          retryAvailable: true,
+        },
+      });
+      expect(finalizer).toHaveBeenCalledTimes(1);
+      const promptCount = failureBroker.prompts.length;
+
+      const stablePoll = await fetch(
+        `${origin}/api/geo/projects/${encodeURIComponent(first.projectToken)}`,
+        { headers: { cookie } },
+      );
+      expect(stablePoll.status).toBe(200);
+      const stable = (await stablePoll.json()) as Record<string, any>;
+      expect(finalizer).toHaveBeenCalledTimes(1);
+      expect(stable.project.knowledgeBaseFinalization.candidateSha256).toBe(
+        first.project.knowledgeBaseFinalization.candidateSha256,
+      );
+
+      finalizer.mockImplementation(async () => {
+        await new Promise((resolve) => setTimeout(resolve, 20));
+        throw new Error("deterministic contract failure");
+      });
+      const retryUrl = `${origin}/api/geo/projects/${encodeURIComponent(
+        stable.projectToken,
+      )}/knowledge-base/finalization/retry`;
+      const retries = await Promise.all([
+        fetch(retryUrl, { method: "POST", headers: { cookie } }),
+        fetch(retryUrl, { method: "POST", headers: { cookie } }),
+      ]);
+      expect(retries.map((response) => response.status)).toEqual([200, 200]);
+      const retriedPayloads = await Promise.all(
+        retries.map(
+          async (response) => (await response.json()) as Record<string, any>,
+        ),
+      );
+      expect(finalizer).toHaveBeenCalledTimes(2);
+      expect(failureBroker.prompts).toHaveLength(promptCount);
+      for (const retriedPayload of retriedPayloads) {
+        expect(
+          retriedPayload.project.knowledgeBaseFinalization.candidateSha256,
+        ).toBe(first.project.knowledgeBaseFinalization.candidateSha256);
+        expect(retriedPayload.project.knowledgeBaseFinalization).toMatchObject({
+          finalizationState: "failed_internal",
+          retryAvailable: true,
+        });
+      }
+    } finally {
+      await new Promise<void>((resolve, reject) =>
+        failureServer.close((error) => (error ? reject(error) : resolve())),
       );
     }
   });
