@@ -275,6 +275,12 @@ describe("GEO question-recommender skill", () => {
     expect(skill).toContain(
       "Every item must also declare a different `competitorAnchor`",
     );
+    expect(skill).toContain(
+      "Never stop, return a `blocked`/`status`/error object",
+    );
+    expect(skill).toContain(
+      "Missing D08 evidence is not a permitted reason to omit the twenty questions",
+    );
     expect(skill).toContain('"minContains": 5');
     expect(skill).toContain("competitorAnchor");
     expect(skill).toContain("All five questions must explicitly name the current enterprise");
@@ -306,6 +312,8 @@ describe("GEO question-recommender skill", () => {
     expect(prompt).toContain("禁止无企业和产品主语的行业教育问句");
     expect(prompt).toContain("四类各 5 题必须分别覆盖 5 个不同客户决策意图");
     expect(prompt).toContain("禁止内部英文枚举、序号占位");
+    expect(prompt).toContain("知识库 D08 或其他文件没有竞品名称时");
+    expect(prompt).toContain("不得返回 blocked/status/error 对象");
   });
 
   it("packages the complete question recommender as a deterministic Skill ZIP", async () => {
