@@ -13,6 +13,7 @@ import {
   claimKnowledgeBaseAutoRetry,
   CurrentAssessment,
   EnterpriseAnalysis,
+  expandLegacyTruncatedOverview,
   formatExecutionElapsed,
   GeoWorkspaceHandoff,
   MonitoringResults,
@@ -26,6 +27,36 @@ import { KnowledgeCompletenessDetails } from "./KnowledgeCompletenessDialog";
 import { createGeoStylePreviewProject } from "./preview";
 
 describe("GEO style preview rendering", () => {
+  it("expands a legacy 72-character structural overview from its complete leaf titles", () => {
+    const markdown = [
+      "# 产品与服务综述",
+      "",
+      "产品与服务分支涵盖MindPromise 智诺：构建 AI 可理解的企业语义资产、MindReach 智达：连接获客、营销与客服智能体、Mind。",
+    ].join("\n");
+    const expanded = expandLegacyTruncatedOverview(markdown, "产品与服务", [
+      {
+        id: "mindpromise",
+        title: "MindPromise 智诺：构建 AI 可理解的企业语义资产",
+        assetIds: [],
+      },
+      {
+        id: "mindreach",
+        title: "MindReach 智达：连接获客、营销与客服智能体",
+        assetIds: [],
+      },
+      {
+        id: "mindnexus",
+        title: "MindNexus 智汇：把企业级 AI 工作流接入现有系统",
+        assetIds: [],
+      },
+    ]);
+
+    expect(expanded).toContain(
+      "MindNexus 智汇：把企业级 AI 工作流接入现有系统，详细事实与来源已按条目分别整理。",
+    );
+    expect(expanded).not.toContain("、Mind。");
+  });
+
   it("redirects only signed local-acceptance checkouts to the loopback payment page", () => {
     const checkout = {
       authorization: "local-payment-889100000001",

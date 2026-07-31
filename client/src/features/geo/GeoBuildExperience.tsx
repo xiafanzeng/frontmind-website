@@ -622,6 +622,34 @@ export function completeKnowledgeBaseSections(
   });
 }
 
+export function expandLegacyTruncatedOverview(
+  markdown: string,
+  sectionTitle: string,
+  leaves: GeoKnowledgeSection["leaves"],
+) {
+  const leafTitles = Array.from(
+    new Set(
+      (leaves ?? [])
+        .map((leaf) => leaf.title.trim())
+        .filter((title) => title && title !== sectionTitle),
+    ),
+  ).slice(0, 3);
+  if (!markdown || leafTitles.length === 0) return markdown;
+  const completeNarrative = `${sectionTitle}分支涵盖${leafTitles.join("、")}，详细事实与来源已按条目分别整理。`;
+  const legacyPrefix = `${sectionTitle}分支涵盖`;
+  return markdown
+    .split("\n")
+    .map((line) => {
+      const content = line.trim();
+      if (!content.startsWith(legacyPrefix)) return line;
+      const unpunctuated = content.replace(/[。！？.!?]+$/, "");
+      return completeNarrative.startsWith(unpunctuated)
+        ? completeNarrative
+        : line;
+    })
+    .join("\n");
+}
+
 const KNOWLEDGE_BRANCH_ICONS = [
   Building2,
   Users,
@@ -4586,8 +4614,11 @@ export function EnterpriseAnalysis({
     sections[0];
   const activeLeaves = activeSection?.leaves ?? [];
   const activeOverview = activeSection?.overview;
-  const activeMarkdown =
-    activeOverview?.markdown || activeSection?.markdown || "";
+  const activeMarkdown = expandLegacyTruncatedOverview(
+    activeOverview?.markdown || activeSection?.markdown || "",
+    activeSection?.title || "",
+    activeLeaves,
+  );
 
   return (
     <div className="geo-analysis-shell">
