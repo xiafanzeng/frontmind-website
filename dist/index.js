@@ -180,7 +180,7 @@ async function handleVisitorStatsRequest(req, res, next) {
       logVisitorStatsFailure("summary", error);
       sendJson(res, 503, {
         ok: false,
-        error: "Visitor statistics are temporarily unavailable"
+        error: "\u8BBF\u95EE\u7EDF\u8BA1\u6682\u65F6\u4E0D\u53EF\u7528"
       });
     }
     return;
@@ -191,19 +191,19 @@ async function handleVisitorStatsRequest(req, res, next) {
       const visitorId = typeof body.visitorId === "string" ? body.visitorId.trim() : "";
       const page = typeof body.page === "string" ? body.page.slice(0, 300) : "";
       if (!visitorId || visitorId.length < 12 || visitorId.length > 160) {
-        sendJson(res, 400, { ok: false, error: "Invalid visitor id" });
+        sendJson(res, 400, { ok: false, error: "\u8BBF\u95EE\u6807\u8BC6\u65E0\u6548" });
         return;
       }
       recordHit(req, visitorId, page);
       sendJson(res, 200, { ok: true, summary: buildSummary() });
     } catch (error) {
       if (error instanceof VisitorStatsRequestError) {
-        sendJson(res, 400, { ok: false, error: "Invalid request" });
+        sendJson(res, 400, { ok: false, error: "\u8BF7\u6C42\u683C\u5F0F\u65E0\u6548" });
       } else {
         logVisitorStatsFailure("hit", error);
         sendJson(res, 503, {
           ok: false,
-          error: "Visitor statistics are temporarily unavailable"
+          error: "\u8BBF\u95EE\u7EDF\u8BA1\u6682\u65F6\u4E0D\u53EF\u7528"
         });
       }
     }
@@ -213,7 +213,7 @@ async function handleVisitorStatsRequest(req, res, next) {
     next();
     return;
   }
-  sendJson(res, 404, { ok: false, error: "Not found" });
+  sendJson(res, 404, { ok: false, error: "\u63A5\u53E3\u4E0D\u5B58\u5728" });
 }
 function recordHit(req, visitorId, _page) {
   if (isBot(req.headers["user-agent"])) return;
@@ -10763,6 +10763,59 @@ function knowledgeCandidateDiagnosticCode(value) {
   if (value.startsWith("02_run.json")) return "run_metadata_ignored";
   return "candidate_recovered";
 }
+async function verifyUploadedKnowledgeBaseArchive(broker, input) {
+  let bytes;
+  try {
+    const response = await broker.downloadFile(input.fileId);
+    bytes = await readResponseBufferLimited(
+      response,
+      MAX_VALIDATED_ARCHIVE_BYTES
+    );
+  } catch (error) {
+    throw new GeoHttpError(
+      "\u77E5\u8BC6\u5E93\u6B63\u5F0F\u6587\u4EF6\u4F20\u8F93\u6682\u65F6\u4E0D\u53EF\u7528\uFF0C\u8BF7\u7A0D\u540E\u91CD\u8BD5",
+      error instanceof GeoByteLimitError ? 502 : 503,
+      "FINAL_ARCHIVE_READBACK_FAILED"
+    );
+  }
+  if (!bytes.length) {
+    throw new GeoHttpError(
+      "\u77E5\u8BC6\u5E93\u6B63\u5F0F\u6587\u4EF6\u4F20\u8F93\u6682\u65F6\u4E0D\u53EF\u7528\uFF0C\u8BF7\u7A0D\u540E\u91CD\u8BD5",
+      503,
+      "FINAL_ARCHIVE_READBACK_FAILED"
+    );
+  }
+  const actualSha256 = crypto5.createHash("sha256").update(bytes).digest("hex");
+  if (actualSha256 !== input.expectedSha256 || !bytes.equals(input.expectedBytes)) {
+    throw new GeoHttpError(
+      "\u77E5\u8BC6\u5E93\u6B63\u5F0F\u6587\u4EF6\u4F20\u8F93\u6821\u9A8C\u5931\u8D25\uFF0C\u8BF7\u7A0D\u540E\u91CD\u8BD5",
+      503,
+      "FINAL_ARCHIVE_HASH_MISMATCH"
+    );
+  }
+  let manifest;
+  try {
+    manifest = await parseKnowledgeBaseArchive(bytes, {
+      companyName: input.companyName,
+      validationProfile: "website-lead-v1",
+      generatedAt: input.generatedAt
+    });
+  } catch {
+    throw new GeoHttpError(
+      "\u77E5\u8BC6\u5E93\u6B63\u5F0F\u6587\u4EF6\u7ED3\u6784\u6821\u9A8C\u5931\u8D25\uFF0C\u8BF7\u7A0D\u540E\u91CD\u8BD5",
+      503,
+      "FINAL_ARCHIVE_CONTRACT_MISMATCH"
+    );
+  }
+  if (manifest.packageManifestSha256 !== input.expectedPackageManifestSha256) {
+    throw new GeoHttpError(
+      "\u77E5\u8BC6\u5E93\u6B63\u5F0F\u6587\u4EF6\u6E05\u5355\u6821\u9A8C\u5931\u8D25\uFF0C\u8BF7\u7A0D\u540E\u91CD\u8BD5",
+      503,
+      "FINAL_ARCHIVE_MANIFEST_MISMATCH"
+    );
+  }
+  return manifest;
+}
 function createGeoRouter(options = {}) {
   const env = options.env ?? process.env;
   const production = env.NODE_ENV === "production";
@@ -11085,6 +11138,7 @@ function createGeoRouter(options = {}) {
         mimeType: "application/zip",
         sizeBytes: finalized.bytes.length
       });
+      let verifiedManifest;
       try {
         const uploadStartedAt = Date.now();
         await broker.uploadFile(
@@ -11093,6 +11147,16 @@ function createGeoRouter(options = {}) {
           "application/zip",
           file.proxy_upload_ticket
         );
+        const uploadMs = Date.now() - uploadStartedAt;
+        const readbackStartedAt = Date.now();
+        verifiedManifest = await verifyUploadedKnowledgeBaseArchive(broker, {
+          fileId: file.id,
+          companyName: finalCompanyName,
+          generatedAt: evaluatedAt,
+          expectedBytes: finalized.bytes,
+          expectedSha256: finalized.sha256,
+          expectedPackageManifestSha256: finalized.packageManifestSha256
+        });
         console.info("[GEO KB]", {
           event: "knowledge_base_finalized",
           projectId: value.projectId,
@@ -11109,9 +11173,17 @@ function createGeoRouter(options = {}) {
           packagedImages: finalized.metrics.packagedImages,
           rejectedImages: selectedCandidate.assets.length - finalized.metrics.packagedImages,
           finalizeMs: Date.now() - finalizeStartedAt,
-          uploadMs: Date.now() - uploadStartedAt
+          uploadMs,
+          readbackMs: Date.now() - readbackStartedAt
         });
       } catch (error) {
+        console.warn("[GEO KB]", {
+          event: "final_archive_readback_failed",
+          projectId: value.projectId,
+          taskId: value.knowledgeBaseTaskId,
+          finalFileId: file.id,
+          diagnosticCode: error instanceof GeoHttpError ? error.code : "FINAL_ARCHIVE_UPLOAD_OR_READBACK_FAILED"
+        });
         await broker.deleteFile(file.id).catch(() => void 0);
         throw error;
       }
@@ -11154,7 +11226,7 @@ function createGeoRouter(options = {}) {
           }
         }
       };
-      return { value: nextValue, manifest: finalized.manifest };
+      return { value: nextValue, manifest: verifiedManifest };
     })().then((result) => {
       knowledgeBaseFinalizationBackoffs.delete(finalizationKey);
       return result;
@@ -15100,7 +15172,7 @@ async function loadKnowledgeBaseManifest(broker, taskId, task, companyName, arch
     cache = /* @__PURE__ */ new Map();
     manifestCacheByBroker.set(broker, cache);
   }
-  const cacheKey = `${taskId}:${archive.fileId || archive.url || archive.filename}:${validationProfile || "historical-compatible"}`;
+  const cacheKey = `${taskId}:${archive.fileId || archive.url || archive.filename}:${validationProfile || "historical-compatible"}:${archive.sha256 || "unverified"}:${archive.packageManifestSha256 || "unverified"}`;
   const cached = cache.get(cacheKey);
   if (cached && cached.expiresAt > Date.now()) return cached.promise;
   const promise = (async () => {
@@ -15122,15 +15194,31 @@ async function loadKnowledgeBaseManifest(broker, taskId, task, companyName, arch
           "unsafe"
         );
       }
+      console.warn("[GEO KB]", {
+        event: "archive_download_failed",
+        taskId,
+        fileId: archive.fileId,
+        filename: archive.filename,
+        diagnosticCode: error instanceof GeoBrokerError ? error.code : "ARCHIVE_READ_FAILED",
+        upstreamStatus: error instanceof GeoBrokerError ? error.status : void 0
+      });
       throw new GeoHttpError(
         "\u77E5\u8BC6\u5E93 ZIP \u6682\u65F6\u65E0\u6CD5\u8BFB\u53D6\uFF0C\u8BF7\u7A0D\u540E\u91CD\u8BD5",
         502,
         "ARCHIVE_READ_FAILED"
       );
     }
+    if (archive.sha256 && crypto5.createHash("sha256").update(bytes).digest("hex") !== archive.sha256) {
+      throw new GeoHttpError(
+        "\u77E5\u8BC6\u5E93\u6B63\u5F0F\u6587\u4EF6\u4F20\u8F93\u6821\u9A8C\u5931\u8D25\uFF0C\u8BF7\u7A0D\u540E\u91CD\u8BD5",
+        502,
+        "FINAL_ARCHIVE_HASH_MISMATCH"
+      );
+    }
+    let manifest;
     try {
       if (!bytes.length) throw new Error("Knowledge-base archive is empty");
-      return await parseKnowledgeBaseArchive(bytes, {
+      manifest = await parseKnowledgeBaseArchive(bytes, {
         companyName,
         validationProfile,
         generatedAt: typeof task.completed_at === "string" ? task.completed_at : typeof task.updated_at === "string" ? task.updated_at : void 0
@@ -15146,6 +15234,14 @@ async function loadKnowledgeBaseManifest(broker, taskId, task, companyName, arch
         category
       );
     }
+    if (archive.packageManifestSha256 && manifest.packageManifestSha256 !== archive.packageManifestSha256) {
+      throw new GeoHttpError(
+        "\u77E5\u8BC6\u5E93\u6B63\u5F0F\u6587\u4EF6\u6E05\u5355\u6821\u9A8C\u5931\u8D25\uFF0C\u8BF7\u7A0D\u540E\u91CD\u8BD5",
+        502,
+        "FINAL_ARCHIVE_MANIFEST_MISMATCH"
+      );
+    }
+    return manifest;
   })();
   cache.set(cacheKey, { expiresAt: Date.now() + 10 * 60 * 1e3, promise });
   while (cache.size > 20) {
@@ -15389,7 +15485,9 @@ function resolveKnowledgeBaseArtifact(value, _task) {
   if (!finalArtifact) return null;
   return {
     fileId: finalArtifact.fileId,
-    filename: finalArtifact.filename
+    filename: finalArtifact.filename,
+    sha256: finalArtifact.sha256,
+    packageManifestSha256: finalArtifact.packageManifestSha256
   };
 }
 function validateProjectAttachments(input, codec, sessionId) {
@@ -15712,7 +15810,7 @@ function normalizeError(error) {
 
 // server/geo/health.ts
 function geoPublicBuildSha(env = process.env) {
-  const embedded = true ? "ca6982ed268c93c0a3ec7219651cacb566762576".trim() : "";
+  const embedded = true ? "6aba0ef243eb8aa21ae166630acbd147da4ed290".trim() : "";
   if (/^[a-f0-9]{7,64}$/i.test(embedded)) return embedded.toLowerCase();
   const candidate = (env.FRONTMIND_BUILD_SHA || env.GITHUB_SHA || env.RAILWAY_GIT_COMMIT_SHA || "").trim();
   return /^[a-f0-9]{7,64}$/i.test(candidate) ? candidate.toLowerCase() : null;
@@ -15913,7 +16011,7 @@ async function startServer() {
   );
   app.get("*", (req, res) => {
     if (path8.extname(req.path)) {
-      res.status(404).type("text/plain").send("Not found");
+      res.status(404).type("text/plain").send("\u9875\u9762\u4E0D\u5B58\u5728");
       return;
     }
     const routePath = req.path === "/" ? "/" : req.path.replace(/\/+$/, "");
