@@ -25,6 +25,18 @@ describe("GeoQuestionSetSchema", () => {
     expect(result.questions).toHaveLength(20);
   });
 
+  it("accepts natural named-brand evaluation wording as a concrete comparison", () => {
+    const questions = validQuestions();
+    questions[19] = {
+      ...questions[19],
+      question:
+        "跨区域部署时应如何评估 FrontMind 与云岚科技的服务覆盖？",
+    };
+    expect(GeoQuestionSetSchema.parse({ questions }).questions).toHaveLength(
+      20,
+    );
+  });
+
   it("rejects selectable industry-ranking questions", () => {
     const questions = validQuestions();
     questions[10] = { ...questions[10], selectable: true };
@@ -184,6 +196,9 @@ describe("custom GEO question policy", () => {
     "主流 GEO 服务商有哪些？",
     "国内企业 GEO 服务商有哪些？",
     "企业 AI 品牌建设服务商怎么选？",
+    "部署企业级 Kubernetes 平台时哪些云服务商更适合？",
+    "建设大模型应用平台时应把哪些厂商纳入选型名单？",
+    "本地部署场景应优先考察哪些专有云厂商？",
     "科研仪器行业排\u200b名有哪些？",
     "2026 年行业 TOP 10 是谁？",
   ])(

@@ -45,6 +45,7 @@ Every item must be phrased as a real reputation judgment such as “靠谱吗？
 5. Segment discovery: a sourced region, technology route, service model, or subcategory recommendation question.
 
 Every item in this category must genuinely be an open ranking, shortlist, or recommendation question. Do not put ordinary category education, definitions, trends, or product FAQs here merely to fill five slots.
+Natural shortlist wording such as “哪些服务商更适合？” “应把哪些厂商纳入选型名单？” or “应优先考察哪些厂商？” is valid open recommendation intent.
 
 ### `competitor_comparison`
 
@@ -55,6 +56,7 @@ Every item in this category must genuinely be an open ranking, shortlist, or rec
 5. Service boundary, support, risk, ecosystem, localization, or long-term-operation comparison.
 
 All five questions must explicitly name the current enterprise or brand through `enterpriseAnchor` and a different real competitor company or brand through `competitorAnchor`. Prefer five different competitor brands when the ZIP or trustworthy public knowledge supports them. If only one competitor can be identified with high confidence, five questions may compare the same pair only when they use five genuinely different customer decisions. Generic labels such as “同类平台”“传统方案”“原生接口” or “自建集群” are not allowed as comparison targets.
+Natural comparison wording such as “应如何评估 A 与 B 的服务覆盖？” is valid when both anchors are explicit and the question asks for a shared decision dimension without asserting a winner.
 
 ## Portfolio Rules
 
