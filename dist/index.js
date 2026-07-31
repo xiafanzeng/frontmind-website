@@ -3762,8 +3762,8 @@ function questionContainsAnchor(question, anchor) {
   return normalizedAnchor.length >= 2 && normalizeQuestionAnchor(question).includes(normalizedAnchor);
 }
 var FORBIDDEN_GENERATED_QUESTION_PATTERN = /\b(?:reputation|product_scenario|industry_ranking|competitor_comparison)\b|第\s*(?:\d+|[一二三四五六七八九十]+)\s*个(?:问题|问句)|测试问题|值得优化吗/i;
-var REPUTATION_INTENT_PATTERN = /(?:背景|团队|资质|认证|专利|合规|安全|可靠|稳定|口碑|评价|声誉|客户|案例|交付|售后|服务|风险|投诉|正规|官方|认可|信任|可信|质量|融资|荣誉|实力)/;
-var COMPETITOR_COMPARISON_PATTERN = /(?:对比|相比|比较|区别|差异|相较|取舍|还是|同类|传统方案|传统工具|自建|替代|与.+哪个|和.+哪个|vs)/i;
+var REPUTATION_INTENT_PATTERN = /(?:背景|团队|资质|认证|专利|合规|安全|可靠|稳定|口碑|评价|声誉|客户|案例|交付|售后|服务|风险|投诉|正规|官方|认可|信任|可信|质量|融资|荣誉|实力|核验|证据|证书|奖项|主办方|隐私|个人信息|联系表单|cookie|数据处理|同意|访问|更正|删除|法定主体|注册地|办公所在地|身份)/i;
+var COMPETITOR_COMPARISON_PATTERN = /(?:对比|相比|比较|区别|差异|相较|取舍|还是|同类|传统方案|传统工具|自建|替代|(?:与|和|跟).+(?:哪个|哪种更适合|分别适合|分别用于|各自适合|适合什么(?:样的)?需求|如何选择)|vs)/i;
 function normalizeGeneratedQuestion(value) {
   return value.normalize("NFKC").toLocaleLowerCase("zh-CN").replace(
     /[\s!"#$%&'()*+,\-./:;<=>?@[\\\]^_`{|}~，。！？、；：“”‘’（）【】《》·…—～￥]+/g,
@@ -3986,7 +3986,9 @@ function isIndustryRankingQuestion(question) {
     /(?:哪些|哪(?:一)?家|哪个|哪款|什么|谁).{0,12}(?:品牌|产品|公司|企业|平台|机构|服务商|供应商|厂家|工具|方案).{0,12}(?:推荐|值得选择|值得购买|比较好|更好|好用|靠谱|专业)/,
     /(?:品牌|产品|公司|企业|平台|机构|服务商|供应商|厂家|工具|方案).{0,10}(?:有推荐|有哪些推荐|推荐哪些|推荐哪)/,
     /哪(?:一)?(?:家|个|款|种).{0,12}(?:好|比较好|更好|好用|靠谱|专业|值得选)/,
-    /(?:做|采购|选择).{0,12}(?:找谁|选哪(?:一)?家)/
+    /(?:做|采购|选择).{0,12}(?:找谁|选哪(?:一)?家)/,
+    /优先(?:比较|考察|了解|评估|筛选).{0,16}(?:哪些|哪几).{0,20}(?:品牌|产品|公司|企业|平台|机构|服务商|供应商|厂家|工具|解决方案|方案)/,
+    /(?:哪些|哪几).{0,16}(?:品牌|产品|公司|企业|平台|机构|服务商|供应商|厂家|工具|解决方案|方案|类型).{0,24}(?:值得)?(?:纳入|进入|放进|列入).{0,20}(?:名单|清单|候选|考察|筛选|评估|选型|比较)/
   ];
   return openRecommendationPatterns.some((pattern) => pattern.test(normalized));
 }
@@ -6167,20 +6169,51 @@ function findArchiveDescriptor(value) {
   } : null;
 }
 function parseQuestionSetFromTask(value) {
-  for (const item of trustedAssistantOutputItems(value)) {
-    const parsed = GeoQuestionSetSchema.safeParse(item);
+  return inspectQuestionSetFromTask(value).questionSet;
+}
+function questionSetValidationSummaryFromTask(value) {
+  const issues = inspectQuestionSetFromTask(value).issues;
+  if (!issues.length) return null;
+  return `\u4E0A\u4E00\u6B21\u8FD4\u56DE\u5DF2\u89E3\u6790\u4E3A JSON\uFF0C\u4F46\u672A\u901A\u8FC7\u4EE5\u4E0B\u5B57\u6BB5\u6821\u9A8C\uFF1A${issues.slice(0, 8).join("\uFF1B")}`;
+}
+function inspectQuestionSetFromTask(value) {
+  let bestIssues = [];
+  const inspectCandidate = (candidate) => {
+    const parsed = GeoQuestionSetSchema.safeParse(candidate);
     if (parsed.success) return parsed.data;
+    const record = asRecord2(candidate);
+    if (!Array.isArray(record?.questions)) return null;
+    const issues = Array.from(
+      new Set(
+        parsed.error.issues.map((issue) => {
+          const path9 = issue.path.reduce((result, part) => {
+            if (typeof part === "number") return `${result}[${part}]`;
+            const key = String(part);
+            return result ? `${result}.${key}` : key;
+          }, "");
+          return `${path9 || "root"}: ${issue.message}`;
+        })
+      )
+    );
+    if (!bestIssues.length || issues.length < bestIssues.length) {
+      bestIssues = issues;
+    }
+    return null;
+  };
+  for (const item of trustedAssistantOutputItems(value)) {
+    const parsed = inspectCandidate(item);
+    if (parsed) return { questionSet: parsed, issues: [] };
   }
   for (const candidate of trustedAssistantOutputTexts(value)) {
     for (const jsonText of possibleJsonObjects3(candidate)) {
       try {
-        const parsed = GeoQuestionSetSchema.safeParse(JSON.parse(jsonText));
-        if (parsed.success) return parsed.data;
+        const parsed = inspectCandidate(JSON.parse(jsonText));
+        if (parsed) return { questionSet: parsed, issues: [] };
       } catch {
       }
     }
   }
-  return null;
+  return { questionSet: null, issues: bestIssues };
 }
 function possibleJsonObjects3(value) {
   const trimmed = value.trim();
@@ -12049,7 +12082,7 @@ function createGeoRouter(options = {}) {
           prompt: await buildGeoQuestionPrompt({
             companyName: trackedValue.companyName,
             archiveFilename: attachment.filename,
-            retryReason: "\u5FC5\u987B\u4E25\u683C\u8FD4\u56DE\u56DB\u7C7B\u5404 5 \u9898\u3001\u603B\u8BA1 20 \u9898\uFF0C\u5E76\u6EE1\u8DB3 ID\u3001\u8BC1\u636E\u5F15\u7528\u548C selectable \u7EA6\u675F"
+            retryReason: questionSetValidationSummaryFromTask(questionTask) || "\u5FC5\u987B\u4E25\u683C\u8FD4\u56DE\u56DB\u7C7B\u5404 5 \u9898\u3001\u603B\u8BA1 20 \u9898\uFF0C\u5E76\u6EE1\u8DB3 ID\u3001\u8BC1\u636E\u5F15\u7528\u548C selectable \u7EA6\u675F"
           }),
           attachments: [attachment],
           idempotencyKey: `geo:${trackedValue.projectId}:questions:2`
@@ -16399,7 +16432,7 @@ function normalizeError(error) {
 
 // server/geo/health.ts
 function geoPublicBuildSha(env = process.env) {
-  const embedded = true ? "1610308cdf5d3b41854c922b48ced5a9495fc136".trim() : "";
+  const embedded = true ? "40a69528e2d497a21e3e28df3ee91589b01804ce".trim() : "";
   if (/^[a-f0-9]{7,64}$/i.test(embedded)) return embedded.toLowerCase();
   const candidate = (env.FRONTMIND_BUILD_SHA || env.GITHUB_SHA || env.RAILWAY_GIT_COMMIT_SHA || "").trim();
   return /^[a-f0-9]{7,64}$/i.test(candidate) ? candidate.toLowerCase() : null;
