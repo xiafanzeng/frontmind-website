@@ -16399,7 +16399,7 @@ function normalizeError(error) {
 
 // server/geo/health.ts
 function geoPublicBuildSha(env = process.env) {
-  const embedded = true ? "41ac7630bf3b29d757bc0984ed350727c97d722e".trim() : "";
+  const embedded = true ? "1610308cdf5d3b41854c922b48ced5a9495fc136".trim() : "";
   if (/^[a-f0-9]{7,64}$/i.test(embedded)) return embedded.toLowerCase();
   const candidate = (env.FRONTMIND_BUILD_SHA || env.GITHUB_SHA || env.RAILWAY_GIT_COMMIT_SHA || "").trim();
   return /^[a-f0-9]{7,64}$/i.test(candidate) ? candidate.toLowerCase() : null;
