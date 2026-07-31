@@ -1,0 +1,87 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "GeoCustomQuestionClassification",
+  "oneOf": [
+    {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "decision",
+        "category",
+        "enterpriseRelated",
+        "reasonCode",
+        "reason",
+        "enterpriseAnchor",
+        "offeringAnchor",
+        "evidenceRefs"
+      ],
+      "properties": {
+        "decision": { "const": "accept" },
+        "category": {
+          "enum": ["reputation", "product_scenario", "competitor_comparison"]
+        },
+        "enterpriseRelated": { "const": true },
+        "reasonCode": { "const": "accepted" },
+        "reason": { "type": "string", "minLength": 8, "maxLength": 240 },
+        "enterpriseAnchor": {
+          "type": ["string", "null"],
+          "minLength": 2,
+          "maxLength": 120
+        },
+        "offeringAnchor": {
+          "type": ["string", "null"],
+          "minLength": 2,
+          "maxLength": 120
+        },
+        "evidenceRefs": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 8,
+          "uniqueItems": true,
+          "items": { "type": "string", "minLength": 3, "maxLength": 600 }
+        }
+      }
+    },
+    {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "decision",
+        "category",
+        "enterpriseRelated",
+        "reasonCode",
+        "reason",
+        "enterpriseAnchor",
+        "offeringAnchor",
+        "evidenceRefs"
+      ],
+      "properties": {
+        "decision": { "const": "reject" },
+        "category": {
+          "enum": ["industry_ranking", "unrelated", "ambiguous"]
+        },
+        "enterpriseRelated": { "type": "boolean" },
+        "reasonCode": {
+          "enum": ["industry_ranking", "enterprise_unrelated", "ambiguous"]
+        },
+        "reason": { "type": "string", "minLength": 8, "maxLength": 240 },
+        "enterpriseAnchor": {
+          "type": ["string", "null"],
+          "minLength": 2,
+          "maxLength": 120
+        },
+        "offeringAnchor": {
+          "type": ["string", "null"],
+          "minLength": 2,
+          "maxLength": 120
+        },
+        "evidenceRefs": {
+          "type": "array",
+          "maxItems": 8,
+          "uniqueItems": true,
+          "items": { "type": "string", "minLength": 3, "maxLength": 600 }
+        }
+      }
+    }
+  ]
+}

@@ -3076,6 +3076,7 @@ export async function createGeoCustomQuestion(
     {
       method: "POST",
       body: JSON.stringify({ question: questionText.trim() }),
+      timeoutMs: 45_000,
     },
   );
   const root = asRecord(payload);

@@ -12,7 +12,6 @@
     "dimensions",
     "roadmap",
     "summary",
-    "limitations",
     "claimGuardrails"
   ],
   "properties": {
@@ -131,8 +130,7 @@
     "summary": { "type": "string", "minLength": 20, "maxLength": 2000 },
     "limitations": {
       "type": "array",
-      "minItems": 3,
-      "maxItems": 20,
+      "maxItems": 3,
       "items": { "type": "string", "minLength": 4, "maxLength": 500 }
     },
     "claimGuardrails": {
@@ -256,8 +254,8 @@
           },
           "then": {
             "properties": {
-              "gapClosureLow": { "type": "number", "maximum": 0.65 },
-              "gapClosureHigh": { "type": "number", "maximum": 0.9 }
+              "gapClosureLow": { "type": "number", "maximum": 0.75 },
+              "gapClosureHigh": { "type": "number", "maximum": 0.95 }
             }
           }
         },
@@ -271,8 +269,8 @@
           },
           "then": {
             "properties": {
-              "gapClosureLow": { "type": "number", "maximum": 0.2 },
-              "gapClosureHigh": { "type": "number", "maximum": 0.4 }
+              "gapClosureLow": { "type": "number", "maximum": 0.55 },
+              "gapClosureHigh": { "type": "number", "maximum": 0.75 }
             }
           }
         }

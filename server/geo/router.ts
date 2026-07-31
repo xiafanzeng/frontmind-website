@@ -85,14 +85,21 @@ import {
   normalizeTaskStatus,
   parseQuestionSetFromTask,
 } from "./output";
+import {
+  parseCustomQuestionClassificationTaskOutput,
+  validateAcceptedCustomQuestionGrounding,
+} from "./custom-question-classifier";
 import { trustedAssistantOutputTexts } from "./trusted-task-output";
 import {
+  buildGeoCustomQuestionClassifierPrompt,
   buildGeoQuestionPrompt,
   buildWebsiteKnowledgeBasePrompt,
 } from "./prompts";
 import {
+  buildGeoCustomQuestionClassifierSkillArchive,
   buildGeoQuestionRecommenderSkillArchive,
   buildWebsiteKnowledgeBaseSkillArchive,
+  CUSTOM_QUESTION_CLASSIFIER_SKILL_ARCHIVE_FILENAME,
   QUESTION_SKILL_ARCHIVE_FILENAME,
   WEBSITE_KB_SKILL_ARCHIVE_FILENAME,
 } from "./skills";
@@ -133,7 +140,6 @@ import {
   CreateServicePaymentRequestSchema,
   GeoQuestionSchema,
   InviteRequestSchema,
-  inferCustomQuestionCategory,
   isIndustryRankingQuestion,
   PaymentStatusRequestSchema,
   RetryProjectRequestSchema,
@@ -168,8 +174,10 @@ const MAX_ARCHIVE_COPY_BYTES = 150 * 1024 * 1024;
 const MAX_VALIDATED_ARCHIVE_BYTES = MAX_KNOWLEDGE_ARCHIVE_CANDIDATE_BYTES;
 const MAX_ASSESSMENT_INPUT_BYTES = 12 * 1024 * 1024;
 const MAX_FORECAST_INPUT_BYTES = 12 * 1024 * 1024;
+const CUSTOM_QUESTION_CLASSIFIER_TIMEOUT_MS = 15_000;
+const CUSTOM_QUESTION_CLASSIFIER_POLL_MS = 400;
 const SESSION_RATE_LIMIT_WINDOW_MS = 60 * 60 * 1000;
-const GEO_MANUAL_CONTRACT_TEMPLATE_VERSION = "basic-2026.07-v1";
+const GEO_MANUAL_CONTRACT_TEMPLATE_VERSION = "basic-2026.07-v2";
 const KNOWLEDGE_BASE_VALIDATION_PUBLIC_ERRORS: Record<
   KnowledgeBaseValidationCategory,
   string
@@ -580,10 +588,9 @@ export function createGeoRouter(options: GeoRouterOptions = {}): Router {
     const existingArtifact = value.knowledgeBaseArtifact;
     if (
       existingArtifact?.candidate.taskId === value.knowledgeBaseTaskId &&
-      [
-        "website-kb-finalizer-v2",
-        WEBSITE_KB_FINALIZER_VERSION,
-      ].includes(existingArtifact.finalizerVersion)
+      ["website-kb-finalizer-v2", WEBSITE_KB_FINALIZER_VERSION].includes(
+        existingArtifact.finalizerVersion,
+      )
     ) {
       const descriptor = resolveKnowledgeBaseArtifact(value, task);
       if (!descriptor) return { value };
@@ -812,14 +819,9 @@ export function createGeoRouter(options: GeoRouterOptions = {}): Router {
     ].join(":");
     const now = Date.now();
     pruneExpiringMap(knowledgeBaseFinalizations, now, 200);
-    const transientBackoff = knowledgeBaseFinalizationBackoffs.get(
-      finalizationKey,
-    );
-    if (
-      transientBackoff &&
-      transientBackoff.retryAt > now &&
-      !options.force
-    ) {
+    const transientBackoff =
+      knowledgeBaseFinalizationBackoffs.get(finalizationKey);
+    if (transientBackoff && transientBackoff.retryAt > now && !options.force) {
       throw new GeoHttpError(
         "知识库最终整理文件传输暂时不可用，请稍后重试",
         503,
@@ -2990,6 +2992,11 @@ export function createGeoRouter(options: GeoRouterOptions = {}): Router {
         getResolvedTask(broker, value.knowledgeBaseTaskId),
         getResolvedTask(broker, value.questionTaskId),
       ]);
+      const trackedValue = await resolveCanonicalCompanyIdentity(
+        broker,
+        value,
+        knowledgeBaseTask,
+      );
       const generatedQuestions =
         parseQuestionSetFromTask(questionTask)?.questions;
       if (!generatedQuestions) {
@@ -3015,7 +3022,7 @@ export function createGeoRouter(options: GeoRouterOptions = {}): Router {
       if (duplicate) {
         const project = await buildProjectView(
           broker,
-          value,
+          trackedValue,
           req.params.projectToken,
           knowledgeBaseTask,
           questionTask,
@@ -3028,17 +3035,51 @@ export function createGeoRouter(options: GeoRouterOptions = {}): Router {
         return;
       }
 
+      const classification = await classifyCustomQuestion({
+        broker,
+        value: trackedValue,
+        knowledgeBaseTask,
+        question: input.question,
+      });
+      if (classification.decision === "reject") {
+        if (classification.category === "industry_ranking") {
+          throw new GeoHttpError(
+            "该问题属于行业排名或品牌推荐类问题，需要全域营销权限",
+            422,
+            "INDUSTRY_RANKING_QUESTION",
+          );
+        }
+        if (classification.category === "ambiguous") {
+          throw new GeoHttpError(
+            `无法确认该问题与「${trackedValue.companyName}」的关系，请明确写出企业、品牌或知识库中的具体产品名称`,
+            422,
+            "CUSTOM_QUESTION_AMBIGUOUS",
+          );
+        }
+        throw new GeoHttpError(
+          `该问题与「${trackedValue.companyName}」的企业、产品或服务没有明确关系，请修改后重试`,
+          422,
+          "CUSTOM_QUESTION_ENTERPRISE_UNRELATED",
+        );
+      }
+
       const id = customQuestionId(input.question);
       const question = GeoQuestionSchema.parse({
         id,
-        category: inferCustomQuestionCategory(input.question),
+        category: classification.category,
         question: input.question,
-        rationale: "聚焦您希望验证的具体认知，适合进入多平台现状监控。",
-        evidenceRefs: ["用户自定义问题"],
+        rationale: classification.reason,
+        ...(classification.enterpriseAnchor
+          ? { enterpriseAnchor: classification.enterpriseAnchor }
+          : {}),
+        ...(classification.offeringAnchor
+          ? { offeringAnchor: classification.offeringAnchor }
+          : {}),
+        evidenceRefs: classification.evidenceRefs,
         selectable: true,
       });
       const nextValue: ProjectTokenValue = {
-        ...value,
+        ...trackedValue,
         customQuestion: question,
       };
       const projectToken = codec.seal("project", nextValue, PROJECT_TTL_MS);
@@ -4997,7 +5038,6 @@ function validCustomQuestion(value: ProjectTokenValue) {
   if (
     !question.selectable ||
     question.category === "industry_ranking" ||
-    question.category !== inferCustomQuestionCategory(question.question) ||
     isIndustryRankingQuestion(question.question) ||
     question.id !== customQuestionId(question.question)
   ) {
@@ -5246,19 +5286,19 @@ async function buildProjectView(
         error: KNOWLEDGE_BASE_FINALIZATION_PUBLIC_ERROR,
       }
     : knowledgeBaseValidationFailure
-    ? {
-        ...knowledgeBase,
-        status: "failed" as const,
-        progress: 100,
-        error: knowledgeBaseValidationPublicError,
-      }
-    : statusSyncPending(knowledgeBase.status)
       ? {
           ...knowledgeBase,
-          status: "running" as const,
-          error: undefined,
+          status: "failed" as const,
+          progress: 100,
+          error: knowledgeBaseValidationPublicError,
         }
-      : knowledgeBase;
+      : statusSyncPending(knowledgeBase.status)
+        ? {
+            ...knowledgeBase,
+            status: "running" as const,
+            error: undefined,
+          }
+        : knowledgeBase;
   const executionKnowledgeBaseTask = knowledgeBaseFinalizationFailure
     ? {
         ...knowledgeBaseTask,
@@ -5267,13 +5307,13 @@ async function buildProjectView(
         error: { message: KNOWLEDGE_BASE_FINALIZATION_PUBLIC_ERROR },
       }
     : knowledgeBaseValidationFailure
-    ? {
-        ...knowledgeBaseTask,
-        status: "failed",
-        output: [],
-        error: { message: knowledgeBaseValidationPublicError },
-      }
-    : knowledgeBaseTask;
+      ? {
+          ...knowledgeBaseTask,
+          status: "failed",
+          output: [],
+          error: { message: knowledgeBaseValidationPublicError },
+        }
+      : knowledgeBaseTask;
   const generatedQuestions =
     questionTask && questionsTaskView?.status === "completed"
       ? parseQuestionSetFromTask(questionTask)?.questions
@@ -5568,7 +5608,7 @@ async function buildProjectView(
     knowledgeBaseSupportRequired:
       !knowledgeBaseFinalizationFailure &&
       (knowledgeBaseValidationFailure?.category === "unsafe" ||
-      (statusSyncPending(knowledgeBase.status) &&
+        (statusSyncPending(knowledgeBase.status) &&
           hasElapsed(value.knowledgeBaseSubmittedAt, 15 * 60 * 1_000))),
     knowledgeBaseFinalization: {
       finalizationState:
@@ -5922,39 +5962,40 @@ function toPublicOptimizationForecastView(
           result.applicableTotal.structuralExcludedMaxScore,
       },
       summary: result.summary,
-      dimensions: dimensionEntries.map(([id, dimension]) => {
-        const indicators = Object.values(dimension.indicators);
-        const projected = indicators.filter(
+      dimensions: dimensionEntries.flatMap(([id, dimension]) => {
+        const projected = Object.values(dimension.indicators).filter(
           (indicator) => indicator.measurementStatus === "projectable",
         );
-        return {
-          id,
-          label: dimension.label,
-          currentScore: dimension.current,
-          targetLow: dimension.low,
-          targetExpected: dimension.expected,
-          targetHigh: dimension.high,
-          maxScore: dimension.maxScore,
-          summary:
-            projected
+        if (projected.length === 0) return [];
+        return [
+          {
+            id,
+            label: dimension.label,
+            currentScore: dimension.current,
+            targetLow: dimension.low,
+            targetExpected: dimension.expected,
+            targetHigh: dimension.high,
+            maxScore: dimension.maxScore,
+            summary: Array.from(
+              new Set(projected.map((indicator) => indicator.rationale)),
+            )
               .slice(0, 2)
-              .map((indicator) => indicator.rationale)
-              .join("；") || "当前样本不支持对该维度给出条件提升区间。",
-          actions: Array.from(
-            new Set(
-              projected.flatMap((indicator) =>
-                indicator.actionIds.map(
-                  (actionId) => actionLabelById.get(actionId) || actionId,
+              .join("；"),
+            actions: Array.from(
+              new Set(
+                projected.flatMap((indicator) =>
+                  indicator.actionIds.map(
+                    (actionId) => actionLabelById.get(actionId) || actionId,
+                  ),
                 ),
               ),
             ),
-          ),
-        };
+          },
+        ];
       }),
       assumptions: result.assumptions,
       roadmap: result.roadmap,
       generatedAt: new Date().toISOString(),
-      limitations: result.limitations,
     };
   } catch (error) {
     return {
@@ -6341,6 +6382,179 @@ async function materializeArchiveAttachment(
     filename: file.filename || archive.filename,
     temporary: true,
   };
+}
+
+async function classifyCustomQuestion(input: {
+  broker: GeoPresalesBroker;
+  value: ProjectTokenValue;
+  knowledgeBaseTask: BrokerTask;
+  question: string;
+}) {
+  const archive = resolveKnowledgeBaseArtifact(
+    input.value,
+    input.knowledgeBaseTask,
+  );
+  if (!archive) {
+    throw new GeoHttpError(
+      "企业知识库准备完成后才能验证自定义问题",
+      409,
+      "ARCHIVE_NOT_READY",
+    );
+  }
+  const manifest = await loadKnowledgeBaseManifest(
+    input.broker,
+    input.value.knowledgeBaseTaskId,
+    input.knowledgeBaseTask,
+    input.value.companyName,
+    archive,
+    input.value.knowledgeBaseValidationProfile,
+  );
+  const archiveAttachment = await materializeArchiveAttachment(
+    input.broker,
+    input.value.knowledgeBaseTaskId,
+    archive,
+  );
+  let taskId: string | undefined;
+  let skillFileIds: string[] = [];
+
+  try {
+    const created = await createGeoTaskWithSkillPackages(
+      input.broker,
+      {
+        projectId: input.value.projectId,
+        prompt: buildGeoCustomQuestionClassifierPrompt({
+          companyName: input.value.companyName,
+          question: input.question,
+          archiveFilename: archiveAttachment.filename,
+        }),
+        attachments: [archiveAttachment],
+        idempotencyKey: [
+          "geo",
+          input.value.projectId,
+          "custom-question-classifier",
+          crypto
+            .createHash("sha256")
+            .update(normalizeQuestionIdentity(input.question))
+            .digest("hex")
+            .slice(0, 24),
+          crypto.randomUUID(),
+        ].join(":"),
+      },
+      [
+        {
+          filename: CUSTOM_QUESTION_CLASSIFIER_SKILL_ARCHIVE_FILENAME,
+          body: await buildGeoCustomQuestionClassifierSkillArchive(),
+        },
+      ],
+    );
+    skillFileIds = created.skillAttachments.map(
+      (attachment) => attachment.file_id,
+    );
+    taskId = taskIdFrom(created.task);
+    if (!taskId) {
+      throw new GeoHttpError(
+        "创建问题验证任务失败：缺少任务 ID",
+        502,
+        "CUSTOM_QUESTION_CLASSIFIER_TASK_ID_MISSING",
+      );
+    }
+
+    const resolvedTask = await waitForCustomQuestionClassification(
+      input.broker,
+      taskId,
+      created.task,
+    );
+    const classification =
+      parseCustomQuestionClassificationTaskOutput(resolvedTask);
+    if (!classification) {
+      console.warn("[GEO custom question]", {
+        event: "classifier_output_rejected",
+        projectId: input.value.projectId,
+        taskId,
+        diagnosticCode: "CUSTOM_QUESTION_CLASSIFIER_INVALID_RESPONSE",
+      });
+      throw new GeoHttpError(
+        "问题验证结果暂时无法读取，请稍后重试",
+        502,
+        "CUSTOM_QUESTION_CLASSIFIER_INVALID_RESPONSE",
+      );
+    }
+
+    if (classification.decision === "accept") {
+      const grounding = validateAcceptedCustomQuestionGrounding(
+        classification,
+        {
+          question: input.question,
+          companyName: input.value.companyName,
+          manifest,
+        },
+      );
+      if (!grounding.ok) {
+        console.warn("[GEO custom question]", {
+          event: "classifier_acceptance_blocked",
+          projectId: input.value.projectId,
+          taskId,
+          diagnosticCode:
+            grounding.kind === "invalid_evidence"
+              ? "CUSTOM_QUESTION_CLASSIFIER_INVALID_EVIDENCE"
+              : "CUSTOM_QUESTION_ENTERPRISE_ANCHOR_MISSING",
+          reason: grounding.reason,
+        });
+        if (grounding.kind === "invalid_evidence") {
+          throw new GeoHttpError(
+            "问题验证结果未通过知识库证据校验，请稍后重试",
+            502,
+            "CUSTOM_QUESTION_CLASSIFIER_INVALID_RESPONSE",
+          );
+        }
+        throw new GeoHttpError(
+          `无法确认该问题与「${input.value.companyName}」的关系，请明确写出企业、品牌或知识库中的具体产品名称`,
+          422,
+          "CUSTOM_QUESTION_ENTERPRISE_UNRELATED",
+        );
+      }
+    }
+    return classification;
+  } finally {
+    await Promise.allSettled([
+      ...(taskId ? [input.broker.deleteTask(taskId)] : []),
+      ...skillFileIds.map((fileId) => input.broker.deleteFile(fileId)),
+      ...(archiveAttachment.temporary
+        ? [input.broker.deleteFile(archiveAttachment.file_id)]
+        : []),
+    ]);
+  }
+}
+
+async function waitForCustomQuestionClassification(
+  broker: GeoPresalesBroker,
+  taskId: string,
+  initialTask: BrokerTask,
+) {
+  const deadline = Date.now() + CUSTOM_QUESTION_CLASSIFIER_TIMEOUT_MS;
+  let task = initialTask;
+  while (true) {
+    const status = normalizeTaskStatus(task.status);
+    if (status === "completed") return getResolvedTask(broker, taskId);
+    if (status === "failed" || status === "cancelled") {
+      throw new GeoHttpError(
+        "问题验证暂时未完成，请稍后重试",
+        502,
+        "CUSTOM_QUESTION_CLASSIFIER_FAILED",
+      );
+    }
+    if (Date.now() >= deadline) {
+      throw new GeoHttpError(
+        "问题验证超时，请稍后重试",
+        504,
+        "CUSTOM_QUESTION_CLASSIFIER_TIMEOUT",
+      );
+    }
+    await new Promise((resolve) =>
+      setTimeout(resolve, CUSTOM_QUESTION_CLASSIFIER_POLL_MS),
+    );
+    task = await broker.getTask(taskId);
+  }
 }
 
 type GeoTaskSkillPackage = {

@@ -4,43 +4,10 @@ import {
   normalizeTask,
   parseQuestionSetFromTask,
 } from "./output";
-import { PRODUCT_QA_INTENTS, type GeoQuestion } from "./schemas";
+import { buildValidQuestionSet } from "./question-set.test-fixture";
 
 function questionSet() {
-  const definitions = [
-    ["reputation", "reputation"],
-    ["product_scenario", "product-scenario"],
-    ["industry_ranking", "industry-ranking"],
-    ["competitor_comparison", "competitor-comparison"],
-  ] as const;
-  return {
-    questions: definitions.flatMap(([category, prefix]) =>
-      Array.from({ length: 5 }, (_, index): GeoQuestion => {
-        const offeringAnchor = `服务模块 ${index + 1}`;
-        return {
-          id: `${prefix}-${String(index + 1).padStart(2, "0")}`,
-          category,
-          question:
-            category === "product_scenario"
-              ? `Acme 的${offeringAnchor}适合哪些企业场景？`
-              : `${category} 测试问题 ${index + 1} 是否合适？`,
-          rationale: "覆盖一项真实且可核验的购买决策意图。",
-          evidenceRefs:
-            category === "product_scenario"
-              ? [`03_products/module-${index + 1}/overview.md`]
-              : ["00_source_index.md"],
-          selectable: category !== "industry_ranking",
-          ...(category === "product_scenario"
-            ? {
-                enterpriseAnchor: "Acme",
-                offeringAnchor,
-                qaIntent: PRODUCT_QA_INTENTS[index],
-              }
-            : {}),
-        };
-      }),
-    ),
-  };
+  return buildValidQuestionSet();
 }
 
 describe("GEO task output normalization", () => {

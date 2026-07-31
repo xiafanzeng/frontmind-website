@@ -38,36 +38,87 @@ if (!/^[a-f0-9]{7,64}$/.test(expectedSha)) {
   throw new Error("--sha must be a 7-64 character hexadecimal Git SHA");
 }
 
-const websiteSkillFiles = [
-  "SKILL.md",
-  "agents/openai.yaml",
-  "references/dimensions.md",
-  "references/candidate-format.md",
-  "scripts/build_candidate.py",
+const runtimeSkillDefinitions = [
+  {
+    name: "website-one-shot-kb-builder",
+    version: 5,
+    files: [
+      "SKILL.md",
+      "agents/openai.yaml",
+      "references/dimensions.md",
+      "references/candidate-format.md",
+      "scripts/build_candidate.py",
+    ],
+  },
+  {
+    name: "geo-question-recommender",
+    version: 1,
+    files: [
+      "SKILL.md",
+      "references/demark-question-logic.md",
+      "references/output-schema.json",
+    ],
+  },
+  {
+    name: "geo-custom-question-classifier",
+    version: 1,
+    files: ["SKILL.md", "agents/openai.yaml", "references/output-schema.json"],
+  },
+  {
+    name: "geo-knowledge-answer-verifier",
+    version: 1,
+    files: ["SKILL.md", "references/comparison-contract.json"],
+  },
+  {
+    name: "geo-current-state-evaluator",
+    version: 1,
+    files: [
+      "SKILL.md",
+      "references/bsas-baseline-methodology.md",
+      "references/raw-output-schema.json",
+    ],
+  },
+  {
+    name: "geo-optimization-outcome-forecaster",
+    version: 1,
+    files: [
+      "SKILL.md",
+      "references/impact-forecast-methodology.md",
+      "references/output-schema.json",
+      "references/source-manifest.json",
+    ],
+  },
 ];
-const skillRoot = resolve(
-  projectRoot,
-  "server",
-  "skills",
-  "website-one-shot-kb-builder",
+
+async function expectedRuntimeSkill(definition) {
+  const skillRoot = resolve(projectRoot, "server", "skills", definition.name);
+  const contents = await Promise.all(
+    definition.files.map(async (relativePath) => ({
+      relativePath,
+      content: await readFile(resolve(skillRoot, relativePath), "utf8"),
+    })),
+  );
+  const contentHash = createHash("sha256")
+    .update(
+      contents
+        .map(
+          ({ relativePath, content }) =>
+            `# FILE: ${relativePath}\n\n${content.trim()}`,
+        )
+        .join("\n\n---\n\n"),
+      "utf8",
+    )
+    .digest("hex");
+  return {
+    name: definition.name,
+    version: definition.version,
+    contentHash,
+  };
+}
+
+const expectedRuntimeSkills = await Promise.all(
+  runtimeSkillDefinitions.map(expectedRuntimeSkill),
 );
-const skillContents = await Promise.all(
-  websiteSkillFiles.map(async (relativePath) => ({
-    relativePath,
-    content: await readFile(resolve(skillRoot, relativePath), "utf8"),
-  })),
-);
-const expectedSkillHash = createHash("sha256")
-  .update(
-    skillContents
-      .map(
-        ({ relativePath, content }) =>
-          `# FILE: ${relativePath}\n\n${content.trim()}`,
-      )
-      .join("\n\n---\n\n"),
-    "utf8",
-  )
-  .digest("hex");
 
 async function fetchOk(url) {
   const response = await fetch(url, {
@@ -90,17 +141,33 @@ if (String(health?.buildSha || "").toLowerCase() !== expectedSha) {
 }
 
 const skills = Array.isArray(health?.skills) ? health.skills : [];
-if (skills.length !== 5 || skills.some((skill) => skill?.status !== "ok")) {
-  throw new Error("All five runtime Skills must report status=ok");
+const skillsByName = new Map(skills.map((skill) => [skill?.name, skill]));
+if (
+  skills.length !== expectedRuntimeSkills.length ||
+  skillsByName.size !== expectedRuntimeSkills.length
+) {
+  throw new Error("Production must expose the exact six runtime Skills");
+}
+for (const expectedSkill of expectedRuntimeSkills) {
+  const actualSkill = skillsByName.get(expectedSkill.name);
+  if (!actualSkill || actualSkill.status !== "ok") {
+    throw new Error(`${expectedSkill.name} must report status=ok`);
+  }
+  if (actualSkill.version !== expectedSkill.version) {
+    throw new Error(`${expectedSkill.name} version differs from local source`);
+  }
+  if (actualSkill.contentHash !== expectedSkill.contentHash) {
+    throw new Error(`${expectedSkill.name} hash differs from local source`);
+  }
 }
 const websiteSkill = skills.find(
   (skill) => skill?.name === "website-one-shot-kb-builder",
 );
-if (websiteSkill?.version !== 5) {
-  throw new Error("website-one-shot-kb-builder must report version 5");
-}
-if (websiteSkill?.contentHash !== expectedSkillHash) {
-  throw new Error("Production website Skill hash differs from local source");
+const expectedWebsiteSkill = expectedRuntimeSkills.find(
+  (skill) => skill.name === "website-one-shot-kb-builder",
+);
+if (!websiteSkill || !expectedWebsiteSkill) {
+  throw new Error("website-one-shot-kb-builder readiness is missing");
 }
 if (
   health?.dependencies?.status !== "ok" ||
@@ -161,7 +228,8 @@ console.log(
       url: productionUrl.origin,
       buildSha: expectedSha,
       websiteSkillVersion: websiteSkill.version,
-      websiteSkillHash: expectedSkillHash,
+      websiteSkillHash: expectedWebsiteSkill.contentHash,
+      runtimeSkills: expectedRuntimeSkills,
       frontendEntry: localEntry,
       frontendEntrySha256: localEntryHash,
     },

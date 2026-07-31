@@ -412,6 +412,16 @@ VITE_CLIENT_PORTAL_URL=https://dashboard.frontmind.net/login
 Website 同样在独立构建环境中执行本地发布门，构建成功后由 1Panel 重建或重启唯一的
 Node 运行环境；不要再手工启动第二个 `pnpm start`。
 
+启动 Website 前必须在同一套生产环境变量下执行只读商户预检。该命令只调用 ZPAY
+余额查询接口验证 PID/Key，不创建订单、不扣款，也不会输出余额或密钥：
+
+```bash
+pnpm verify:payment
+```
+
+只有返回 `status: "ok"`、`provider: "zpay"` 且 callbackOrigin 为正式官网域名时才能
+继续启动。缺失、格式错误或被 ZPAY 拒绝的商户配置都会直接失败。
+
 ## 4. Website 验收
 
 ```bash

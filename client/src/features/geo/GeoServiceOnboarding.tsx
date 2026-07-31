@@ -49,6 +49,22 @@ type GeoServiceAccountDraft = GeoServiceAccountCredentials & {
   confirmPassword: string;
 };
 
+export function buildPopulatedServiceContractHref(
+  contractHref: string,
+  profile: GeoServiceContractProfile,
+) {
+  const hash = new URLSearchParams({
+    legalName: profile.legalName.trim(),
+    creditCode: profile.creditCode.trim().toUpperCase(),
+    address: profile.address.trim(),
+    signatoryName: profile.signatoryName.trim(),
+    signatoryTitle: profile.signatoryTitle.trim(),
+    mobile: profile.mobile.trim(),
+    email: profile.email.trim().toLowerCase(),
+  });
+  return `${contractHref.split("#", 1)[0]}#${hash.toString()}`;
+}
+
 const STEP_ORDER: OnboardingStep[] = [
   "profile",
   "signature",
@@ -201,6 +217,41 @@ function profileErrors(profile: GeoServiceContractProfileDraft) {
   return errors;
 }
 
+function contractProfileSessionKey(companyName: string, question: string) {
+  return `frontmind:geo-contract-profile:${companyName.trim()}:${question.trim()}`;
+}
+
+function readSessionContractProfile(companyName: string, question: string) {
+  if (typeof window === "undefined") return undefined;
+  try {
+    const stored = window.sessionStorage.getItem(
+      contractProfileSessionKey(companyName, question),
+    );
+    if (!stored) return undefined;
+    const value = JSON.parse(stored) as GeoServiceContractProfileDraft;
+    return Object.keys(profileErrors(value)).length === 0 ? value : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+function writeSessionContractProfile(
+  companyName: string,
+  question: string,
+  profile: GeoServiceContractProfile,
+) {
+  if (typeof window === "undefined") return;
+  try {
+    window.sessionStorage.setItem(
+      contractProfileSessionKey(companyName, question),
+      JSON.stringify(profile),
+    );
+  } catch {
+    // Keep the submitted data in component state if session storage is
+    // unavailable. Storage failure must not block contract submission.
+  }
+}
+
 function accountErrors(account: GeoServiceAccountDraft) {
   const errors: Partial<Record<keyof GeoServiceAccountDraft, string>> = {};
   const displayName = account.displayName.trim();
@@ -298,16 +349,19 @@ export function GeoServiceOnboarding({
   const failedRetryAvailable = canRetryGeoServiceKnowledgeImport(activation);
   const actualStep = statusStep(effectiveStatus);
   const [viewStep, setViewStep] = useState<OnboardingStep>(actualStep);
-  const [profile, setProfile] = useState<GeoServiceContractProfileDraft>({
-    legalName: companyName,
-    creditCode: "",
-    address: "",
-    signatoryName: "",
-    signatoryTitle: "",
-    mobile: "",
-    email: "",
-    authorized: false,
-  });
+  const [profile, setProfile] = useState<GeoServiceContractProfileDraft>(
+    () =>
+      readSessionContractProfile(companyName, question) || {
+        legalName: companyName,
+        creditCode: "",
+        address: "",
+        signatoryName: "",
+        signatoryTitle: "",
+        mobile: "",
+        email: "",
+        authorized: false,
+      },
+  );
   const [errors, setErrors] = useState<
     Partial<Record<keyof GeoServiceContractProfile, string>>
   >({});
@@ -364,6 +418,12 @@ export function GeoServiceOnboarding({
     activation.workspaceUrl || activation.accountSetupUrl,
   );
   const signingUrl = safePublicAppUrl(activation.signingUrl);
+  const populatedContractHref = profile.authorized
+    ? buildPopulatedServiceContractHref(
+        contractHref,
+        profile as GeoServiceContractProfile,
+      )
+    : contractHref;
   const profileSummary = useMemo(
     () => [
       ["签约主体", profile.legalName || companyName],
@@ -394,10 +454,23 @@ export function GeoServiceOnboarding({
       return;
     }
     setFormError("");
+    const normalizedProfile: GeoServiceContractProfile = {
+      ...profile,
+      legalName: profile.legalName.trim(),
+      creditCode: profile.creditCode.trim().toUpperCase(),
+      address: profile.address.trim(),
+      signatoryName: profile.signatoryName.trim(),
+      signatoryTitle: profile.signatoryTitle.trim(),
+      mobile: profile.mobile.trim(),
+      email: profile.email.trim().toLowerCase(),
+      authorized: true,
+    };
     if (isPreview) {
+      setProfile(normalizedProfile);
+      writeSessionContractProfile(companyName, question, normalizedProfile);
       setAccount((current) => ({
         ...current,
-        displayName: profile.legalName.trim() || companyName,
+        displayName: normalizedProfile.legalName || companyName,
       }));
       setPreviewWorkflowStatus("contract_preparing");
       setViewStep("signature");
@@ -405,17 +478,9 @@ export function GeoServiceOnboarding({
     }
     setProfileSubmitting(true);
     try {
-      await onSubmitProfile({
-        ...profile,
-        legalName: profile.legalName.trim(),
-        creditCode: profile.creditCode.trim().toUpperCase(),
-        address: profile.address.trim(),
-        signatoryName: profile.signatoryName.trim(),
-        signatoryTitle: profile.signatoryTitle.trim(),
-        mobile: profile.mobile.trim(),
-        email: profile.email.trim().toLowerCase(),
-        authorized: true as const,
-      });
+      await onSubmitProfile(normalizedProfile);
+      setProfile(normalizedProfile);
+      writeSessionContractProfile(companyName, question, normalizedProfile);
     } catch (error) {
       setFormError(
         localizedUserFacingError(
@@ -787,7 +852,7 @@ export function GeoServiceOnboarding({
             )}
 
             <div className="geo-onboarding-actions">
-              <a href={contractHref} target="_blank" rel="noreferrer">
+              <a href={populatedContractHref} target="_blank" rel="noreferrer">
                 查看合同内容 <ExternalLink size={14} />
               </a>
               <button type="submit" disabled={profileSubmitting}>
@@ -839,8 +904,8 @@ export function GeoServiceOnboarding({
                     : "FrontMind GEO 月度优化服务协议"}
                 </small>
               </div>
-              <a href={contractHref} target="_blank" rel="noreferrer">
-                查看内容 <ExternalLink size={14} />
+              <a href={populatedContractHref} target="_blank" rel="noreferrer">
+                查看并下载合同 PDF <ExternalLink size={14} />
               </a>
             </article>
 

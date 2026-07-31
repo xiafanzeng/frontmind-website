@@ -6,14 +6,18 @@ import path from "node:path";
 import { promisify } from "node:util";
 import { describe, expect, it } from "vitest";
 import {
+  buildGeoCustomQuestionClassifierPrompt,
   buildGeoQuestionPrompt,
   buildWebsiteKnowledgeBasePrompt,
 } from "./prompts";
 import {
+  buildGeoCustomQuestionClassifierSkillArchive,
   buildGeoQuestionRecommenderSkillArchive,
   buildWebsiteKnowledgeBaseSkillArchive,
+  loadGeoCustomQuestionClassifierSkill,
   loadGeoQuestionRecommenderSkill,
   loadWebsiteKnowledgeBaseSkill,
+  CUSTOM_QUESTION_CLASSIFIER_SKILL_ARCHIVE_FILENAME,
   QUESTION_SKILL_ARCHIVE_FILENAME,
   WEBSITE_KB_SKILL_ARCHIVE_FILENAME,
 } from "./skills";
@@ -268,6 +272,9 @@ describe("GEO question-recommender skill", () => {
     expect(skill).toContain("offering_definition");
     expect(skill).toContain("support_boundary");
     expect(skill).toContain("不是企业产品与服务 Q&A");
+    expect(skill).toContain("Five-question intent matrices");
+    expect(skill).toContain("Never write placeholder structures");
+    expect(skill).toContain("all twenty rationales are specific");
   });
 
   it("builds a JSON-only grounded recommendation prompt", async () => {
@@ -284,6 +291,8 @@ describe("GEO question-recommender skill", () => {
       "product_scenario 的五道题必须是该企业具体产品、服务、模块或功能的 Q&A",
     );
     expect(prompt).toContain("禁止无企业和产品主语的行业教育问句");
+    expect(prompt).toContain("四类各 5 题必须分别覆盖 5 个不同客户决策意图");
+    expect(prompt).toContain("禁止内部英文枚举、序号占位");
   });
 
   it("packages the complete question recommender as a deterministic Skill ZIP", async () => {
@@ -308,6 +317,116 @@ describe("GEO question-recommender skill", () => {
       entrypoint: "SKILL.md",
     });
     expect(manifest.files).toHaveLength(3);
+  });
+});
+
+describe("GEO custom-question classifier skill", () => {
+  it("requires enterprise relevance, hard ranking rejection, strict JSON, and ZIP evidence paths", async () => {
+    const skill = await loadGeoCustomQuestionClassifierSkill();
+    for (const invariant of [
+      "geo-custom-question-classifier",
+      "enterprise_unrelated",
+      "industry_ranking",
+      "competitor_comparison",
+      "evidenceRefs",
+      "exact file paths",
+      "never guess",
+    ]) {
+      expect(skill.toLowerCase()).toContain(invariant.toLowerCase());
+    }
+  });
+
+  it("builds a one-question, JSON-only, knowledge-grounded classifier prompt", () => {
+    const prompt = buildGeoCustomQuestionClassifierPrompt({
+      companyName: "超前智能",
+      question: "超前智能有哪些值得重点了解的优势？",
+      archiveFilename: "超前智能_website_lead_knowledge_base.zip",
+    });
+    expect(prompt).toContain(CUSTOM_QUESTION_CLASSIFIER_SKILL_ARCHIVE_FILENAME);
+    expect(prompt).toContain("超前智能有哪些值得重点了解的优势？");
+    expect(prompt).toContain("企业相关性");
+    expect(prompt).toContain("行业排名");
+    expect(prompt).toContain("单个 JSON 对象");
+    expect(prompt).not.toContain("# FILE:");
+    expect(Buffer.byteLength(prompt, "utf8")).toBeLessThan(4 * 1024);
+  });
+
+  it("packages the complete classifier as a deterministic Skill ZIP", async () => {
+    const [first, second] = await Promise.all([
+      buildGeoCustomQuestionClassifierSkillArchive(),
+      buildGeoCustomQuestionClassifierSkillArchive(),
+    ]);
+    expect(first.equals(second)).toBe(true);
+    const zip = await (await import("jszip")).default.loadAsync(first);
+    expect(Object.keys(zip.files).sort()).toEqual([
+      "MANIFEST.json",
+      "SKILL.md",
+      "agents/openai.yaml",
+      "references/output-schema.json",
+    ]);
+    expect(
+      JSON.parse(await zip.file("MANIFEST.json")!.async("string")),
+    ).toMatchObject({
+      schemaVersion: 1,
+      name: "geo-custom-question-classifier",
+      entrypoint: "SKILL.md",
+    });
+    expect(CUSTOM_QUESTION_CLASSIFIER_SKILL_ARCHIVE_FILENAME).toBe(
+      "geo-custom-question-classifier.skill.zip",
+    );
+  });
+});
+
+describe("GEO production runtime Skill release gates", () => {
+  it("loads, audits, and verifies the exact six-Skill runtime set", () => {
+    const serverEntry = fs.readFileSync(
+      path.resolve(process.cwd(), "server/index.ts"),
+      "utf8",
+    );
+    const bundleAudit = fs.readFileSync(
+      path.resolve(process.cwd(), "scripts/audit-production-bundle.mjs"),
+      "utf8",
+    );
+    const productionVerifier = fs.readFileSync(
+      path.resolve(process.cwd(), "scripts/verify-production-release.mjs"),
+      "utf8",
+    );
+    const requiredSkills = [
+      "website-one-shot-kb-builder",
+      "geo-question-recommender",
+      "geo-custom-question-classifier",
+      "geo-knowledge-answer-verifier",
+      "geo-current-state-evaluator",
+      "geo-optimization-outcome-forecaster",
+    ];
+    expect(serverEntry).toContain("loadGeoCustomQuestionClassifierSkill");
+    for (const skillName of requiredSkills) {
+      expect(serverEntry).toContain(skillName);
+      expect(bundleAudit).toContain(skillName);
+      expect(productionVerifier).toContain(skillName);
+    }
+    expect(productionVerifier).toContain(
+      "Production must expose the exact six runtime Skills",
+    );
+    expect(productionVerifier).not.toMatch(
+      /skills\.length\s*!==?\s*5|All five runtime Skills/,
+    );
+    expect(bundleAudit).not.toContain("must contain exactly 21 files");
+  });
+
+  it("builds payment verification for the production-only dependency set", () => {
+    const packageJson = JSON.parse(
+      fs.readFileSync(path.resolve(process.cwd(), "package.json"), "utf8"),
+    );
+    const serverBuild = fs.readFileSync(
+      path.resolve(process.cwd(), "scripts/build-server.mjs"),
+      "utf8",
+    );
+    expect(packageJson.scripts["verify:payment"]).toBe(
+      "node dist/verify-live-payment.js",
+    );
+    expect(serverBuild).toContain('"verify-live-payment"');
+    expect(serverBuild).toContain('"verify-live-payment.ts"');
   });
 });
 

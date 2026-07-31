@@ -29,6 +29,11 @@ const QUESTION_SKILL: GeoSkillArchiveDefinition = {
   ],
 };
 
+const CUSTOM_QUESTION_CLASSIFIER_SKILL: GeoSkillArchiveDefinition = {
+  name: "geo-custom-question-classifier",
+  files: ["SKILL.md", "agents/openai.yaml", "references/output-schema.json"],
+};
+
 const skillCache = new Map<string, string>();
 const GEO_SKILL_ARCHIVE_DATE = new Date("1980-01-01T00:00:00.000Z");
 
@@ -36,6 +41,8 @@ export const WEBSITE_KB_SKILL_ARCHIVE_FILENAME =
   "website-one-shot-kb-builder.skill.zip";
 export const QUESTION_SKILL_ARCHIVE_FILENAME =
   "geo-question-recommender.skill.zip";
+export const CUSTOM_QUESTION_CLASSIFIER_SKILL_ARCHIVE_FILENAME =
+  "geo-custom-question-classifier.skill.zip";
 
 function skillRootCandidates() {
   const configuredRoot = process.env.FRONTMIND_GEO_SKILLS_DIR?.trim();
@@ -178,6 +185,14 @@ export function loadGeoQuestionRecommenderSkill() {
 
 export function buildGeoQuestionRecommenderSkillArchive() {
   return buildGeoSkillArchive(QUESTION_SKILL);
+}
+
+export function loadGeoCustomQuestionClassifierSkill() {
+  return loadSkill(CUSTOM_QUESTION_CLASSIFIER_SKILL);
+}
+
+export function buildGeoCustomQuestionClassifierSkillArchive() {
+  return buildGeoSkillArchive(CUSTOM_QUESTION_CLASSIFIER_SKILL);
 }
 
 export function clearGeoSkillCacheForTests() {

@@ -8,45 +8,15 @@ import {
   GeoQuestionSetSchema,
   inferCustomQuestionCategory,
   isIndustryRankingQuestion,
-  PRODUCT_QA_INTENTS,
   RetryProjectRequestSchema,
   ServicePaymentAuthorizationSchema,
   ServiceStatusRequestSchema,
   StartMonitoringRequestSchema,
-  type GeoQuestion,
 } from "./schemas";
-
-const categories = [
-  ["reputation", "reputation"],
-  ["product_scenario", "product-scenario"],
-  ["industry_ranking", "industry-ranking"],
-  ["competitor_comparison", "competitor-comparison"],
-] as const;
+import { buildValidQuestionSet } from "./question-set.test-fixture";
 
 function validQuestions() {
-  return categories.flatMap(([category, prefix]) =>
-    Array.from({ length: 5 }, (_, index): GeoQuestion => {
-      const offeringAnchor = `服务模块 ${index + 1}`;
-      return {
-        id: `${prefix}-${String(index + 1).padStart(2, "0")}`,
-        category,
-        question:
-          category === "product_scenario"
-            ? `FrontMind 的${offeringAnchor}能解决哪些具体业务问题？`
-            : `${category} 的第 ${index + 1} 个真实采购问题是什么？`,
-        rationale: "该问题对应知识库中的真实决策意图与可核验证据。",
-        evidenceRefs: [`03_products/item-${index + 1}/overview.md`],
-        selectable: category !== "industry_ranking",
-        ...(category === "product_scenario"
-          ? {
-              enterpriseAnchor: "FrontMind",
-              offeringAnchor,
-              qaIntent: PRODUCT_QA_INTENTS[index],
-            }
-          : {}),
-      };
-    }),
-  );
+  return buildValidQuestionSet("FrontMind").questions;
 }
 
 describe("GeoQuestionSetSchema", () => {
@@ -71,6 +41,48 @@ describe("GeoQuestionSetSchema", () => {
       question: questions[0].question,
     };
     expect(() => GeoQuestionSetSchema.parse({ questions })).toThrow();
+  });
+
+  it("rejects internal enum leaks, numbered placeholders, repeated templates, and repeated rationales", () => {
+    const internalEnum = validQuestions();
+    internalEnum[0] = {
+      ...internalEnum[0],
+      question: "FrontMind 在 reputation 方面的公开口碑怎么样？",
+    };
+    expect(() =>
+      GeoQuestionSetSchema.parse({ questions: internalEnum }),
+    ).toThrow(/internal category token|placeholder/);
+
+    const numberedPlaceholder = validQuestions();
+    numberedPlaceholder[0] = {
+      ...numberedPlaceholder[0],
+      question: "FrontMind 的第 1 个问题值得优化吗？",
+    };
+    expect(() =>
+      GeoQuestionSetSchema.parse({ questions: numberedPlaceholder }),
+    ).toThrow(/placeholder/);
+
+    const repeatedTemplate = validQuestions();
+    repeatedTemplate[6] = {
+      ...repeatedTemplate[6],
+      question: "FrontMind 的服务模块 2 适合哪些客户与应用场景？",
+    };
+    repeatedTemplate[7] = {
+      ...repeatedTemplate[7],
+      question: "FrontMind 的服务模块 3 适合哪些客户与应用场景？",
+    };
+    expect(() =>
+      GeoQuestionSetSchema.parse({ questions: repeatedTemplate }),
+    ).toThrow(/repeats the template/);
+
+    const repeatedRationale = validQuestions();
+    repeatedRationale[1] = {
+      ...repeatedRationale[1],
+      rationale: repeatedRationale[0].rationale,
+    };
+    expect(() =>
+      GeoQuestionSetSchema.parse({ questions: repeatedRationale }),
+    ).toThrow(/rationale duplicates/);
   });
 
   it("rejects generic product questions without their declared enterprise and offering anchors", () => {

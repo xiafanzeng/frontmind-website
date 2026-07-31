@@ -20,7 +20,8 @@ import {
 import { createGeoRouter } from "./router";
 import { parseKnowledgeBaseArchive } from "./archive";
 import { finalizeKnowledgeBaseCandidate } from "./knowledge-base-finalizer";
-import { PRODUCT_QA_INTENTS, type GeoQuestion } from "./schemas";
+import { buildValidQuestionSet } from "./question-set.test-fixture";
+import type { GeoQuestion } from "./schemas";
 import { GeoTokenCodec } from "./tokens";
 import { GeoAccountProvisioningError } from "./provisioning";
 import {
@@ -105,6 +106,7 @@ class MockBroker implements GeoPresalesBroker {
   nextSkillFile = 1;
   nextRegularFile = 1;
   questionTaskCount = 0;
+  customQuestionClassifierTaskCount = 0;
   assessmentTaskCount = 0;
   forecastTaskCount = 0;
   completeAssessmentImmediately = false;
@@ -126,6 +128,16 @@ class MockBroker implements GeoPresalesBroker {
   omitNextKnowledgeTaskStatus = false;
   downloadErrors = new Map<string, Error>();
   downloadOverrides = new Map<string, Buffer>();
+  customQuestionClassifierOutput: Record<string, unknown> = {
+    decision: "accept",
+    category: "product_scenario",
+    enterpriseRelated: true,
+    reasonCode: "accepted",
+    reason: "问题明确指向 Acme 及其科研场景服务能力。",
+    enterpriseAnchor: "Acme",
+    offeringAnchor: null,
+    evidenceRefs: ["01_company_overview/overview.md"],
+  };
 
   async getStatus() {
     return {
@@ -169,20 +181,25 @@ class MockBroker implements GeoPresalesBroker {
     const isQuestionTask = input.prompt.includes(
       "geo-question-recommender.skill.zip",
     );
+    const isCustomQuestionClassifierTask = input.prompt.includes(
+      "geo-custom-question-classifier.skill.zip",
+    );
     const isAssessmentTask = input.prompt.includes(
       "geo-current-state-evaluator.skill.zip",
     );
     const isForecastTask = input.prompt.includes(
       "geo-optimization-outcome-forecaster.skill.zip",
     );
-    const id = isQuestionTask
-      ? `question-${++this.questionTaskCount}`
-      : isAssessmentTask
-        ? `assessment-${++this.assessmentTaskCount}`
-        : isForecastTask
-          ? `forecast-${++this.forecastTaskCount}`
-          : `kb-${this.nextTask++}`;
-    const task: BrokerTask = isQuestionTask
+    const id = isCustomQuestionClassifierTask
+      ? `custom-question-classifier-${++this.customQuestionClassifierTaskCount}`
+      : isQuestionTask
+        ? `question-${++this.questionTaskCount}`
+        : isAssessmentTask
+          ? `assessment-${++this.assessmentTaskCount}`
+          : isForecastTask
+            ? `forecast-${++this.forecastTaskCount}`
+            : `kb-${this.nextTask++}`;
+    const task: BrokerTask = isCustomQuestionClassifierTask
       ? {
           id,
           status: "completed",
@@ -190,45 +207,58 @@ class MockBroker implements GeoPresalesBroker {
             {
               role: "assistant",
               content: [
-                {
-                  text:
-                    this.invalidFirstQuestionTask &&
-                    this.questionTaskCount === 1
-                      ? JSON.stringify({ questions: [] })
-                      : JSON.stringify(validQuestionSet()),
-                },
+                { text: JSON.stringify(this.customQuestionClassifierOutput) },
               ],
             },
           ],
         }
-      : isAssessmentTask && this.completeAssessmentImmediately
+      : isQuestionTask
         ? {
             id,
             status: "completed",
             output: [
               {
                 role: "assistant",
-                content: [{ text: JSON.stringify(validAssessmentOutput()) }],
+                content: [
+                  {
+                    text:
+                      this.invalidFirstQuestionTask &&
+                      this.questionTaskCount === 1
+                        ? JSON.stringify({ questions: [] })
+                        : JSON.stringify(validQuestionSet()),
+                  },
+                ],
               },
             ],
           }
-        : isForecastTask && this.completeForecastImmediately
+        : isAssessmentTask && this.completeAssessmentImmediately
           ? {
               id,
               status: "completed",
               output: [
                 {
                   role: "assistant",
-                  content: [{ text: JSON.stringify(validForecastOutput()) }],
+                  content: [{ text: JSON.stringify(validAssessmentOutput()) }],
                 },
               ],
             }
-          : !isQuestionTask &&
-              !isAssessmentTask &&
-              !isForecastTask &&
-              this.omitNextKnowledgeTaskStatus
-            ? { id, progress: 0.25, output: [] }
-            : { id, status: "running", progress: 0.25, output: [] };
+          : isForecastTask && this.completeForecastImmediately
+            ? {
+                id,
+                status: "completed",
+                output: [
+                  {
+                    role: "assistant",
+                    content: [{ text: JSON.stringify(validForecastOutput()) }],
+                  },
+                ],
+              }
+            : !isQuestionTask &&
+                !isAssessmentTask &&
+                !isForecastTask &&
+                this.omitNextKnowledgeTaskStatus
+              ? { id, progress: 0.25, output: [] }
+              : { id, status: "running", progress: 0.25, output: [] };
     this.tasks.set(id, task);
     this.idempotentTasks.set(input.idempotencyKey, task);
     return task;
@@ -3102,7 +3132,17 @@ describe("GEO API", () => {
       category: "product_scenario",
       question: "Acme 在高校科研场景中能解决什么问题？",
       selectable: true,
+      evidenceRefs: ["01_company_overview/overview.md"],
     });
+    expect(broker.customQuestionClassifierTaskCount).toBe(1);
+    expect(
+      broker.taskAttachments
+        .at(-1)
+        ?.some(
+          (attachment) =>
+            attachment.filename === "geo-custom-question-classifier.skill.zip",
+        ),
+    ).toBe(true);
     expect(customPayload.project.questions).toHaveLength(21);
     expect(customPayload.projectToken).not.toBe(ready.projectToken);
 
@@ -3201,6 +3241,133 @@ describe("GEO API", () => {
       expect(broker.monitorCreates).toBe(0);
     },
   );
+
+  it("rejects a question that the knowledge-base classifier identifies as enterprise-unrelated", async () => {
+    const ready = await createReadyProject();
+    broker.customQuestionClassifierOutput = {
+      decision: "reject",
+      category: "unrelated",
+      enterpriseRelated: false,
+      reasonCode: "enterprise_unrelated",
+      reason: "问题讨论其他品牌手机，与 Acme 企业知识无关。",
+      enterpriseAnchor: null,
+      offeringAnchor: null,
+      evidenceRefs: [],
+    };
+
+    const rejected = await jsonRequest(
+      `/projects/${encodeURIComponent(ready.projectToken)}/questions/custom`,
+      ready.cookie,
+      {
+        method: "POST",
+        body: { question: "苹果手机最近有什么新功能？" },
+      },
+    );
+
+    expect(rejected.response.status).toBe(422);
+    expect(rejected.body).toMatchObject({
+      error: { code: "CUSTOM_QUESTION_ENTERPRISE_UNRELATED" },
+    });
+    expect(broker.customQuestionClassifierTaskCount).toBe(1);
+    expect(paymentCheckoutCalls).toHaveLength(0);
+  });
+
+  it("fails closed when a classifier accepts a question without a verified enterprise or offering anchor", async () => {
+    const ready = await createReadyProject();
+    broker.customQuestionClassifierOutput = {
+      decision: "accept",
+      category: "product_scenario",
+      enterpriseRelated: true,
+      reasonCode: "accepted",
+      reason: "问题看似涉及一种通用产品场景。",
+      enterpriseAnchor: null,
+      offeringAnchor: null,
+      evidenceRefs: ["01_company_overview/overview.md"],
+    };
+
+    const rejected = await jsonRequest(
+      `/projects/${encodeURIComponent(ready.projectToken)}/questions/custom`,
+      ready.cookie,
+      {
+        method: "POST",
+        body: { question: "苹果手机最近有什么新功能？" },
+      },
+    );
+
+    expect(rejected.response.status).toBe(422);
+    expect(rejected.body).toMatchObject({
+      error: { code: "CUSTOM_QUESTION_ENTERPRISE_UNRELATED" },
+    });
+    expect(paymentCheckoutCalls).toHaveLength(0);
+  });
+
+  it("fails closed when the classifier returns an evidence path outside the enterprise knowledge base", async () => {
+    const ready = await createReadyProject();
+    broker.customQuestionClassifierOutput = {
+      decision: "accept",
+      category: "reputation",
+      enterpriseRelated: true,
+      reasonCode: "accepted",
+      reason: "问题明确询问 Acme 的可信度。",
+      enterpriseAnchor: "Acme",
+      offeringAnchor: null,
+      evidenceRefs: ["external/nonexistent.md"],
+    };
+
+    const rejected = await jsonRequest(
+      `/projects/${encodeURIComponent(ready.projectToken)}/questions/custom`,
+      ready.cookie,
+      {
+        method: "POST",
+        body: { question: "Acme 靠谱吗？" },
+      },
+    );
+
+    expect(rejected.response.status).toBe(502);
+    expect(rejected.body).toMatchObject({
+      error: { code: "CUSTOM_QUESTION_CLASSIFIER_INVALID_RESPONSE" },
+    });
+    expect(paymentCheckoutCalls).toHaveLength(0);
+  });
+
+  it("uses the classifier category instead of the previous regex fallback", async () => {
+    const ready = await createReadyProject();
+    broker.customQuestionClassifierOutput = {
+      decision: "accept",
+      category: "competitor_comparison",
+      enterpriseRelated: true,
+      reasonCode: "accepted",
+      reason: "问题要求在 Acme 与传统自建路线之间进行具体取舍。",
+      enterpriseAnchor: "Acme",
+      offeringAnchor: null,
+      evidenceRefs: ["01_company_overview/overview.md"],
+    };
+
+    const accepted = await jsonRequest(
+      `/projects/${encodeURIComponent(ready.projectToken)}/questions/custom`,
+      ready.cookie,
+      {
+        method: "POST",
+        body: { question: "Acme 与传统自建路线应如何取舍？" },
+      },
+    );
+
+    expect(accepted.response.status).toBe(201);
+    expect(accepted.body).toMatchObject({
+      question: {
+        category: "competitor_comparison",
+        enterpriseAnchor: "Acme",
+      },
+      project: {
+        questions: expect.arrayContaining([
+          expect.objectContaining({
+            category: "competitor_comparison",
+            question: "Acme 与传统自建路线应如何取舍？",
+          }),
+        ]),
+      },
+    });
+  });
 
   it("returns the exact acknowledgement expected by a verified ZPAY notify", async () => {
     const response = await fetch(`${baseUrl}/payments/notify?sign=mock`);
@@ -3819,8 +3986,15 @@ describe("GEO API", () => {
         (dimension: Record<string, unknown>) =>
           dimension.id === "competitive_advantage",
       )?.summary,
-    ).toBe(
-      "知识库差距与当前基线支持建立可复测的条件提升区间。；知识库差距与当前基线支持建立可复测的条件提升区间。",
+    ).toBe("知识库差距与当前基线支持建立可复测的条件提升区间。");
+    expect(
+      forecastedPayload.project.optimizationForecast.targetLow,
+    ).toBeGreaterThanOrEqual(60);
+    expect(
+      JSON.stringify(forecastedPayload.project.optimizationForecast),
+    ).not.toContain("当前样本不支持");
+    expect(forecastedPayload.project.optimizationForecast).not.toHaveProperty(
+      "limitations",
     );
     expect(
       forecastedPayload.project.optimizationForecast.targetLow,
@@ -4047,7 +4221,7 @@ describe("GEO API", () => {
     expect(manualOrderCreateCalls).toHaveLength(1);
     expect(manualOrderCreateCalls[0]).toMatchObject({
       project: { companyName: "深圳星辰科技有限公司" },
-      contract: { profile },
+      contract: { templateVersion: "basic-2026.07-v2", profile },
     });
     expect(adminNotificationCalls).toEqual([
       {
@@ -5467,60 +5641,14 @@ function monitorRecord(runIndex: number, answerText: string) {
 }
 
 function validQuestionSet() {
-  const categories = [
-    ["reputation", "reputation"],
-    ["product_scenario", "product-scenario"],
-    ["industry_ranking", "industry-ranking"],
-    ["competitor_comparison", "competitor-comparison"],
-  ] as const;
-  return {
-    questions: categories.flatMap(([category, prefix]) =>
-      Array.from({ length: 5 }, (_, index): GeoQuestion => {
-        const offeringAnchor = [
-          "企业知识库构建服务",
-          "AI 平台监控功能",
-          "语义资产构建服务",
-          "GEO 交付流程",
-          "持续优化支持",
-        ][index];
-        const productQuestion = [
-          "Acme 的企业知识库构建服务会形成哪些交付物？",
-          "Acme 的 AI 平台监控功能如何识别回答差异？",
-          "Acme 的语义资产构建服务适合哪些企业场景？",
-          "Acme 的 GEO 交付流程需要经过哪些实施步骤？",
-          "Acme 的持续优化支持包含哪些服务边界？",
-        ][index];
-        return {
-          id: `${prefix}-${String(index + 1).padStart(2, "0")}`,
-          category,
-          question:
-            category === "product_scenario"
-              ? productQuestion
-              : `${category} 的问题 ${index + 1} 是否值得优化？`,
-          rationale: "覆盖知识库中的真实决策意图和可核验证据。",
-          evidenceRefs:
-            category === "product_scenario"
-              ? ["03_products/overview.md"]
-              : ["00_source_index.md"],
-          selectable: category !== "industry_ranking",
-          ...(category === "product_scenario"
-            ? {
-                enterpriseAnchor: "Acme",
-                offeringAnchor,
-                qaIntent: PRODUCT_QA_INTENTS[index],
-              }
-            : {}),
-        };
-      }),
-    ),
-  };
+  return buildValidQuestionSet();
 }
 
 function validAssessmentOutput(
   question: Pick<GeoQuestion, "id" | "category" | "question"> = {
     id: "product-scenario-01",
     category: "product_scenario",
-    question: "Acme 的企业知识库构建服务会形成哪些交付物？",
+    question: "Acme 的服务模块 1 是什么，主要解决哪些业务问题？",
   },
 ) {
   const rankingMetricEligible = question.category !== "reputation";

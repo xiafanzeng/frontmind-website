@@ -19,6 +19,7 @@ import {
 } from "./geo/health";
 import { installBaseSecurityHeaders } from "./security";
 import {
+  loadGeoCustomQuestionClassifierSkill,
   loadGeoQuestionRecommenderSkill,
   loadWebsiteKnowledgeBaseSkill,
 } from "./geo/skills";
@@ -27,6 +28,7 @@ import {
   loadGeoKnowledgeAnswerVerifierSkill,
 } from "./geo/assessment";
 import { loadGeoOptimizationOutcomeForecasterSkill } from "./geo/forecast";
+import { assertGeoPaymentConfigurationFromEnv } from "./geo/payment";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -34,6 +36,7 @@ const __dirname = path.dirname(__filename);
 const GEO_RUNTIME_SKILLS = [
   { name: "website-one-shot-kb-builder", version: 5 },
   { name: "geo-question-recommender", version: 1 },
+  { name: "geo-custom-question-classifier", version: 1 },
   { name: "geo-knowledge-answer-verifier", version: 1 },
   { name: "geo-current-state-evaluator", version: 1 },
   { name: "geo-optimization-outcome-forecaster", version: 1 },
@@ -43,6 +46,7 @@ async function getGeoRuntimeSkillReadiness() {
   const contents = await Promise.all([
     loadWebsiteKnowledgeBaseSkill(),
     loadGeoQuestionRecommenderSkill(),
+    loadGeoCustomQuestionClassifierSkill(),
     loadGeoKnowledgeAnswerVerifierSkill(),
     loadGeoCurrentStateEvaluatorSkill(),
     loadGeoOptimizationOutcomeForecasterSkill(),
@@ -66,6 +70,7 @@ async function startServer() {
     paymentReceiptStore,
   });
   if (process.env.NODE_ENV === "production") {
+    assertGeoPaymentConfigurationFromEnv(process.env);
     await Promise.all([
       getGeoRuntimeSkillReadiness(),
       getGeoDependencyReadiness(),

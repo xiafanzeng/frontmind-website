@@ -176,6 +176,13 @@ type ZpayGatewayOptions = {
   ) => string;
 };
 
+export class GeoPaymentConfigurationError extends Error {
+  constructor(message = "ZPAY payment configuration is invalid") {
+    super(message);
+    this.name = "GeoPaymentConfigurationError";
+  }
+}
+
 export function canonicalizeZpayParameters(params: Record<string, string>) {
   return Object.entries(params)
     .filter(
@@ -866,24 +873,13 @@ export function createGeoPaymentGatewayFromEnv(
   env: NodeJS.ProcessEnv,
   codec: GeoTokenCodec,
 ): GeoPaymentGateway {
-  const pid = env.FRONTMIND_ZPAY_PID?.trim() || "";
-  const key = env.FRONTMIND_ZPAY_KEY?.trim() || "";
-  const publicBaseUrl =
-    env.FRONTMIND_PUBLIC_BASE_URL?.trim() ||
-    env.FRONTMIND_PUBLIC_URL?.trim() ||
-    "";
-  if (!pid || !key || !publicBaseUrl) {
+  const config = zpayConfigurationFromEnv(env);
+  if (!config) {
     return new UnconfiguredGeoPaymentGateway();
   }
   try {
     return new ZpayGeoPaymentGateway(
-      {
-        pid,
-        key,
-        publicBaseUrl,
-        channelIds: env.FRONTMIND_ZPAY_CID?.trim() || undefined,
-        production: env.NODE_ENV === "production",
-      },
+      config,
       codec,
       {
         receiptStore: createGeoPaymentReceiptStore({ env }),
@@ -894,6 +890,75 @@ export function createGeoPaymentGatewayFromEnv(
       "在线支付服务暂不可用，请联系技术人员",
     );
   }
+}
+
+/**
+ * Production startup guard. Payment must never be presented as available when
+ * the merchant identity, signing key, or public callback origin is absent or
+ * malformed. The error deliberately excludes all configured values.
+ */
+export function assertGeoPaymentConfigurationFromEnv(
+  env: NodeJS.ProcessEnv,
+): void {
+  const config = zpayConfigurationFromEnv(env);
+  if (!config) {
+    throw new GeoPaymentConfigurationError(
+      "Required ZPAY payment configuration is missing",
+    );
+  }
+  try {
+    assertZpayConfiguration(config);
+  } catch {
+    throw new GeoPaymentConfigurationError();
+  }
+}
+
+/**
+ * Read-only live merchant preflight used by the release gate. It validates the
+ * exact credentials against ZPAY without creating an order or exposing balance
+ * or credential values in its result.
+ */
+export async function verifyGeoPaymentProviderFromEnv(
+  env: NodeJS.ProcessEnv,
+  fetchImpl: typeof fetch = fetch,
+): Promise<{ status: "ok"; provider: "zpay"; callbackOrigin: string }> {
+  assertGeoPaymentConfigurationFromEnv(env);
+  const config = zpayConfigurationFromEnv(env)!;
+  const query = new URL(ZPAY_ORDER_QUERY_URL);
+  query.searchParams.set("act", "balance");
+  query.searchParams.set("pid", config.pid);
+  query.searchParams.set("key", config.key);
+
+  let response: Response;
+  try {
+    response = await fetchImpl(query, {
+      method: "GET",
+      headers: { accept: "application/json" },
+      cache: "no-store",
+      redirect: "error",
+      signal: AbortSignal.timeout(8_000),
+    });
+  } catch {
+    throw paymentProviderReadinessError();
+  }
+  if (!response.ok) throw paymentProviderReadinessError();
+
+  let result: Record<string, unknown>;
+  try {
+    result = asRecord(JSON.parse(await readBoundedResponseText(response)));
+  } catch (error) {
+    if (error instanceof GeoPaymentVerificationError) throw error;
+    throw paymentProviderReadinessError();
+  }
+  if (String(result.code ?? "") !== "1") {
+    throw paymentProviderReadinessError();
+  }
+
+  return {
+    status: "ok",
+    provider: "zpay",
+    callbackOrigin: new URL(config.publicBaseUrl).origin,
+  };
 }
 
 export class UnconfiguredGeoPaymentGateway implements GeoPaymentGateway {
@@ -962,6 +1027,25 @@ function paymentScopeHash(payment: ZpayPaymentTokenValue) {
         : { platformIds: normalizedPlatforms(payment.platformIds) }),
     }),
   );
+}
+
+function zpayConfigurationFromEnv(
+  env: NodeJS.ProcessEnv,
+): ZpayGatewayConfig | undefined {
+  const pid = env.FRONTMIND_ZPAY_PID?.trim() || "";
+  const key = env.FRONTMIND_ZPAY_KEY?.trim() || "";
+  const publicBaseUrl =
+    env.FRONTMIND_PUBLIC_BASE_URL?.trim() ||
+    env.FRONTMIND_PUBLIC_URL?.trim() ||
+    "";
+  if (!pid || !key || !publicBaseUrl) return undefined;
+  return {
+    pid,
+    key,
+    publicBaseUrl,
+    channelIds: env.FRONTMIND_ZPAY_CID?.trim() || undefined,
+    production: env.NODE_ENV === "production",
+  };
 }
 
 function assertZpayConfiguration(config: ZpayGatewayConfig) {
@@ -1222,6 +1306,14 @@ function callbackError() {
     "支付通知验签失败",
     "PAYMENT_CALLBACK_INVALID",
     400,
+  );
+}
+
+function paymentProviderReadinessError() {
+  return new GeoPaymentVerificationError(
+    "ZPAY 商户连接验证失败",
+    "PAYMENT_PROVIDER_NOT_READY",
+    503,
   );
 }
 

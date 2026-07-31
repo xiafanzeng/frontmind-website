@@ -11,6 +11,7 @@ const outputRoot = path.join(projectRoot, "dist", "skills");
 const skillNames = [
   "website-one-shot-kb-builder",
   "geo-question-recommender",
+  "geo-custom-question-classifier",
   "geo-knowledge-answer-verifier",
   "geo-current-state-evaluator",
   "geo-optimization-outcome-forecaster",

@@ -17,7 +17,6 @@ import {
   CreditCard,
   Database,
   ExternalLink,
-  FileArchive,
   FileText,
   FolderKanban,
   Globe2,
@@ -35,6 +34,7 @@ import {
   Minus,
   Paperclip,
   PackageOpen,
+  Play,
   Plus,
   Quote,
   RadioTower,
@@ -132,7 +132,6 @@ import {
 import {
   geoLocalArchiveAssetRefreshKey,
   loadLocalGeoAssetBlobs,
-  paginateGeoKnowledgeAssets,
 } from "./local-archive-assets";
 import {
   GEO_PLATFORMS,
@@ -582,7 +581,7 @@ function restorePendingGeoPayment(): PendingGeoPayment | undefined {
   }
 }
 
-type KnowledgeView = "overview" | "assets" | "sources" | "report";
+type KnowledgeView = "overview" | "sources";
 const FIXED_KNOWLEDGE_SECTIONS = [
   ["company-identity", "企业与品牌"],
   ["team", "团队与组织"],
@@ -785,6 +784,22 @@ function looksLikeIndustryRankingQuestion(value: string) {
   );
 }
 
+function explicitlyReferencesProjectCompany(
+  question: string,
+  companyName: string,
+) {
+  const normalize = (value: string) =>
+    value
+      .normalize("NFKC")
+      .toLocaleLowerCase("zh-CN")
+      .replace(/[\s，。！？、；：“”‘’（）【】《》?.,!()[\]{}'"]/g, "");
+  const normalizedCompanyName = normalize(companyName);
+  return (
+    normalizedCompanyName.length >= 2 &&
+    normalize(question).includes(normalizedCompanyName)
+  );
+}
+
 function preparePaymentWindow() {
   const target = `frontmind-zpay-${Date.now()}`;
   const popup = window.open(
@@ -805,13 +820,32 @@ function preparePaymentWindow() {
   return { popup, target };
 }
 
+export function resolvePaymentCheckoutAction(
+  checkout: GeoPaymentCheckout | GeoServicePaymentCheckout,
+  location: Pick<Location, "hostname" | "origin"> = window.location,
+) {
+  const localAcceptanceHost = [
+    "127.0.0.1",
+    "localhost",
+    "::1",
+    "[::1]",
+  ].includes(location.hostname);
+  const localAcceptanceCheckout =
+    localAcceptanceHost &&
+    checkout.fields.pid === "frontmind-local-acceptance" &&
+    checkout.fields.param === "frontmind-local-acceptance";
+  return localAcceptanceCheckout
+    ? `${location.origin}/__acceptance__/paid`
+    : checkout.action;
+}
+
 function submitPaymentCheckout(
   checkout: GeoPaymentCheckout | GeoServicePaymentCheckout,
   target: string,
 ) {
   const form = document.createElement("form");
   form.method = checkout.method;
-  form.action = checkout.action;
+  form.action = resolvePaymentCheckoutAction(checkout);
   form.target = target;
   form.acceptCharset = "UTF-8";
   form.style.display = "none";
@@ -829,6 +863,24 @@ function submitPaymentCheckout(
 
 function projectDisplayTitle(project: GeoProject): string {
   return project.title;
+}
+
+function canStartService(project: GeoProject): boolean {
+  return Boolean(
+    project.serviceActivation?.status === "active" ||
+      (project.assessment?.status === "ready" &&
+        project.optimizationForecast?.status === "ready" &&
+        project.serviceActivation),
+  );
+}
+
+function canPreviewServiceWorkspace(project: GeoProject): boolean {
+  return Boolean(
+    project.assessment?.status === "ready" &&
+      (project.selectedQuestionId ||
+        project.serviceActivation?.questionId ||
+        project.questions.length > 0),
+  );
 }
 
 function canOpenStage(project: GeoProject, stage: GeoStage): boolean {
@@ -857,11 +909,7 @@ function canOpenStage(project: GeoProject, stage: GeoStage): boolean {
         (entry) => entry.stage === "current_assessment",
       ) === true
     );
-  return (
-    project.assessment?.status === "ready" &&
-    project.optimizationForecast?.status === "ready" &&
-    Boolean(project.serviceActivation)
-  );
+  return canStartService(project) || canPreviewServiceWorkspace(project);
 }
 
 function projectDefaultStage(project: GeoProject): GeoStage {
@@ -2294,6 +2342,13 @@ function GeoBuildExperienceZh() {
       if (looksLikeIndustryRankingQuestion(questionText)) {
         throw new Error(
           "该问题属于行业排名或品牌推荐方向，请选择其他非行业排名类问题。",
+        );
+      }
+      const companyName =
+        activeProject.knowledgeBase?.companyName || activeProject.title;
+      if (!explicitlyReferencesProjectCompany(questionText, companyName)) {
+        throw new Error(
+          `该问题与「${companyName}」没有明确关系，请在问题中写出企业或品牌名称。`,
         );
       }
       const normalized = `${questionText.trim().replace(/[?？]+$/, "")}？`;
@@ -3951,6 +4006,11 @@ export function StageNavigation({
             stage.id === "question_recommendation" && questionSelectionLocked;
           const enabled = canOpenStage(project, stage.id);
           const complete = isStageComplete(project, stage.id);
+          const sampleOnly =
+            stage.id === "service_activation" &&
+            enabled &&
+            !canStartService(project);
+          const subtitle = sampleOnly ? "预览企业服务工作台" : stage.subtitle;
           return (
             <div key={stage.id} className="geo-stage-item-wrap">
               <button
@@ -3959,7 +4019,7 @@ export function StageNavigation({
                 disabled={!enabled}
                 onClick={() => onChange(stage.id)}
                 aria-current={activeStage === stage.id ? "step" : undefined}
-                aria-label={`步骤 ${index + 1}：${stage.title}，${stage.subtitle}${
+                aria-label={`步骤 ${index + 1}：${stage.title}，${subtitle}${
                   scopeLocked
                     ? "，订单范围已锁定，只读查看"
                     : enabled
@@ -3972,7 +4032,7 @@ export function StageNavigation({
                 </span>
                 <span>
                   <strong>{stage.title}</strong>
-                  <small>{stage.subtitle}</small>
+                  <small>{subtitle}</small>
                 </span>
                 {!enabled && (
                   <LockKeyhole size={13} className="geo-stage-lock" />
@@ -4308,22 +4368,23 @@ export function EnterpriseAnalysis({
   const [view, setView] = useState<KnowledgeView>("overview");
   const knowledgeBase = project.knowledgeBase;
   const [activeSectionId, setActiveSectionId] = useState<string>();
-  const [activeLeafId, setActiveLeafId] = useState<string>();
-  const [assetPage, setAssetPage] = useState(0);
   const [completenessOpen, setCompletenessOpen] = useState(false);
   const localAssetUrls = useLocalKnowledgeAssetPreviewUrls(
     project.id,
     knowledgeBase?.assets ?? [],
     archivePersistenceVersion,
   );
-  const knowledgeAssets = useMemo(
-    () =>
-      (knowledgeBase?.assets ?? []).map((asset) => ({
-        ...asset,
-        previewUrl: localAssetUrls[asset.id] || asset.previewUrl,
-      })),
-    [knowledgeBase?.assets, localAssetUrls],
-  );
+  const logoAsset = useMemo(() => {
+    const assets = (knowledgeBase?.assets ?? []).map((asset) => ({
+      ...asset,
+      previewUrl: localAssetUrls[asset.id] || asset.previewUrl,
+    }));
+    return assets.find(
+      (asset) =>
+        asset.assetType === "brand_identity" ||
+        /(?:^|[-_\s])(logo|标志|品牌)(?:[-_.\s]|$)/i.test(asset.name),
+    );
+  }, [knowledgeBase?.assets, localAssetUrls]);
 
   useEffect(() => {
     if (
@@ -4333,19 +4394,6 @@ export function EnterpriseAnalysis({
       setActiveSectionId(knowledgeBase.sections[0].id);
     }
   }, [activeSectionId, knowledgeBase?.sections]);
-
-  useEffect(() => {
-    const section = knowledgeBase?.sections.find(
-      (candidate) => candidate.id === activeSectionId,
-    );
-    if (
-      activeLeafId &&
-      !section?.leaves?.some((leaf) => leaf.id === activeLeafId)
-    )
-      setActiveLeafId(undefined);
-  }, [activeLeafId, activeSectionId, knowledgeBase?.sections]);
-
-  useEffect(() => setAssetPage(0), [project.id]);
 
   if (isGeoDraftProject(project)) {
     return (
@@ -4513,12 +4561,6 @@ export function EnterpriseAnalysis({
       detail: "由知识库来源索引返回",
     },
     {
-      key: "assets",
-      label: "企业素材",
-      value: knowledgeBase.assets.length,
-      detail: "图像、文件及品牌素材",
-    },
-    {
       key: "files",
       label: "输入资料",
       value: project.files.length,
@@ -4527,7 +4569,11 @@ export function EnterpriseAnalysis({
   ];
   const metrics =
     knowledgeBase.metrics.length > 0
-      ? knowledgeBase.metrics.slice(0, 6)
+      ? knowledgeBase.metrics.filter(
+          (metric) =>
+            !["assets", "pages", "images"].includes(metric.key) &&
+            !["企业素材", "发现页面", "下载图片"].includes(metric.label),
+        )
       : fallbackMetrics;
   const sections = completeKnowledgeBaseSections(knowledgeBase.sections);
   const activeSection =
@@ -4539,74 +4585,10 @@ export function EnterpriseAnalysis({
     ) ??
     sections[0];
   const activeLeaves = activeSection?.leaves ?? [];
-  const activeLeaf = activeLeaves.find((leaf) => leaf.id === activeLeafId);
   const activeOverview = activeSection?.overview;
-  const activeMarkdown = activeLeaf
-    ? activeLeaf.markdown
-    : activeOverview?.markdown || activeSection?.markdown;
-  const activeSummary = activeLeaf
-    ? activeLeaf.summary
-    : activeOverview?.summary || activeSection?.summary;
-  const activeAssetIds = activeLeaf
-    ? activeLeaf.assetIds
-    : activeOverview
-      ? activeOverview.assetIds
-      : activeSection?.assetIds;
-  const {
-    items: pagedAssets,
-    page: visibleAssetPage,
-    pageCount: assetPageCount,
-  } = paginateGeoKnowledgeAssets(knowledgeAssets, assetPage);
-  const acquisition = knowledgeBase.completeness?.acquisition;
-  type ReportScopeCard = {
-    key: string;
-    icon: ReactNode;
-    title: string;
-    detail: string;
-  };
-  const reportScopeCardCandidates: Array<ReportScopeCard | undefined> = [
-    acquisition?.officialPages
-      ? {
-          key: "official-pages",
-          icon: <Database size={16} />,
-          title: "官网页面采集",
-          detail: `${acquisition.officialPages.completed} / ${acquisition.officialPages.total} 个页面`,
-        }
-      : undefined,
-    acquisition?.webQueries
-      ? {
-          key: "web-queries",
-          icon: <Search size={16} />,
-          title: "公开信息查询",
-          detail: `${acquisition.webQueries.completed} / ${acquisition.webQueries.total} 个查询`,
-        }
-      : undefined,
-    acquisition?.documents || acquisition?.images || knowledgeBase.assets.length
-      ? {
-          key: "assets",
-          icon: <FileArchive size={16} />,
-          title: "文档与素材",
-          detail: [
-            acquisition?.documents
-              ? `文档 ${acquisition.documents.completed} / ${acquisition.documents.total}`
-              : "",
-            acquisition?.images
-              ? `图片 ${acquisition.images.completed} / ${acquisition.images.total}`
-              : "",
-            !acquisition?.documents &&
-            !acquisition?.images &&
-            knowledgeBase.assets.length
-              ? `索引 ${knowledgeBase.assets.length} 项`
-              : "",
-          ]
-            .filter(Boolean)
-            .join(" · "),
-        }
-      : undefined,
-  ];
-  const reportScopeCards = reportScopeCardCandidates.filter(
-    (card): card is ReportScopeCard => card !== undefined,
-  );
+  const activeMarkdown =
+    activeOverview?.markdown || activeSection?.markdown || "";
+  const activeSummary = activeOverview?.summary || activeSection?.summary;
 
   return (
     <div className="geo-analysis-shell">
@@ -4704,16 +4686,10 @@ export function EnterpriseAnalysis({
           [
             ["overview", "知识总览", BookOpenText],
             [
-              "assets",
-              `企业素材 ${knowledgeBase.assets.length || ""}`,
-              ImageIcon,
-            ],
-            [
               "sources",
               `证据来源 ${knowledgeBase.sources.length || ""}`,
               ShieldCheck,
             ],
-            ["report", "抓取报告", BarChart3],
           ] as Array<[KnowledgeView, string, typeof BookOpenText]>
         ).map(([id, label, Icon]) => (
           <button
@@ -4751,13 +4727,18 @@ export function EnterpriseAnalysis({
                   key={section.id}
                   type="button"
                   className={section.id === activeSection?.id ? "active" : ""}
-                  onClick={() => {
-                    setActiveSectionId(section.id);
-                    setActiveLeafId(undefined);
-                  }}
+                  onClick={() => setActiveSectionId(section.id)}
                 >
-                  <span className="geo-branch-index">
-                    {String(index + 1).padStart(2, "0")}
+                  <span
+                    className={`geo-branch-index ${
+                      index === 0 && logoAsset ? "has-logo" : ""
+                    }`}
+                  >
+                    {index === 0 && logoAsset ? (
+                      <KnowledgeAssetPreviewImage asset={logoAsset} />
+                    ) : (
+                      String(index + 1).padStart(2, "0")
+                    )}
                   </span>
                   <span>
                     <strong>{section.title}</strong>
@@ -4767,227 +4748,41 @@ export function EnterpriseAnalysis({
                         : section.summary || "暂无可展示摘要"}
                     </small>
                   </span>
-                  <StatusPill status={section.status} />
                 </button>
               ))}
             </aside>
             <article className="geo-knowledge-document">
               <header>
                 <div>
-                  <span>
-                    {activeLeaf ? "KNOWLEDGE LEAF" : "BRANCH OVERVIEW"}
-                  </span>
-                  <h3>{activeLeaf?.title || activeSection?.title}</h3>
+                  <span>KNOWLEDGE BRANCH</span>
+                  <h3>{activeSection?.title}</h3>
                 </div>
-                <StatusPill
-                  status={activeLeaf?.status || activeSection?.status}
-                />
               </header>
-              {!activeLeaf &&
-                activeSection?.contentAvailability &&
-                activeSection.contentAvailability !== "complete" && (
-                  <div className="geo-evidence-availability-note" role="status">
-                    <CircleAlert size={16} aria-hidden="true" />
-                    <span>
-                      {activeSection.contentAvailability === "limited_evidence"
-                        ? "该分支公开证据有限，以下内容已按现有真实资料整理；未确认信息不会补写。"
-                        : "该分支暂未取得可确认事实，以下保留已检查范围和待企业补充的信息。"}
-                    </span>
-                  </div>
+              <div className="geo-knowledge-copy geo-knowledge-copy-all">
+                {activeSummary && (
+                  <p className="geo-document-lead">{activeSummary}</p>
                 )}
-              {activeLeaves.length > 0 && (
-                <div
-                  className="geo-knowledge-mode-switch"
-                  role="tablist"
-                  aria-label={`${activeSection?.title || "当前分支"}内容层级`}
-                >
-                  <button
-                    type="button"
-                    role="tab"
-                    aria-selected={!activeLeaf}
-                    className={!activeLeaf ? "active" : ""}
-                    onClick={() => setActiveLeafId(undefined)}
-                  >
-                    分支综述
-                  </button>
-                  <button
-                    type="button"
-                    role="tab"
-                    aria-selected={Boolean(activeLeaf)}
-                    className={activeLeaf ? "active" : ""}
-                    onClick={() => setActiveLeafId(activeLeaves[0]?.id)}
-                  >
-                    查看知识叶子
-                    <span>{activeLeaves.length}</span>
-                  </button>
-                </div>
-              )}
-              {activeLeaf && (
-                <div className="geo-leaf-switcher">
-                  <button
-                    type="button"
-                    aria-label="上一个知识叶子"
-                    onClick={() => {
-                      const index = activeLeaves.findIndex(
-                        (leaf) => leaf.id === activeLeaf.id,
-                      );
-                      setActiveLeafId(
-                        activeLeaves[
-                          (index - 1 + activeLeaves.length) %
-                            activeLeaves.length
-                        ]?.id,
-                      );
-                    }}
-                  >
-                    <ChevronLeft size={16} />
-                  </button>
-                  <label>
-                    <span>
-                      知识叶子{" "}
-                      {activeLeaves.findIndex(
-                        (leaf) => leaf.id === activeLeaf.id,
-                      ) + 1}{" "}
-                      / {activeLeaves.length}
-                    </span>
-                    <select
-                      value={activeLeaf.id}
-                      onChange={(event) => setActiveLeafId(event.target.value)}
-                      aria-label="选择知识叶子"
-                    >
-                      {activeLeaves.map((leaf) => (
-                        <option key={leaf.id} value={leaf.id}>
-                          {leaf.title}
-                        </option>
-                      ))}
-                    </select>
-                  </label>
-                  <button
-                    type="button"
-                    aria-label="下一个知识叶子"
-                    onClick={() => {
-                      const index = activeLeaves.findIndex(
-                        (leaf) => leaf.id === activeLeaf.id,
-                      );
-                      setActiveLeafId(
-                        activeLeaves[(index + 1) % activeLeaves.length]?.id,
-                      );
-                    }}
-                  >
-                    <ChevronRight size={16} />
-                  </button>
-                </div>
-              )}
-              <div className="geo-knowledge-content">
-                {activeSection && (
-                  <KnowledgeSectionVisual
-                    section={activeSection}
-                    sectionIndex={Math.max(
-                      0,
-                      sections.findIndex(
-                        (section) => section.id === activeSection.id,
-                      ),
+                <LightweightMarkdown
+                  markdown={activeMarkdown || knowledgeBase.reportMarkdown}
+                />
+                {activeLeaves.map((leaf, index) => (
+                  <section className="geo-knowledge-leaf-section" key={leaf.id}>
+                    <header>
+                      <span>
+                        {String(index + 1).padStart(2, "0")} /{" "}
+                        {String(activeLeaves.length).padStart(2, "0")}
+                      </span>
+                      <h4>{leaf.title}</h4>
+                    </header>
+                    {leaf.summary && (
+                      <p className="geo-document-lead">{leaf.summary}</p>
                     )}
-                    assets={knowledgeAssets}
-                    assetIds={activeAssetIds}
-                    leafId={activeLeaf?.id}
-                  />
-                )}
-                <div className="geo-knowledge-copy">
-                  {activeSummary && (
-                    <p className="geo-document-lead">{activeSummary}</p>
-                  )}
-                  <LightweightMarkdown
-                    markdown={activeMarkdown || knowledgeBase.reportMarkdown}
-                  />
-                </div>
+                    <LightweightMarkdown markdown={leaf.markdown} />
+                  </section>
+                ))}
               </div>
             </article>
           </div>
-        </div>
-      )}
-
-      {view === "assets" && (
-        <div className="geo-asset-view">
-          <div className="geo-view-intro">
-            <div>
-              <span>企业素材库</span>
-              <h3>本次知识库中的真实图文素材</h3>
-            </div>
-            <p>正文仅精选展示每个分支最多 3 张图片，其余素材在这里分页查看。</p>
-          </div>
-          {knowledgeAssets.length > 0 ? (
-            <>
-              <div className="geo-asset-grid">
-                {pagedAssets.map((asset) => {
-                  const href = asset.previewUrl || asset.url;
-                  return (
-                    <article key={asset.id}>
-                      <span
-                        className={`geo-asset-preview ${
-                          knowledgeAssetUsesContain(asset) ? "is-contain" : ""
-                        }`}
-                      >
-                        {isPreviewableKnowledgeAsset(asset) && href ? (
-                          <KnowledgeAssetPreviewImage asset={asset} />
-                        ) : (
-                          <FileText size={20} aria-hidden="true" />
-                        )}
-                      </span>
-                      <div>
-                        <strong>{asset.caption || asset.name}</strong>
-                        <small>
-                          {asset.source || asset.type || "企业知识素材"}
-                        </small>
-                      </div>
-                      {href && (
-                        <a
-                          href={href}
-                          target="_blank"
-                          rel="noreferrer"
-                          aria-label={`查看素材：${asset.name}`}
-                        >
-                          <ExternalLink size={15} />
-                        </a>
-                      )}
-                    </article>
-                  );
-                })}
-              </div>
-              {assetPageCount > 1 && (
-                <nav className="geo-asset-pagination" aria-label="企业素材分页">
-                  <button
-                    type="button"
-                    disabled={visibleAssetPage === 0}
-                    onClick={() =>
-                      setAssetPage((page) => Math.max(0, page - 1))
-                    }
-                  >
-                    <ChevronLeft size={15} /> 上一页
-                  </button>
-                  <span>
-                    {visibleAssetPage + 1} / {assetPageCount}
-                  </span>
-                  <button
-                    type="button"
-                    disabled={visibleAssetPage >= assetPageCount - 1}
-                    onClick={() =>
-                      setAssetPage((page) =>
-                        Math.min(assetPageCount - 1, page + 1),
-                      )
-                    }
-                  >
-                    下一页 <ChevronRight size={15} />
-                  </button>
-                </nav>
-              )}
-            </>
-          ) : (
-            <EmptyKnowledgeState
-              icon={<ImageIcon size={22} />}
-              title="暂无可展示的企业素材"
-              copy="当前归档未返回可展示的图片或文档条目。"
-            />
-          )}
         </div>
       )}
 
@@ -5039,32 +4834,6 @@ export function EnterpriseAnalysis({
               copy="请以 ZIP 内来源索引与报告正文的实际内容为准。"
             />
           )}
-        </div>
-      )}
-
-      {view === "report" && (
-        <div className="geo-report-view">
-          {reportScopeCards.length > 0 ? (
-            <div className="geo-report-summary">
-              {reportScopeCards.map((card) => (
-                <div key={card.key}>
-                  <span>{card.icon}</span>
-                  <strong>{card.title}</strong>
-                  <small>{card.detail}</small>
-                </div>
-              ))}
-            </div>
-          ) : (
-            <EmptyKnowledgeState
-              icon={<Database size={22} />}
-              title="未返回量化采集范围"
-              copy="请以报告正文和知识库清单实际返回的内容为准。"
-            />
-          )}
-          <KnowledgeBuildTree knowledgeBase={knowledgeBase} />
-          <article className="geo-report-document">
-            <LightweightMarkdown markdown={knowledgeBase.reportMarkdown} />
-          </article>
         </div>
       )}
     </div>
@@ -5229,6 +4998,7 @@ function QuestionRecommendation({
   const [customQuestion, setCustomQuestion] = useState("");
   const [customSubmitting, setCustomSubmitting] = useState(false);
   const [customError, setCustomError] = useState("");
+  const [permissionVideoOpen, setPermissionVideoOpen] = useState(false);
   const recommendedQuestions = project.questions.filter(
     (question) => !question.id.startsWith("custom-"),
   );
@@ -5358,6 +5128,16 @@ function QuestionRecommendation({
             <h3>行业排名类问题需要全域营销权限</h3>
             <p>如果想在行业中实现品牌优胜，需具备以下全域营销权限，举例如：</p>
           </div>
+          <button
+            type="button"
+            className="geo-permission-video-trigger"
+            onClick={() => setPermissionVideoOpen(true)}
+            aria-haspopup="dialog"
+          >
+            <Play size={15} fill="currentColor" aria-hidden="true" />
+            观看视频解释
+            <span>01:06</span>
+          </button>
         </div>
         <ul>
           <li>
@@ -5400,44 +5180,51 @@ function QuestionRecommendation({
             <div>
               <strong>商品与服务矩阵</strong>
               <p>
-                完成京东、美团、抖音、淘宝等商品与服务货架上架，并让元宝、豆包、千问读取到一致的产品参数、适用场景与购买入口。
+                完成抖音、美团、淘宝等商品与服务货架上架，并让对应的豆包、元宝、千问读取到一致的产品参数、适用场景与购买入口。
               </p>
-              <div className="geo-permission-channels">
-                <PermissionChannel
-                  name="京东"
-                  logo="/geo-builder/channels/jd.svg"
-                  tone="is-red"
-                />
-                <PermissionChannel
-                  name="美团"
-                  logo="/geo-builder/channels/meituan.svg"
-                  tone="is-yellow"
-                />
-                <PermissionChannel
-                  name="抖音"
-                  logo="/geo-builder/channels/douyin.svg"
-                  tone="is-dark"
-                />
-                <PermissionChannel
-                  name="淘宝"
-                  logo="/geo-builder/channels/taobao.svg"
-                  tone="is-red"
-                />
-                <PermissionChannel
-                  name="元宝"
-                  logo="/geo-builder/platforms/yuanbao.png"
-                  tone="is-blue"
-                />
-                <PermissionChannel
-                  name="豆包"
-                  logo="/geo-builder/platforms/doubao.png"
-                  tone="is-blue"
-                />
-                <PermissionChannel
-                  name="千问"
-                  logo="/geo-builder/platforms/qianwen.png"
-                  tone="is-blue"
-                />
+              <div
+                className="geo-permission-platform-pairs"
+                aria-label="商品与服务货架和 AI 平台的对应关系"
+              >
+                <div className="geo-permission-platform-pair">
+                  <PermissionChannel
+                    name="抖音"
+                    logo="/geo-builder/channels/douyin.svg"
+                    tone="is-dark"
+                  />
+                  <span aria-hidden="true">↔</span>
+                  <PermissionChannel
+                    name="豆包"
+                    logo="/geo-builder/platforms/doubao.png"
+                    tone="is-blue"
+                  />
+                </div>
+                <div className="geo-permission-platform-pair">
+                  <PermissionChannel
+                    name="美团"
+                    logo="/geo-builder/channels/meituan.svg"
+                    tone="is-yellow"
+                  />
+                  <span aria-hidden="true">↔</span>
+                  <PermissionChannel
+                    name="元宝"
+                    logo="/geo-builder/platforms/yuanbao.png"
+                    tone="is-blue"
+                  />
+                </div>
+                <div className="geo-permission-platform-pair">
+                  <PermissionChannel
+                    name="淘宝"
+                    logo="/geo-builder/channels/taobao.svg"
+                    tone="is-red"
+                  />
+                  <span aria-hidden="true">↔</span>
+                  <PermissionChannel
+                    name="千问"
+                    logo="/geo-builder/platforms/qianwen.png"
+                    tone="is-blue"
+                  />
+                </div>
               </div>
             </div>
           </li>
@@ -5486,6 +5273,46 @@ function QuestionRecommendation({
         </div>
       </section>
 
+      <Dialog open={permissionVideoOpen} onOpenChange={setPermissionVideoOpen}>
+        <DialogContent
+          className="geo-permission-video-dialog"
+          overlayClassName="geo-permission-video-overlay"
+        >
+          <DialogHeader className="geo-permission-video-dialog-header">
+            <span className="geo-permission-video-kicker">
+              <Play size={13} fill="currentColor" aria-hidden="true" />
+              66 秒视频解释
+            </span>
+            <DialogTitle>行业排名为什么需要全域营销权限？</DialogTitle>
+            <DialogDescription>
+              从行业内容、商品与服务、自有阵地和权威信源三个层面，理解 AI
+              推荐背后的品牌信号系统。
+            </DialogDescription>
+          </DialogHeader>
+          <div className="geo-permission-video-frame">
+            <video
+              controls
+              autoPlay
+              playsInline
+              preload="metadata"
+              poster="/videos/frontmind-industry-ranking-permission-explainer-poster.jpg"
+            >
+              <source
+                src="/videos/frontmind-industry-ranking-permission-explainer-66s.mp4"
+                type="video/mp4"
+              />
+              <track
+                kind="captions"
+                src="/videos/frontmind-industry-ranking-permission-explainer-zh-CN.vtt"
+                srcLang="zh-CN"
+                label="简体中文"
+              />
+              当前浏览器暂不支持 HTML5 视频播放。
+            </video>
+          </div>
+        </DialogContent>
+      </Dialog>
+
       <section className="geo-custom-question-card">
         <div className="geo-custom-question-copy">
           <span aria-hidden="true">
@@ -5495,7 +5322,8 @@ function QuestionRecommendation({
             <small>自定义问题</small>
             <h3>已有明确的 GEO 优化问题？</h3>
             <p>
-              输入一个<strong>非行业排名类</strong>问题，验证通过后即可继续。
+              输入一个与当前企业明确相关的
+              <strong>非行业排名类</strong>问题，验证并分类后即可继续。
             </p>
           </div>
         </div>
@@ -5551,7 +5379,9 @@ function QuestionRecommendation({
               )}
             </button>
           </div>
-          <small>不支持行业排名、榜单、或品牌推荐类问题。</small>
+          <small>
+            问题需明确包含当前企业、品牌或知识库中的具体产品/服务；行业排名、榜单、开放式品牌推荐及企业无关问题不会通过。
+          </small>
           {customError && (
             <p className="geo-custom-question-error" role="alert">
               <CircleAlert size={14} /> {customError}
@@ -5584,10 +5414,12 @@ function buildServiceContractHref({
   category,
   question,
   client,
+  order,
 }: {
   category?: GeoServiceCategory;
   question?: string;
   client?: string;
+  order?: string;
 }) {
   const serviceContractCategory =
     category === "product_scenario" ||
@@ -5600,6 +5432,7 @@ function buildServiceContractHref({
     question: question || "以付款确认页所列问题为准",
     client: client || "待确认企业",
   });
+  if (order) params.set("order", order);
   return (
     "/contracts/frontmind-geo-monthly-optimization-service-agreement.html?" +
     params.toString()
@@ -7366,16 +7199,6 @@ export function OptimizationForecastView({
               </ul>
             </div>
           )}
-          {forecast.limitations && forecast.limitations.length > 0 && (
-            <div className="geo-forecast-roadmap-limitations">
-              <strong>目标适用限制</strong>
-              <ul>
-                {forecast.limitations.map((limitation) => (
-                  <li key={limitation}>{limitation}</li>
-                ))}
-              </ul>
-            </div>
-          )}
         </section>
       </div>
     </div>
@@ -7707,10 +7530,11 @@ export function ServiceActivation({
     "services",
   );
   const activation = project.serviceActivation;
-  const question = project.questions.find(
-    (item) =>
-      item.id === (activation?.questionId ?? project.selectedQuestionId),
-  );
+  const question =
+    project.questions.find(
+      (item) =>
+        item.id === (activation?.questionId ?? project.selectedQuestionId),
+    ) ?? project.questions[0];
   const [previewServiceStatus, setPreviewServiceStatus] =
     useState<GeoServiceActivationStatus>(activation?.status ?? "not_started");
   useEffect(() => {
@@ -7720,7 +7544,7 @@ export function ServiceActivation({
     ? previewServiceStatus
     : activation?.status;
   const active = serviceStatus === "active";
-  const dashboardAvailable = active || Boolean(project.preview);
+  const dashboardAvailable = true;
   const handlePathTabKeyDown = (event: ReactKeyboardEvent<HTMLDivElement>) => {
     if (!["ArrowLeft", "ArrowRight", "Home", "End"].includes(event.key)) {
       return;
@@ -7766,11 +7590,52 @@ export function ServiceActivation({
       : category === "reputation" || category === "competitor_comparison"
         ? 200_000
         : 0);
+  const sampleOnly =
+    !active &&
+    !(
+      project.assessment?.status === "ready" &&
+      project.optimizationForecast?.status === "ready" &&
+      activation &&
+      question &&
+      amountFen > 0
+    );
   const serviceContractHref = buildServiceContractHref({
     category,
     question: question?.question,
     client: project.knowledgeBase?.companyName || project.title,
+    order: activation?.orderId || activation?.contractWorkflowReference,
   });
+
+  if (sampleOnly && question) {
+    return (
+      <div className="geo-service-activation">
+        <header className="geo-service-header">
+          <div>
+            <span className="geo-kb-kicker">
+              <Sparkles size={14} /> 企业服务工作台样例
+            </span>
+            <h2 className="geo-stage-title">先看豪华版服务如何持续推进</h2>
+            <p>
+              当前项目尚未进入正式服务开通条件；您可以先查看工作台结构与豪华版服务范围，预览不会触发签约、付款或真实交付。
+            </p>
+          </div>
+          <button type="button" onClick={onBack}>
+            返回现状评估
+          </button>
+        </header>
+
+        <div className="geo-agent-dashboard-frame is-standalone-sample">
+          <GeoAgentUserDashboard
+            project={project}
+            question={question}
+            categoryLabel={categoryLabel}
+            active={false}
+            sampleMode="luxury"
+          />
+        </div>
+      </div>
+    );
+  }
 
   if (!activation || !question || amountFen <= 0) {
     return (
@@ -7922,17 +7787,13 @@ export function ServiceActivation({
           >
             <Users size={17} />
             <span>
-              <strong>
-                {project.preview ? "用户角色看板" : "企业服务工作台"}
-              </strong>
+              <strong>企业服务工作台</strong>
               <small>
-                {active
-                  ? project.preview
-                    ? "查看用户端内容骨架"
-                    : "进入本次开通返回的真实工作台"
-                  : project.preview
-                    ? "查看用户端内容骨架"
-                    : "完成合同、付款和账号创建后开放"}
+                {project.preview
+                  ? "查看用户端内容骨架"
+                  : active
+                    ? "进入本次开通返回的真实工作台"
+                    : "查看豪华版工作台样例"}
               </small>
             </span>
           </button>
@@ -8119,12 +7980,13 @@ export function ServiceActivation({
             aria-labelledby="geo-service-tab-dashboard"
             tabIndex={0}
           >
-            {project.preview ? (
+            {project.preview || !active ? (
               <GeoAgentUserDashboard
                 project={project}
                 question={question}
                 categoryLabel={categoryLabel}
                 active={active}
+                sampleMode={!project.preview ? "luxury" : undefined}
               />
             ) : (
               <GeoWorkspaceHandoff

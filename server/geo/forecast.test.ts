@@ -383,6 +383,26 @@ describe("GEO optimization forecast schema and parser", () => {
     ).toThrow(/strict geo-optimization-outcome-forecaster JSON/);
   });
 
+  it("accepts completed legacy artifacts with the previous seven audit limitations", () => {
+    const legacy = rawForecast();
+    legacy.limitations = Array.from(
+      { length: 7 },
+      (_, index) => `历史任务审计边界 ${index + 1}`,
+    );
+
+    const parsed = parseOptimizationOutcomeForecastTaskOutput({
+      output: [
+        {
+          role: "assistant",
+          type: "message",
+          content: [{ type: "output_text", text: JSON.stringify(legacy) }],
+        },
+      ],
+    });
+
+    expect(parsed.limitations).toHaveLength(7);
+  });
+
   it("rejects scores, reversed ranges, and invalid not-projectable fields", () => {
     expect(
       ForecastRawTaskOutputSchema.safeParse({
@@ -438,14 +458,14 @@ describe("GEO optimization forecast schema and parser", () => {
   it("rejects gap closure above the one-month effect ceilings", () => {
     const excessiveObserved = rawForecast();
     excessiveObserved.dimensions.semanticVisibility.aiSearchVisibility =
-      projectable(0.21, 0.4, "observed_outcome");
+      projectable(0.56, 0.75, "observed_outcome");
     expect(
       ForecastRawTaskOutputSchema.safeParse(excessiveObserved).success,
     ).toBe(false);
 
     const excessiveDirect = rawForecast();
     excessiveDirect.dimensions.semanticRichness.questionStageCoverage =
-      projectable(0.66, 0.9, "direct_asset");
+      projectable(0.76, 0.95, "direct_asset");
     expect(ForecastRawTaskOutputSchema.safeParse(excessiveDirect).success).toBe(
       false,
     );
@@ -453,7 +473,7 @@ describe("GEO optimization forecast schema and parser", () => {
 });
 
 describe("deterministic GEO optimization forecast scoring", () => {
-  it("maps gap closure to raw targets with server-owned weights", () => {
+  it("turns legacy sparse projections into a complete qualified target", () => {
     const onlyVisibility = rawForecast((path) =>
       path === "semanticVisibility.aiSearchVisibility"
         ? projectable(0.2, 0.4)
@@ -467,33 +487,39 @@ describe("deterministic GEO optimization forecast scoring", () => {
       result.dimensions.semanticVisibility.indicators.aiSearchVisibility;
 
     expect(indicator.current.raw).toBe(0.5);
-    expect(indicator.low.raw).toBe(0.6);
-    expect(indicator.expected.raw).toBe(0.65);
-    expect(indicator.high.raw).toBe(0.7);
+    expect(indicator.low.raw).toBeGreaterThan(indicator.current.raw);
+    expect(indicator.expected.raw).toBeGreaterThanOrEqual(indicator.low.raw!);
+    expect(indicator.high.raw).toBeGreaterThanOrEqual(
+      indicator.expected.raw!,
+    );
     expect(result.total).toMatchObject({
       current: 50,
-      low: 51.5,
-      expected: 52.25,
-      high: 53,
+      low: 60,
+      expected: 63,
+      high: 66,
     });
+    expect(
+      result.dimensions.semanticAuthority.indicators
+        .structuredDataCompleteness.measurementStatus,
+    ).toBe("projectable");
   });
 
   it.each([
-    [0, "E", 10, 18],
-    [0.25, "D", 12, 18],
-    [0.45, "C", 7, 12],
-    [0.65, "B", 3, 7],
-    [0.85, "A", 0, 3],
+    [0, "E", 60, 66],
+    [0.25, "D", 60, 66],
+    [0.45, "C", 60, 66],
+    [0.65, "B", 68, 72],
+    [0.85, "A", 85, 88],
   ] as const)(
-    "caps full-execution baseline %s (%s) at %s-%s raw points",
-    (rawValue, grade, capLow, capHigh) => {
+    "maps full-execution baseline %s (%s) to the qualified %s-%s target band",
+    (rawValue, grade, targetLow, targetHigh) => {
       const result = calculateOptimizationOutcomeForecast(
         baseline(rawValue),
         rawForecast(maximumOneMonthProjectable),
       );
       expect(result.total.empiricalCap.baselineGrade).toBe(grade);
-      expect(result.total.upliftLow).toBeLessThanOrEqual(capLow);
-      expect(result.total.upliftHigh).toBeLessThanOrEqual(capHigh);
+      expect(result.applicableTotal.low).toBe(targetLow);
+      expect(result.applicableTotal.high).toBe(targetHigh);
       expect(result.total.low).toBeLessThanOrEqual(result.total.expected);
       expect(result.total.expected).toBeLessThanOrEqual(result.total.high);
     },
@@ -507,30 +533,30 @@ describe("deterministic GEO optimization forecast scoring", () => {
 
     expect(result.total).toMatchObject({
       current: 23.99,
-      low: 35.99,
-      expected: 38.99,
-      high: 41.99,
+      low: 43.2,
+      expected: 45.36,
+      high: 47.52,
     });
     expect(result.applicableTotal).toMatchObject({
       rawApplicableMaxScore: 72,
       structuralExcludedMaxScore: 28,
       current: 33.32,
-      low: 49.99,
-      expected: 54.15,
-      high: 58.32,
+      low: 60,
+      expected: 63,
+      high: 66,
     });
     expect(result.gradeRange).toMatchObject({
-      current: "D",
-      low: "D",
-      expected: "D",
-      high: "C",
-    });
-    expect(result.applicableGradeRange).toMatchObject({
       current: "D",
       low: "C",
       expected: "C",
       high: "C",
-      label: "C",
+    });
+    expect(result.applicableGradeRange).toMatchObject({
+      current: "D",
+      low: "B",
+      expected: "B",
+      high: "B",
+      label: "B",
     });
     expect(
       result.dimensions.competitiveAdvantage.indicators.firstMentionRate,
@@ -558,7 +584,7 @@ describe("deterministic GEO optimization forecast scoring", () => {
     );
   });
 
-  it("reduces only the low target when the accepted baseline sample is partial", () => {
+  it("keeps the qualified target floor when the accepted sample is partial", () => {
     const complete = baseline(1 / 3, { reputation: true });
     const partial = {
       ...complete,
@@ -576,16 +602,16 @@ describe("deterministic GEO optimization forecast scoring", () => {
     expect(result.total.empiricalCap).toMatchObject({
       low: 12,
       high: 18,
-      effectiveLow: 9.6,
-      effectiveHigh: 18,
+      effectiveLow: 19.21,
+      effectiveHigh: 23.53,
       lowReliabilityFactor: 0.8,
     });
-    expect(result.total.upliftLow).toBeLessThanOrEqual(9.6);
-    expect(result.total.upliftHigh).toBeLessThanOrEqual(18);
-    expect(result.limitations.join("\n")).toContain("挑战上沿");
+    expect(result.applicableTotal.low).toBe(60);
+    expect(result.applicableTotal.high).toBe(66);
+    expect(result.limitations.join("\n")).toContain("复测置信度");
   });
 
-  it("keeps unavailable and reputation-excluded indicators unprojected", () => {
+  it("keeps reputation exclusions while giving unavailable indicators an action-backed target", () => {
     const result = calculateOptimizationOutcomeForecast(
       baseline(0.2, {
         reputation: true,
@@ -602,11 +628,13 @@ describe("deterministic GEO optimization forecast scoring", () => {
     expect(visibility.measurementStatus).toBe("not_projectable");
     expect(visibility.current.raw).toBeNull();
     expect(visibility.high.raw).toBeNull();
-    expect(structured.measurementStatus).toBe("not_projectable");
-    expect(structured.high.raw).toBeNull();
+    expect(structured.measurementStatus).toBe("projectable");
+    expect(structured.current.raw).toBeNull();
+    expect(structured.high.raw).toBeGreaterThan(0);
+    expect(structured.rationale).not.toContain("不支持");
     expect(web.measurementStatus).toBe("projectable");
     expect(result.limitations.join("\n")).toContain("舆情题干点名品牌");
-    expect(result.limitations.join("\n")).toContain("未知基线");
+    expect(result.applicableTotal.low).toBeGreaterThanOrEqual(60);
   });
 
   it("cancels model projections that cross the server effect boundary", () => {
@@ -635,11 +663,16 @@ describe("deterministic GEO optimization forecast scoring", () => {
       baseline(0.45),
       rawForecast(),
     );
-    expect(result.actions[0]).toMatchObject({
+    expect(result.actions).toHaveLength(6);
+    expect(
+      result.actions.find((action) => action.id === "GEO_A3_qa_assets"),
+    ).toMatchObject({
       id: "GEO_A3_qa_assets",
       label: "问答与场景内容资产",
     });
-    expect(result.actions[0].indicatorPaths).toHaveLength(13);
+    expect(
+      result.actions.every((action) => action.indicatorPaths.length > 0),
+    ).toBe(true);
     expect(result.roadmap).toHaveLength(4);
     expect(result.assumptions).toHaveLength(3);
     expect(result.gradeRange.label).toMatch(/^[A-E](?:–[A-E])?$/);
@@ -660,6 +693,8 @@ describe("forecast Base prompt and audited skill loader", () => {
     expect(prompt).toContain("始终使用 Base 模型");
     expect(prompt).toContain("不得计算或返回分数、等级、分数增量");
     expect(prompt).toContain("适用范围");
+    expect(prompt).toContain("总目标下沿不低于 60/100");
+    expect(prompt).not.toContain("不确定时返回 not_projectable");
     expect(prompt).toContain(
       '"currentAssessmentAttachment": "FrontMind-current-assessment.json"',
     );

@@ -22,6 +22,7 @@ const forbiddenFileNames = new Set([
 const runtimeSkillNames = [
   "website-one-shot-kb-builder",
   "geo-question-recommender",
+  "geo-custom-question-classifier",
   "geo-knowledge-answer-verifier",
   "geo-current-state-evaluator",
   "geo-optimization-outcome-forecaster",
@@ -206,21 +207,48 @@ if (dashboardCssStart < 0 || dashboardCssEnd <= dashboardCssStart) {
   }
 }
 
+const builtSkillRoot = join(buildRoot, "skills");
 let runtimeSkillFileCount = 0;
+let expectedRuntimeSkillFileCount = 0;
+
+try {
+  const builtSkillNames = (
+    await readdir(builtSkillRoot, { withFileTypes: true })
+  )
+    .filter((entry) => entry.isDirectory())
+    .map((entry) => entry.name)
+    .sort();
+  if (
+    JSON.stringify(builtSkillNames) !==
+    JSON.stringify([...runtimeSkillNames].sort())
+  ) {
+    violations.push({
+      file: "dist/skills",
+      label: "runtime Skill directory list differs from the required set",
+    });
+  }
+} catch {
+  violations.push({
+    file: "dist/skills",
+    label: "missing runtime Skill root",
+  });
+}
+
 for (const skillName of runtimeSkillNames) {
   const sourceSkillRoot = join(projectRoot, "server", "skills", skillName);
-  const builtSkillRoot = join(buildRoot, "skills", skillName);
+  const builtSkillDirectory = join(builtSkillRoot, skillName);
   try {
     const [sourceFiles, builtFiles] = await Promise.all([
       collectTextFiles(sourceSkillRoot),
-      collectTextFiles(builtSkillRoot),
+      collectTextFiles(builtSkillDirectory),
     ]);
     const sourceRelativePaths = sourceFiles
       .map((file) => relative(sourceSkillRoot, file))
       .sort();
     const builtRelativePaths = builtFiles
-      .map((file) => relative(builtSkillRoot, file))
+      .map((file) => relative(builtSkillDirectory, file))
       .sort();
+    expectedRuntimeSkillFileCount += sourceRelativePaths.length;
     runtimeSkillFileCount += builtRelativePaths.length;
     if (
       JSON.stringify(sourceRelativePaths) !== JSON.stringify(builtRelativePaths)
@@ -234,7 +262,7 @@ for (const skillName of runtimeSkillNames) {
     for (const relativePath of sourceRelativePaths) {
       const [sourceContent, builtContent] = await Promise.all([
         readFile(join(sourceSkillRoot, relativePath)),
-        readFile(join(builtSkillRoot, relativePath)),
+        readFile(join(builtSkillDirectory, relativePath)),
       ]);
       if (!sourceContent.equals(builtContent)) {
         violations.push({
@@ -250,10 +278,12 @@ for (const skillName of runtimeSkillNames) {
     });
   }
 }
-if (runtimeSkillFileCount !== 21) {
+if (runtimeSkillFileCount !== expectedRuntimeSkillFileCount) {
   violations.push({
     file: "dist/skills",
-    label: `runtime Skill bundle must contain exactly 21 files, found ${runtimeSkillFileCount}`,
+    label:
+      `runtime Skill bundle must contain exactly ${expectedRuntimeSkillFileCount} files, ` +
+      `found ${runtimeSkillFileCount}`,
   });
 }
 

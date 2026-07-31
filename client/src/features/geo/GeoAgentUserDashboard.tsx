@@ -287,15 +287,18 @@ function ServiceOverviewPanel({
   project,
   question,
   active,
+  sampleMode,
   onNavigate,
 }: {
   project: GeoProject;
   question: GeoQuestion;
   active: boolean;
+  sampleMode?: "luxury";
   onNavigate: (section: DashboardSection, subpage: DashboardSubpage) => void;
 }) {
   const activation = project.serviceActivation;
   const companyName = project.knowledgeBase?.companyName || project.title;
+  const isLuxurySample = sampleMode === "luxury";
   const hasSelectedQuestion = Boolean(
     activation?.questionId || project.selectedQuestionId,
   );
@@ -308,32 +311,46 @@ function ServiceOverviewPanel({
         activation?.status === "provisioning" ||
         activation?.status === "active"),
   );
-  const planName =
-    activation?.planCode === WEBSITE_SERVICE_PLAN.code || project.preview
+  const planName = isLuxurySample
+    ? "豪华版"
+    : activation?.planCode === WEBSITE_SERVICE_PLAN.code || project.preview
       ? WEBSITE_SERVICE_PLAN.label
       : "待同步";
-  const serviceStatus = active
-    ? "已生效"
-    : activation
-      ? SERVICE_STATUS_LABELS[activation.status]
-      : "待同步";
+  const serviceStatus = isLuxurySample
+    ? "工作台界面样例"
+    : active
+      ? "已生效"
+      : activation
+        ? SERVICE_STATUS_LABELS[activation.status]
+        : "待同步";
   const knowledgeImport = activation?.knowledgeImport;
-  const knowledgeState = getKnowledgeJourneyState(project);
+  const knowledgeState = isLuxurySample
+    ? "complete"
+    : getKnowledgeJourneyState(project);
   const questionState: ServiceJourneyState = hasSelectedQuestion
-    ? hasPurchasedQuestion
+    ? isLuxurySample || hasPurchasedQuestion
       ? "complete"
       : "current"
     : project.questions.length > 0
       ? "current"
       : "pending";
-  const responseLogicState: ServiceJourneyState = hasSelectedQuestion
+  const responseLogicState: ServiceJourneyState = isLuxurySample
     ? "current"
-    : "pending";
-  const monitoringState = getMonitoringJourneyState(project);
-  const reportState: ServiceJourneyState = active ? "syncing" : "pending";
-  const serviceDays =
-    activation?.serviceDays ??
-    (project.preview ? WEBSITE_SERVICE_PLAN.serviceDays : null);
+    : hasSelectedQuestion
+      ? "current"
+      : "pending";
+  const monitoringState = isLuxurySample
+    ? "syncing"
+    : getMonitoringJourneyState(project);
+  const reportState: ServiceJourneyState = isLuxurySample
+    ? "pending"
+    : active
+      ? "syncing"
+      : "pending";
+  const serviceDays = isLuxurySample
+    ? null
+    : (activation?.serviceDays ??
+      (project.preview ? WEBSITE_SERVICE_PLAN.serviceDays : null));
   const journeyItems: Array<{
     id: string;
     title: string;
@@ -346,8 +363,9 @@ function ServiceOverviewPanel({
     {
       id: "knowledge",
       title: "知识库展示",
-      description:
-        knowledgeImport?.status === "ready"
+      description: isLuxurySample
+        ? `${companyName} 的企业事实、产品服务、案例与可信信源统一进入知识底座。`
+        : knowledgeImport?.status === "ready"
           ? `${companyName} 的企业知识库已同步到服务工作台。`
           : knowledgeImport?.status === "failed"
             ? knowledgeImport.message || "知识库导入未完成，请检查开通状态。"
@@ -363,9 +381,11 @@ function ServiceOverviewPanel({
     {
       id: "question",
       title: hasPurchasedQuestion ? "已购服务问题" : "当前服务问题",
-      description: hasSelectedQuestion
-        ? question.question
-        : "从已返回的问题中确定本次服务问题。",
+      description: isLuxurySample
+        ? `32 个品牌问题池按行业、竞品、美誉与产品场景管理；当前示例：${question.question}`
+        : hasSelectedQuestion
+          ? question.question
+          : "从已返回的问题中确定本次服务问题。",
       state: questionState,
       section: "intent",
       subpage: "intent-questions",
@@ -373,9 +393,11 @@ function ServiceOverviewPanel({
     {
       id: "response-logic",
       title: "应答逻辑智能体",
-      description: hasSelectedQuestion
-        ? "围绕当前问题组织知识调用、证据锚点与目标回答结构。"
-        : "选定服务问题后生成可核验的应答逻辑。",
+      description: isLuxurySample
+        ? "为重点问题编排标准回答、事实证据、引用锚点与内容任务。"
+        : hasSelectedQuestion
+          ? "围绕当前问题组织知识调用、证据锚点与目标回答结构。"
+          : "选定服务问题后生成可核验的应答逻辑。",
       state: responseLogicState,
       section: "intent",
       subpage: "intent-logic",
@@ -383,9 +405,11 @@ function ServiceOverviewPanel({
     {
       id: "monitoring",
       title: "问题监控",
-      description: project.monitoring
-        ? `${project.monitoring.completedRecords} / ${project.monitoring.expectedRecords} 条回答已完成采集。`
-        : "选定问题与平台后开始真实回答采集。",
+      description: isLuxurySample
+        ? "按固定问题在 6 个主流 AI 平台持续采集，统一查看提及、引用与答案变化。"
+        : project.monitoring
+          ? `${project.monitoring.completedRecords} / ${project.monitoring.expectedRecords} 条回答已完成采集。`
+          : "选定问题与平台后开始真实回答采集。",
       state: monitoringState,
       section: "progress",
       subpage: "progress-distribution",
@@ -393,8 +417,9 @@ function ServiceOverviewPanel({
     {
       id: "report",
       title: "进度报告",
-      description:
-        project.assessment || project.optimizationForecast
+      description: isLuxurySample
+        ? "汇总本月任务、内容交付、平台表现与下一阶段优化重点。"
+        : project.assessment || project.optimizationForecast
           ? "服务前评估已就绪；服务周期复测与进度报告由 Agent 工作台同步。"
           : "服务开启后由 Agent 同步周期复测、发现与下一步。",
       state: reportState,
@@ -406,6 +431,19 @@ function ServiceOverviewPanel({
 
   return (
     <section className="geo-agent-service-home" aria-label="服务首页">
+      {isLuxurySample && (
+        <div className="geo-agent-sample-notice" role="note">
+          <span>
+            <Sparkles size={16} />
+            豪华版工作台样例
+          </span>
+          <p>
+            用于预览完整服务开通后的工作方式；下列进度与数量为界面演示，不代表当前项目已开通或已经交付。
+          </p>
+          <strong>演示数据</strong>
+        </div>
+      )}
+
       <header className="geo-agent-service-heading">
         <span>MindPromise 智诺 · 服务首页</span>
       </header>
@@ -423,7 +461,11 @@ function ServiceOverviewPanel({
             <h2>{planName}</h2>
             <p>
               {serviceStatus}
-              {serviceDays ? ` · ${serviceDays} 天单题服务` : ""}
+              {isLuxurySample
+                ? " · 持续品牌智能优化"
+                : serviceDays
+                  ? ` · ${serviceDays} 天单题服务`
+                  : ""}
             </p>
           </div>
           <div className="geo-agent-plan-meta">
@@ -432,7 +474,11 @@ function ServiceOverviewPanel({
                 <CalendarDays size={15} />
                 服务有效期
               </span>
-              <strong>{getServiceValidity(project)}</strong>
+              <strong>
+                {isLuxurySample
+                  ? "持续服务 · 按月推进 · 分阶段验收"
+                  : getServiceValidity(project)}
+              </strong>
             </div>
             <div>
               <span>
@@ -440,11 +486,13 @@ function ServiceOverviewPanel({
                 套餐范围
               </span>
               <strong>
-                {activation
-                  ? `${activation.billingMonths} 个月 · ${
-                      hasSelectedQuestion ? "1 个服务问题" : "问题待选择"
-                    }`
-                  : "开通后由 Agent 同步"}
+                {isLuxurySample
+                  ? "32 个品牌问题 · 6 个主流 AI 平台"
+                  : activation
+                    ? `${activation.billingMonths} 个月 · ${
+                        hasSelectedQuestion ? "1 个服务问题" : "问题待选择"
+                      }`
+                    : "开通后由 Agent 同步"}
               </strong>
             </div>
           </div>
@@ -513,28 +561,79 @@ function ServiceOverviewPanel({
             <header>
               <div>
                 <span>套餐配额</span>
-                <h3>本次服务配置</h3>
+                <h3>{isLuxurySample ? "品牌问题矩阵" : "本次服务配置"}</h3>
               </div>
             </header>
             <div>
-              <span>
-                <small>当前服务问题</small>
-                <strong>
-                  {hasSelectedQuestion ? "1 个已选问题" : "待选择"}
-                </strong>
-              </span>
-              <span>
-                <small>监控平台</small>
-                <strong>
-                  {project.selectedPlatformIds.length > 0
-                    ? `${project.selectedPlatformIds.length} 个平台`
-                    : "待选择"}
-                </strong>
-              </span>
+              {isLuxurySample ? (
+                <>
+                  <span>
+                    <small>行业排名</small>
+                    <strong>4 个问题</strong>
+                  </span>
+                  <span>
+                    <small>竞品对比</small>
+                    <strong>4 个问题</strong>
+                  </span>
+                  <span>
+                    <small>美誉舆情</small>
+                    <strong>4 个问题</strong>
+                  </span>
+                  <span>
+                    <small>产品场景</small>
+                    <strong>20 个问题</strong>
+                  </span>
+                </>
+              ) : (
+                <>
+                  <span>
+                    <small>当前服务问题</small>
+                    <strong>
+                      {hasSelectedQuestion ? "1 个已选问题" : "待选择"}
+                    </strong>
+                  </span>
+                  <span>
+                    <small>监控平台</small>
+                    <strong>
+                      {project.selectedPlatformIds.length > 0
+                        ? `${project.selectedPlatformIds.length} 个平台`
+                        : "待选择"}
+                    </strong>
+                  </span>
+                </>
+              )}
             </div>
           </article>
         </div>
       </div>
+
+      {isLuxurySample && (
+        <div
+          className="geo-agent-sample-metrics"
+          aria-label="豪华版服务能力概览"
+        >
+          <article>
+            <small>品牌知识底座</small>
+            <strong>持续更新</strong>
+            <span>企业事实与可信信源统一管理</span>
+          </article>
+          <article>
+            <small>AI 平台监测</small>
+            <strong>6 个平台</strong>
+            <span>同问题、多轮次、同口径复测</span>
+          </article>
+          <article>
+            <small>权威内容运营</small>
+            <strong>按月交付</strong>
+            <span>内容、信源与官网任务协同推进</span>
+          </article>
+          <article>
+            <small>服务复盘</small>
+            <strong>月度报告</strong>
+            <span>任务进度、平台变化与下一步</span>
+          </article>
+        </div>
+      )}
 
       <section className="geo-agent-journey-panel" aria-label="智能交付">
         <header>
@@ -583,10 +682,16 @@ function ServiceOverviewPanel({
           </span>
           <div>
             <header>
-              <h4>AI 友好内容资产</h4>
-              <small>预览入口</small>
+              <h4>
+                {isLuxurySample ? "权威内容与 AI 友好官网" : "AI 友好内容资产"}
+              </h4>
+              <small>{isLuxurySample ? "持续运营" : "预览入口"}</small>
             </header>
-            <p>查看当前项目已返回的图文素材与内容资产状态。</p>
+            <p>
+              {isLuxurySample
+                ? "将知识、应答逻辑与监测发现转化为可发布、可追踪的品牌内容任务。"
+                : "查看当前项目已返回的图文素材与内容资产状态。"}
+            </p>
           </div>
           <button
             type="button"
@@ -2010,11 +2115,13 @@ export function GeoAgentUserDashboard({
   question,
   categoryLabel,
   active,
+  sampleMode,
 }: {
   project: GeoProject;
   question: GeoQuestion;
   categoryLabel: string;
   active: boolean;
+  sampleMode?: "luxury";
 }) {
   const [section, setSection] = useState<DashboardSection>("service");
   const [subpage, setSubpage] = useState<DashboardSubpage>("service-overview");
@@ -2069,6 +2176,7 @@ export function GeoAgentUserDashboard({
     setMobileNavigationOpen(false);
   };
   const updatedLabel = useMemo(() => {
+    if (sampleMode === "luxury") return "演示数据 · 不代表实际交付";
     if (project.preview) return "项目数据已同步";
     const source =
       project.optimizationForecast?.generatedAt ||
@@ -2085,12 +2193,17 @@ export function GeoAgentUserDashboard({
     project.optimizationForecast?.generatedAt,
     project.preview,
     project.updatedAt,
+    sampleMode,
   ]);
 
   return (
     <div
       className="geo-agent-dashboard"
-      aria-label="FrontMind Agent 用户角色看板"
+      aria-label={
+        sampleMode === "luxury"
+          ? "豪华版企业服务工作台样例"
+          : "FrontMind Agent 用户角色看板"
+      }
     >
       {mobileNavigationOpen && (
         <button
@@ -2130,7 +2243,10 @@ export function GeoAgentUserDashboard({
         </header>
 
         <div className="geo-agent-nav-card">
-          <span>MindPromise 智诺</span>
+          <span>
+            MindPromise 智诺
+            {sampleMode === "luxury" ? " · 豪华版样例" : ""}
+          </span>
           <nav aria-label="用户看板功能">
             {DASHBOARD_SECTIONS.map((item) => {
               const Icon = item.icon;
@@ -2173,7 +2289,7 @@ export function GeoAgentUserDashboard({
         <footer>
           <span>{getProjectInitial(companyName)}</span>
           <div>
-            <small>当前企业</small>
+            <small>{sampleMode === "luxury" ? "样例企业" : "当前企业"}</small>
             <strong>{companyName}</strong>
           </div>
         </footer>
@@ -2196,7 +2312,11 @@ export function GeoAgentUserDashboard({
             <Menu size={19} />
           </button>
           <div>
-            <span>FrontMind 智能品牌优化看板</span>
+            <span>
+              {sampleMode === "luxury"
+                ? "FrontMind 豪华版企业服务工作台 · 样例"
+                : "FrontMind 智能品牌优化看板"}
+            </span>
             <h3>{companyName}</h3>
           </div>
           <small>{updatedLabel}</small>
@@ -2218,6 +2338,7 @@ export function GeoAgentUserDashboard({
               project={project}
               question={question}
               active={active}
+              sampleMode={sampleMode}
               onNavigate={handleNavigate}
             />
           )}

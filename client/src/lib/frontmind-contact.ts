@@ -1,6 +1,5 @@
 export const FRONTMIND_CONTACT_EMAILS = [
-  "fanzengxia@link.cuhk.edu.cn",
-  "litongxin@cuhk.edu.cn",
+  "xiafanzeng@frontmind.com.cn",
 ] as const;
 
 export const FRONTMIND_WECHAT_QR_PATH =

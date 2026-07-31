@@ -31,7 +31,7 @@ export const GeoQuestionSchema = z
       .refine((value) => value.endsWith("？"), {
         message: "question must end with a Chinese question mark",
       }),
-    rationale: z.string().min(4).max(240),
+    rationale: z.string().min(8).max(240),
     enterpriseAnchor: z.string().trim().min(2).max(120).optional(),
     offeringAnchor: z.string().trim().min(2).max(120).optional(),
     qaIntent: ProductQaIntentSchema.optional(),
@@ -71,6 +71,35 @@ function questionContainsAnchor(question: string, anchor: string) {
   );
 }
 
+const FORBIDDEN_GENERATED_QUESTION_PATTERN =
+  /\b(?:reputation|product_scenario|industry_ranking|competitor_comparison)\b|第\s*(?:\d+|[一二三四五六七八九十]+)\s*个(?:问题|问句)|测试问题|值得优化吗/i;
+const REPUTATION_INTENT_PATTERN =
+  /(?:背景|团队|资质|认证|专利|合规|安全|可靠|稳定|口碑|评价|声誉|客户|案例|交付|售后|服务|风险|投诉|正规|官方|认可|信任|可信|质量|融资|荣誉|实力)/;
+const COMPETITOR_COMPARISON_PATTERN =
+  /(?:对比|相比|比较|区别|差异|相较|取舍|还是|同类|传统方案|传统工具|自建|替代|与.+哪个|和.+哪个|vs)/i;
+
+function normalizeGeneratedQuestion(value: string) {
+  return value
+    .normalize("NFKC")
+    .toLocaleLowerCase("zh-CN")
+    .replace(
+      /[\s!"#$%&'()*+,\-./:;<=>?@[\\\]^_`{|}~，。！？、；：“”‘’（）【】《》·…—～￥]+/g,
+      "",
+    );
+}
+
+function questionTemplateSkeleton(
+  item: z.infer<typeof GeoQuestionSchema>,
+) {
+  let skeleton = normalizeGeneratedQuestion(item.question);
+  for (const anchor of [item.enterpriseAnchor, item.offeringAnchor]) {
+    if (!anchor) continue;
+    const normalizedAnchor = normalizeGeneratedQuestion(anchor);
+    if (normalizedAnchor) skeleton = skeleton.split(normalizedAnchor).join("");
+  }
+  return skeleton.replace(/\d+|[一二三四五六七八九十]+/g, "#");
+}
+
 export const GeoQuestionSetSchema = z
   .object({
     questions: z.array(GeoQuestionSchema).length(20),
@@ -80,6 +109,8 @@ export const GeoQuestionSetSchema = z
     const seenIds = new Set<string>();
     const seenQuestions = new Set<string>();
     const seenProductQaIntents = new Set<string>();
+    const seenRationales = new Map<string, number>();
+    const seenQuestionTemplates = new Map<string, number>();
 
     for (const category of GEO_QUESTION_CATEGORIES) {
       const categoryQuestions = questions.filter(
@@ -116,6 +147,39 @@ export const GeoQuestionSetSchema = z
       }
       seenQuestions.add(normalizedQuestion);
 
+      if (FORBIDDEN_GENERATED_QUESTION_PATTERN.test(item.question)) {
+        context.addIssue({
+          code: "custom",
+          message:
+            "question contains an internal category token or placeholder template",
+          path: ["questions", index, "question"],
+        });
+      }
+
+      const normalizedRationale = normalizeGeneratedQuestion(item.rationale);
+      const previousRationale = seenRationales.get(normalizedRationale);
+      if (previousRationale !== undefined) {
+        context.addIssue({
+          code: "custom",
+          message: `rationale duplicates question ${previousRationale + 1}`,
+          path: ["questions", index, "rationale"],
+        });
+      } else {
+        seenRationales.set(normalizedRationale, index);
+      }
+
+      const templateSkeleton = questionTemplateSkeleton(item);
+      const previousTemplate = seenQuestionTemplates.get(templateSkeleton);
+      if (templateSkeleton.length >= 6 && previousTemplate !== undefined) {
+        context.addIssue({
+          code: "custom",
+          message: `question repeats the template of question ${previousTemplate + 1}`,
+          path: ["questions", index, "question"],
+        });
+      } else {
+        seenQuestionTemplates.set(templateSkeleton, index);
+      }
+
       const expectedId = `${idPrefixByCategory[item.category]}-${String(
         questions.filter(
           (candidate, candidateIndex) =>
@@ -136,6 +200,42 @@ export const GeoQuestionSetSchema = z
           code: "custom",
           message: `${item.category} selectable must be ${expectedSelectable}`,
           path: ["questions", index, "selectable"],
+        });
+      }
+
+      if (
+        item.category === "reputation" &&
+        !REPUTATION_INTENT_PATTERN.test(item.question)
+      ) {
+        context.addIssue({
+          code: "custom",
+          message:
+            "reputation question must express a trust, credibility, delivery, service, or risk-check intent",
+          path: ["questions", index, "question"],
+        });
+      }
+
+      if (
+        item.category === "industry_ranking" &&
+        !isIndustryRankingQuestion(item.question)
+      ) {
+        context.addIssue({
+          code: "custom",
+          message:
+            "industry_ranking question must express ranking, shortlist, or open recommendation intent",
+          path: ["questions", index, "question"],
+        });
+      }
+
+      if (
+        item.category === "competitor_comparison" &&
+        !COMPETITOR_COMPARISON_PATTERN.test(item.question)
+      ) {
+        context.addIssue({
+          code: "custom",
+          message:
+            "competitor_comparison question must express a concrete comparison or trade-off",
+          path: ["questions", index, "question"],
         });
       }
 

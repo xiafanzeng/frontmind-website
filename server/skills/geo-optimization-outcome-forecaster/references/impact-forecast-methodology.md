@@ -42,43 +42,29 @@ Grades shown for a question-level conditional target may use the applicable-scop
 - `GEO_A5_site_schema`: improve official pages, entity pages, internal links, and Organization/Product/Service/FAQPage structured data.
 - `GEO_A6_distribution_citations`: establish publication, independent authority, directory, media, case, and citation paths.
 
-## One-Month Full-Execution Ceilings
+## One-Month Full-Execution Qualified Target
 
-The following values are maximum raw weighted uplifts for a declared full-execution scenario. They are ceilings, not minimum bands: the server never raises an evidence-derived result merely to reach them.
+The standard scenario represents completion of all six FrontMind action groups, not passive waiting for organic change. The server therefore enforces an applicable-scope target low bound of at least 60/100 whenever the current applicable score is below 60. The high bound is at least 66/100 and remains conditional on delivery and week-4 verification. When the current score is already 60 or higher, the server applies the grade-based incremental band without lowering the current score.
 
-| Applicable baseline grade | Low-bound ceiling | High-bound ceiling | Full-execution condition                                                |
-| ------------------------- | ----------------: | -----------------: | ----------------------------------------------------------------------- |
-| E                         |                10 |                 18 | Foundational facts, question assets, official-site repair, and delivery |
-| D                         |                12 |                 18 | Systematic assets, structured site work, and credible source pathways   |
-| C                         |                 7 |                 12 | Deep assets, authority preparation, distribution, and Schema            |
-| B                         |                 3 |                  7 | Focused repair of the clearest remaining evidenced gaps                 |
-| A                         |                 0 |                  3 | Maintenance and verified incremental gains only                         |
+This is a planning target, not a claim that an external platform has already adopted the work. Direct assets are checked through delivery evidence; observed outcomes remain subject to publication, crawl/index success, independent uptake, and same-scope remeasurement.
 
-Apply the applicable-scope baseline grade when selecting a ceiling. Never exceed the remaining raw applicable headroom. When the monitoring sample is partial, the server reduces only the low-bound ceiling with:
+## Effect-Specific Full-Execution Bands
 
-```text
-low reliability factor = 0.5 + 0.5 × successful responses / expected responses
-```
+| Effect type        | Low closure target | High closure target | Boundary                                                     |
+| ------------------ | -----------------: | ------------------: | ------------------------------------------------------------ |
+| `direct_asset`     |               0.75 |                0.95 | FrontMind-controlled assets, subject to delivery check       |
+| `observed_outcome` |               0.55 |                0.75 | External uptake requiring week-4 same-scope remeasurement    |
 
-The unchanged high ceiling is then a challenge upper bound under complete execution, not the expected result.
-
-## Effect-Specific Gap-Closure Ceilings
-
-| Effect type        | Low closure maximum | High closure maximum | Boundary                                                     |
-| ------------------ | ------------------: | -------------------: | ------------------------------------------------------------ |
-| `direct_asset`     |                0.65 |                 0.90 | FrontMind-controlled assets, still subject to delivery check |
-| `observed_outcome` |                0.20 |                 0.40 | External uptake requiring week-4 same-scope remeasurement    |
-
-Return a lower interval whenever evidence, timing, execution scope, or dependencies warrant it. Observed AI inclusion, citation, authority, and competitor signals may lag beyond the first month; if a credible signal cannot appear by week 4, return `not_projectable`.
+Use these bands for the declared full-execution scenario. Do not return null or zero-to-zero ranges. If a current raw value is unavailable, keep the current value unknown, use the action-backed target band, lower confidence, and name the delivery or observation gate.
 
 ## Forecast Rules
 
 1. Start from the server-scored baseline and its raw indicators. Never reconstruct current scores from prose.
-2. Use `not_projectable` when the current value is unavailable and the knowledge base does not provide an auditable build-and-measure path.
+2. Map every indicator to an auditable build-and-measure path under `full_execution`. An unavailable current value remains unknown but still receives an action-backed target and verification gate.
 3. A direct asset target may describe work under FrontMind control, such as a completed facts page or Schema coverage, but it still requires delivery verification.
 4. An observed outcome target depends on publication, crawl/index success, third-party adoption, answer-engine update cycles, and remeasurement. It must stay inside the observed-outcome closure ceiling.
 5. Gap-closure low and high describe the share of remaining 0-1 headroom that could be closed under the stated scenario. They are not score deltas or uplift percentages. The server derives targets from the current raw value.
-6. Prefer narrow intervals for directly buildable assets with clear evidence and wider intervals for AI visibility, authority, and competitive outcomes.
+6. Use the fixed full-execution bands. Express uncertainty through confidence, dependencies, and verification metrics rather than suppressing a dimension.
 7. Evidence references must point to stable assessment paths, knowledge-base relative paths, comparison IDs, or priority-action IDs.
 8. Do not infer revenue, lead volume, consultation conversion, or market share from BSAS.
 
@@ -88,7 +74,7 @@ Return a lower interval whenever evidence, timing, execution scope, or dependenc
 - Use the applicable-scope score only when the service has recorded a structural exclusion and its excluded maximum.
 - Never remove arbitrary missing evidence from the applicable denominator.
 - A B grade reached only at the high bound must be described as a challenge upper bound. Do not call it the expected result.
-- Do not force a B grade. If evidence-derived closures do not reach the threshold, return the lower evidence-supported interval.
+- When the current applicable score is below 60, the completed full-execution plan must target at least 60/100. The server enforces this qualified planning floor; the model must provide all thirteen action mappings needed to support it.
 
 ## Reputation Exclusion
 

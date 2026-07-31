@@ -1,7 +1,10 @@
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it, vi } from "vitest";
 
-import { GeoServiceOnboarding } from "./GeoServiceOnboarding";
+import {
+  buildPopulatedServiceContractHref,
+  GeoServiceOnboarding,
+} from "./GeoServiceOnboarding";
 import type { GeoServiceActivation } from "./types";
 
 const baseActivation: GeoServiceActivation = {
@@ -33,6 +36,29 @@ function renderOnboarding(activation = baseActivation) {
 }
 
 describe("GeoServiceOnboarding", () => {
+  it("keeps submitted contract fields in the URL fragment for a render-ready PDF without sending them to the server", () => {
+    const href = buildPopulatedServiceContractHref(
+      "/contracts/frontmind-geo.html?category=product_scenario&order=FM-001",
+      {
+        legalName: "深圳星辰科技有限公司",
+        creditCode: "91440300ma5f12345x",
+        address: "深圳市南山区科技园一号",
+        signatoryName: "张三",
+        signatoryTitle: "运营负责人",
+        mobile: "13800138000",
+        email: "CONTRACTS@example.com",
+        authorized: true,
+      },
+    );
+
+    expect(href).toContain("?category=product_scenario&order=FM-001#");
+    expect(href.split("#")[0]).not.toContain("13800138000");
+    const profile = new URLSearchParams(href.split("#")[1]);
+    expect(profile.get("legalName")).toBe("深圳星辰科技有限公司");
+    expect(profile.get("creditCode")).toBe("91440300MA5F12345X");
+    expect(profile.get("email")).toBe("contracts@example.com");
+  });
+
   it("shows the sign-first sequence as four ordered steps", () => {
     const html = renderOnboarding();
 
@@ -74,7 +100,7 @@ describe("GeoServiceOnboarding", () => {
     expect(html).toContain('src="/geo-builder/contact-wechat.png"');
     expect(html).toContain("打开微信二维码");
     expect(html).toContain("邮件提醒管理员");
-    expect(html).toContain('href="mailto:fanzengxia@link.cuhk.edu.cn');
+    expect(html).toContain('href="mailto:xiafanzeng@frontmind.com.cn');
     expect(html).toContain("FrontMind%20%E5%90%88%E5%90%8C%E5%8F%91%E8%B5%B7");
     expect(html).toContain("刷新发起状态");
     expect(html).not.toContain("前往付款");
@@ -227,7 +253,7 @@ describe("GeoServiceOnboarding", () => {
     });
 
     expect(html).toContain("联系技术支持");
-    expect(html).toContain('href="mailto:fanzengxia@link.cuhk.edu.cn');
+    expect(html).toContain('href="mailto:xiafanzeng@frontmind.com.cn');
     expect(html).toContain("FM202607240001");
     expect(html).not.toContain("重试查询");
     expect(html).not.toContain("重试同步");

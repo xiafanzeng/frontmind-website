@@ -15,7 +15,14 @@ if (!/^[a-f0-9]{40}$/.test(buildSha)) {
 }
 
 await build({
-  entryPoints: [resolve(projectRoot, "server", "index.ts")],
+  entryPoints: {
+    index: resolve(projectRoot, "server", "index.ts"),
+    "verify-live-payment": resolve(
+      projectRoot,
+      "scripts",
+      "verify-live-payment.ts",
+    ),
+  },
   outdir: resolve(projectRoot, "dist"),
   platform: "node",
   packages: "external",
@@ -26,4 +33,4 @@ await build({
   },
 });
 
-console.log(`Server bundle built from ${buildSha}.`);
+console.log(`Server and payment-verification bundles built from ${buildSha}.`);

@@ -182,8 +182,8 @@ export default function Contact({ includeChrome = true }: ContactProps) {
     {
       q: t("如何联系？", "How can we get in touch?"),
       a: t(
-        `请发送邮件至 ${FRONTMIND_CONTACT_EMAILS[0]} 或 ${FRONTMIND_CONTACT_EMAILS[1]}。来信中可包含公司背景、您的职务、介绍材料和希望讨论的方向。`,
-        `Please email ${FRONTMIND_CONTACT_EMAILS[0]} or ${FRONTMIND_CONTACT_EMAILS[1]}. You may include company context, your title, introduction material, and the topic you would like to discuss.`,
+        `请发送邮件至 ${FRONTMIND_CONTACT_EMAILS[0]}。来信中可包含公司背景、您的职务、介绍材料和希望讨论的方向。`,
+        `Please email ${FRONTMIND_CONTACT_EMAILS[0]}. You may include company context, your title, introduction material, and the topic you would like to discuss.`,
       ),
     },
   ];

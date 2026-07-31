@@ -17,6 +17,7 @@ import {
   GeoWorkspaceHandoff,
   MonitoringResults,
   OptimizationForecastView,
+  resolvePaymentCheckoutAction,
   ServiceActivation,
   shouldRenderExecutionProgress,
   StageNavigation,
@@ -25,6 +26,36 @@ import { KnowledgeCompletenessDetails } from "./KnowledgeCompletenessDialog";
 import { createGeoStylePreviewProject } from "./preview";
 
 describe("GEO style preview rendering", () => {
+  it("redirects only signed local-acceptance checkouts to the loopback payment page", () => {
+    const checkout = {
+      authorization: "local-payment-889100000001",
+      orderId: "889100000001",
+      amountFen: 200,
+      unitPriceFen: 200,
+      answersPerPlatform: 5,
+      expiresAt: "2026-07-31T13:00:00.000Z",
+      action: "https://zpayz.cn/submit.php" as const,
+      method: "POST" as const,
+      fields: {
+        pid: "frontmind-local-acceptance",
+        param: "frontmind-local-acceptance",
+      },
+    };
+
+    expect(
+      resolvePaymentCheckoutAction(checkout, {
+        hostname: "127.0.0.1",
+        origin: "http://127.0.0.1:8891",
+      }),
+    ).toBe("http://127.0.0.1:8891/__acceptance__/paid");
+    expect(
+      resolvePaymentCheckoutAction(checkout, {
+        hostname: "frontmind.net",
+        origin: "https://frontmind.net",
+      }),
+    ).toBe("https://zpayz.cn/submit.php");
+  });
+
   it("claims at most one automatic knowledge-base repair for the same failed project", () => {
     const project = {
       ...createGeoStylePreviewProject(),
@@ -207,7 +238,7 @@ describe("GEO style preview rendering", () => {
     expect(html).not.toContain("已完成系统整理");
   });
 
-  it("defaults to the formal branch overview, exposes leaf switching, and previews at most three images", () => {
+  it("renders the branch overview and every knowledge leaf directly without asset or report views", () => {
     const fixture = createGeoStylePreviewProject();
     const project = {
       ...fixture,
@@ -260,16 +291,19 @@ describe("GEO style preview rendering", () => {
       />,
     );
 
-    expect(html).toContain("BRANCH OVERVIEW");
+    expect(html).toContain("KNOWLEDGE BRANCH");
     expect(html).toContain("正式产品综述");
     expect(html).toContain("这是整理后的客户可见正文");
-    expect(html).toContain("分支综述");
-    expect(html).toContain("查看知识叶子");
-    expect(html).toContain("该分支公开证据有限");
-    expect(html).toContain("另含 1 份素材");
-    expect(html.match(/geo-section-media-image/g)).toHaveLength(3);
-    expect(html).toContain("企业素材 4");
-    expect(html).not.toContain("叶子正文仅在切换后显示");
+    expect(html).toContain("API 服务");
+    expect(html).toContain("叶子正文仅在切换后显示");
+    expect(html).not.toContain("该分支公开证据有限");
+    expect(html).not.toContain("未确认信息不会补写");
+    expect(html).not.toContain("分支综述");
+    expect(html).not.toContain("查看知识叶子");
+    expect(html).not.toContain("geo-section-media");
+    expect(html).not.toContain("geo-status-pill");
+    expect(html).not.toContain("企业素材 4");
+    expect(html).not.toContain("抓取报告");
     expect(html).not.toContain("这段抓取报告不应混入默认知识正文");
   });
 
@@ -326,6 +360,42 @@ describe("GEO style preview rendering", () => {
     expect(html).toContain("本综述没有关联图片");
     expect(html).not.toContain("geo-section-media-image");
     expect(html).not.toContain('src="/api/assets/leaf"');
+  });
+
+  it("places a single brand logo in the 01 branch slot without creating an image panel", () => {
+    const fixture = createGeoStylePreviewProject();
+    const project = {
+      ...fixture,
+      knowledgeBase: {
+        ...fixture.knowledgeBase!,
+        assets: [
+          {
+            id: "asset-logo",
+            name: "brand-logo.png",
+            previewUrl: "/api/assets/logo",
+            type: "image/png",
+            assetType: "brand_identity" as const,
+            displayRole: "badge" as const,
+          },
+        ],
+      },
+    };
+    const html = renderToStaticMarkup(
+      <EnterpriseAnalysis
+        project={project}
+        onDownload={vi.fn()}
+        onRetry={vi.fn()}
+        onContact={vi.fn()}
+        onStart={vi.fn()}
+        starting={false}
+        retrying={false}
+      />,
+    );
+
+    expect(html).toContain("geo-branch-index has-logo");
+    expect(html).toContain('src="/api/assets/logo"');
+    expect(html).not.toContain("geo-section-media");
+    expect(html.match(/src="\/api\/assets\/logo"/g)).toHaveLength(1);
   });
 
   it("only offers an authorized enterprise-analysis retry and locks it in flight", () => {
@@ -659,8 +729,8 @@ describe("GEO style preview rendering", () => {
     expect(html).toContain("核验主体、方案边界与服务承诺");
     expect(html).toContain("形成可公开与待核验口径清单");
     expect(html).toContain("路线执行条件");
-    expect(html).toContain("目标适用限制");
-    expect(html).toContain("仅适用于本次问题与所选平台样本");
+    expect(html).not.toContain("目标适用限制");
+    expect(html).not.toContain("仅适用于本次问题与所选平台样本");
     expect(html).toContain("预期 81.5");
     expect(html).toContain("A 为挑战上沿");
     expect(html).toContain("原始现状分");
@@ -784,7 +854,7 @@ describe("GEO style preview rendering", () => {
         onBack={vi.fn()}
       />,
     );
-    const labelIndex = html.indexOf("用户角色看板");
+    const labelIndex = html.indexOf("企业服务工作台");
     const buttonStart = html.lastIndexOf("<button", labelIndex);
     const buttonEnd = html.indexOf(">", buttonStart);
     const dashboardButton = html.slice(buttonStart, buttonEnd + 1);
@@ -792,6 +862,85 @@ describe("GEO style preview rendering", () => {
     expect(labelIndex).toBeGreaterThan(-1);
     expect(dashboardButton).not.toContain("disabled");
     expect(html).toContain("查看用户端内容骨架");
+  });
+
+  it("offers a clearly labelled luxury workspace sample before service activation", () => {
+    const fixture = createGeoStylePreviewProject();
+    const project = {
+      ...fixture,
+      preview: undefined,
+      serviceActivation: {
+        ...fixture.serviceActivation!,
+        status: "profile_required" as const,
+      },
+    };
+    const html = renderToStaticMarkup(
+      <ServiceActivation
+        project={project}
+        paymentPending={false}
+        onCheckout={vi.fn()}
+        onSubmitProfile={vi.fn(async () => undefined)}
+        onCreateAccount={vi.fn(async () => undefined)}
+        onCheckStatus={vi.fn(async () => undefined)}
+        onBack={vi.fn()}
+      />,
+    );
+    const labelIndex = html.indexOf("企业服务工作台");
+    const buttonStart = html.lastIndexOf("<button", labelIndex);
+    const buttonEnd = html.indexOf(">", buttonStart);
+    const dashboardButton = html.slice(buttonStart, buttonEnd + 1);
+
+    expect(labelIndex).toBeGreaterThan(-1);
+    expect(dashboardButton).not.toContain("disabled");
+    expect(html).toContain("查看豪华版工作台样例");
+    expect(html).not.toContain("完成合同、付款和账号创建后开放");
+  });
+
+  it("opens the workspace sample when the assessment is ready but the forecast failed", () => {
+    const fixture = createGeoStylePreviewProject();
+    const project = {
+      ...fixture,
+      preview: undefined,
+      optimizationForecast: {
+        ...fixture.optimizationForecast!,
+        status: "failed" as const,
+        error: "优化评估暂未生成",
+      },
+    };
+    const navigation = renderToStaticMarkup(
+      <StageNavigation
+        project={project}
+        activeStage="current_assessment"
+        onChange={vi.fn()}
+        onOpenExecutionLog={vi.fn()}
+      />,
+    );
+    const stageLabelIndex = navigation.indexOf(
+      "步骤 5：启动服务，预览企业服务工作台",
+    );
+    const buttonStart = navigation.lastIndexOf("<button", stageLabelIndex);
+    const buttonEnd = navigation.indexOf(">", buttonStart);
+    const serviceStageButton = navigation.slice(buttonStart, buttonEnd + 1);
+
+    expect(stageLabelIndex).toBeGreaterThan(-1);
+    expect(serviceStageButton).not.toContain("disabled");
+
+    const activation = renderToStaticMarkup(
+      <ServiceActivation
+        project={project}
+        paymentPending={false}
+        onCheckout={vi.fn()}
+        onSubmitProfile={vi.fn(async () => undefined)}
+        onCreateAccount={vi.fn(async () => undefined)}
+        onCheckStatus={vi.fn(async () => undefined)}
+        onBack={vi.fn()}
+      />,
+    );
+
+    expect(activation).toContain("企业服务工作台样例");
+    expect(activation).toContain("豪华版企业服务工作台样例");
+    expect(activation).toContain("预览不会触发签约、付款或真实交付");
+    expect(activation).not.toContain("提交合同主体与签约经办人");
   });
 
   it("hands an active customer off only to the URL returned for that service", () => {
@@ -1067,6 +1216,36 @@ describe("GEO style preview rendering", () => {
       /进度报告<\/h4><span[^>]*class="geo-agent-journey-status state-pending">待前置/,
     );
     expect(html).not.toContain("内容制作体系");
+  });
+
+  it("renders the luxury workspace sample with service scope and demo disclosure", () => {
+    const project = createGeoStylePreviewProject();
+    const question = project.questions.find(
+      (item) => item.id === project.serviceActivation?.questionId,
+    );
+    expect(question).toBeDefined();
+
+    const html = renderToStaticMarkup(
+      <GeoAgentUserDashboard
+        project={{ ...project, preview: undefined }}
+        question={question!}
+        categoryLabel="美誉舆情"
+        active={false}
+        sampleMode="luxury"
+      />,
+    );
+
+    expect(html).toContain('aria-label="豪华版企业服务工作台样例"');
+    expect(html).toContain("豪华版工作台样例");
+    expect(html).toContain("下列进度与数量为界面演示");
+    expect(html).toContain("32 个品牌问题");
+    expect(html).toContain("6 个主流 AI 平台");
+    expect(html).toContain("行业排名");
+    expect(html).toContain("竞品对比");
+    expect(html).toContain("美誉舆情");
+    expect(html).toContain("产品场景");
+    expect(html).toContain("权威内容与 AI 友好官网");
+    expect(html).toContain("演示数据 · 不代表实际交付");
   });
 
   it("mirrors the latest Agent response-logic workspace as a compact read-only view", () => {

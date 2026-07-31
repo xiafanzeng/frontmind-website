@@ -1,8 +1,11 @@
 import { describe, expect, it, vi } from "vitest";
 import {
+  assertGeoPaymentConfigurationFromEnv,
   canonicalizeZpayParameters,
+  GeoPaymentConfigurationError,
   signZpayParameters,
   UnconfiguredGeoPaymentVerifier,
+  verifyGeoPaymentProviderFromEnv,
   ZpayGeoPaymentGateway,
 } from "./payment";
 import type { GeoPaymentReceipt, GeoPaymentReceiptStore } from "./provisioning";
@@ -91,6 +94,84 @@ describe("ZPAY signature", () => {
 });
 
 describe("ZPAY GEO gateway", () => {
+  it("fails production startup when live merchant configuration is absent or unsafe", () => {
+    expect(() =>
+      assertGeoPaymentConfigurationFromEnv({ NODE_ENV: "production" }),
+    ).toThrow(GeoPaymentConfigurationError);
+    expect(() =>
+      assertGeoPaymentConfigurationFromEnv({
+        NODE_ENV: "production",
+        FRONTMIND_ZPAY_PID: "merchant123",
+        FRONTMIND_ZPAY_KEY: "merchant-secret",
+        FRONTMIND_PUBLIC_BASE_URL: "http://127.0.0.1:8891",
+      }),
+    ).toThrow(GeoPaymentConfigurationError);
+    expect(() =>
+      assertGeoPaymentConfigurationFromEnv({
+        NODE_ENV: "production",
+        FRONTMIND_ZPAY_PID: "merchant123",
+        FRONTMIND_ZPAY_KEY: "merchant-secret",
+        FRONTMIND_PUBLIC_BASE_URL: "https://www.frontmind.net",
+      }),
+    ).not.toThrow();
+  });
+
+  it("preflights the live merchant without creating an order or exposing account data", async () => {
+    const fetchMock = vi.fn<typeof fetch>().mockResolvedValue(
+      new Response(
+        JSON.stringify({
+          code: 1,
+          msg: "查询账户余额成功",
+          balance: "999.99",
+        }),
+        { headers: { "content-type": "application/json" } },
+      ),
+    );
+    const readiness = await verifyGeoPaymentProviderFromEnv(
+      {
+        NODE_ENV: "production",
+        FRONTMIND_ZPAY_PID: "merchant123",
+        FRONTMIND_ZPAY_KEY: "merchant-secret",
+        FRONTMIND_PUBLIC_BASE_URL: "https://www.frontmind.net",
+      },
+      fetchMock,
+    );
+
+    expect(readiness).toEqual({
+      status: "ok",
+      provider: "zpay",
+      callbackOrigin: "https://www.frontmind.net",
+    });
+    expect(JSON.stringify(readiness)).not.toContain("merchant");
+    expect(JSON.stringify(readiness)).not.toContain("999.99");
+    const requestUrl = new URL(String(fetchMock.mock.calls[0][0]));
+    expect(requestUrl.origin + requestUrl.pathname).toBe(
+      "https://zpayz.cn/api.php",
+    );
+    expect(requestUrl.searchParams.get("act")).toBe("balance");
+  });
+
+  it("fails the merchant preflight closed for rejected credentials", async () => {
+    await expect(
+      verifyGeoPaymentProviderFromEnv(
+        {
+          NODE_ENV: "production",
+          FRONTMIND_ZPAY_PID: "merchant123",
+          FRONTMIND_ZPAY_KEY: "merchant-secret",
+          FRONTMIND_PUBLIC_BASE_URL: "https://www.frontmind.net",
+        },
+        vi
+          .fn<typeof fetch>()
+          .mockResolvedValue(
+            new Response(JSON.stringify({ code: -1, msg: "密钥错误" })),
+          ),
+      ),
+    ).rejects.toMatchObject({
+      code: "PAYMENT_PROVIDER_NOT_READY",
+      status: 503,
+    });
+  });
+
   it("requires a public HTTPS callback origin in production", () => {
     expect(
       () =>
