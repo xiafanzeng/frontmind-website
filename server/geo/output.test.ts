@@ -3,6 +3,7 @@ import {
   findArchiveDescriptor,
   normalizeTask,
   parseQuestionSetFromTask,
+  questionSetValidationSummaryFromTask,
 } from "./output";
 import { buildValidQuestionSet } from "./question-set.test-fixture";
 
@@ -100,6 +101,27 @@ describe("GEO task output normalization", () => {
         ],
       }),
     ).toBeNull();
+  });
+
+  it("reports exact safe schema issues for a completed but invalid recommendation", () => {
+    const invalid = questionSet();
+    invalid.questions[0] = {
+      ...invalid.questions[0],
+      question: "Acme 未来准备做什么？",
+    };
+    const task = {
+      output: [
+        {
+          role: "assistant",
+          content: [{ text: JSON.stringify(invalid) }],
+        },
+      ],
+    };
+
+    expect(parseQuestionSetFromTask(task)).toBeNull();
+    expect(questionSetValidationSummaryFromTask(task)).toContain(
+      "questions[0].question: reputation question must express",
+    );
   });
 
   it("does not parse question JSON injected through user output or metadata", () => {

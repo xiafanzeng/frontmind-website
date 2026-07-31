@@ -74,9 +74,9 @@ function questionContainsAnchor(question: string, anchor: string) {
 const FORBIDDEN_GENERATED_QUESTION_PATTERN =
   /\b(?:reputation|product_scenario|industry_ranking|competitor_comparison)\b|第\s*(?:\d+|[一二三四五六七八九十]+)\s*个(?:问题|问句)|测试问题|值得优化吗/i;
 const REPUTATION_INTENT_PATTERN =
-  /(?:背景|团队|资质|认证|专利|合规|安全|可靠|稳定|口碑|评价|声誉|客户|案例|交付|售后|服务|风险|投诉|正规|官方|认可|信任|可信|质量|融资|荣誉|实力)/;
+  /(?:背景|团队|资质|认证|专利|合规|安全|可靠|稳定|口碑|评价|声誉|客户|案例|交付|售后|服务|风险|投诉|正规|官方|认可|信任|可信|质量|融资|荣誉|实力|核验|证据|证书|奖项|主办方|隐私|个人信息|联系表单|cookie|数据处理|同意|访问|更正|删除|法定主体|注册地|办公所在地|身份)/i;
 const COMPETITOR_COMPARISON_PATTERN =
-  /(?:对比|相比|比较|区别|差异|相较|取舍|还是|同类|传统方案|传统工具|自建|替代|与.+哪个|和.+哪个|vs)/i;
+  /(?:对比|相比|比较|区别|差异|相较|取舍|还是|同类|传统方案|传统工具|自建|替代|(?:与|和|跟).+(?:哪个|哪种更适合|分别适合|分别用于|各自适合|适合什么(?:样的)?需求|如何选择)|vs)/i;
 
 function normalizeGeneratedQuestion(value: string) {
   return value
@@ -393,6 +393,8 @@ export function isIndustryRankingQuestion(question: string) {
     /(?:品牌|产品|公司|企业|平台|机构|服务商|供应商|厂家|工具|方案).{0,10}(?:有推荐|有哪些推荐|推荐哪些|推荐哪)/,
     /哪(?:一)?(?:家|个|款|种).{0,12}(?:好|比较好|更好|好用|靠谱|专业|值得选)/,
     /(?:做|采购|选择).{0,12}(?:找谁|选哪(?:一)?家)/,
+    /优先(?:比较|考察|了解|评估|筛选).{0,16}(?:哪些|哪几).{0,20}(?:品牌|产品|公司|企业|平台|机构|服务商|供应商|厂家|工具|解决方案|方案)/,
+    /(?:哪些|哪几).{0,16}(?:品牌|产品|公司|企业|平台|机构|服务商|供应商|厂家|工具|解决方案|方案|类型).{0,24}(?:值得)?(?:纳入|进入|放进|列入).{0,20}(?:名单|清单|候选|考察|筛选|评估|选型|比较)/,
   ];
   return openRecommendationPatterns.some((pattern) => pattern.test(normalized));
 }

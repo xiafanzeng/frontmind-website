@@ -95,21 +95,62 @@ export function findArchiveDescriptor(
 export function parseQuestionSetFromTask(
   value: unknown,
 ): GeoQuestionSet | null {
-  for (const item of trustedAssistantOutputItems(value)) {
-    const parsed = GeoQuestionSetSchema.safeParse(item);
+  return inspectQuestionSetFromTask(value).questionSet;
+}
+
+export function questionSetValidationSummaryFromTask(
+  value: unknown,
+): string | null {
+  const issues = inspectQuestionSetFromTask(value).issues;
+  if (!issues.length) return null;
+  return `上一次返回已解析为 JSON，但未通过以下字段校验：${issues
+    .slice(0, 8)
+    .join("；")}`;
+}
+
+function inspectQuestionSetFromTask(value: unknown): {
+  questionSet: GeoQuestionSet | null;
+  issues: string[];
+} {
+  let bestIssues: string[] = [];
+  const inspectCandidate = (candidate: unknown) => {
+    const parsed = GeoQuestionSetSchema.safeParse(candidate);
     if (parsed.success) return parsed.data;
+    const record = asRecord(candidate);
+    if (!Array.isArray(record?.questions)) return null;
+    const issues = Array.from(
+      new Set(
+        parsed.error.issues.map((issue) => {
+          const path = issue.path.reduce<string>((result, part) => {
+            if (typeof part === "number") return `${result}[${part}]`;
+            const key = String(part);
+            return result ? `${result}.${key}` : key;
+          }, "");
+          return `${path || "root"}: ${issue.message}`;
+        }),
+      ),
+    );
+    if (!bestIssues.length || issues.length < bestIssues.length) {
+      bestIssues = issues;
+    }
+    return null;
+  };
+
+  for (const item of trustedAssistantOutputItems(value)) {
+    const parsed = inspectCandidate(item);
+    if (parsed) return { questionSet: parsed, issues: [] };
   }
   for (const candidate of trustedAssistantOutputTexts(value)) {
     for (const jsonText of possibleJsonObjects(candidate)) {
       try {
-        const parsed = GeoQuestionSetSchema.safeParse(JSON.parse(jsonText));
-        if (parsed.success) return parsed.data;
+        const parsed = inspectCandidate(JSON.parse(jsonText));
+        if (parsed) return { questionSet: parsed, issues: [] };
       } catch {
         // Try the next text candidate.
       }
     }
   }
-  return null;
+  return { questionSet: null, issues: bestIssues };
 }
 
 function possibleJsonObjects(value: string) {

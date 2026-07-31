@@ -25,6 +25,44 @@ describe("GeoQuestionSetSchema", () => {
     expect(result.questions).toHaveLength(20);
   });
 
+  it("accepts natural trust, shortlist, selection, and comparison phrasings from production output", () => {
+    const questions = validQuestions();
+    questions[1] = {
+      ...questions[1],
+      question:
+        "FrontMind 超前智能官网列示的创科大赛和创新创业奖项，能否提供主办方页面或证书供独立核验？",
+    };
+    questions[3] = {
+      ...questions[3],
+      question:
+        "FrontMind 超前智能网站如何处理联系表单信息与 Cookie 偏好，咨询者需要注意哪些同意边界？",
+    };
+    questions[10] = {
+      ...questions[10],
+      question:
+        "面向企业级 AI 咨询与战略部署，哪些服务商值得纳入初步考察名单？",
+    };
+    questions[11] = {
+      ...questions[11],
+      question:
+        "企业 SaaS 想提升 AI 引用优化并梳理增长链路时，可优先比较哪些服务商或解决方案？",
+    };
+    questions[12] = {
+      ...questions[12],
+      question:
+        "电商与零售团队筛选获客、营销与客服智能体时，应该把哪些类型的解决方案放进同一轮选型比较？",
+    };
+    questions[16] = {
+      ...questions[16],
+      question:
+        "企业主要希望影响 AI 搜索、智能问答和行业推荐时，FrontMind 超前智能的 MindPromise 智诺与传统 SEO 分别适合什么样的需求？",
+    };
+
+    expect(
+      GeoQuestionSetSchema.parse({ questions }).questions,
+    ).toHaveLength(20);
+  });
+
   it("rejects selectable industry-ranking questions", () => {
     const questions = validQuestions();
     questions[10] = { ...questions[10], selectable: true };
@@ -153,6 +191,9 @@ describe("custom GEO question policy", () => {
     "主流 GEO 服务商有哪些？",
     "国内企业 GEO 服务商有哪些？",
     "企业 AI 品牌建设服务商怎么选？",
+    "企业 SaaS 想提升 AI 引用优化时，可优先比较哪些服务商或解决方案？",
+    "面向企业级 AI 咨询，哪些服务商值得纳入初步考察名单？",
+    "应该把哪些类型的解决方案放进同一轮选型比较？",
     "科研仪器行业排\u200b名有哪些？",
     "2026 年行业 TOP 10 是谁？",
   ])(

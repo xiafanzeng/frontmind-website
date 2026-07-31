@@ -5170,6 +5170,9 @@ describe("GEO API", () => {
     expect(retriedPayload.projectToken).not.toBe(firstPayload.projectToken);
     expect(broker.questionTaskCount).toBe(2);
     expect(broker.prompts.at(-1)).toContain("这是唯一一次结构校验重试");
+    expect(broker.prompts.at(-1)).toContain(
+      "上一次返回已解析为 JSON，但未通过以下字段校验：questions:",
+    );
 
     await jsonRequest(
       `/projects/${encodeURIComponent(retriedPayload.projectToken)}`,

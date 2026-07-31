@@ -84,6 +84,7 @@ import {
   normalizeTask,
   normalizeTaskStatus,
   parseQuestionSetFromTask,
+  questionSetValidationSummaryFromTask,
 } from "./output";
 import {
   parseCustomQuestionClassificationTaskOutput,
@@ -1584,6 +1585,7 @@ export function createGeoRouter(options: GeoRouterOptions = {}): Router {
               companyName: trackedValue.companyName,
               archiveFilename: attachment.filename,
               retryReason:
+                questionSetValidationSummaryFromTask(questionTask) ||
                 "必须严格返回四类各 5 题、总计 20 题，并满足 ID、证据引用和 selectable 约束",
             }),
             attachments: [attachment],
