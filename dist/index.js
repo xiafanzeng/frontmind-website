@@ -7255,7 +7255,7 @@ import { createHash as createHash4 } from "node:crypto";
 import path7 from "node:path";
 import JSZip4 from "jszip";
 import sharp2 from "sharp";
-var WEBSITE_KB_FINALIZER_VERSION = "website-kb-finalizer-v2";
+var WEBSITE_KB_FINALIZER_VERSION = "website-kb-finalizer-v3";
 var ZIP_DATE = /* @__PURE__ */ new Date("1980-01-01T00:00:00.000Z");
 var DISPLAY_BRANCHES = [
   {
@@ -7473,7 +7473,10 @@ function splitByHeading(sectionTitle, markdown) {
       {
         title: sectionTitle,
         markdown: markdown.trim(),
-        intro: markdown.trim()
+        // A heading-free section is one leaf. Reusing its entire body as the
+        // branch introduction would duplicate the same customer narrative in
+        // both overview.md and the leaf document.
+        intro: ""
       }
     ];
   }
@@ -7487,6 +7490,63 @@ function splitByHeading(sectionTitle, markdown) {
       intro: index === 0 ? intro : ""
     };
   });
+}
+function normalizedNarrativeShingles2(value) {
+  const normalized = value.normalize("NFKC").toLowerCase().replace(/\d+/g, "#").replace(/\s+/g, "").replace(
+    /[!"#$%&'()*+,\-./:;<=>?@[\\\]^_`{|}~，。！？；：“”‘’（）【】《》…—·]/g,
+    ""
+  );
+  const shingles = /* @__PURE__ */ new Set();
+  for (let index = 0; index <= normalized.length - 5; index += 1) {
+    shingles.add(normalized.slice(index, index + 5));
+  }
+  return shingles;
+}
+function normalizedNarrativeSimilarity2(left, right) {
+  const leftShingles = normalizedNarrativeShingles2(left);
+  const rightShingles = normalizedNarrativeShingles2(right);
+  if (!leftShingles.size || !rightShingles.size) return 0;
+  let intersection = 0;
+  leftShingles.forEach((shingle) => {
+    if (rightShingles.has(shingle)) intersection += 1;
+  });
+  return intersection / (leftShingles.size + rightShingles.size - intersection);
+}
+function shortenOverviewNarrative(value, maximum = 72) {
+  const compact = value.replace(/\s+/g, " ").trim();
+  if (Array.from(compact).length <= maximum) return compact;
+  const shortened = Array.from(compact).slice(0, maximum).join("").trim();
+  return `${shortened.replace(/[，、；：,.!?。！？]+$/, "")}\u3002`;
+}
+function structuralOverviewNarrative(display, leaves) {
+  const leafTitles = Array.from(
+    new Set(
+      leaves.map((leaf) => leaf.title.trim()).filter((title) => title && title !== display.customerTitle)
+    )
+  ).slice(0, 3);
+  return leafTitles.length ? `${display.title}\u5206\u652F\u6DB5\u76D6${leafTitles.join("\u3001")}\uFF0C\u8BE6\u7EC6\u4E8B\u5B9E\u4E0E\u6765\u6E90\u5DF2\u6309\u6761\u76EE\u5206\u522B\u6574\u7406\u3002` : `${display.title}\u5206\u652F\u7684\u4E8B\u5B9E\u3001\u6765\u6E90\u4E0E\u5F85\u6838\u9A8C\u8FB9\u754C\u5DF2\u6309\u6761\u76EE\u5206\u522B\u6574\u7406\u3002`;
+}
+function buildOverviewNarrative(input) {
+  const fallback = structuralOverviewNarrative(input.display, input.leaves);
+  if (!input.hasEvidence) {
+    return `\u516C\u5F00\u8D44\u6599\u6682\u672A\u63D0\u4F9B${input.display.title}\u7684\u5145\u5206\u53EF\u6838\u9A8C\u4FE1\u606F\u3002`;
+  }
+  const introSourceIds = sourceIdsForMarkdown(
+    input.intro,
+    input.sourceRecords
+  );
+  let narrative = introSourceIds.length ? shortenOverviewNarrative(sanitizeSupportedNarrative(input.intro)) : "";
+  if (!narrative || input.leaves.some(
+    (leaf) => normalizedNarrativeSimilarity2(narrative, leaf.narrative) >= 0.55
+  )) {
+    narrative = fallback;
+  }
+  if (input.leaves.some(
+    (leaf) => normalizedNarrativeSimilarity2(narrative, leaf.narrative) >= 0.55
+  )) {
+    narrative = `${input.display.title}\uFF1A${input.leaves.length} \u4E2A\u72EC\u7ACB\u6761\u76EE\u5DF2\u5B8C\u6210\u6765\u6E90\u5173\u8054\u3002`;
+  }
+  return shortenOverviewNarrative(narrative);
 }
 function splitLargeChunk(title, markdown) {
   if (meaningfulCharacters(markdown) <= 1800) {
@@ -7690,9 +7750,10 @@ async function normalizeImage(candidateAsset) {
       throw new Error("SVG \u5305\u542B\u811A\u672C\u3001\u5916\u90E8\u5B9E\u4F53\u6216\u5916\u90E8\u8D44\u6E90\u5F15\u7528");
     }
   }
-  const pipeline = sharp2(candidateAsset.bytes, {
+  let pipeline = sharp2(candidateAsset.bytes, {
     animated: false,
-    limitInputPixels: 4e7
+    limitInputPixels: 4e7,
+    ...isSvg ? { density: 300 } : {}
   }).rotate();
   const metadata = await pipeline.metadata();
   if (!metadata.width || !metadata.height) throw new Error("\u56FE\u7247\u6CA1\u6709\u6709\u6548\u5C3A\u5BF8");
@@ -7700,6 +7761,14 @@ async function normalizeImage(candidateAsset) {
   const longEdge = Math.max(metadata.width, metadata.height);
   if (shortEdge < 32 || longEdge < 128) {
     throw new Error("Logo \u56FE\u7247\u4F4E\u4E8E\u77ED\u8FB9 32px \u6216\u957F\u8FB9 128px");
+  }
+  if (isSvg) {
+    pipeline = pipeline.resize(512, 256, {
+      fit: "contain",
+      background: { r: 0, g: 0, b: 0, alpha: 0 }
+    });
+  } else if (metadata.width < 256 || metadata.height < 256) {
+    throw new Error("Logo \u4F4D\u56FE\u4F4E\u4E8E 256\xD7256\uFF0C\u4E0D\u80FD\u4F5C\u4E3A\u6B63\u5F0F\u54C1\u724C\u5FBD\u6807");
   }
   let output = await pipeline.png().toBuffer({ resolveWithObject: true });
   let extension = "png";
@@ -8076,24 +8145,17 @@ ${right.narrative}`;
       (entry) => Boolean(entry)
     );
     const sourceIds = Array.from(
-      new Set(
-        branchLeaves.filter((leaf) => leaf.branchId === display.overviewBranch).flatMap((leaf) => leaf.sourceIds)
-      )
+      new Set(branchLeaves.flatMap((leaf) => leaf.sourceIds))
     );
     const status = evidenceForOverview.length ? sourceStatus(sourceIds, sourceRecords) : "needs_verification";
     const intro = introByDisplay.get(display.id) || "";
-    const introSourceIds = sourceIdsForMarkdown(intro, sourceRecords);
-    let narrative = evidenceForOverview.length && introSourceIds.length ? sanitizeSupportedNarrative(intro) : "";
-    if (!narrative && evidenceForOverview.length) {
-      const first = branchLeaves.find(
-        (leaf) => leaf.branchId === display.overviewBranch && leaf.status !== "needs_verification" && leaf.status !== "not_applicable"
-      );
-      narrative = first?.narrative.split(/[。！？]\s*/)[0]?.slice(0, 90) || "";
-      if (narrative && !/[。！？]$/.test(narrative)) narrative += "\u3002";
-    }
-    if (!narrative) {
-      narrative = `\u516C\u5F00\u8D44\u6599\u6682\u672A\u63D0\u4F9B${display.title}\u7684\u5145\u5206\u53EF\u6838\u9A8C\u4FE1\u606F\u3002`;
-    }
+    const narrative = buildOverviewNarrative({
+      display,
+      intro,
+      leaves: branchLeaves,
+      hasEvidence: evidenceForOverview.length > 0,
+      sourceRecords
+    });
     const documentId = `doc-overview-${display.id}`;
     const documentPath = `${display.overviewBranch}/overview.md`;
     overviewIds.set(display.id, documentId);
@@ -10678,6 +10740,7 @@ var KNOWLEDGE_BASE_VALIDATION_PUBLIC_ERRORS = {
   content: "\u77E5\u8BC6\u5E93\u6587\u5B57\u6682\u672A\u5B8C\u6210\u7ED3\u6784\u5316\u6574\u7406\uFF0C\u53EF\u5728\u5F53\u524D\u9879\u76EE\u4E2D\u91CD\u65B0\u751F\u6210\u3002",
   unsafe: "\u77E5\u8BC6\u5E93\u6587\u4EF6\u5B58\u5728\u5B89\u5168\u98CE\u9669\uFF0C\u5DF2\u963B\u6B62\u4E0B\u8F7D\u53CA\u540E\u7EED\u5206\u6790\u3002\u8BF7\u52FF\u7EE7\u7EED\u5904\u7406\u8BE5\u6587\u4EF6\uFF0C\u5E76\u8054\u7CFB\u6280\u672F\u652F\u6301\u3002"
 };
+var KNOWLEDGE_BASE_FINALIZATION_PUBLIC_ERROR = "\u5019\u9009\u8D44\u6599\u5DF2\u5B89\u5168\u4FDD\u7559\uFF0C\u7CFB\u7EDF\u6700\u7EC8\u6574\u7406\u6821\u9A8C\u5F02\u5E38\uFF1B\u4FEE\u590D\u540E\u53EF\u76F4\u63A5\u91CD\u8BD5\u6574\u7406\uFF0C\u65E0\u9700\u91CD\u65B0\u4E0A\u4F20\u3002";
 function knowledgeCandidateDiagnosticCode(value) {
   if (value.startsWith("Selected candidate root:"))
     return "candidate_root_selected";
@@ -10724,6 +10787,7 @@ function createGeoRouter(options = {}) {
   const adminNotifier = options.adminNotifier ?? createGeoAdminNotifierFromEnv({ env });
   const knowledgeImporter = options.knowledgeImporter ?? createGeoKnowledgeImporter({ env });
   const projectOrderRegistry = options.projectOrderRegistry ?? createGeoProjectOrderRegistry({ env });
+  const knowledgeBaseFinalizer = options.knowledgeBaseFinalizer ?? finalizeKnowledgeBaseCandidate;
   const failedInvites = /* @__PURE__ */ new Map();
   const sessionRates = /* @__PURE__ */ new Map();
   const identityRates = /* @__PURE__ */ new Map();
@@ -10734,27 +10798,41 @@ function createGeoRouter(options = {}) {
   let activeUploads = 0;
   const questionRetries = /* @__PURE__ */ new Map();
   const knowledgeBaseFinalizations = /* @__PURE__ */ new Map();
+  const knowledgeBaseFinalizationBackoffs = /* @__PURE__ */ new Map();
   const knowledgeBaseAutomaticRetries = /* @__PURE__ */ new Map();
   const knowledgeBaseSourceInputs = /* @__PURE__ */ new Map();
   const router = express.Router();
-  const ensureFinalizedKnowledgeBase = async (value, task) => {
+  const ensureFinalizedKnowledgeBase = async (value, task, options2 = {}) => {
     if (normalizeTaskStatus(task.status) !== "completed") {
       return { value };
     }
     const existingArtifact = value.knowledgeBaseArtifact;
-    if (existingArtifact?.candidate.taskId === value.knowledgeBaseTaskId && existingArtifact.finalizerVersion === WEBSITE_KB_FINALIZER_VERSION) {
+    if (existingArtifact?.candidate.taskId === value.knowledgeBaseTaskId && [
+      "website-kb-finalizer-v2",
+      WEBSITE_KB_FINALIZER_VERSION
+    ].includes(existingArtifact.finalizerVersion)) {
       const descriptor = resolveKnowledgeBaseArtifact(value, task);
       if (!descriptor) return { value };
+      const manifest = await loadKnowledgeBaseManifest(
+        broker,
+        value.knowledgeBaseTaskId,
+        task,
+        value.companyName,
+        descriptor,
+        "website-lead-v1"
+      );
       return {
-        value,
-        manifest: await loadKnowledgeBaseManifest(
-          broker,
-          value.knowledgeBaseTaskId,
-          task,
-          value.companyName,
-          descriptor,
-          "website-lead-v1"
-        )
+        value: value.knowledgeBaseFinalization ? value : {
+          ...value,
+          knowledgeBaseFinalization: {
+            state: "completed",
+            finalizerVersion: existingArtifact.finalizerVersion,
+            candidateSha256: existingArtifact.candidate.sha256,
+            retryAvailable: false,
+            updatedAt: existingArtifact.final.finalizedAt
+          }
+        },
+        manifest
       };
     }
     const candidateDescriptors = rankedKnowledgeArchiveDescriptors(task.output);
@@ -10768,6 +10846,9 @@ function createGeoRouter(options = {}) {
           }
         }
       };
+    }
+    if (value.knowledgeBaseFinalization?.state === "failed_internal" && value.knowledgeBaseFinalization.finalizerVersion === WEBSITE_KB_FINALIZER_VERSION && value.knowledgeBaseFinalization.candidateSha256 && !options2.force) {
+      return { value };
     }
     const candidateDownloadStartedAt = Date.now();
     let downloadedCandidateBytes = 0;
@@ -10884,6 +10965,17 @@ function createGeoRouter(options = {}) {
       };
     }
     const candidateSha = crypto5.createHash("sha256").update(candidateBytes).digest("hex");
+    const recordedFinalization = value.knowledgeBaseFinalization;
+    if (recordedFinalization?.state === "failed_internal" && recordedFinalization.finalizerVersion === WEBSITE_KB_FINALIZER_VERSION && recordedFinalization.candidateSha256 === candidateSha && !options2.force) {
+      return { value };
+    }
+    if (options2.force && recordedFinalization?.state === "failed_internal" && recordedFinalization.candidateSha256 && recordedFinalization.candidateSha256 !== candidateSha) {
+      throw new GeoHttpError(
+        "\u5019\u9009\u8D44\u6599\u7248\u672C\u5DF2\u53D8\u5316\uFF0C\u8BF7\u5237\u65B0\u9879\u76EE\u72B6\u6001\u540E\u91CD\u8BD5",
+        409,
+        "KB_FINALIZATION_CANDIDATE_CHANGED"
+      );
+    }
     const candidateDownloadMs = Date.now() - candidateDownloadStartedAt;
     const descriptorHash = knowledgeArchiveDescriptorHash(candidateDescriptor);
     const selectedCandidate = candidate;
@@ -10896,9 +10988,23 @@ function createGeoRouter(options = {}) {
     ].join(":");
     const now = Date.now();
     pruneExpiringMap(knowledgeBaseFinalizations, now, 200);
+    const transientBackoff = knowledgeBaseFinalizationBackoffs.get(
+      finalizationKey
+    );
+    if (transientBackoff && transientBackoff.retryAt > now && !options2.force) {
+      throw new GeoHttpError(
+        "\u77E5\u8BC6\u5E93\u6700\u7EC8\u6574\u7406\u6587\u4EF6\u4F20\u8F93\u6682\u65F6\u4E0D\u53EF\u7528\uFF0C\u8BF7\u7A0D\u540E\u91CD\u8BD5",
+        503,
+        "KB_FINALIZATION_TRANSIENT_BACKOFF"
+      );
+    }
     const running = knowledgeBaseFinalizations.get(finalizationKey);
-    if (running && running.expiresAt > now) return running.promise;
-    const promise = (async () => {
+    if (running && running.expiresAt > now) {
+      if (!options2.force || !running.settled) return running.promise;
+      knowledgeBaseFinalizations.delete(finalizationKey);
+    }
+    let promise;
+    promise = (async () => {
       const assessment = assessKnowledgeBaseCandidate(selectedCandidate);
       const recoveredHeadingCount = selectedCandidate.diagnostics.filter(
         (item) => item.startsWith("Recovered ")
@@ -10944,7 +11050,7 @@ function createGeoRouter(options = {}) {
       let finalized;
       const finalizeStartedAt = Date.now();
       try {
-        finalized = await finalizeKnowledgeBaseCandidate({
+        finalized = await knowledgeBaseFinalizer({
           candidate: selectedCandidate,
           companyName: finalCompanyName,
           evaluatedAt
@@ -10955,11 +11061,20 @@ function createGeoRouter(options = {}) {
           candidateSha,
           error: error instanceof Error ? error.message : String(error)
         });
-        throw new GeoHttpError(
-          "\u77E5\u8BC6\u5E93\u6700\u7EC8\u6574\u7406\u6682\u65F6\u5931\u8D25\uFF0C\u8BF7\u7A0D\u540E\u91CD\u8BD5",
-          503,
-          "KB_FINALIZER_CONTRACT_VIOLATION"
-        );
+        return {
+          value: {
+            ...value,
+            knowledgeBaseCandidateFailure: void 0,
+            knowledgeBaseFinalization: {
+              state: "failed_internal",
+              finalizerVersion: WEBSITE_KB_FINALIZER_VERSION,
+              candidateSha256: candidateSha,
+              errorCode: "KB_FINALIZER_CONTRACT_VIOLATION",
+              retryAvailable: true,
+              updatedAt: (/* @__PURE__ */ new Date()).toISOString()
+            }
+          }
+        };
       }
       const filename = `${sanitizeFilename(
         finalCompanyName,
@@ -11005,6 +11120,13 @@ function createGeoRouter(options = {}) {
         companyName: finalCompanyName,
         ...finalCompanyName !== value.companyName ? { companyNameSource: "input" } : {},
         knowledgeBaseCandidateFailure: void 0,
+        knowledgeBaseFinalization: {
+          state: "completed",
+          finalizerVersion: WEBSITE_KB_FINALIZER_VERSION,
+          candidateSha256: candidateSha,
+          retryAvailable: false,
+          updatedAt: (/* @__PURE__ */ new Date()).toISOString()
+        },
         archiveFileIds: Array.from(
           /* @__PURE__ */ new Set([
             ...value.archiveFileIds || [],
@@ -11033,12 +11155,24 @@ function createGeoRouter(options = {}) {
         }
       };
       return { value: nextValue, manifest: finalized.manifest };
-    })().catch((error) => {
+    })().then((result) => {
+      knowledgeBaseFinalizationBackoffs.delete(finalizationKey);
+      return result;
+    }).catch((error) => {
       knowledgeBaseFinalizations.delete(finalizationKey);
+      const attempts = (knowledgeBaseFinalizationBackoffs.get(finalizationKey)?.attempts ?? 0) + 1;
+      knowledgeBaseFinalizationBackoffs.set(finalizationKey, {
+        attempts,
+        retryAt: Date.now() + Math.min(6e4, 2e3 * Math.pow(2, Math.min(attempts - 1, 5)))
+      });
       throw error;
+    }).finally(() => {
+      const current = knowledgeBaseFinalizations.get(finalizationKey);
+      if (current?.promise === promise) current.settled = true;
     });
     knowledgeBaseFinalizations.set(finalizationKey, {
       expiresAt: now + 10 * 60 * 1e3,
+      settled: false,
       promise
     });
     return promise;
@@ -11090,6 +11224,7 @@ function createGeoRouter(options = {}) {
               automaticResult: "submitted"
             },
             knowledgeBaseCandidateFailure: void 0,
+            knowledgeBaseFinalization: void 0,
             knowledgeBaseArtifact: void 0,
             temporaryFileIds: Array.from(
               /* @__PURE__ */ new Set([
@@ -12240,6 +12375,64 @@ function createGeoRouter(options = {}) {
     })
   );
   router.post(
+    "/projects/:projectToken/knowledge-base/finalization/retry",
+    requireConfiguration,
+    requireSession,
+    requireSessionRate("knowledge-base-finalization-retry", 8, 60 * 1e3),
+    asyncHandler(async (req, res) => {
+      const value = openOwnedProject(req, res);
+      if (value.knowledgeBaseFinalization?.state !== "failed_internal" || value.knowledgeBaseFinalization.retryAvailable !== true) {
+        throw new GeoHttpError(
+          "\u5F53\u524D\u9879\u76EE\u6CA1\u6709\u53EF\u91CD\u8BD5\u7684\u77E5\u8BC6\u5E93\u6700\u7EC8\u6574\u7406\u4EFB\u52A1",
+          409,
+          "KB_FINALIZATION_RETRY_NOT_AVAILABLE"
+        );
+      }
+      const knowledgeBaseTask = await getResolvedTask(
+        broker,
+        value.knowledgeBaseTaskId
+      );
+      if (normalizeTaskStatus(knowledgeBaseTask.status) !== "completed") {
+        throw new GeoHttpError(
+          "\u5019\u9009\u8D44\u6599\u5C1A\u672A\u751F\u6210\u5B8C\u6210\uFF0C\u6682\u4E0D\u80FD\u91CD\u8BD5\u6700\u7EC8\u6574\u7406",
+          409,
+          "KB_FINALIZATION_CANDIDATE_NOT_READY"
+        );
+      }
+      const previousFinalFileId = value.knowledgeBaseArtifact?.final.fileId;
+      const finalized = await ensureFinalizedKnowledgeBase(
+        trackArchiveFile(value, knowledgeBaseTask),
+        knowledgeBaseTask,
+        { force: true }
+      );
+      const nextValue = await resolveCanonicalCompanyIdentity(
+        broker,
+        finalized.value,
+        knowledgeBaseTask,
+        { allowInvalidArchiveForProjectView: true }
+      );
+      let projectToken;
+      try {
+        projectToken = codec.seal("project", nextValue, PROJECT_TTL_MS);
+      } catch (error) {
+        const currentFinalFileId = nextValue.knowledgeBaseArtifact?.final.fileId;
+        if (currentFinalFileId && currentFinalFileId !== previousFinalFileId) {
+          await broker.deleteFile(currentFinalFileId).catch(() => void 0);
+        }
+        throw error;
+      }
+      const questionTask = nextValue.questionTaskId ? await getResolvedTask(broker, nextValue.questionTaskId) : void 0;
+      const project = await buildProjectView(
+        broker,
+        nextValue,
+        projectToken,
+        knowledgeBaseTask,
+        questionTask
+      );
+      res.json({ projectToken, project });
+    })
+  );
+  router.post(
     "/projects/:projectToken/retry",
     requireConfiguration,
     requireSession,
@@ -12347,6 +12540,7 @@ function createGeoRouter(options = {}) {
           automaticResult: "failed"
         } : void 0,
         knowledgeBaseCandidateFailure: void 0,
+        knowledgeBaseFinalization: void 0,
         knowledgeBaseArtifact: void 0,
         temporaryFileIds: Array.from(
           /* @__PURE__ */ new Set([
@@ -14413,6 +14607,7 @@ async function buildProjectView(broker, value, projectToken, knowledgeBaseTask, 
     error: void 0
   } : questionsTaskView;
   const archiveDescriptor = knowledgeBase.status === "completed" ? resolveKnowledgeBaseArtifact(value, knowledgeBaseTask) : null;
+  const knowledgeBaseFinalizationFailure = knowledgeBase.status === "completed" && value.knowledgeBaseFinalization?.state === "failed_internal" ? value.knowledgeBaseFinalization : void 0;
   let knowledgeBaseValidationFailure;
   let knowledgeBaseManifest;
   if (knowledgeBase.status === "completed" && value.knowledgeBaseCandidateFailure) {
@@ -14420,7 +14615,7 @@ async function buildProjectView(broker, value, projectToken, knowledgeBaseTask, 
       value.knowledgeBaseCandidateFailure.message,
       value.knowledgeBaseCandidateFailure.category
     );
-  } else if (knowledgeBase.status === "completed" && !archiveDescriptor) {
+  } else if (knowledgeBase.status === "completed" && !archiveDescriptor && !knowledgeBaseFinalizationFailure) {
     knowledgeBaseValidationFailure = new KnowledgeBaseArchiveValidationError2(
       "completed task does not contain a ZIP artifact",
       "structure"
@@ -14440,12 +14635,17 @@ async function buildProjectView(broker, value, projectToken, knowledgeBaseTask, 
       knowledgeBaseValidationFailure = error;
     }
   }
-  const knowledgeBaseRetryAvailable = Boolean(knowledgeBaseValidationFailure) && knowledgeBaseValidationFailure?.category !== "unsafe" || ["failed", "cancelled"].includes(knowledgeBase.status);
+  const knowledgeBaseRetryAvailable = !knowledgeBaseFinalizationFailure && (Boolean(knowledgeBaseValidationFailure) && knowledgeBaseValidationFailure?.category !== "unsafe" || ["failed", "cancelled"].includes(knowledgeBase.status));
   const knowledgeBaseAutoRetryAvailable = knowledgeBaseRetryAvailable && knowledgeBaseValidationFailure?.category !== "unsafe" && !value.knowledgeBaseAutomaticRetryUsed && !value.knowledgeBaseRecovery?.automaticAttemptedAt;
   const knowledgeBaseRecoveryState = knowledgeBaseManifest && value.knowledgeBaseRecovery?.automaticAttemptedAt ? "recovered" : value.knowledgeBaseRecovery?.automaticResult === "submitted" && !knowledgeBaseRetryAvailable && !knowledgeBaseManifest ? "automatic_in_progress" : value.knowledgeBaseRecovery?.automaticAttemptedAt && knowledgeBaseRetryAvailable ? "manual_required" : "none";
   const knowledgeBaseValidationPublicError = knowledgeBaseValidationFailure ? KNOWLEDGE_BASE_VALIDATION_PUBLIC_ERRORS[knowledgeBaseValidationFailure.category] : KNOWLEDGE_BASE_VALIDATION_PUBLIC_ERRORS.structure;
   const archiveUrl = archiveDescriptor && knowledgeBaseManifest ? `/api/geo/projects/${encodeURIComponent(projectToken)}/archive` : void 0;
-  const publicKnowledgeBaseTask = knowledgeBaseValidationFailure ? {
+  const publicKnowledgeBaseTask = knowledgeBaseFinalizationFailure ? {
+    ...knowledgeBase,
+    status: "failed",
+    progress: 100,
+    error: KNOWLEDGE_BASE_FINALIZATION_PUBLIC_ERROR
+  } : knowledgeBaseValidationFailure ? {
     ...knowledgeBase,
     status: "failed",
     progress: 100,
@@ -14455,7 +14655,12 @@ async function buildProjectView(broker, value, projectToken, knowledgeBaseTask, 
     status: "running",
     error: void 0
   } : knowledgeBase;
-  const executionKnowledgeBaseTask = knowledgeBaseValidationFailure ? {
+  const executionKnowledgeBaseTask = knowledgeBaseFinalizationFailure ? {
+    ...knowledgeBaseTask,
+    status: "failed",
+    output: [],
+    error: { message: KNOWLEDGE_BASE_FINALIZATION_PUBLIC_ERROR }
+  } : knowledgeBaseValidationFailure ? {
     ...knowledgeBaseTask,
     status: "failed",
     output: [],
@@ -14583,7 +14788,14 @@ async function buildProjectView(broker, value, projectToken, knowledgeBaseTask, 
     knowledgeBaseAutoRetryAvailable,
     knowledgeBaseRecoveryState,
     knowledgeBaseValidationCategory: knowledgeBaseValidationFailure?.category,
-    knowledgeBaseSupportRequired: knowledgeBaseValidationFailure?.category === "unsafe" || statusSyncPending(knowledgeBase.status) && hasElapsed(value.knowledgeBaseSubmittedAt, 15 * 60 * 1e3),
+    knowledgeBaseSupportRequired: !knowledgeBaseFinalizationFailure && (knowledgeBaseValidationFailure?.category === "unsafe" || statusSyncPending(knowledgeBase.status) && hasElapsed(value.knowledgeBaseSubmittedAt, 15 * 60 * 1e3)),
+    knowledgeBaseFinalization: {
+      finalizationState: value.knowledgeBaseFinalization?.state ?? (knowledgeBaseManifest ? "completed" : "pending"),
+      finalizerVersion: value.knowledgeBaseFinalization?.finalizerVersion ?? value.knowledgeBaseArtifact?.finalizerVersion ?? WEBSITE_KB_FINALIZER_VERSION,
+      candidateSha256: value.knowledgeBaseFinalization?.candidateSha256 ?? value.knowledgeBaseArtifact?.candidate.sha256,
+      errorCode: value.knowledgeBaseFinalization?.errorCode,
+      retryAvailable: value.knowledgeBaseFinalization?.state === "failed_internal" && value.knowledgeBaseFinalization.retryAvailable === true
+    },
     questionRetryAvailable,
     assessmentRetryAvailable,
     optimizationForecastRetryAvailable,
@@ -14663,7 +14875,7 @@ async function buildProjectView(broker, value, projectToken, knowledgeBaseTask, 
       questionId: serviceQuestion.id
     } : void 0,
     questionValidationError: invalidQuestionResult ? questionRetryAvailable ? "\u63A8\u8350\u7ED3\u679C\u672A\u901A\u8FC7\u56DB\u7C7B\u5404\u4E94\u9898\u7684\u7ED3\u6784\u6821\u9A8C\uFF0C\u53EF\u91CD\u65B0\u751F\u6210\u4E00\u6B21" : "\u63A8\u8350\u7ED3\u679C\u672A\u901A\u8FC7\u56DB\u7C7B\u5404\u4E94\u9898\u7684\u7ED3\u6784\u6821\u9A8C\uFF0C\u81EA\u52A8\u91CD\u8BD5\u6B21\u6570\u5DF2\u7528\u5B8C\uFF0C\u8BF7\u8054\u7CFB\u6280\u672F\u652F\u6301" : void 0,
-    error: knowledgeBaseValidationFailure ? knowledgeBaseValidationPublicError : void 0
+    error: knowledgeBaseFinalizationFailure ? KNOWLEDGE_BASE_FINALIZATION_PUBLIC_ERROR : knowledgeBaseValidationFailure ? knowledgeBaseValidationPublicError : void 0
   };
 }
 function toPublicAssessmentView(task, question, monitorRun, knowledgeEvidencePaths) {
@@ -15500,7 +15712,7 @@ function normalizeError(error) {
 
 // server/geo/health.ts
 function geoPublicBuildSha(env = process.env) {
-  const embedded = true ? "038479a7d6e60998aacc67e79f03ec4be81692ff".trim() : "";
+  const embedded = true ? "ca6982ed268c93c0a3ec7219651cacb566762576".trim() : "";
   if (/^[a-f0-9]{7,64}$/i.test(embedded)) return embedded.toLowerCase();
   const candidate = (env.FRONTMIND_BUILD_SHA || env.GITHUB_SHA || env.RAILWAY_GIT_COMMIT_SHA || "").trim();
   return /^[a-f0-9]{7,64}$/i.test(candidate) ? candidate.toLowerCase() : null;
