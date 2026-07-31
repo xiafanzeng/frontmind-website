@@ -379,6 +379,74 @@ type ProjectOrderProtection = {
   };
 };
 
+async function verifyUploadedKnowledgeBaseArchive(
+  broker: GeoPresalesBroker,
+  input: {
+    fileId: string;
+    companyName: string;
+    generatedAt: string;
+    expectedBytes: Buffer;
+    expectedSha256: string;
+    expectedPackageManifestSha256: string;
+  },
+) {
+  let bytes: Buffer;
+  try {
+    const response = await broker.downloadFile(input.fileId);
+    bytes = await readResponseBufferLimited(
+      response,
+      MAX_VALIDATED_ARCHIVE_BYTES,
+    );
+  } catch (error) {
+    throw new GeoHttpError(
+      "知识库正式文件传输暂时不可用，请稍后重试",
+      error instanceof GeoByteLimitError ? 502 : 503,
+      "FINAL_ARCHIVE_READBACK_FAILED",
+    );
+  }
+  if (!bytes.length) {
+    throw new GeoHttpError(
+      "知识库正式文件传输暂时不可用，请稍后重试",
+      503,
+      "FINAL_ARCHIVE_READBACK_FAILED",
+    );
+  }
+  const actualSha256 = crypto.createHash("sha256").update(bytes).digest("hex");
+  if (
+    actualSha256 !== input.expectedSha256 ||
+    !bytes.equals(input.expectedBytes)
+  ) {
+    throw new GeoHttpError(
+      "知识库正式文件传输校验失败，请稍后重试",
+      503,
+      "FINAL_ARCHIVE_HASH_MISMATCH",
+    );
+  }
+
+  let manifest: KnowledgeBaseManifest;
+  try {
+    manifest = await parseKnowledgeBaseArchive(bytes, {
+      companyName: input.companyName,
+      validationProfile: "website-lead-v1",
+      generatedAt: input.generatedAt,
+    });
+  } catch {
+    throw new GeoHttpError(
+      "知识库正式文件结构校验失败，请稍后重试",
+      503,
+      "FINAL_ARCHIVE_CONTRACT_MISMATCH",
+    );
+  }
+  if (manifest.packageManifestSha256 !== input.expectedPackageManifestSha256) {
+    throw new GeoHttpError(
+      "知识库正式文件清单校验失败，请稍后重试",
+      503,
+      "FINAL_ARCHIVE_MANIFEST_MISMATCH",
+    );
+  }
+  return manifest;
+}
+
 export function createGeoRouter(options: GeoRouterOptions = {}): Router {
   const env = options.env ?? process.env;
   const production = env.NODE_ENV === "production";
@@ -867,6 +935,7 @@ export function createGeoRouter(options: GeoRouterOptions = {}): Router {
         mimeType: "application/zip",
         sizeBytes: finalized.bytes.length,
       });
+      let verifiedManifest: KnowledgeBaseManifest;
       try {
         const uploadStartedAt = Date.now();
         await broker.uploadFile(
@@ -875,6 +944,16 @@ export function createGeoRouter(options: GeoRouterOptions = {}): Router {
           "application/zip",
           file.proxy_upload_ticket,
         );
+        const uploadMs = Date.now() - uploadStartedAt;
+        const readbackStartedAt = Date.now();
+        verifiedManifest = await verifyUploadedKnowledgeBaseArchive(broker, {
+          fileId: file.id,
+          companyName: finalCompanyName,
+          generatedAt: evaluatedAt,
+          expectedBytes: finalized.bytes,
+          expectedSha256: finalized.sha256,
+          expectedPackageManifestSha256: finalized.packageManifestSha256,
+        });
         console.info("[GEO KB]", {
           event: "knowledge_base_finalized",
           projectId: value.projectId,
@@ -892,9 +971,20 @@ export function createGeoRouter(options: GeoRouterOptions = {}): Router {
           rejectedImages:
             selectedCandidate.assets.length - finalized.metrics.packagedImages,
           finalizeMs: Date.now() - finalizeStartedAt,
-          uploadMs: Date.now() - uploadStartedAt,
+          uploadMs,
+          readbackMs: Date.now() - readbackStartedAt,
         });
       } catch (error) {
+        console.warn("[GEO KB]", {
+          event: "final_archive_readback_failed",
+          projectId: value.projectId,
+          taskId: value.knowledgeBaseTaskId,
+          finalFileId: file.id,
+          diagnosticCode:
+            error instanceof GeoHttpError
+              ? error.code
+              : "FINAL_ARCHIVE_UPLOAD_OR_READBACK_FAILED",
+        });
         await broker.deleteFile(file.id).catch(() => undefined);
         throw error;
       }
@@ -943,7 +1033,7 @@ export function createGeoRouter(options: GeoRouterOptions = {}): Router {
           },
         },
       };
-      return { value: nextValue, manifest: finalized.manifest };
+      return { value: nextValue, manifest: verifiedManifest };
     })()
       .then((result) => {
         knowledgeBaseFinalizationBackoffs.delete(finalizationKey);
@@ -5928,7 +6018,13 @@ async function loadKnowledgeBaseManifest(
   taskId: string,
   task: BrokerTask,
   companyName: string,
-  archive: { fileId?: string; url?: string; filename: string },
+  archive: {
+    fileId?: string;
+    url?: string;
+    filename: string;
+    sha256?: string;
+    packageManifestSha256?: string;
+  },
   validationProfile?: "website-lead-v1",
 ) {
   let cache = manifestCacheByBroker.get(broker);
@@ -5938,6 +6034,8 @@ async function loadKnowledgeBaseManifest(
   }
   const cacheKey = `${taskId}:${archive.fileId || archive.url || archive.filename}:${
     validationProfile || "historical-compatible"
+  }:${archive.sha256 || "unverified"}:${
+    archive.packageManifestSha256 || "unverified"
   }`;
   const cached = cache.get(cacheKey);
   if (cached && cached.expiresAt > Date.now()) return cached.promise;
@@ -5963,15 +6061,36 @@ async function loadKnowledgeBaseManifest(
           "unsafe",
         );
       }
+      console.warn("[GEO KB]", {
+        event: "archive_download_failed",
+        taskId,
+        fileId: archive.fileId,
+        filename: archive.filename,
+        diagnosticCode:
+          error instanceof GeoBrokerError ? error.code : "ARCHIVE_READ_FAILED",
+        upstreamStatus:
+          error instanceof GeoBrokerError ? error.status : undefined,
+      });
       throw new GeoHttpError(
         "知识库 ZIP 暂时无法读取，请稍后重试",
         502,
         "ARCHIVE_READ_FAILED",
       );
     }
+    if (
+      archive.sha256 &&
+      crypto.createHash("sha256").update(bytes).digest("hex") !== archive.sha256
+    ) {
+      throw new GeoHttpError(
+        "知识库正式文件传输校验失败，请稍后重试",
+        502,
+        "FINAL_ARCHIVE_HASH_MISMATCH",
+      );
+    }
+    let manifest: KnowledgeBaseManifest;
     try {
       if (!bytes.length) throw new Error("Knowledge-base archive is empty");
-      return await parseKnowledgeBaseArchive(bytes, {
+      manifest = await parseKnowledgeBaseArchive(bytes, {
         companyName,
         validationProfile,
         generatedAt:
@@ -5995,6 +6114,17 @@ async function loadKnowledgeBaseManifest(
         category,
       );
     }
+    if (
+      archive.packageManifestSha256 &&
+      manifest.packageManifestSha256 !== archive.packageManifestSha256
+    ) {
+      throw new GeoHttpError(
+        "知识库正式文件清单校验失败，请稍后重试",
+        502,
+        "FINAL_ARCHIVE_MANIFEST_MISMATCH",
+      );
+    }
+    return manifest;
   })();
 
   cache.set(cacheKey, { expiresAt: Date.now() + 10 * 60 * 1000, promise });
@@ -6307,12 +6437,20 @@ function trackArchiveFile(
 function resolveKnowledgeBaseArtifact(
   value: ProjectTokenValue,
   _task: BrokerTask,
-): { fileId?: string; url?: string; filename: string } | null {
+): {
+  fileId?: string;
+  url?: string;
+  filename: string;
+  sha256?: string;
+  packageManifestSha256?: string;
+} | null {
   const finalArtifact = value.knowledgeBaseArtifact?.final;
   if (!finalArtifact) return null;
   return {
     fileId: finalArtifact.fileId,
     filename: finalArtifact.filename,
+    sha256: finalArtifact.sha256,
+    packageManifestSha256: finalArtifact.packageManifestSha256,
   };
 }
 

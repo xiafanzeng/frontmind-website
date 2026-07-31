@@ -162,6 +162,7 @@ import {
 } from "./workbench-geometry";
 import { safePublicAppUrl } from "./safe-url";
 import { GeoAgentUserDashboard } from "./GeoAgentUserDashboard";
+import { localizedUserFacingError } from "./error-localization";
 import { KnowledgeCompletenessDialog } from "./KnowledgeCompletenessDialog";
 import {
   canRetryGeoServiceKnowledgeImport,
@@ -755,9 +756,7 @@ function groupedExecutionEvents(entry: GeoExecutionLogEntry) {
 }
 
 function errorMessage(error: unknown): string {
-  if (error instanceof GeoApiError || error instanceof Error)
-    return error.message;
-  return "暂时无法完成操作，请稍后重试。";
+  return localizedUserFacingError(error);
 }
 
 export function claimKnowledgeBaseAutoRetry(

@@ -1093,6 +1093,29 @@ describe("uploadGeoFile", () => {
     });
   });
 
+  it("converts English API failures into Chinese user-facing messages", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn<typeof fetch>().mockResolvedValue(
+        new Response(
+          JSON.stringify({
+            error: {
+              code: "UPSTREAM_UNAVAILABLE",
+              message: "The request could not be completed",
+            },
+          }),
+          { status: 503, headers: { "content-type": "application/json" } },
+        ),
+      ),
+    );
+
+    await expect(verifyGeoInvitation("invite-code")).rejects.toMatchObject({
+      code: "UPSTREAM_UNAVAILABLE",
+      status: 503,
+      message: "服务暂时不可用，请稍后重试。",
+    });
+  });
+
   it("fails closed when project creation receives JSON with the wrong shape", async () => {
     vi.stubGlobal(
       "fetch",

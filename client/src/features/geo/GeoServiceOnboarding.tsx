@@ -29,6 +29,7 @@ import type {
   GeoServiceContractProfile,
 } from "./types";
 import { safePublicAppUrl } from "./safe-url";
+import { localizedUserFacingError } from "./error-localization";
 
 type OnboardingStep = "profile" | "signature" | "payment" | "account";
 type GeoServiceContractProfileDraft = Omit<
@@ -417,9 +418,11 @@ export function GeoServiceOnboarding({
       });
     } catch (error) {
       setFormError(
-        error instanceof Error
-          ? error.message
-          : "签约资料暂未提交成功，请稍后重试。",
+        localizedUserFacingError(
+          error,
+          undefined,
+          "签约资料暂未提交成功，请稍后重试。",
+        ),
       );
     } finally {
       setProfileSubmitting(false);
@@ -459,9 +462,11 @@ export function GeoServiceOnboarding({
       }));
     } catch (error) {
       setFormError(
-        error instanceof Error
-          ? error.message
-          : "账号暂未提交成功，请稍后重试。",
+        localizedUserFacingError(
+          error,
+          undefined,
+          "账号暂未提交成功，请稍后重试。",
+        ),
       );
     } finally {
       setAccountSubmitting(false);
@@ -487,9 +492,11 @@ export function GeoServiceOnboarding({
       await onCheckStatus();
     } catch (error) {
       setFormError(
-        error instanceof Error
-          ? error.message
-          : "暂时无法查询当前状态，请重试。",
+        localizedUserFacingError(
+          error,
+          undefined,
+          "暂时无法查询当前状态，请重试。",
+        ),
       );
     } finally {
       setStatusChecking(false);

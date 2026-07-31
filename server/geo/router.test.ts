@@ -19,6 +19,7 @@ import {
 } from "./admin-notifications";
 import { createGeoRouter } from "./router";
 import { parseKnowledgeBaseArchive } from "./archive";
+import { finalizeKnowledgeBaseCandidate } from "./knowledge-base-finalizer";
 import { PRODUCT_QA_INTENTS, type GeoQuestion } from "./schemas";
 import { GeoTokenCodec } from "./tokens";
 import { GeoAccountProvisioningError } from "./provisioning";
@@ -102,6 +103,7 @@ class MockBroker implements GeoPresalesBroker {
   archive = Buffer.alloc(0);
   nextTask = 1;
   nextSkillFile = 1;
+  nextRegularFile = 1;
   questionTaskCount = 0;
   assessmentTaskCount = 0;
   forecastTaskCount = 0;
@@ -122,6 +124,8 @@ class MockBroker implements GeoPresalesBroker {
   monitorCredentialConfigured = true;
   publicUrlConfigured = true;
   omitNextKnowledgeTaskStatus = false;
+  downloadErrors = new Map<string, Error>();
+  downloadOverrides = new Map<string, Buffer>();
 
   async getStatus() {
     return {
@@ -140,7 +144,7 @@ class MockBroker implements GeoPresalesBroker {
         status: "pending",
       };
     }
-    const id = `file-${this.uploads.size + 1}`;
+    const id = `file-${this.nextRegularFile++}`;
     return { id, filename: input.filename, status: "pending" };
   }
 
@@ -253,7 +257,14 @@ class MockBroker implements GeoPresalesBroker {
   }
 
   async downloadFile(fileId?: string) {
-    const bytes = (fileId && this.uploads.get(fileId)) || this.archive;
+    if (fileId) {
+      const error = this.downloadErrors.get(fileId);
+      if (error) throw error;
+    }
+    const bytes =
+      (fileId && this.downloadOverrides.get(fileId)) ||
+      (fileId && this.uploads.get(fileId)) ||
+      this.archive;
     return new Response(bytes, {
       status: 200,
       headers: {
@@ -1191,12 +1202,11 @@ describe("GEO API", () => {
       });
       expect(completed.project.knowledgeBase.sections).toHaveLength(7);
       expect(completed.projectToken).not.toBe(initial.projectToken);
+      expect(v2Broker.uploads.size).toBe(1);
+      expect(v2Broker.nextRegularFile).toBe(2);
 
       const codec = new GeoTokenCodec(secret);
-      const value = codec.open<any>(
-        completed.projectToken,
-        "project",
-      ).value;
+      const value = codec.open<any>(completed.projectToken, "project").value;
       expect(value).toMatchObject({
         knowledgeBaseArtifact: {
           finalizerVersion: "website-kb-finalizer-v3",
@@ -1265,6 +1275,275 @@ describe("GEO API", () => {
     } finally {
       await new Promise<void>((resolve, reject) =>
         v2Server.close((error) => (error ? reject(error) : resolve())),
+      );
+    }
+  });
+
+  it("does not issue a completed project token when uploaded final ZIP readback fails", async () => {
+    const { cookie } = await verifyInvite();
+    const created = await jsonRequest("/projects", cookie, {
+      method: "POST",
+      body: { input: "Acme", attachments: [] },
+    });
+    const initial = created.body as Record<string, any>;
+    broker.tasks.set("kb-1", {
+      id: "kb-1",
+      status: "completed",
+      output: [
+        {
+          role: "assistant",
+          content: [
+            {
+              type: "output_file",
+              file_id: "candidate-readback-failure",
+              filename: "website-lead-candidate-v1.zip",
+            },
+          ],
+        },
+      ],
+    });
+    broker.downloadErrors.set(
+      "file-1",
+      new GeoBrokerError(
+        "canonical file content unavailable",
+        502,
+        "AGENT_REQUEST_FAILED",
+      ),
+    );
+
+    const failed = await jsonRequest(
+      `/projects/${encodeURIComponent(initial.projectToken)}`,
+      cookie,
+    );
+    expect(failed.response.status).toBe(503);
+    expect(failed.body).toMatchObject({
+      error: { code: "FINAL_ARCHIVE_READBACK_FAILED" },
+    });
+    expect((failed.body as any).projectToken).toBeUndefined();
+    expect(broker.deletedFiles).toContain("file-1");
+    expect(broker.uploads.has("file-1")).toBe(false);
+
+    const backedOff = await jsonRequest(
+      `/projects/${encodeURIComponent(initial.projectToken)}`,
+      cookie,
+    );
+    expect(backedOff.response.status).toBe(503);
+    expect(backedOff.body).toMatchObject({
+      error: { code: "KB_FINALIZATION_TRANSIENT_BACKOFF" },
+    });
+    expect(broker.nextRegularFile).toBe(2);
+  });
+
+  it("does not issue a completed project token when uploaded final ZIP changes bytes", async () => {
+    const { cookie } = await verifyInvite();
+    const created = await jsonRequest("/projects", cookie, {
+      method: "POST",
+      body: { input: "Acme", attachments: [] },
+    });
+    const initial = created.body as Record<string, any>;
+    broker.tasks.set("kb-1", {
+      id: "kb-1",
+      status: "completed",
+      output: [
+        {
+          role: "assistant",
+          content: [
+            {
+              type: "output_file",
+              file_id: "candidate-readback",
+              filename: "website-lead-candidate-v1.zip",
+            },
+          ],
+        },
+      ],
+    });
+    broker.downloadOverrides.set("file-1", Buffer.from("changed-after-upload"));
+
+    const failed = await jsonRequest(
+      `/projects/${encodeURIComponent(initial.projectToken)}`,
+      cookie,
+    );
+    expect(failed.response.status).toBe(503);
+    expect(failed.body).toMatchObject({
+      error: { code: "FINAL_ARCHIVE_HASH_MISMATCH" },
+    });
+    expect((failed.body as any).projectToken).toBeUndefined();
+    expect(broker.deletedFiles).toContain("file-1");
+    expect(broker.uploads.has("file-1")).toBe(false);
+  });
+
+  it("does not run a candidate rebuild when a previously recorded final ZIP cannot be read", async () => {
+    const { cookie } = await verifyInvite();
+    const created = await jsonRequest("/projects", cookie, {
+      method: "POST",
+      body: { input: "Acme", attachments: [] },
+    });
+    const initial = created.body as Record<string, any>;
+    broker.tasks.set("kb-1", {
+      id: "kb-1",
+      status: "completed",
+      completed_at: "2026-07-30T04:00:00.000Z",
+      output: [
+        {
+          role: "assistant",
+          content: [
+            {
+              type: "output_file",
+              file_id: "candidate-no-rebuild",
+              filename: "website-lead-candidate-v1.zip",
+            },
+          ],
+        },
+      ],
+    });
+
+    const completed = await jsonRequest(
+      `/projects/${encodeURIComponent(initial.projectToken)}`,
+      cookie,
+    );
+    expect(completed.response.status).toBe(200);
+    const completedPayload = completed.body as Record<string, any>;
+    const codec = new GeoTokenCodec(
+      "test-session-secret-at-least-16-characters",
+    );
+    const completedValue = codec.open<any>(
+      completedPayload.projectToken,
+      "project",
+    ).value;
+    const finalFileId = completedValue.knowledgeBaseArtifact.final.fileId;
+
+    const noRebuildBroker = new MockBroker();
+    noRebuildBroker.archive = broker.archive;
+    noRebuildBroker.tasks = new Map(broker.tasks);
+    noRebuildBroker.uploads = new Map(broker.uploads);
+    noRebuildBroker.nextRegularFile = broker.nextRegularFile;
+    noRebuildBroker.downloadErrors.set(
+      finalFileId,
+      new GeoBrokerError(
+        "stored file unavailable",
+        502,
+        "AGENT_REQUEST_FAILED",
+      ),
+    );
+    const noRebuildApp = express();
+    noRebuildApp.use(
+      "/api/geo",
+      createGeoRouter({
+        broker: noRebuildBroker,
+        projectOrderRegistry,
+        env: {
+          NODE_ENV: "test",
+          FRONTMIND_GEO_INVITE_CODE: "frontmind666",
+          FRONTMIND_GEO_SESSION_SECRET:
+            "test-session-secret-at-least-16-characters",
+        },
+      }),
+    );
+    const noRebuildServer = noRebuildApp.listen(0);
+    await new Promise<void>((resolve) =>
+      noRebuildServer.once("listening", resolve),
+    );
+    try {
+      const origin = `http://127.0.0.1:${
+        (noRebuildServer.address() as AddressInfo).port
+      }`;
+      const response = await fetch(
+        `${origin}/api/geo/projects/${encodeURIComponent(
+          completedPayload.projectToken,
+        )}`,
+        { headers: { cookie } },
+      );
+      expect(response.status).toBe(502);
+      await expect(response.json()).resolves.toMatchObject({
+        error: { code: "ARCHIVE_READ_FAILED" },
+      });
+      expect(noRebuildBroker.uploads.size).toBe(1);
+      expect(noRebuildBroker.nextRegularFile).toBe(2);
+      expect(noRebuildBroker.prompts).toHaveLength(0);
+    } finally {
+      await new Promise<void>((resolve, reject) =>
+        noRebuildServer.close((error) => (error ? reject(error) : resolve())),
+      );
+    }
+  });
+
+  it("rejects a read-back ZIP when its package manifest hash disagrees with the finalizer result", async () => {
+    const mismatchBroker = new MockBroker();
+    mismatchBroker.archive = await fixtureCandidateArchive();
+    const secret = "manifest-mismatch-secret-at-least-32-characters";
+    const app = express();
+    app.use(
+      "/api/geo",
+      createGeoRouter({
+        broker: mismatchBroker,
+        knowledgeBaseFinalizer: async (input) => {
+          const finalized = await finalizeKnowledgeBaseCandidate(input);
+          return {
+            ...finalized,
+            packageManifestSha256: "0".repeat(64),
+          };
+        },
+        projectOrderRegistry,
+        env: {
+          NODE_ENV: "test",
+          FRONTMIND_GEO_INVITE_CODE: "frontmind666",
+          FRONTMIND_GEO_SESSION_SECRET: secret,
+        },
+      }),
+    );
+    const mismatchServer = app.listen(0);
+    await new Promise<void>((resolve) =>
+      mismatchServer.once("listening", resolve),
+    );
+    try {
+      const origin = `http://127.0.0.1:${
+        (mismatchServer.address() as AddressInfo).port
+      }`;
+      const invited = await fetch(`${origin}/api/geo/invite/verify`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ code: "frontmind666" }),
+      });
+      const cookie = invited.headers.get("set-cookie")!.split(";")[0]!;
+      const created = await fetch(`${origin}/api/geo/projects`, {
+        method: "POST",
+        headers: { cookie, "content-type": "application/json" },
+        body: JSON.stringify({ input: "Acme", attachments: [] }),
+      });
+      const initial = (await created.json()) as Record<string, any>;
+      mismatchBroker.tasks.set("kb-1", {
+        id: "kb-1",
+        status: "completed",
+        completed_at: "2026-07-30T04:00:00.000Z",
+        output: [
+          {
+            role: "assistant",
+            content: [
+              {
+                type: "output_file",
+                file_id: "candidate-manifest-mismatch",
+                filename: "website-lead-candidate-v1.zip",
+              },
+            ],
+          },
+        ],
+      });
+
+      const failed = await fetch(
+        `${origin}/api/geo/projects/${encodeURIComponent(
+          initial.projectToken,
+        )}`,
+        { headers: { cookie } },
+      );
+      expect(failed.status).toBe(503);
+      await expect(failed.json()).resolves.toMatchObject({
+        error: { code: "FINAL_ARCHIVE_MANIFEST_MISMATCH" },
+      });
+      expect(mismatchBroker.deletedFiles).toContain("file-1");
+      expect(mismatchBroker.uploads.has("file-1")).toBe(false);
+    } finally {
+      await new Promise<void>((resolve, reject) =>
+        mismatchServer.close((error) => (error ? reject(error) : resolve())),
       );
     }
   });

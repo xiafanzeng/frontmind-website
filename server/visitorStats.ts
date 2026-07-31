@@ -53,7 +53,7 @@ export async function handleVisitorStatsRequest(
       logVisitorStatsFailure("summary", error);
       sendJson(res, 503, {
         ok: false,
-        error: "Visitor statistics are temporarily unavailable",
+        error: "访问统计暂时不可用",
       });
     }
     return;
@@ -67,7 +67,7 @@ export async function handleVisitorStatsRequest(
       const page = typeof body.page === "string" ? body.page.slice(0, 300) : "";
 
       if (!visitorId || visitorId.length < 12 || visitorId.length > 160) {
-        sendJson(res, 400, { ok: false, error: "Invalid visitor id" });
+        sendJson(res, 400, { ok: false, error: "访问标识无效" });
         return;
       }
 
@@ -75,12 +75,12 @@ export async function handleVisitorStatsRequest(
       sendJson(res, 200, { ok: true, summary: buildSummary() });
     } catch (error) {
       if (error instanceof VisitorStatsRequestError) {
-        sendJson(res, 400, { ok: false, error: "Invalid request" });
+        sendJson(res, 400, { ok: false, error: "请求格式无效" });
       } else {
         logVisitorStatsFailure("hit", error);
         sendJson(res, 503, {
           ok: false,
-          error: "Visitor statistics are temporarily unavailable",
+          error: "访问统计暂时不可用",
         });
       }
     }
@@ -92,7 +92,7 @@ export async function handleVisitorStatsRequest(
     return;
   }
 
-  sendJson(res, 404, { ok: false, error: "Not found" });
+  sendJson(res, 404, { ok: false, error: "接口不存在" });
 }
 
 function recordHit(req: IncomingMessage, visitorId: string, _page: string) {

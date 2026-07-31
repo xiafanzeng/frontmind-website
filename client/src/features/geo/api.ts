@@ -33,6 +33,7 @@ import type {
   GeoServiceContractProfile,
   GeoStage,
 } from "./types";
+import { localizedUserFacingError } from "./error-localization";
 
 const GEO_API_ROOT = "/api/geo";
 const DEFAULT_REQUEST_TIMEOUT_MS = 30_000;
@@ -413,8 +414,11 @@ async function parseResponse(
     const record = asRecord(body);
     const error = asRecord(record.error);
     throw new GeoApiError(
-      boundedApiMessage(error.message, record.message) ??
+      localizedUserFacingError(
+        boundedApiMessage(error.message, record.message),
+        response.status,
         "请求未完成，请稍后重试。",
+      ),
       response.status,
       textValue(error.code, record.code),
     );
@@ -1259,7 +1263,11 @@ function normalizeMonitoringAnswer(
       record.completedAt,
       record.completed_at,
     ),
-    error: textValue(record.error, record.errorMessage, record.error_message),
+    error: localizedUserFacingError(
+      textValue(record.error, record.errorMessage, record.error_message),
+      undefined,
+      "",
+    ),
   };
 }
 
@@ -1392,7 +1400,11 @@ function normalizeMonitoring(value: unknown): GeoMonitoringResult | undefined {
     partialAccepted:
       source.partialAccepted === true || source.partial_accepted === true,
     answers,
-    error: textValue(source.error, source.errorMessage, source.error_message),
+    error: localizedUserFacingError(
+      textValue(source.error, source.errorMessage, source.error_message),
+      undefined,
+      "",
+    ),
   };
 }
 
@@ -1856,7 +1868,11 @@ function normalizeAssessment(value: unknown): GeoAssessmentResult | undefined {
       root.completedAt,
       root.completed_at,
     ),
-    error: textValue(root.error, root.errorMessage, root.error_message),
+    error: localizedUserFacingError(
+      textValue(root.error, root.errorMessage, root.error_message),
+      undefined,
+      "",
+    ),
   };
 }
 
@@ -2084,7 +2100,11 @@ function normalizeOptimizationForecast(
       root.completedAt,
       root.completed_at,
     ),
-    error: textValue(root.error, root.errorMessage, root.error_message),
+    error: localizedUserFacingError(
+      textValue(root.error, root.errorMessage, root.error_message),
+      undefined,
+      "",
+    ),
   };
 }
 
@@ -2152,7 +2172,8 @@ function normalizeExecutionLog(value: unknown): GeoExecutionLog | undefined {
             textValue(event.id) ??
             `${id}-event-${entryIndex + 1}-${eventIndex + 1}`,
           kind: rawKind as GeoExecutionLog["entries"][number]["events"][number]["kind"],
-          message,
+          message:
+            rawKind === "error" ? localizedUserFacingError(message) : message,
           createdAt: textValue(event.createdAt, event.created_at, event.at),
         },
       ];
@@ -2487,11 +2508,15 @@ function normalizeServiceActivation(
           typeof knowledge.retryable === "boolean"
             ? knowledge.retryable
             : undefined,
-        message: textValue(knowledge.message),
+        message: localizedUserFacingError(
+          textValue(knowledge.message),
+          undefined,
+          "",
+        ),
         updatedAt: textValue(knowledge.updatedAt, knowledge.updated_at),
       };
     })(),
-    error: textValue(source.error),
+    error: localizedUserFacingError(textValue(source.error), undefined, ""),
   };
 }
 
@@ -2737,10 +2762,9 @@ export function normalizeGeoProject(
         finalization.error_code,
       );
       return {
-        finalizationState:
-          finalizationState as NonNullable<
-            GeoProject["knowledgeBaseFinalization"]
-          >["finalizationState"],
+        finalizationState: finalizationState as NonNullable<
+          GeoProject["knowledgeBaseFinalization"]
+        >["finalizationState"],
         finalizerVersion,
         candidateSha256: textValue(
           finalization.candidateSha256,
@@ -2796,11 +2820,15 @@ export function normalizeGeoProject(
     optimizationForecast,
     serviceActivation,
     executionLog,
-    error: textValue(
-      validationError,
-      error.message,
-      project.errorMessage,
-      typeof project.error === "string" ? project.error : undefined,
+    error: localizedUserFacingError(
+      textValue(
+        validationError,
+        error.message,
+        project.errorMessage,
+        typeof project.error === "string" ? project.error : undefined,
+      ),
+      undefined,
+      "",
     ),
   };
 }

@@ -202,7 +202,7 @@ async function startServer() {
   // Handle client-side routing, while keeping missing static assets as real 404s.
   app.get("*", (req, res) => {
     if (path.extname(req.path)) {
-      res.status(404).type("text/plain").send("Not found");
+      res.status(404).type("text/plain").send("页面不存在");
       return;
     }
 
