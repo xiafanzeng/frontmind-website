@@ -7704,11 +7704,8 @@ function normalizedNarrativeSimilarity2(left, right) {
   });
   return intersection / (leftShingles.size + rightShingles.size - intersection);
 }
-function shortenOverviewNarrative(value, maximum = 72) {
-  const compact = value.replace(/\s+/g, " ").trim();
-  if (Array.from(compact).length <= maximum) return compact;
-  const shortened = Array.from(compact).slice(0, maximum).join("").trim();
-  return `${shortened.replace(/[，、；：,.!?。！？]+$/, "")}\u3002`;
+function normalizeOverviewNarrative(value) {
+  return value.replace(/\s+/g, " ").trim();
 }
 function structuralOverviewNarrative(display, leaves) {
   const leafTitles = Array.from(
@@ -7727,7 +7724,7 @@ function buildOverviewNarrative(input) {
     input.intro,
     input.sourceRecords
   );
-  let narrative = introSourceIds.length ? shortenOverviewNarrative(sanitizeSupportedNarrative(input.intro)) : "";
+  let narrative = introSourceIds.length ? normalizeOverviewNarrative(sanitizeSupportedNarrative(input.intro)) : "";
   if (!narrative || input.leaves.some(
     (leaf) => normalizedNarrativeSimilarity2(narrative, leaf.narrative) >= 0.55
   )) {
@@ -7738,7 +7735,7 @@ function buildOverviewNarrative(input) {
   )) {
     narrative = `${input.display.title}\uFF1A${input.leaves.length} \u4E2A\u72EC\u7ACB\u6761\u76EE\u5DF2\u5B8C\u6210\u6765\u6E90\u5173\u8054\u3002`;
   }
-  return shortenOverviewNarrative(narrative);
+  return normalizeOverviewNarrative(narrative);
 }
 function splitLargeChunk(title, markdown) {
   if (meaningfulCharacters(markdown) <= 1800) {
@@ -16402,7 +16399,7 @@ function normalizeError(error) {
 
 // server/geo/health.ts
 function geoPublicBuildSha(env = process.env) {
-  const embedded = true ? "817d2da48979ffc135cbdb13e286368637a88668".trim() : "";
+  const embedded = true ? "41ac7630bf3b29d757bc0984ed350727c97d722e".trim() : "";
   if (/^[a-f0-9]{7,64}$/i.test(embedded)) return embedded.toLowerCase();
   const candidate = (env.FRONTMIND_BUILD_SHA || env.GITHUB_SHA || env.RAILWAY_GIT_COMMIT_SHA || "").trim();
   return /^[a-f0-9]{7,64}$/i.test(candidate) ? candidate.toLowerCase() : null;
