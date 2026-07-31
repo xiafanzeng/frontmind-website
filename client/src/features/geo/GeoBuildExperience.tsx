@@ -4588,7 +4588,6 @@ export function EnterpriseAnalysis({
   const activeOverview = activeSection?.overview;
   const activeMarkdown =
     activeOverview?.markdown || activeSection?.markdown || "";
-  const activeSummary = activeOverview?.summary || activeSection?.summary;
 
   return (
     <div className="geo-analysis-shell">
@@ -4759,9 +4758,6 @@ export function EnterpriseAnalysis({
                 </div>
               </header>
               <div className="geo-knowledge-copy geo-knowledge-copy-all">
-                {activeSummary && (
-                  <p className="geo-document-lead">{activeSummary}</p>
-                )}
                 <LightweightMarkdown
                   markdown={activeMarkdown || knowledgeBase.reportMarkdown}
                 />
@@ -4774,9 +4770,6 @@ export function EnterpriseAnalysis({
                       </span>
                       <h4>{leaf.title}</h4>
                     </header>
-                    {leaf.summary && (
-                      <p className="geo-document-lead">{leaf.summary}</p>
-                    )}
                     <LightweightMarkdown markdown={leaf.markdown} />
                   </section>
                 ))}

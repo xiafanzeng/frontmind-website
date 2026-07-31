@@ -57,7 +57,19 @@ const customerSections = [
   ["团队与组织", "公开资料暂未提供完整团队名单。[待核验]"],
   [
     "产品与服务",
-    "### 平台产品\n\n数据平台提供 API 接入能力。[来源](https://example.com/products)",
+    [
+      "### 平台产品 MindPromise 智诺：构建 AI 可理解的企业语义资产",
+      "",
+      "数据平台提供 API 接入能力。[来源](https://example.com/products)",
+      "",
+      "### MindReach 智达：连接获客、营销与客服智能体",
+      "",
+      "MindReach 提供面向业务场景的智能体能力。[来源](https://example.com/products)",
+      "",
+      "### MindNexus 智汇：把企业级 AI 工作流接入现有系统",
+      "",
+      "MindNexus 支持企业工作流与系统集成。[来源](https://example.com/products)",
+    ].join("\n"),
   ],
   [
     "技术与交付",
@@ -566,6 +578,13 @@ describe("website knowledge-base finalizer", () => {
         .find((section) => section.title === "产品与服务")
         ?.leaves.some((leaf) => leaf.title.includes("平台产品")),
     ).toBe(true);
+    const productOverview = await zip
+      .file("03_products/overview.md")!
+      .async("string");
+    expect(productOverview).toContain(
+      "MindNexus 智汇：把企业级 AI 工作流接入现有系统",
+    );
+    expect(productOverview).not.toMatch(/Mind。\s*$/m);
   });
 
   it("normalizes and packages one traceable first-party logo", async () => {

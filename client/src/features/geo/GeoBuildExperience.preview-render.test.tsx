@@ -300,6 +300,7 @@ describe("GEO style preview rendering", () => {
     expect(html).not.toContain("未确认信息不会补写");
     expect(html).not.toContain("分支综述");
     expect(html).not.toContain("查看知识叶子");
+    expect(html).not.toContain("geo-document-lead");
     expect(html).not.toContain("geo-section-media");
     expect(html).not.toContain("geo-status-pill");
     expect(html).not.toContain("企业素材 4");

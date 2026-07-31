@@ -514,11 +514,8 @@ function normalizedNarrativeSimilarity(left: string, right: string) {
   return intersection / (leftShingles.size + rightShingles.size - intersection);
 }
 
-function shortenOverviewNarrative(value: string, maximum = 72) {
-  const compact = value.replace(/\s+/g, " ").trim();
-  if (Array.from(compact).length <= maximum) return compact;
-  const shortened = Array.from(compact).slice(0, maximum).join("").trim();
-  return `${shortened.replace(/[，、；：,.!?。！？]+$/, "")}。`;
+function normalizeOverviewNarrative(value: string) {
+  return value.replace(/\s+/g, " ").trim();
 }
 
 function structuralOverviewNarrative(
@@ -553,7 +550,7 @@ function buildOverviewNarrative(input: {
     input.sourceRecords,
   );
   let narrative = introSourceIds.length
-    ? shortenOverviewNarrative(sanitizeSupportedNarrative(input.intro))
+    ? normalizeOverviewNarrative(sanitizeSupportedNarrative(input.intro))
     : "";
   if (
     !narrative ||
@@ -572,7 +569,7 @@ function buildOverviewNarrative(input: {
   ) {
     narrative = `${input.display.title}：${input.leaves.length} 个独立条目已完成来源关联。`;
   }
-  return shortenOverviewNarrative(narrative);
+  return normalizeOverviewNarrative(narrative);
 }
 
 function splitLargeChunk(title: string, markdown: string) {
