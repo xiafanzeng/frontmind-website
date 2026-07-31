@@ -450,8 +450,7 @@ export class ZpayGeoPaymentGateway implements GeoPaymentGateway {
 
     let order: Record<string, unknown>;
     try {
-      const parsed = JSON.parse(body) as unknown;
-      order = asRecord(parsed);
+      order = parseZpayResponseRecord(body);
     } catch {
       throw new GeoPaymentVerificationError(
         "支付结果格式异常",
@@ -945,7 +944,9 @@ export async function verifyGeoPaymentProviderFromEnv(
 
   let result: Record<string, unknown>;
   try {
-    result = asRecord(JSON.parse(await readBoundedResponseText(response)));
+    result = parseZpayResponseRecord(
+      await readBoundedResponseText(response),
+    );
   } catch (error) {
     if (error instanceof GeoPaymentVerificationError) throw error;
     throw paymentProviderReadinessError();
@@ -1321,6 +1322,16 @@ function asRecord(value: unknown): Record<string, unknown> {
   return value && typeof value === "object" && !Array.isArray(value)
     ? (value as Record<string, unknown>)
     : {};
+}
+
+function parseZpayResponseRecord(body: string) {
+  const parsed = JSON.parse(body) as unknown;
+  // Some live ZPAY merchant responses are JSON strings whose contents are the
+  // documented JSON object. Accept exactly one compatibility wrapper while
+  // keeping every subsequent field and scope check unchanged.
+  const unwrapped =
+    typeof parsed === "string" ? (JSON.parse(parsed) as unknown) : parsed;
+  return asRecord(unwrapped);
 }
 
 function textValue(value: unknown) {

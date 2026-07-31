@@ -151,6 +151,37 @@ describe("ZPAY GEO gateway", () => {
     expect(requestUrl.searchParams.get("act")).toBe("balance");
   });
 
+  it("accepts the live merchant balance response wrapped in one JSON string", async () => {
+    const fetchMock = vi.fn<typeof fetch>().mockResolvedValue(
+      new Response(
+        JSON.stringify(
+          JSON.stringify({
+            code: 1,
+            msg: "查询账户余额成功！",
+            balance: "0.00",
+          }),
+        ),
+        { headers: { "content-type": "application/json" } },
+      ),
+    );
+
+    await expect(
+      verifyGeoPaymentProviderFromEnv(
+        {
+          NODE_ENV: "production",
+          FRONTMIND_ZPAY_PID: "merchant123",
+          FRONTMIND_ZPAY_KEY: "merchant-secret",
+          FRONTMIND_PUBLIC_BASE_URL: "https://www.frontmind.net",
+        },
+        fetchMock,
+      ),
+    ).resolves.toEqual({
+      status: "ok",
+      provider: "zpay",
+      callbackOrigin: "https://www.frontmind.net",
+    });
+  });
+
   it("fails the merchant preflight closed for rejected credentials", async () => {
     await expect(
       verifyGeoPaymentProviderFromEnv(
@@ -431,6 +462,45 @@ describe("ZPAY GEO gateway", () => {
     expect(query.origin + query.pathname).toBe("https://zpayz.cn/api.php");
     expect(query.searchParams.get("act")).toBe("order");
     expect(query.searchParams.get("out_trade_no")).toBe(checkout.orderId);
+  });
+
+  it("accepts an order query response wrapped in one JSON string", async () => {
+    const fetchMock = vi.fn<typeof fetch>().mockResolvedValue(
+      new Response(
+        JSON.stringify(
+          JSON.stringify({
+            code: 1,
+            status: 0,
+            pid: "merchant123",
+            out_trade_no: "202607221800001234567890",
+            type: "alipay",
+            name: "FrontMind GEO 问题现状监控（2个平台，每平台5次）",
+            money: "4.00",
+          }),
+        ),
+        { headers: { "content-type": "application/json" } },
+      ),
+    );
+    const paymentGateway = gateway(fetchMock);
+    const checkout = await paymentGateway.createCheckout({
+      ...scope,
+      platformIds: [...scope.platformIds],
+    });
+
+    await expect(
+      paymentGateway.getStatus({
+        authorization: checkout.authorization,
+        ownerSessionId: scope.ownerSessionId,
+        projectId: scope.projectId,
+        questionId: scope.questionId,
+        platformIds: [...scope.platformIds],
+        expectedAmountFen: scope.expectedAmountFen,
+      }),
+    ).resolves.toMatchObject({
+      status: "pending",
+      orderId: checkout.orderId,
+      amountFen: scope.expectedAmountFen,
+    });
   });
 
   it("recovers a paid order from the ledger after recreating its randomized checkout token", async () => {
