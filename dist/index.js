@@ -158,11 +158,81 @@ var visitorCountryCatalog = [
   { country: "Other locations", iso: "other", latitude: 0, longitude: 0 },
   { country: "Unknown", iso: "unknown", latitude: 0, longitude: 0 }
 ];
+var historicalReadsByIso = {
+  cn: 930,
+  hk: 112,
+  us: 48,
+  sg: 38,
+  tw: 36,
+  jp: 28,
+  kr: 24,
+  de: 18,
+  gb: 15,
+  ca: 13,
+  au: 12,
+  my: 11,
+  vn: 10,
+  in: 9,
+  fr: 8,
+  th: 8,
+  ae: 6,
+  id: 6,
+  nl: 5,
+  it: 5,
+  es: 4,
+  ch: 4,
+  nz: 4,
+  br: 3,
+  se: 3,
+  ph: 3,
+  ru: 3,
+  sa: 3,
+  tr: 2,
+  be: 2,
+  pt: 2,
+  il: 2,
+  qa: 2,
+  ie: 2,
+  bd: 2,
+  pk: 2,
+  lk: 2,
+  eg: 1,
+  fi: 1,
+  no: 1,
+  at: 1,
+  lu: 1,
+  ma: 1,
+  np: 1,
+  ng: 1,
+  cl: 1,
+  ro: 1,
+  ua: 1,
+  pl: 1,
+  mx: 1,
+  za: 1,
+  other: 5,
+  unknown: 1
+};
+var visitorHistoricalBaseline = visitorCountryCatalog.map((country) => ({
+  ...country,
+  reads: historicalReadsByIso[country.iso] ?? 0
+})).filter((country) => country.reads > 0);
+var visitorHistoricalBaselineSummary = {
+  capturedAt: "2026-06-23",
+  totalReads: visitorHistoricalBaseline.reduce(
+    (total, country) => total + country.reads,
+    0
+  ),
+  countryCount: visitorHistoricalBaseline.length
+};
 
 // server/visitorStats.ts
 var STORE_PATH = process.env.FRONTMIND_VISITOR_STATS_FILE || path.resolve(process.cwd(), ".frontmind-visitor-stats.json");
 var metadataByIso = new Map(
   visitorCountryCatalog.map((country) => [country.iso, country])
+);
+var historicalCountryIsos = new Set(
+  visitorHistoricalBaseline.map((country) => country.iso).filter((iso) => /^[a-z]{2}$/.test(iso))
 );
 var regionNames = typeof Intl.DisplayNames !== "undefined" ? new Intl.DisplayNames(["en"], { type: "region" }) : null;
 var VisitorStatsRequestError = class extends Error {
@@ -245,11 +315,17 @@ function buildSummary() {
   return summarizeVisitorStore(readStore());
 }
 function summarizeVisitorStore(store) {
-  const countryMap = /* @__PURE__ */ new Map();
+  const countryMap = new Map(
+    visitorHistoricalBaseline.map((country) => [country.iso, { ...country }])
+  );
+  const liveCountryIsos = /* @__PURE__ */ new Set();
+  let liveReads = 0;
   for (const visitor of Object.values(store.visitors)) {
     const visits = normalizeVisitCount(visitor.visits);
     if (visits === 0) continue;
+    liveReads += visits;
     const iso = normalizeStoredIso(visitor.iso);
+    if (/^[a-z]{2}$/.test(iso)) liveCountryIsos.add(iso);
     const metadata = metadataByIso.get(iso);
     const current = countryMap.get(iso);
     countryMap.set(iso, {
@@ -263,22 +339,22 @@ function summarizeVisitorStore(store) {
   const countries = Array.from(countryMap.values()).sort(
     (left, right) => right.reads - left.reads || left.country.localeCompare(right.country)
   );
-  const totalReads = countries.reduce(
-    (total, country) => total + country.reads,
-    0
-  );
-  const countryCount = countries.filter(
-    (country) => /^[a-z]{2}$/.test(country.iso)
+  const totalReads = visitorHistoricalBaselineSummary.totalReads + liveReads;
+  const newLiveCountryCount = Array.from(liveCountryIsos).filter(
+    (iso) => !historicalCountryIsos.has(iso)
   ).length;
+  const countryCount = visitorHistoricalBaselineSummary.countryCount + newLiveCountryCount;
   return {
     ok: true,
     mode: "live",
     totalReads,
     countryCount,
-    pageviews: totalReads,
+    baselineReads: visitorHistoricalBaselineSummary.totalReads,
+    liveReads,
+    pageviews: liveReads,
     countries,
     updatedAt: store.updatedAt || null,
-    note: "Counts are persisted page views grouped by the trusted country header available at request time; missing geography is reported as Unknown."
+    note: `Lifetime totals include the published snapshot captured on ${visitorHistoricalBaselineSummary.capturedAt}; newer persisted page views are grouped by trusted country headers, and missing geography remains Unknown.`
   };
 }
 function readStore() {
@@ -16392,7 +16468,7 @@ function normalizeError(error) {
 
 // server/geo/health.ts
 function geoPublicBuildSha(env = process.env) {
-  const embedded = true ? "f7c7078ae1b3c569e81d120f461b673d9ba188d9".trim() : "";
+  const embedded = true ? "c06ade1012f561ebf12ebf2f4fcfe2415837b1d8".trim() : "";
   if (/^[a-f0-9]{7,64}$/i.test(embedded)) return embedded.toLowerCase();
   const candidate = (env.FRONTMIND_BUILD_SHA || env.GITHUB_SHA || env.RAILWAY_GIT_COMMIT_SHA || "").trim();
   return /^[a-f0-9]{7,64}$/i.test(candidate) ? candidate.toLowerCase() : null;
