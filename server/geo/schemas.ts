@@ -601,32 +601,6 @@ export const CreateProjectRequestSchema = z
 
 export type CreateProjectRequest = z.infer<typeof CreateProjectRequestSchema>;
 
-export const RetryProjectRequestSchema = z
-  .object({
-    input: z.string().trim().max(4000).default(""),
-    trigger: z.enum(["automatic", "manual"]).optional().default("manual"),
-    attachments: z
-      .array(ProjectAttachmentSchema.pick({ fileId: true, filename: true }))
-      .max(10)
-      .default([]),
-  })
-  .strict()
-  .refine((value) => Boolean(value.input || value.attachments.length), {
-    message: "input or at least one attachment is required",
-  })
-  .superRefine((value, context) => {
-    const candidates = value.input.match(/https?:\/\/[^\s<>"']+/gi) || [];
-    if (candidates.some((candidate) => !isPublicHttpUrl(candidate))) {
-      context.addIssue({
-        code: "custom",
-        message: "website URLs must use public HTTP(S) addresses",
-        path: ["input"],
-      });
-    }
-  });
-
-export type RetryProjectRequest = z.infer<typeof RetryProjectRequestSchema>;
-
 export const GeoMonitorPlatformSchema = z.enum(GEO_MONITOR_PLATFORM_IDS);
 
 export const GeoPaymentMethodSchema = z.enum(["alipay", "wxpay"]);

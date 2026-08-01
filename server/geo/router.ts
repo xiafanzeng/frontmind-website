@@ -144,14 +144,12 @@ import {
   InviteRequestSchema,
   isIndustryRankingQuestion,
   PaymentStatusRequestSchema,
-  RetryProjectRequestSchema,
   ServicePaymentAuthorizationSchema,
   ServiceStatusRequestSchema,
   StartMonitoringRequestSchema,
   UploadInitRequestSchema,
   type CreateProjectRequest,
   type GeoQuestion,
-  type RetryProjectRequest,
 } from "./schemas";
 import {
   GeoTokenCodec,
@@ -184,14 +182,14 @@ const KNOWLEDGE_BASE_VALIDATION_PUBLIC_ERRORS: Record<
   KnowledgeBaseValidationCategory,
   string
 > = {
-  structure: "知识库候选文件暂未完成安全整理，可在当前项目中重新生成。",
+  structure: "企业知识库生成结果未通过结构校验，请联系技术支持。",
   media: "Logo 素材未通过校验，系统会忽略该素材并继续整理文字知识库。",
-  content: "知识库文字暂未完成结构化整理，可在当前项目中重新生成。",
+  content: "企业知识库生成结果未通过内容校验，请联系技术支持。",
   unsafe:
     "知识库文件存在安全风险，已阻止下载及后续分析。请勿继续处理该文件，并联系技术支持。",
 };
 const KNOWLEDGE_BASE_FINALIZATION_PUBLIC_ERROR =
-  "候选资料已安全保留，系统最终整理校验异常；修复后可直接重试整理，无需重新上传。";
+  "企业知识库最终整理未通过校验，请联系技术支持。";
 
 function knowledgeCandidateDiagnosticCode(value: string) {
   if (value.startsWith("Selected candidate root:"))
@@ -238,12 +236,6 @@ type ProjectTokenValue = {
   knowledgeBaseTaskId: string;
   knowledgeBaseSubmittedAt?: string;
   knowledgeBaseValidationProfile?: "website-lead-v1";
-  knowledgeBaseAutomaticRetryUsed?: true;
-  knowledgeBaseRecovery?: {
-    automaticSourceTaskId?: string;
-    automaticAttemptedAt?: string;
-    automaticResult?: "submitted" | "failed";
-  };
   knowledgeBaseCandidateFailure?: {
     category: "unsafe" | "structure" | "content";
     message: string;
@@ -253,7 +245,6 @@ type ProjectTokenValue = {
     finalizerVersion: string;
     candidateSha256?: string;
     errorCode?: "KB_FINALIZER_CONTRACT_VIOLATION";
-    retryAvailable: boolean;
     updatedAt: string;
   };
   knowledgeBaseArtifact?: {
@@ -539,35 +530,11 @@ export function createGeoRouter(options: GeoRouterOptions = {}): Router {
     string,
     { attempts: number; retryAt: number }
   >();
-  const knowledgeBaseAutomaticRetries = new Map<
-    string,
-    {
-      expiresAt: number;
-      promise: Promise<{
-        value: ProjectTokenValue;
-        knowledgeBaseTask: BrokerTask;
-      }>;
-    }
-  >();
-  const knowledgeBaseSourceInputs = new Map<
-    string,
-    {
-      expiresAt: number;
-      input: {
-        input: string;
-        companyName?: string;
-        companyWebsite?: string;
-        operatorNotes?: string;
-        attachments: Array<{ fileId: string; filename: string }>;
-      };
-    }
-  >();
   const router = express.Router();
 
   const ensureFinalizedKnowledgeBase = async (
     value: ProjectTokenValue,
     task: BrokerTask,
-    options: { force?: boolean } = {},
   ): Promise<{
     value: ProjectTokenValue;
     manifest?: KnowledgeBaseManifest;
@@ -601,7 +568,6 @@ export function createGeoRouter(options: GeoRouterOptions = {}): Router {
                 state: "completed",
                 finalizerVersion: existingArtifact.finalizerVersion,
                 candidateSha256: existingArtifact.candidate.sha256,
-                retryAvailable: false,
                 updatedAt: existingArtifact.final.finalizedAt,
               },
             },
@@ -625,8 +591,7 @@ export function createGeoRouter(options: GeoRouterOptions = {}): Router {
       value.knowledgeBaseFinalization?.state === "failed_internal" &&
       value.knowledgeBaseFinalization.finalizerVersion ===
         WEBSITE_KB_FINALIZER_VERSION &&
-      value.knowledgeBaseFinalization.candidateSha256 &&
-      !options.force
+      value.knowledgeBaseFinalization.candidateSha256
     ) {
       return { value };
     }
@@ -780,22 +745,9 @@ export function createGeoRouter(options: GeoRouterOptions = {}): Router {
     if (
       recordedFinalization?.state === "failed_internal" &&
       recordedFinalization.finalizerVersion === WEBSITE_KB_FINALIZER_VERSION &&
-      recordedFinalization.candidateSha256 === candidateSha &&
-      !options.force
+      recordedFinalization.candidateSha256 === candidateSha
     ) {
       return { value };
-    }
-    if (
-      options.force &&
-      recordedFinalization?.state === "failed_internal" &&
-      recordedFinalization.candidateSha256 &&
-      recordedFinalization.candidateSha256 !== candidateSha
-    ) {
-      throw new GeoHttpError(
-        "候选资料版本已变化，请刷新项目状态后重试",
-        409,
-        "KB_FINALIZATION_CANDIDATE_CHANGED",
-      );
     }
     const candidateDownloadMs = Date.now() - candidateDownloadStartedAt;
     const descriptorHash = knowledgeArchiveDescriptorHash(candidateDescriptor);
@@ -811,7 +763,7 @@ export function createGeoRouter(options: GeoRouterOptions = {}): Router {
     pruneExpiringMap(knowledgeBaseFinalizations, now, 200);
     const transientBackoff =
       knowledgeBaseFinalizationBackoffs.get(finalizationKey);
-    if (transientBackoff && transientBackoff.retryAt > now && !options.force) {
+    if (transientBackoff && transientBackoff.retryAt > now) {
       throw new GeoHttpError(
         "知识库最终整理文件传输暂时不可用，请稍后重试",
         503,
@@ -819,11 +771,8 @@ export function createGeoRouter(options: GeoRouterOptions = {}): Router {
       );
     }
     const running = knowledgeBaseFinalizations.get(finalizationKey);
-    // Manual retries bypass a recorded failure/backoff, but concurrent retries
-    // for the same candidate must still share one finalization/upload promise.
     if (running && running.expiresAt > now) {
-      if (!options.force || !running.settled) return running.promise;
-      knowledgeBaseFinalizations.delete(finalizationKey);
+      return running.promise;
     }
 
     let promise: Promise<{
@@ -911,7 +860,6 @@ export function createGeoRouter(options: GeoRouterOptions = {}): Router {
               finalizerVersion: WEBSITE_KB_FINALIZER_VERSION,
               candidateSha256: candidateSha,
               errorCode: "KB_FINALIZER_CONTRACT_VIOLATION" as const,
-              retryAvailable: true,
               updatedAt: new Date().toISOString(),
             },
           },
@@ -991,7 +939,6 @@ export function createGeoRouter(options: GeoRouterOptions = {}): Router {
           state: "completed",
           finalizerVersion: WEBSITE_KB_FINALIZER_VERSION,
           candidateSha256: candidateSha,
-          retryAvailable: false,
           updatedAt: new Date().toISOString(),
         },
         archiveFileIds: Array.from(
@@ -1051,115 +998,6 @@ export function createGeoRouter(options: GeoRouterOptions = {}): Router {
     knowledgeBaseFinalizations.set(finalizationKey, {
       expiresAt: now + 10 * 60 * 1000,
       settled: false,
-      promise,
-    });
-    return promise;
-  };
-
-  const maybeAutomaticallyRegenerateKnowledgeBase = async (
-    value: ProjectTokenValue,
-    knowledgeBaseTask: BrokerTask,
-  ) => {
-    const status = normalizeTaskStatus(knowledgeBaseTask.status);
-    const failure = value.knowledgeBaseCandidateFailure;
-    const retainedSource = knowledgeBaseSourceInputs.get(value.projectId);
-    const shouldRetry =
-      !value.knowledgeBaseAutomaticRetryUsed &&
-      !value.knowledgeBaseRecovery?.automaticAttemptedAt &&
-      Boolean(retainedSource && retainedSource.expiresAt > Date.now()) &&
-      (["failed", "cancelled"].includes(status) ||
-        Boolean(failure && failure.category !== "unsafe"));
-    if (!shouldRetry) return { value, knowledgeBaseTask };
-
-    const retryKey = `${value.projectId}:${value.knowledgeBaseTaskId}:automatic`;
-    const now = Date.now();
-    pruneExpiringMap(knowledgeBaseAutomaticRetries, now, 200);
-    const running = knowledgeBaseAutomaticRetries.get(retryKey);
-    if (running && running.expiresAt > now) return running.promise;
-
-    const promise = (async () => {
-      const source = retainedSource!.input;
-      try {
-        const created = await createWebsiteKnowledgeBaseTaskWithSkill(broker, {
-          projectId: value.projectId,
-          prompt: await buildWebsiteKnowledgeBasePrompt(source),
-          attachments: source.attachments.map((attachment) => ({
-            file_id: attachment.fileId,
-            filename: attachment.filename,
-          })),
-          idempotencyKey: `geo:${value.projectId}:knowledge-base:automatic-regenerate`,
-        });
-        const taskId = taskIdFrom(created.task);
-        if (!taskId) {
-          await broker
-            .deleteFile(created.skillAttachment.file_id)
-            .catch(() => undefined);
-          throw new Error("automatic knowledge-base task is missing an ID");
-        }
-        console.info("[GEO KB]", {
-          event: "knowledge_base_auto_recovery_submitted",
-          projectId: value.projectId,
-          taskId,
-          sourceTaskId: value.knowledgeBaseTaskId,
-          idempotent: false,
-        });
-        return {
-          value: {
-            ...trackArchiveFile(value, knowledgeBaseTask),
-            knowledgeBaseTaskId: taskId,
-            knowledgeBaseSubmittedAt: new Date().toISOString(),
-            knowledgeBaseAutomaticRetryUsed: true as const,
-            knowledgeBaseRecovery: {
-              automaticSourceTaskId: value.knowledgeBaseTaskId,
-              automaticAttemptedAt: new Date().toISOString(),
-              automaticResult: "submitted" as const,
-            },
-            knowledgeBaseCandidateFailure: undefined,
-            knowledgeBaseFinalization: undefined,
-            knowledgeBaseArtifact: undefined,
-            temporaryFileIds: Array.from(
-              new Set([
-                ...(value.temporaryFileIds || []),
-                created.skillAttachment.file_id,
-              ]),
-            ),
-            previousKnowledgeBaseTaskIds: Array.from(
-              new Set([
-                ...(value.previousKnowledgeBaseTaskIds || []),
-                value.knowledgeBaseTaskId,
-              ]),
-            ),
-          },
-          knowledgeBaseTask: created.task,
-        };
-      } catch (error) {
-        console.warn("[GEO KB] automatic regeneration failed", {
-          event: "knowledge_base_auto_recovery_skipped",
-          projectId: value.projectId,
-          taskId: value.knowledgeBaseTaskId,
-          diagnosticCode:
-            error instanceof Error ? error.name : "automatic_retry_error",
-        });
-        return {
-          value: {
-            ...value,
-            knowledgeBaseAutomaticRetryUsed: true as const,
-            knowledgeBaseRecovery: {
-              automaticSourceTaskId: value.knowledgeBaseTaskId,
-              automaticAttemptedAt: new Date().toISOString(),
-              automaticResult: "failed" as const,
-            },
-            knowledgeBaseCandidateFailure: {
-              category: "structure" as const,
-              message: "自动重新生成未能启动，原始资料已保留",
-            },
-          },
-          knowledgeBaseTask,
-        };
-      }
-    })();
-    knowledgeBaseAutomaticRetries.set(retryKey, {
-      expiresAt: now + 10 * 60 * 1000,
       promise,
     });
     return promise;
@@ -2338,24 +2176,6 @@ export function createGeoRouter(options: GeoRouterOptions = {}): Router {
       }
 
       const companyIdentity = deriveCompanyIdentity(input);
-      pruneExpiringMap(knowledgeBaseSourceInputs, Date.now(), 20_000);
-      knowledgeBaseSourceInputs.set(projectId, {
-        expiresAt: Date.now() + PROJECT_TTL_MS,
-        input: {
-          input: input.input,
-          ...(input.companyName ? { companyName: input.companyName } : {}),
-          ...(input.companyWebsite
-            ? { companyWebsite: input.companyWebsite }
-            : {}),
-          ...(input.operatorNotes
-            ? { operatorNotes: input.operatorNotes }
-            : {}),
-          attachments: input.attachments.map((attachment) => ({
-            fileId: attachment.fileId,
-            filename: sanitizeFilename(attachment.filename, "company-material"),
-          })),
-        },
-      });
       const value: ProjectTokenValue = {
         projectId,
         ownerSessionId: String(res.locals.geoSessionId || ""),
@@ -2414,31 +2234,10 @@ export function createGeoRouter(options: GeoRouterOptions = {}): Router {
         trackArchiveFile(value, knowledgeBaseTask),
         knowledgeBaseTask,
       );
-      const automaticRegeneration =
-        await maybeAutomaticallyRegenerateKnowledgeBase(
-          finalizedKnowledgeBase.value,
-          knowledgeBaseTask,
-        );
-      const currentKnowledgeBaseTask = automaticRegeneration.knowledgeBaseTask;
-      const automaticRecoveryFailed =
-        automaticRegeneration.value.knowledgeBaseRecovery?.automaticResult ===
-          "submitted" &&
-        (["failed", "cancelled"].includes(
-          normalizeTaskStatus(currentKnowledgeBaseTask.status),
-        ) ||
-          Boolean(automaticRegeneration.value.knowledgeBaseCandidateFailure));
-      const recoveredValue = automaticRecoveryFailed
-        ? {
-            ...automaticRegeneration.value,
-            knowledgeBaseRecovery: {
-              ...automaticRegeneration.value.knowledgeBaseRecovery,
-              automaticResult: "failed" as const,
-            },
-          }
-        : automaticRegeneration.value;
+      const currentKnowledgeBaseTask = knowledgeBaseTask;
       let currentValue = await resolveCanonicalCompanyIdentity(
         broker,
-        recoveredValue,
+        finalizedKnowledgeBase.value,
         currentKnowledgeBaseTask,
         { allowInvalidArchiveForProjectView: true },
       );
@@ -2469,231 +2268,6 @@ export function createGeoRouter(options: GeoRouterOptions = {}): Router {
         optimizationForecastTask,
       );
       res.json({ projectToken: currentToken, project });
-    }),
-  );
-
-  router.post(
-    "/projects/:projectToken/knowledge-base/finalization/retry",
-    requireConfiguration,
-    requireSession,
-    requireSessionRate("knowledge-base-finalization-retry", 8, 60 * 1000),
-    asyncHandler(async (req, res) => {
-      const value = openOwnedProject(req, res);
-      if (
-        value.knowledgeBaseFinalization?.state !== "failed_internal" ||
-        value.knowledgeBaseFinalization.retryAvailable !== true
-      ) {
-        throw new GeoHttpError(
-          "当前项目没有可重试的知识库最终整理任务",
-          409,
-          "KB_FINALIZATION_RETRY_NOT_AVAILABLE",
-        );
-      }
-      const knowledgeBaseTask = await getResolvedTask(
-        broker,
-        value.knowledgeBaseTaskId,
-      );
-      if (normalizeTaskStatus(knowledgeBaseTask.status) !== "completed") {
-        throw new GeoHttpError(
-          "候选资料尚未生成完成，暂不能重试最终整理",
-          409,
-          "KB_FINALIZATION_CANDIDATE_NOT_READY",
-        );
-      }
-      const previousFinalFileId = value.knowledgeBaseArtifact?.final.fileId;
-      const finalized = await ensureFinalizedKnowledgeBase(
-        trackArchiveFile(value, knowledgeBaseTask),
-        knowledgeBaseTask,
-        { force: true },
-      );
-      const nextValue = await resolveCanonicalCompanyIdentity(
-        broker,
-        finalized.value,
-        knowledgeBaseTask,
-        { allowInvalidArchiveForProjectView: true },
-      );
-      let projectToken: string;
-      try {
-        projectToken = codec.seal("project", nextValue, PROJECT_TTL_MS);
-      } catch (error) {
-        const currentFinalFileId =
-          nextValue.knowledgeBaseArtifact?.final.fileId;
-        if (currentFinalFileId && currentFinalFileId !== previousFinalFileId) {
-          await broker.deleteFile(currentFinalFileId).catch(() => undefined);
-        }
-        throw error;
-      }
-      const questionTask = nextValue.questionTaskId
-        ? await getResolvedTask(broker, nextValue.questionTaskId)
-        : undefined;
-      const project = await buildProjectView(
-        broker,
-        nextValue,
-        projectToken,
-        knowledgeBaseTask,
-        questionTask,
-      );
-      res.json({ projectToken, project });
-    }),
-  );
-
-  router.post(
-    "/projects/:projectToken/retry",
-    requireConfiguration,
-    requireSession,
-    requireCostRate("project-retry", 4),
-    asyncHandler(async (req, res) => {
-      let value = openOwnedProject(req, res);
-      const originalValue = value;
-      const retryInput = RetryProjectRequestSchema.parse(req.body);
-      const retryAttachments = validateRetryProjectAttachments(
-        retryInput,
-        value,
-      );
-      const currentTask = await getResolvedTask(
-        broker,
-        value.knowledgeBaseTaskId,
-      );
-      const currentStatus = normalizeTaskStatus(currentTask.status);
-      if (currentStatus === "completed") {
-        value = (
-          await ensureFinalizedKnowledgeBase(
-            trackArchiveFile(value, currentTask),
-            currentTask,
-          )
-        ).value;
-      }
-      if (
-        !["failed", "cancelled"].includes(currentStatus) &&
-        !value.knowledgeBaseCandidateFailure
-      ) {
-        const currentToken =
-          value === originalValue
-            ? req.params.projectToken
-            : codec.seal("project", value, PROJECT_TTL_MS);
-        const project = await buildProjectView(
-          broker,
-          value,
-          currentToken,
-          currentTask,
-          undefined,
-        );
-        res.json({ projectToken: currentToken, project });
-        return;
-      }
-      if (value.knowledgeBaseCandidateFailure?.category === "unsafe") {
-        throw new GeoHttpError(
-          KNOWLEDGE_BASE_VALIDATION_PUBLIC_ERRORS.unsafe,
-          422,
-          "KNOWLEDGE_BASE_UNSAFE_BLOCKED",
-        );
-      }
-      if (
-        retryInput.trigger === "automatic" &&
-        (value.knowledgeBaseAutomaticRetryUsed ||
-          Boolean(value.knowledgeBaseRecovery?.automaticAttemptedAt))
-      ) {
-        console.info("[GEO KB]", {
-          event: "knowledge_base_auto_recovery_skipped",
-          projectId: value.projectId,
-          taskId: value.knowledgeBaseTaskId,
-          diagnosticCode: "automatic_recovery_already_attempted",
-          idempotent: true,
-        });
-        const currentToken =
-          value === originalValue
-            ? req.params.projectToken
-            : codec.seal("project", value, PROJECT_TTL_MS);
-        const project = await buildProjectView(
-          broker,
-          value,
-          currentToken,
-          currentTask,
-          undefined,
-        );
-        res.json({ projectToken: currentToken, project });
-        return;
-      }
-      const normalizedRetryInput: RetryProjectRequest = {
-        ...retryInput,
-        attachments: retryAttachments,
-      };
-      const created = await createWebsiteKnowledgeBaseTaskWithSkill(broker, {
-        projectId: value.projectId,
-        prompt: await buildWebsiteKnowledgeBasePrompt(normalizedRetryInput),
-        attachments: normalizedRetryInput.attachments.map((attachment) => ({
-          file_id: attachment.fileId,
-          filename: attachment.filename,
-        })),
-        idempotencyKey: `geo:${value.projectId}:knowledge-base:regenerate:${value.knowledgeBaseTaskId}`,
-      });
-      const task = created.task;
-      const taskId = taskIdFrom(task);
-      if (!taskId) {
-        await broker
-          .deleteFile(created.skillAttachment.file_id)
-          .catch(() => undefined);
-        throw new GeoHttpError(
-          "重新创建企业分析任务失败：缺少任务 ID",
-          502,
-          "TASK_ID_MISSING",
-        );
-      }
-      const retrySubmittedAt = new Date().toISOString();
-      console.info("[GEO KB]", {
-        event:
-          retryInput.trigger === "automatic"
-            ? "knowledge_base_auto_recovery_submitted"
-            : "knowledge_base_manual_retry_submitted",
-        projectId: value.projectId,
-        taskId,
-        sourceTaskId: value.knowledgeBaseTaskId,
-        idempotent: false,
-      });
-      const nextValue: ProjectTokenValue = {
-        ...trackArchiveFile(value, currentTask),
-        knowledgeBaseTaskId: taskId,
-        knowledgeBaseSubmittedAt: retrySubmittedAt,
-        knowledgeBaseValidationProfile: "website-lead-v1",
-        knowledgeBaseAutomaticRetryUsed: true,
-        knowledgeBaseRecovery:
-          retryInput.trigger === "automatic"
-            ? {
-                automaticSourceTaskId: value.knowledgeBaseTaskId,
-                automaticAttemptedAt: retrySubmittedAt,
-                automaticResult: "submitted",
-              }
-            : value.knowledgeBaseRecovery
-              ? {
-                  ...value.knowledgeBaseRecovery,
-                  automaticResult: "failed",
-                }
-              : undefined,
-        knowledgeBaseCandidateFailure: undefined,
-        knowledgeBaseFinalization: undefined,
-        knowledgeBaseArtifact: undefined,
-        temporaryFileIds: Array.from(
-          new Set([
-            ...(value.temporaryFileIds || []),
-            created.skillAttachment.file_id,
-          ]),
-        ),
-        previousKnowledgeBaseTaskIds: Array.from(
-          new Set([
-            ...(value.previousKnowledgeBaseTaskIds || []),
-            value.knowledgeBaseTaskId,
-          ]),
-        ),
-      };
-      const projectToken = codec.seal("project", nextValue, PROJECT_TTL_MS);
-      const project = await buildProjectView(
-        broker,
-        nextValue,
-        projectToken,
-        task,
-        undefined,
-      );
-      res.status(201).json({ projectToken, project });
     }),
   );
 
@@ -2750,9 +2324,9 @@ export function createGeoRouter(options: GeoRouterOptions = {}): Router {
           );
         }
         throw new GeoHttpError(
-          "企业知识库候选文件需要在当前项目中重新生成",
+          "企业知识库生成结果未通过校验，请联系技术支持",
           409,
-          "KNOWLEDGE_BASE_RETRY_REQUIRED",
+          "KNOWLEDGE_BASE_VALIDATION_FAILED",
         );
       }
       const archive = resolveKnowledgeBaseArtifact(value, knowledgeBaseTask);
@@ -5103,31 +4677,6 @@ async function buildProjectView(
       knowledgeBaseValidationFailure = error;
     }
   }
-  const knowledgeBaseRetryAvailable =
-    !knowledgeBaseFinalizationFailure &&
-    ((Boolean(knowledgeBaseValidationFailure) &&
-      knowledgeBaseValidationFailure?.category !== "unsafe") ||
-      ["failed", "cancelled"].includes(knowledgeBase.status));
-  const knowledgeBaseAutoRetryAvailable =
-    knowledgeBaseRetryAvailable &&
-    knowledgeBaseValidationFailure?.category !== "unsafe" &&
-    !value.knowledgeBaseAutomaticRetryUsed &&
-    !value.knowledgeBaseRecovery?.automaticAttemptedAt;
-  const knowledgeBaseRecoveryState:
-    | "none"
-    | "automatic_in_progress"
-    | "manual_required"
-    | "recovered" =
-    knowledgeBaseManifest && value.knowledgeBaseRecovery?.automaticAttemptedAt
-      ? "recovered"
-      : value.knowledgeBaseRecovery?.automaticResult === "submitted" &&
-          !knowledgeBaseRetryAvailable &&
-          !knowledgeBaseManifest
-        ? "automatic_in_progress"
-        : value.knowledgeBaseRecovery?.automaticAttemptedAt &&
-            knowledgeBaseRetryAvailable
-          ? "manual_required"
-          : "none";
   const knowledgeBaseValidationPublicError = knowledgeBaseValidationFailure
     ? KNOWLEDGE_BASE_VALIDATION_PUBLIC_ERRORS[
         knowledgeBaseValidationFailure.category
@@ -5456,15 +5005,14 @@ async function buildProjectView(
     questions,
     selectedQuestionId: value.monitorQuestionId,
     selectedPlatformIds: value.monitorPlatformIds || [],
-    knowledgeBaseRetryAvailable,
-    knowledgeBaseAutoRetryAvailable,
-    knowledgeBaseRecoveryState,
     knowledgeBaseValidationCategory: knowledgeBaseValidationFailure?.category,
     knowledgeBaseSupportRequired:
-      !knowledgeBaseFinalizationFailure &&
-      (knowledgeBaseValidationFailure?.category === "unsafe" ||
-        (statusSyncPending(knowledgeBase.status) &&
-          hasElapsed(value.knowledgeBaseSubmittedAt, 15 * 60 * 1_000))),
+      Boolean(knowledgeBaseFinalizationFailure) ||
+      Boolean(knowledgeBaseValidationFailure) ||
+      ["failed", "cancelled"].includes(knowledgeBase.status) ||
+      (!knowledgeBaseFinalizationFailure &&
+        statusSyncPending(knowledgeBase.status) &&
+        hasElapsed(value.knowledgeBaseSubmittedAt, 15 * 60 * 1_000)),
     knowledgeBaseFinalization: {
       finalizationState:
         value.knowledgeBaseFinalization?.state ??
@@ -5477,9 +5025,6 @@ async function buildProjectView(
         value.knowledgeBaseFinalization?.candidateSha256 ??
         value.knowledgeBaseArtifact?.candidate.sha256,
       errorCode: value.knowledgeBaseFinalization?.errorCode,
-      retryAvailable:
-        value.knowledgeBaseFinalization?.state === "failed_internal" &&
-        value.knowledgeBaseFinalization.retryAvailable === true,
     },
     questionRetryAvailable,
     assessmentRetryAvailable,
@@ -6552,26 +6097,6 @@ function validateProjectAttachments(
       );
     }
     return value;
-  });
-}
-
-function validateRetryProjectAttachments(
-  input: RetryProjectRequest,
-  value: ProjectTokenValue,
-) {
-  const uploadFileIds = new Set(value.uploadFileIds || []);
-  return input.attachments.map((attachment) => {
-    if (!uploadFileIds.has(attachment.fileId)) {
-      throw new GeoHttpError(
-        "重试附件不属于当前项目",
-        400,
-        "RETRY_ATTACHMENT_NOT_OWNED",
-      );
-    }
-    return {
-      fileId: attachment.fileId,
-      filename: sanitizeFilename(attachment.filename, "company-material"),
-    };
   });
 }
 

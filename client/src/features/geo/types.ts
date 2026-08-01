@@ -544,13 +544,6 @@ export type GeoProject = {
   status: GeoProjectStatus;
   progress: number;
   progressLabel?: string;
-  knowledgeBaseRetryAvailable?: boolean;
-  knowledgeBaseAutoRetryAvailable?: boolean;
-  knowledgeBaseRecoveryState?:
-    | "none"
-    | "automatic_in_progress"
-    | "manual_required"
-    | "recovered";
   knowledgeBaseValidationCategory?:
     | "structure"
     | "media"
@@ -562,7 +555,6 @@ export type GeoProject = {
     finalizerVersion: string;
     candidateSha256?: string;
     errorCode?: "KB_FINALIZER_CONTRACT_VIOLATION";
-    retryAvailable: boolean;
   };
   questionRetryAvailable?: boolean;
   assessmentRetryAvailable?: boolean;

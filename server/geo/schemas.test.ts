@@ -8,7 +8,6 @@ import {
   GeoQuestionSetSchema,
   inferCustomQuestionCategory,
   isIndustryRankingQuestion,
-  RetryProjectRequestSchema,
   ServicePaymentAuthorizationSchema,
   ServiceStatusRequestSchema,
   StartMonitoringRequestSchema,
@@ -29,8 +28,7 @@ describe("GeoQuestionSetSchema", () => {
     const questions = validQuestions();
     questions[19] = {
       ...questions[19],
-      question:
-        "跨区域部署时应如何评估 FrontMind 与云岚科技的服务覆盖？",
+      question: "跨区域部署时应如何评估 FrontMind 与云岚科技的服务覆盖？",
     };
     expect(GeoQuestionSetSchema.parse({ questions }).questions).toHaveLength(
       20,
@@ -396,33 +394,6 @@ describe("CreateProjectRequestSchema", () => {
   ])("rejects non-public crawl targets: %s", (target) => {
     expect(() =>
       CreateProjectRequestSchema.parse({ input: target, attachments: [] }),
-    ).toThrow(/public HTTP/);
-  });
-});
-
-describe("RetryProjectRequestSchema", () => {
-  it("accepts a local project input without attachments", () => {
-    expect(
-      RetryProjectRequestSchema.parse({ input: "Acme", attachments: [] }),
-    ).toEqual({ input: "Acme", attachments: [], trigger: "manual" });
-  });
-
-  it("accepts the explicit automatic recovery trigger", () => {
-    expect(
-      RetryProjectRequestSchema.parse({
-        input: "Acme",
-        attachments: [],
-        trigger: "automatic",
-      }).trigger,
-    ).toBe("automatic");
-  });
-
-  it("reuses public URL validation for retry input", () => {
-    expect(() =>
-      RetryProjectRequestSchema.parse({
-        input: "Acme http://127.0.0.1/admin",
-        attachments: [],
-      }),
     ).toThrow(/public HTTP/);
   });
 });

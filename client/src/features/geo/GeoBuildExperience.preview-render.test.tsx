@@ -10,7 +10,6 @@ import {
 } from "./GeoAgentUserDashboard";
 import {
   AssessmentOverview,
-  claimKnowledgeBaseAutoRetry,
   CurrentAssessment,
   EnterpriseAnalysis,
   expandLegacyTruncatedOverview,
@@ -85,56 +84,6 @@ describe("GEO style preview rendering", () => {
         origin: "https://frontmind.net",
       }),
     ).toBe("https://zpayz.cn/submit.php");
-  });
-
-  it("claims at most one automatic knowledge-base repair for the same failed project", () => {
-    const project = {
-      ...createGeoStylePreviewProject(),
-      preview: undefined,
-      status: "failed" as const,
-      knowledgeBase: undefined,
-      knowledgeBaseRetryAvailable: true,
-      knowledgeBaseAutoRetryAvailable: true,
-      knowledgeBaseValidationCategory: "content" as const,
-    };
-    const attempted = new Set<string>();
-    const inFlight = new Set<string>();
-
-    expect(claimKnowledgeBaseAutoRetry(project, attempted, inFlight)).toBe(
-      true,
-    );
-    expect(claimKnowledgeBaseAutoRetry(project, attempted, inFlight)).toBe(
-      false,
-    );
-  });
-
-  it("only presents automatic repair as running while its request is in flight", () => {
-    const project = {
-      ...createGeoStylePreviewProject(),
-      preview: undefined,
-      status: "failed" as const,
-      knowledgeBase: undefined,
-      knowledgeBaseRetryAvailable: true,
-      knowledgeBaseAutoRetryAvailable: true,
-      knowledgeBaseValidationCategory: "content" as const,
-      error: "知识库正式正文未充分整理已有证据。",
-    };
-    const render = (retrying: boolean) =>
-      renderToStaticMarkup(
-        <EnterpriseAnalysis
-          project={project}
-          onDownload={vi.fn()}
-          onRetry={vi.fn()}
-          onContact={vi.fn()}
-          onStart={vi.fn()}
-          starting={false}
-          retrying={retrying}
-        />,
-      );
-
-    expect(render(true)).toContain("正在当前项目中重新生成企业知识库");
-    expect(render(false)).toContain("企业资料处理暂时中断");
-    expect(render(false)).toContain("重新生成知识库");
   });
 
   it("starts execution timing at zero when no remote start time exists", () => {
@@ -213,11 +162,9 @@ describe("GEO style preview rendering", () => {
       <EnterpriseAnalysis
         project={project}
         onDownload={vi.fn()}
-        onRetry={vi.fn()}
         onContact={vi.fn()}
         onStart={vi.fn()}
         starting={false}
-        retrying={false}
       />,
     );
 
@@ -253,11 +200,9 @@ describe("GEO style preview rendering", () => {
       <EnterpriseAnalysis
         project={project}
         onDownload={vi.fn()}
-        onRetry={vi.fn()}
         onContact={vi.fn()}
         onStart={vi.fn()}
         starting={false}
-        retrying={false}
       />,
     );
 
@@ -314,11 +259,9 @@ describe("GEO style preview rendering", () => {
       <EnterpriseAnalysis
         project={project}
         onDownload={vi.fn()}
-        onRetry={vi.fn()}
         onContact={vi.fn()}
         onStart={vi.fn()}
         starting={false}
-        retrying={false}
       />,
     );
 
@@ -382,11 +325,9 @@ describe("GEO style preview rendering", () => {
       <EnterpriseAnalysis
         project={project}
         onDownload={vi.fn()}
-        onRetry={vi.fn()}
         onContact={vi.fn()}
         onStart={vi.fn()}
         starting={false}
-        retrying={false}
       />,
     );
 
@@ -418,11 +359,9 @@ describe("GEO style preview rendering", () => {
       <EnterpriseAnalysis
         project={project}
         onDownload={vi.fn()}
-        onRetry={vi.fn()}
         onContact={vi.fn()}
         onStart={vi.fn()}
         starting={false}
-        retrying={false}
       />,
     );
 
@@ -432,125 +371,60 @@ describe("GEO style preview rendering", () => {
     expect(html.match(/src="\/api\/assets\/logo"/g)).toHaveLength(1);
   });
 
-  it("only offers an authorized enterprise-analysis retry and locks it in flight", () => {
-    const project = {
-      ...createGeoStylePreviewProject(),
-      status: "failed" as const,
-      knowledgeBase: undefined,
-      knowledgeBaseRetryAvailable: true,
-      error: "知识库结构校验未通过。",
-    };
-    const html = renderToStaticMarkup(
-      <EnterpriseAnalysis
-        project={project}
-        onDownload={vi.fn()}
-        onRetry={vi.fn()}
-        onContact={vi.fn()}
-        onStart={vi.fn()}
-        starting={false}
-        retrying
-      />,
-    );
-
-    expect(html).toContain("知识库结构校验未通过");
-    expect(html).toContain("正在重新生成");
-    expect(html).toContain("disabled");
-    expect(html).toContain('aria-busy="true"');
-    expect(html).not.toContain("联系技术支持");
-  });
-
-  it.each([
-    ["structure", true, false, "重新生成知识库"],
-    ["media", false, false, "重新生成知识库"],
-    ["content", false, false, "重新生成知识库"],
-    ["unsafe", false, true, "联系技术支持"],
-  ] as const)(
-    "renders only the authorized %s validation action",
-    (category, retryAvailable, supportRequired, expectedAction) => {
+  it.each(["structure", "media", "content", "unsafe"] as const)(
+    "routes a failed single-pass %s result to technical support",
+    (category) => {
       const project = {
         ...createGeoStylePreviewProject(),
         status: "failed" as const,
         knowledgeBase: undefined,
         knowledgeBaseValidationCategory: category,
-        knowledgeBaseRetryAvailable: retryAvailable,
-        knowledgeBaseSupportRequired: supportRequired,
+        knowledgeBaseSupportRequired: true,
         error: `${category} validation failed`,
       };
       const html = renderToStaticMarkup(
         <EnterpriseAnalysis
           project={project}
           onDownload={vi.fn()}
-          onRetry={vi.fn()}
           onContact={vi.fn()}
           onStart={vi.fn()}
           starting={false}
-          retrying={false}
         />,
       );
 
-      expect(html).toContain(expectedAction);
-      for (const action of ["重新生成知识库", "联系技术支持"]) {
-        if (action !== expectedAction) expect(html).not.toContain(action);
-      }
+      expect(html).toContain("企业知识库生成未能完成");
+      expect(html).toContain("联系技术支持");
+      expect(html).not.toContain("重新生成知识库");
+      expect(html).not.toContain("正在重新生成");
     },
   );
 
-  it("keeps same-project regeneration available when a stale response omits retry authorization", () => {
+  it("routes a finalizer failure to technical support without a retry action", () => {
     const project = {
       ...createGeoStylePreviewProject(),
       status: "failed" as const,
       knowledgeBase: undefined,
-      knowledgeBaseRetryAvailable: false,
-      error: "知识库结构校验仍未通过。",
-    };
-    const html = renderToStaticMarkup(
-      <EnterpriseAnalysis
-        project={project}
-        onDownload={vi.fn()}
-        onRetry={vi.fn()}
-        onContact={vi.fn()}
-        onStart={vi.fn()}
-        starting={false}
-        retrying={false}
-      />,
-    );
-
-    expect(html).toContain("企业资料处理暂时中断");
-    expect(html).toContain("重新生成知识库");
-    expect(html).not.toContain("联系技术支持");
-  });
-
-  it("offers finalizer-only retry without telling the customer to regenerate or re-upload", () => {
-    const project = {
-      ...createGeoStylePreviewProject(),
-      status: "failed" as const,
-      knowledgeBase: undefined,
-      knowledgeBaseRetryAvailable: false,
       knowledgeBaseFinalization: {
         finalizationState: "failed_internal" as const,
         finalizerVersion: "website-kb-finalizer-v3",
         candidateSha256: "a".repeat(64),
         errorCode: "KB_FINALIZER_CONTRACT_VIOLATION" as const,
-        retryAvailable: true,
       },
-      error:
-        "候选资料已安全保留，系统最终整理校验异常；修复后可直接重试整理，无需重新上传。",
+      error: "企业知识库最终整理未通过校验，请联系技术支持。",
     };
     const html = renderToStaticMarkup(
       <EnterpriseAnalysis
         project={project}
         onDownload={vi.fn()}
-        onRetry={vi.fn()}
         onContact={vi.fn()}
         onStart={vi.fn()}
         starting={false}
-        retrying={false}
       />,
     );
 
-    expect(html).toContain("知识库最终整理需要重试");
-    expect(html).toContain("重试最终整理");
-    expect(html).toContain("无需重新上传");
+    expect(html).toContain("知识库生成未能完成");
+    expect(html).toContain("联系技术支持");
+    expect(html).not.toContain("重试最终整理");
     expect(html).not.toContain("重新生成知识库");
   });
 
@@ -560,7 +434,6 @@ describe("GEO style preview rendering", () => {
       preview: undefined,
       status: "analyzing" as const,
       knowledgeBase: undefined,
-      knowledgeBaseRetryAvailable: false,
       knowledgeBaseSupportRequired: true,
       executionLog: {
         currentEntryId: "enterprise-analysis",
@@ -590,11 +463,9 @@ describe("GEO style preview rendering", () => {
       <EnterpriseAnalysis
         project={project}
         onDownload={vi.fn()}
-        onRetry={vi.fn()}
         onContact={vi.fn()}
         onStart={vi.fn()}
         starting={false}
-        retrying={false}
       />,
     );
 
@@ -643,11 +514,9 @@ describe("GEO style preview rendering", () => {
       <EnterpriseAnalysis
         project={project}
         onDownload={vi.fn()}
-        onRetry={vi.fn()}
         onContact={vi.fn()}
         onStart={vi.fn()}
         starting={false}
-        retrying={false}
       />,
     );
 
@@ -671,11 +540,9 @@ describe("GEO style preview rendering", () => {
       <EnterpriseAnalysis
         project={project}
         onDownload={vi.fn()}
-        onRetry={vi.fn()}
         onContact={vi.fn()}
         onStart={vi.fn()}
         starting={false}
-        retrying
       />,
     );
 
@@ -698,11 +565,9 @@ describe("GEO style preview rendering", () => {
       <EnterpriseAnalysis
         project={project}
         onDownload={vi.fn()}
-        onRetry={vi.fn()}
         onContact={vi.fn()}
         onStart={vi.fn()}
         starting={false}
-        retrying={false}
       />,
     );
 
@@ -1451,11 +1316,9 @@ describe("GEO style preview rendering", () => {
       <EnterpriseAnalysis
         project={project}
         onDownload={vi.fn()}
-        onRetry={vi.fn()}
         onContact={vi.fn()}
         onStart={vi.fn()}
         starting={false}
-        retrying={false}
       />,
     );
 

@@ -11,7 +11,6 @@ import {
   getGeoServiceProvisioningStatus,
   getGeoServicePaymentStatus,
   normalizeGeoProject,
-  retryGeoEnterpriseAnalysis,
   startGeoCurrentAssessment,
   startGeoMonitoring,
   startGeoOptimizationForecast,
@@ -176,10 +175,10 @@ describe("normalizeGeoProject", () => {
     });
   });
 
-  it("treats the server retry decision as authoritative and fails closed", () => {
+  it("drops legacy knowledge-base retry fields while preserving other actions", () => {
     const allowed = normalizeGeoProject({
       project: {
-        id: "retry-allowed",
+        id: "legacy-kb-retry-fields",
         status: "failed",
         knowledgeBaseRetryAvailable: true,
         knowledgeBaseAutoRetryAvailable: true,
@@ -190,91 +189,46 @@ describe("normalizeGeoProject", () => {
         optimizationForecastRetryAvailable: true,
       },
     });
-    const denied = normalizeGeoProject(
-      {
-        project: {
-          id: "retry-denied",
-          status: "failed",
-          knowledgeBaseRetryAvailable: false,
-          knowledgeBaseSupportRequired: false,
-          questionRetryAvailable: false,
-          assessmentRetryAvailable: false,
-          optimizationForecastRetryAvailable: false,
-        },
-      },
-      {
-        knowledgeBaseRetryAvailable: true,
-        knowledgeBaseSupportRequired: true,
-        questionRetryAvailable: true,
-        assessmentRetryAvailable: true,
-        optimizationForecastRetryAvailable: true,
-      },
-    );
     const omitted = normalizeGeoProject(
       {
         project: {
-          id: "retry-omitted",
+          id: "actions-omitted",
           status: "failed",
         },
       },
       {
-        knowledgeBaseRetryAvailable: true,
         knowledgeBaseSupportRequired: true,
         questionRetryAvailable: true,
         assessmentRetryAvailable: true,
         optimizationForecastRetryAvailable: true,
       },
     );
-    const truthyButInvalid = normalizeGeoProject({
-      project: {
-        id: "retry-truthy-but-invalid",
-        status: "failed",
-        knowledgeBaseRetryAvailable: 1,
-        knowledgeBaseSupportRequired: "true",
-        questionRetryAvailable: "true",
-        assessmentRetryAvailable: 1,
-        optimizationForecastRetryAvailable: "true",
-      },
-    });
-
-    expect(allowed.knowledgeBaseRetryAvailable).toBe(true);
-    expect(allowed.knowledgeBaseAutoRetryAvailable).toBe(true);
-    expect(allowed.knowledgeBaseRecoveryState).toBe("automatic_in_progress");
+    expect(allowed).not.toHaveProperty("knowledgeBaseRetryAvailable");
+    expect(allowed).not.toHaveProperty("knowledgeBaseAutoRetryAvailable");
+    expect(allowed).not.toHaveProperty("knowledgeBaseRecoveryState");
     expect(allowed.knowledgeBaseSupportRequired).toBe(true);
     expect(allowed.questionRetryAvailable).toBe(true);
     expect(allowed.assessmentRetryAvailable).toBe(true);
     expect(allowed.optimizationForecastRetryAvailable).toBe(true);
-    expect(denied.knowledgeBaseRetryAvailable).toBe(false);
-    expect(denied.knowledgeBaseSupportRequired).toBe(false);
-    expect(denied.questionRetryAvailable).toBe(false);
-    expect(denied.assessmentRetryAvailable).toBe(false);
-    expect(denied.optimizationForecastRetryAvailable).toBe(false);
-    expect(omitted.knowledgeBaseRetryAvailable).toBe(false);
     expect(omitted.knowledgeBaseSupportRequired).toBe(false);
     expect(omitted.questionRetryAvailable).toBe(false);
     expect(omitted.assessmentRetryAvailable).toBe(false);
     expect(omitted.optimizationForecastRetryAvailable).toBe(false);
-    expect(truthyButInvalid.knowledgeBaseRetryAvailable).toBe(false);
-    expect(truthyButInvalid.knowledgeBaseSupportRequired).toBe(false);
-    expect(truthyButInvalid.questionRetryAvailable).toBe(false);
-    expect(truthyButInvalid.assessmentRetryAvailable).toBe(false);
-    expect(truthyButInvalid.optimizationForecastRetryAvailable).toBe(false);
   });
 
   it.each([
-    ["structure", true, false],
-    ["media", false, false],
-    ["content", false, false],
-    ["unsafe", false, true],
+    ["structure", true],
+    ["media", true],
+    ["content", true],
+    ["unsafe", true],
   ] as const)(
-    "normalizes the %s knowledge validation category with its server-authorized action",
-    (category, retryAvailable, supportRequired) => {
+    "normalizes the %s knowledge validation category with support guidance",
+    (category, supportRequired) => {
       const project = normalizeGeoProject({
         project: {
           id: `validation-${category}`,
           status: "failed",
           knowledgeBaseValidationCategory: category,
-          knowledgeBaseRetryAvailable: retryAvailable,
           knowledgeBaseSupportRequired: supportRequired,
           error: `${category} validation failed`,
         },
@@ -282,7 +236,6 @@ describe("normalizeGeoProject", () => {
 
       expect(project).toMatchObject({
         knowledgeBaseValidationCategory: category,
-        knowledgeBaseRetryAvailable: retryAvailable,
         knowledgeBaseSupportRequired: supportRequired,
       });
     },
@@ -1493,59 +1446,6 @@ describe("uploadGeoFile", () => {
       status: 400,
     });
     expect(fetchMock).not.toHaveBeenCalled();
-  });
-});
-
-describe("retryGeoEnterpriseAnalysis", () => {
-  afterEach(() => vi.unstubAllGlobals());
-
-  it("sends the locally stored input and file references", async () => {
-    const fetchMock = vi.fn<typeof fetch>().mockResolvedValue(
-      new Response(
-        JSON.stringify({
-          projectToken: "next-token",
-          project: {
-            id: "project-1",
-            companyName: "Acme",
-            status: "running",
-            kbTask: { status: "running", progress: 10 },
-          },
-        }),
-        { status: 201, headers: { "content-type": "application/json" } },
-      ),
-    );
-    vi.stubGlobal("fetch", fetchMock);
-    const project: GeoProject = {
-      id: "project-1",
-      remoteId: "project-1",
-      remoteToken: "current-token",
-      title: "Acme",
-      input: "Acme",
-      createdAt: "2026-01-01T00:00:00.000Z",
-      updatedAt: "2026-01-01T00:00:00.000Z",
-      stage: "enterprise_analysis",
-      status: "failed",
-      progress: 0,
-      files: [
-        {
-          id: "file-1",
-          name: "catalog.pdf",
-          size: 42,
-          type: "application/pdf",
-        },
-      ],
-      questions: [],
-      selectedPlatformIds: [],
-    };
-
-    const retried = await retryGeoEnterpriseAnalysis(project);
-
-    expect(retried.remoteToken).toBe("next-token");
-    expect(JSON.parse(String(fetchMock.mock.calls[0][1]?.body))).toEqual({
-      input: "Acme",
-      trigger: "manual",
-      attachments: [{ fileId: "file-1", filename: "catalog.pdf" }],
-    });
   });
 });
 

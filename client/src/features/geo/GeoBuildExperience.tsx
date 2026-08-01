@@ -91,8 +91,6 @@ import {
   type GeoPaymentCheckout,
   type GeoPaymentMethod,
   type GeoServicePaymentCheckout,
-  retryGeoEnterpriseAnalysis,
-  retryGeoKnowledgeBaseFinalization,
   startGeoCurrentAssessment,
   startGeoMonitoring,
   startGeoOptimizationForecast,
@@ -786,26 +784,6 @@ function errorMessage(error: unknown): string {
   return localizedUserFacingError(error);
 }
 
-export function claimKnowledgeBaseAutoRetry(
-  project: GeoProject | undefined,
-  attempted: Set<string>,
-  inFlight: Set<string>,
-) {
-  if (
-    !project ||
-    project.status !== "failed" ||
-    Boolean(project.knowledgeBase) ||
-    project.knowledgeBaseRetryAvailable !== true ||
-    project.knowledgeBaseAutoRetryAvailable !== true ||
-    project.knowledgeBaseValidationCategory === "unsafe" ||
-    attempted.has(project.id) ||
-    inFlight.has(project.id)
-  )
-    return false;
-  attempted.add(project.id);
-  return true;
-}
-
 function looksLikeIndustryRankingQuestion(value: string) {
   return /(?:(?:行业|品类|领域|赛道).{0,10}(?:排名|排行|榜单|top\s*\d*|最好|最佳|第一|领先)|(?:哪家|哪个|哪些).{0,10}(?:最好|最佳|领先|值得推荐)|(?:推荐).{0,8}(?:品牌|公司|厂商|产品)|(?:品牌|公司|企业|平台|机构|服务商|供应商|厂商|工具|方案).{0,12}(?:推荐|排行|排名|有哪些|有哪(?:些|几)家|怎么选|如何选)|(?:有哪些|有哪(?:些|几)家).{0,12}(?:品牌|公司|企业|平台|机构|服务商|供应商|厂商|工具|方案))/i.test(
     value,
@@ -1375,7 +1353,6 @@ function GeoBuildExperienceZh() {
   const [inviteError, setInviteError] = useState("");
   const [creating, setCreating] = useState(false);
   const [startingAnalysisId, setStartingAnalysisId] = useState<string>();
-  const [retryingAnalysisId, setRetryingAnalysisId] = useState<string>();
   const [projects, setProjects] = useState<GeoProject[]>([]);
   const [projectsHydrated, setProjectsHydrated] = useState(false);
   const [activeProjectId, setActiveProjectId] = useState<string | undefined>();
@@ -1425,8 +1402,6 @@ function GeoBuildExperienceZh() {
   );
   const dragOperation = useRef<DragOperation | undefined>(undefined);
   const questionStartInFlight = useRef(new Set<string>());
-  const analysisRetryInFlight = useRef(new Set<string>());
-  const analysisAutoRetryAttempted = useRef(new Set<string>());
   const questionStageAutoOpened = useRef(new Set<string>());
   const assessmentStartInFlight = useRef(new Set<string>());
   const forecastStartInFlight = useRef(new Set<string>());
@@ -1951,36 +1926,6 @@ function GeoBuildExperienceZh() {
   useEffect(() => {
     if (isGeoStylePreviewProject(activeProject)) return;
     if (
-      !claimKnowledgeBaseAutoRetry(
-        activeProject,
-        analysisAutoRetryAttempted.current,
-        analysisRetryInFlight.current,
-      )
-    )
-      return;
-    if (!activeProject) return;
-    const projectId = activeProject.id;
-    analysisRetryInFlight.current.add(projectId);
-    setRetryingAnalysisId(projectId);
-    setStorageNotice("知识库正在进行一次自动校验补救，无需重复操作。");
-    void retryGeoEnterpriseAnalysis(activeProject, "automatic")
-      .then((updated) => {
-        commitProject({ ...updated, error: undefined });
-      })
-      .catch((error) => {
-        setStorageNotice(`知识库自动补救未能启动：${errorMessage(error)}`);
-      })
-      .finally(() => {
-        analysisRetryInFlight.current.delete(projectId);
-        setRetryingAnalysisId((current) =>
-          current === projectId ? undefined : current,
-        );
-      });
-  }, [activeProject, commitProject]);
-
-  useEffect(() => {
-    if (isGeoStylePreviewProject(activeProject)) return;
-    if (
       !activeProject?.knowledgeBase ||
       activeProject.questions.length > 0 ||
       activeProject.status === "failed"
@@ -2248,48 +2193,6 @@ function GeoBuildExperienceZh() {
       50,
     );
   }, []);
-
-  const retryProject = async () => {
-    if (!activeProject) return;
-    if (isGeoStylePreviewProject(activeProject)) {
-      setStorageNotice("当前为本地样式预览，不会重新调用企业分析接口。");
-      return;
-    }
-    if (activeProject.knowledgeBase && activeProject.questions.length === 0) {
-      setStorageNotice("问题推荐只生成一轮，请联系技术支持。");
-      return;
-    }
-    const retryingFinalization =
-      !activeProject.knowledgeBase &&
-      activeProject.knowledgeBaseFinalization?.finalizationState ===
-        "failed_internal" &&
-      activeProject.knowledgeBaseFinalization.retryAvailable === true;
-    if (analysisRetryInFlight.current.has(activeProject.id)) return;
-    const projectId = activeProject.id;
-    analysisRetryInFlight.current.add(projectId);
-    setRetryingAnalysisId(projectId);
-    setStorageNotice("");
-    try {
-      const updated = retryingFinalization
-        ? await retryGeoKnowledgeBaseFinalization(activeProject)
-        : await retryGeoEnterpriseAnalysis(activeProject);
-      commitProject({ ...updated, error: undefined });
-      if (retryingFinalization) {
-        setStorageNotice(
-          updated.knowledgeBase
-            ? "知识库最终整理已完成。"
-            : "候选资料仍已安全保留，最终整理校验尚未通过，可稍后再次重试。",
-        );
-      }
-    } catch (error) {
-      setStorageNotice(errorMessage(error));
-    } finally {
-      analysisRetryInFlight.current.delete(projectId);
-      setRetryingAnalysisId((current) =>
-        current === projectId ? undefined : current,
-      );
-    }
-  };
 
   const selectQuestion = (question: GeoQuestion) => {
     if (activeQuestionSelectionLocked) {
@@ -3858,11 +3761,9 @@ function GeoBuildExperienceZh() {
                       archivePersistenceVersionByProject[activeProject.id] || 0
                     }
                     onDownload={downloadArchive}
-                    onRetry={retryProject}
                     onContact={() => setContactOpen(true)}
                     onStart={startDraftAnalysis}
                     starting={startingAnalysisId === activeProject.id}
-                    retrying={retryingAnalysisId === activeProject.id}
                   />
                 )}
                 {activeStage === "question_recommendation" && (
@@ -4330,20 +4231,16 @@ export function EnterpriseAnalysis({
   project,
   archivePersistenceVersion = 0,
   onDownload,
-  onRetry,
   onContact,
   onStart,
   starting,
-  retrying,
 }: {
   project: GeoProject;
   archivePersistenceVersion?: number;
   onDownload: () => void;
-  onRetry: () => void;
   onContact: () => void;
   onStart: () => void;
   starting: boolean;
-  retrying: boolean;
 }) {
   const [view, setView] = useState<KnowledgeView>("overview");
   const knowledgeBase = project.knowledgeBase;
@@ -4419,107 +4316,28 @@ export function EnterpriseAnalysis({
     );
   }
 
-  if (
-    project.status === "failed" &&
-    !knowledgeBase &&
-    !isGeoStylePreviewProject(project) &&
-    retrying &&
-    project.knowledgeBaseRetryAvailable === true &&
-    project.knowledgeBaseValidationCategory !== "unsafe"
-  ) {
-    return (
-      <AnalysisProgress
-        project={{
-          ...project,
-          status: "analyzing",
-          progressLabel: "正在当前项目中重新生成企业知识库",
-          error: undefined,
-        }}
-        onContact={onContact}
-      />
-    );
-  }
-
-  if (
-    project.status === "failed" &&
-    !knowledgeBase &&
-    retrying &&
-    project.knowledgeBaseFinalization?.finalizationState === "failed_internal"
-  ) {
-    return (
-      <AnalysisProgress
-        project={{
-          ...project,
-          status: "analyzing",
-          progressLabel: "正在使用已保留的候选资料重试最终整理",
-          error: undefined,
-        }}
-        onContact={onContact}
-      />
-    );
-  }
-
-  if (
-    !knowledgeBase &&
-    project.knowledgeBaseRecoveryState === "automatic_in_progress"
-  ) {
-    return (
-      <AnalysisProgress
-        project={{
-          ...project,
-          status: "analyzing",
-          progressLabel: "正在原项目中重新整理企业知识库",
-          error: undefined,
-        }}
-        onContact={onContact}
-      />
-    );
-  }
-
   if (project.status === "failed" && !knowledgeBase) {
-    const unsafe = project.knowledgeBaseValidationCategory === "unsafe";
     const finalizationFailed =
       project.knowledgeBaseFinalization?.finalizationState ===
       "failed_internal";
     const failureMessage =
-      project.error || "资料处理暂时中断，当前项目与原始资料均已保留。";
+      project.error || "企业知识库生成结果未通过校验，请联系技术支持。";
     return (
       <div className="geo-failure-state" role="alert" aria-live="assertive">
         <span>
           <CircleAlert size={24} />
         </span>
         <h2>
-          {finalizationFailed
-            ? "知识库最终整理需要重试"
-            : "企业资料处理暂时中断"}
+          {finalizationFailed ? "知识库生成未能完成" : "企业知识库生成未能完成"}
         </h2>
         <p>{failureMessage}</p>
-        {!unsafe ? (
-          <button
-            type="button"
-            className="geo-primary-button"
-            onClick={onRetry}
-            disabled={retrying}
-            aria-busy={retrying}
-          >
-            <RotateCw size={15} className={retrying ? "is-spinning" : ""} />
-            {retrying
-              ? finalizationFailed
-                ? "正在重试整理"
-                : "正在重新生成"
-              : finalizationFailed
-                ? "重试最终整理"
-                : "重新生成知识库"}
-          </button>
-        ) : (
-          <button
-            type="button"
-            className="geo-primary-button"
-            onClick={onContact}
-          >
-            联系技术支持 <ArrowRight size={15} />
-          </button>
-        )}
+        <button
+          type="button"
+          className="geo-primary-button"
+          onClick={onContact}
+        >
+          联系技术支持 <ArrowRight size={15} />
+        </button>
       </div>
     );
   }

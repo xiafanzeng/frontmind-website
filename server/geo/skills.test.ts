@@ -81,7 +81,8 @@ describe("website one-shot knowledge-base skill", () => {
       "contentFloorExceptions",
       "scripts/build_candidate.py",
       "`frontmind-pro` model profile",
-      "`frontmind-base`",
+      "exactly one enterprise knowledge-base generation task",
+      "automatic recovery, regeneration, or a second attempt",
     ]) {
       expect(skill).toContain(invariant);
     }
@@ -450,7 +451,9 @@ describe("GEO question-recommender skill", () => {
     expect(skill).toContain('"minItems": 20');
     expect(skill).toContain('"industry_ranking"');
     expect(skill).toContain("enterpriseAnchor");
-    expect(skill).toContain("Every item must be phrased as a real reputation judgment");
+    expect(skill).toContain(
+      "Every item must be phrased as a real reputation judgment",
+    );
     expect(skill).toContain("这些题不属于美誉与舆情");
     expect(skill).toContain("Never use the Chinese comma `，`");
     expect(skill).toContain("`frontmind-pro` model profile");
@@ -465,7 +468,9 @@ describe("GEO question-recommender skill", () => {
     );
     expect(skill).toContain('"minContains": 5');
     expect(skill).toContain("competitorAnchor");
-    expect(skill).toContain("All five questions must explicitly name the current enterprise");
+    expect(skill).toContain(
+      "All five questions must explicitly name the current enterprise",
+    );
     expect(skill).toContain(
       '"required": ["enterpriseAnchor", "competitorAnchor"]',
     );

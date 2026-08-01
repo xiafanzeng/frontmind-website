@@ -2707,23 +2707,6 @@ export function normalizeGeoProject(
         ? 100
         : clampProgress(taskForProgress.progress ?? project.progress),
     progressLabel: currentExecutionMessage,
-    knowledgeBaseRetryAvailable: project.knowledgeBaseRetryAvailable === true,
-    knowledgeBaseAutoRetryAvailable:
-      project.knowledgeBaseAutoRetryAvailable === true,
-    knowledgeBaseRecoveryState: (() => {
-      const state = textValue(
-        project.knowledgeBaseRecoveryState,
-        project.knowledge_base_recovery_state,
-      );
-      return [
-        "none",
-        "automatic_in_progress",
-        "manual_required",
-        "recovered",
-      ].includes(state || "")
-        ? (state as GeoProject["knowledgeBaseRecoveryState"])
-        : undefined;
-    })(),
     knowledgeBaseValidationCategory: (() => {
       const category = textValue(
         project.knowledgeBaseValidationCategory,
@@ -2774,7 +2757,6 @@ export function normalizeGeoProject(
           errorCode === "KB_FINALIZER_CONTRACT_VIOLATION"
             ? errorCode
             : undefined,
-        retryAvailable: finalization.retryAvailable === true,
       };
     })(),
     questionRetryAvailable: project.questionRetryAvailable === true,
@@ -3097,42 +3079,6 @@ export async function createGeoCustomQuestion(
     );
   }
   return { project: updatedProject, question };
-}
-
-export async function retryGeoEnterpriseAnalysis(
-  project: GeoProject,
-  trigger: "automatic" | "manual" = "manual",
-): Promise<GeoProject> {
-  const payload = await requestJson(
-    `/projects/${encodeURIComponent(project.remoteToken)}/retry`,
-    {
-      method: "POST",
-      body: JSON.stringify({
-        input: project.input,
-        trigger,
-        attachments: project.files.map((file) => ({
-          fileId: file.id,
-          filename: file.name,
-        })),
-      }),
-    },
-  );
-  return normalizeRequiredProjectResponse(payload, project);
-}
-
-export async function retryGeoKnowledgeBaseFinalization(
-  project: GeoProject,
-): Promise<GeoProject> {
-  const payload = await requestJson(
-    `/projects/${encodeURIComponent(
-      project.remoteToken,
-    )}/knowledge-base/finalization/retry`,
-    {
-      method: "POST",
-      body: JSON.stringify({}),
-    },
-  );
-  return normalizeRequiredProjectResponse(payload, project);
 }
 
 export async function createGeoPaymentCheckout(

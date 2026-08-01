@@ -804,11 +804,6 @@ describe("GEO API", () => {
 
     for (const [pathname, method, body] of [
       [`/projects/${encoded}`, "GET", undefined],
-      [
-        `/projects/${encoded}/retry`,
-        "POST",
-        { input: "Acme", attachments: [] },
-      ],
       [`/projects/${encoded}/questions`, "POST", {}],
       [
         `/projects/${encoded}/questions/custom`,
@@ -1305,7 +1300,6 @@ describe("GEO API", () => {
       expect(legacyV2Payload.project.knowledgeBaseFinalization).toMatchObject({
         finalizationState: "completed",
         finalizerVersion: "website-kb-finalizer-v2",
-        retryAvailable: false,
       });
       expect(v2Broker.uploads.size).toBe(uploadCount);
     } finally {
@@ -1584,7 +1578,7 @@ describe("GEO API", () => {
     }
   });
 
-  it("keeps deterministic finalizer failures stable and retries the same candidate without a new upstream task", async () => {
+  it("keeps deterministic finalizer failures stable without exposing a retry", async () => {
     const failureBroker = new MockBroker();
     failureBroker.archive = await fixtureCandidateArchive();
     const finalizer = vi.fn(async () => {
@@ -1653,14 +1647,12 @@ describe("GEO API", () => {
       const first = (await firstPoll.json()) as Record<string, any>;
       expect(first.project).toMatchObject({
         status: "failed",
-        error:
-          "候选资料已安全保留，系统最终整理校验异常；修复后可直接重试整理，无需重新上传。",
+        error: "企业知识库最终整理未通过校验，请联系技术支持。",
         knowledgeBaseFinalization: {
           finalizationState: "failed_internal",
           finalizerVersion: "website-kb-finalizer-v3",
           candidateSha256: expect.stringMatching(/^[a-f0-9]{64}$/),
           errorCode: "KB_FINALIZER_CONTRACT_VIOLATION",
-          retryAvailable: true,
         },
       });
       expect(finalizer).toHaveBeenCalledTimes(1);
@@ -1677,10 +1669,6 @@ describe("GEO API", () => {
         first.project.knowledgeBaseFinalization.candidateSha256,
       );
 
-      finalizer.mockImplementation(async () => {
-        await new Promise((resolve) => setTimeout(resolve, 20));
-        throw new Error("deterministic contract failure");
-      });
       const retryUrl = `${origin}/api/geo/projects/${encodeURIComponent(
         stable.projectToken,
       )}/knowledge-base/finalization/retry`;
@@ -1688,23 +1676,9 @@ describe("GEO API", () => {
         fetch(retryUrl, { method: "POST", headers: { cookie } }),
         fetch(retryUrl, { method: "POST", headers: { cookie } }),
       ]);
-      expect(retries.map((response) => response.status)).toEqual([200, 200]);
-      const retriedPayloads = await Promise.all(
-        retries.map(
-          async (response) => (await response.json()) as Record<string, any>,
-        ),
-      );
-      expect(finalizer).toHaveBeenCalledTimes(2);
+      expect(retries.map((response) => response.status)).toEqual([404, 404]);
+      expect(finalizer).toHaveBeenCalledTimes(1);
       expect(failureBroker.prompts).toHaveLength(promptCount);
-      for (const retriedPayload of retriedPayloads) {
-        expect(
-          retriedPayload.project.knowledgeBaseFinalization.candidateSha256,
-        ).toBe(first.project.knowledgeBaseFinalization.candidateSha256);
-        expect(retriedPayload.project.knowledgeBaseFinalization).toMatchObject({
-          finalizationState: "failed_internal",
-          retryAvailable: true,
-        });
-      }
     } finally {
       await new Promise<void>((resolve, reject) =>
         failureServer.close((error) => (error ? reject(error) : resolve())),
@@ -1809,7 +1783,7 @@ describe("GEO API", () => {
       project: {
         status: "failed",
         knowledgeBaseValidationCategory: "unsafe",
-        knowledgeBaseRetryAvailable: false,
+        knowledgeBaseSupportRequired: true,
       },
     });
     expect((rejected.body as any).project.knowledgeBase).toBeUndefined();
@@ -1906,7 +1880,6 @@ describe("GEO API", () => {
       },
       error:
         "知识库文件存在安全风险，已阻止下载及后续分析。请勿继续处理该文件，并联系技术支持。",
-      knowledgeBaseRetryAvailable: false,
       knowledgeBaseValidationCategory: "unsafe",
       knowledgeBaseSupportRequired: true,
     });
@@ -1936,16 +1909,13 @@ describe("GEO API", () => {
     expect(broker.questionTaskCount).toBe(0);
   });
 
-  it("automatically retries one structural candidate failure, then exposes same-project regeneration", async () => {
-    const archive = new JSZip();
-    archive.file(
+  it("creates exactly one Pro knowledge-base task and never regenerates it", async () => {
+    const invalidArchive = new JSZip();
+    invalidArchive.file(
       "02_run.json",
-      JSON.stringify({
-        schemaVersion: 1,
-        company: { name: "Acme" },
-      }),
+      JSON.stringify({ schemaVersion: 1, company: { name: "Acme" } }),
     );
-    broker.archive = await archive.generateAsync({ type: "nodebuffer" });
+    broker.archive = await invalidArchive.generateAsync({ type: "nodebuffer" });
     const { cookie } = await verifyInvite();
     const created = await jsonRequest("/projects", cookie, {
       method: "POST",
@@ -1969,156 +1939,48 @@ describe("GEO API", () => {
       ],
     });
 
-    const automatic = await jsonRequest(
+    const first = await jsonRequest(
       `/projects/${encodeURIComponent(initial.projectToken)}`,
       cookie,
     );
-    expect(automatic.response.status).toBe(200);
-    expect(automatic.body).toMatchObject({
-      project: {
-        status: "running",
-        kbTask: { status: "running" },
-        knowledgeBaseAutoRetryAvailable: false,
-        knowledgeBaseRecoveryState: "automatic_in_progress",
-      },
-    });
-    expect(broker.prompts).toHaveLength(2);
-    expect(broker.taskAgentProfiles).toEqual([
-      FRONTMIND_PRO_PROFILE,
-      FRONTMIND_PRO_PROFILE,
-    ]);
-    const automaticPayload = automatic.body as Record<string, any>;
-    const automaticTokenValue = new GeoTokenCodec(
-      "test-session-secret-at-least-16-characters",
-    ).open<Record<string, unknown>>(
-      automaticPayload.projectToken,
-      "project",
-    ).value;
-    expect(automaticTokenValue).toMatchObject({
-      knowledgeBaseTaskId: "kb-2",
-      knowledgeBaseAutomaticRetryUsed: true,
-      knowledgeBaseRecovery: {
-        automaticSourceTaskId: "kb-1",
-        automaticResult: "submitted",
-        automaticAttemptedAt: expect.any(String),
-      },
-      previousKnowledgeBaseTaskIds: ["kb-1"],
-    });
-
-    broker.tasks.set("kb-2", {
-      id: "kb-2",
-      status: "completed",
-      output: [
-        {
-          role: "assistant",
-          content: [
-            {
-              type: "output_file",
-              file_id: "archive-2",
-              filename: "Acme-again.zip",
-            },
-          ],
-        },
-      ],
-    });
-    const failed = await jsonRequest(
-      `/projects/${encodeURIComponent(automaticPayload.projectToken)}`,
-      cookie,
-    );
-    expect(failed.response.status).toBe(200);
-    expect(failed.body).toMatchObject({
+    expect(first.response.status).toBe(200);
+    expect(first.body).toMatchObject({
       project: {
         status: "failed",
         knowledgeBaseValidationCategory: "structure",
-        knowledgeBaseRetryAvailable: true,
-        knowledgeBaseAutoRetryAvailable: false,
-        knowledgeBaseRecoveryState: "manual_required",
+        knowledgeBaseSupportRequired: true,
         kbTask: {
           status: "failed",
-          error: "知识库候选文件暂未完成安全整理，可在当前项目中重新生成。",
+          error: "企业知识库生成结果未通过结构校验，请联系技术支持。",
         },
       },
     });
-    expect(broker.prompts).toHaveLength(2);
-    expect((failed.body as any).project.archive).toBeUndefined();
-    expect(JSON.stringify(failed.body)).not.toContain(
-      "Candidate archive must contain",
+    expect((first.body as any).project).not.toHaveProperty(
+      "knowledgeBaseRetryAvailable",
     );
-    const failedTokenValue = new GeoTokenCodec(
-      "test-session-secret-at-least-16-characters",
-    ).open<Record<string, any>>(
-      (failed.body as Record<string, any>).projectToken,
-      "project",
-    ).value;
-    expect(failedTokenValue.knowledgeBaseRecovery).toMatchObject({
-      automaticSourceTaskId: "kb-1",
-      automaticResult: "failed",
-      automaticAttemptedAt: expect.any(String),
-    });
-  });
+    expect(broker.prompts).toHaveLength(1);
+    expect(broker.taskAgentProfiles).toEqual([FRONTMIND_PRO_PROFILE]);
 
-  it("persists one automatic retry decision and requires manual recovery after it fails", async () => {
-    const { cookie } = await verifyInvite();
-    const created = await jsonRequest("/projects", cookie, {
-      method: "POST",
-      body: { input: "Acme", attachments: [] },
-    });
-    const initial = created.body as Record<string, any>;
-    broker.tasks.set("kb-1", {
-      id: "kb-1",
-      status: "failed",
-      error: { message: "upstream failed" },
-    });
-
-    const automatic = await jsonRequest(
-      `/projects/${encodeURIComponent(initial.projectToken)}/retry`,
+    const stable = await jsonRequest(
+      `/projects/${encodeURIComponent((first.body as any).projectToken)}`,
       cookie,
-      {
-        method: "POST",
-        body: {
-          input: "Acme",
-          attachments: [],
-          trigger: "automatic",
-        },
-      },
     );
-    expect(automatic.response.status).toBe(201);
-    const automaticPayload = automatic.body as Record<string, any>;
-    expect(automaticPayload.project).toMatchObject({
-      status: "running",
-      knowledgeBaseAutoRetryAvailable: false,
-      knowledgeBaseRecoveryState: "automatic_in_progress",
-    });
-    expect(broker.prompts).toHaveLength(2);
+    expect(stable.response.status).toBe(200);
+    expect((stable.body as any).project.kbTask.id).toBe(
+      (first.body as any).project.kbTask.id,
+    );
 
-    broker.tasks.set("kb-2", {
-      id: "kb-2",
-      status: "failed",
-      error: { message: "automatic retry failed" },
-    });
-    const replay = await jsonRequest(
-      `/projects/${encodeURIComponent(automaticPayload.projectToken)}/retry`,
-      cookie,
-      {
-        method: "POST",
-        body: {
-          input: "Acme",
-          attachments: [],
-          trigger: "automatic",
-        },
-      },
-    );
-    expect(replay.response.status).toBe(200);
-    expect(replay.body).toMatchObject({
-      project: {
-        status: "failed",
-        knowledgeBaseRetryAvailable: true,
-        knowledgeBaseAutoRetryAvailable: false,
-        knowledgeBaseRecoveryState: "manual_required",
-      },
-    });
-    expect(broker.prompts).toHaveLength(2);
-    expect(broker.tasks.has("kb-3")).toBe(false);
+    for (const suffix of ["retry", "knowledge-base/finalization/retry"]) {
+      const removedRoute = await fetch(
+        `${baseUrl}/projects/${encodeURIComponent(
+          (stable.body as any).projectToken,
+        )}/${suffix}`,
+        { method: "POST", headers: { cookie } },
+      );
+      expect(removedRoute.status).toBe(404);
+    }
+    expect(broker.prompts).toHaveLength(1);
+    expect(broker.tasks.has("kb-2")).toBe(false);
   });
 
   it("rejects tampered project and upload tokens", async () => {
@@ -2457,41 +2319,6 @@ describe("GEO API", () => {
     });
   });
 
-  it("retries a failed enterprise analysis once with a stable idempotency key", async () => {
-    const { cookie } = await verifyInvite();
-    const created = await jsonRequest("/projects", cookie, {
-      method: "POST",
-      body: { input: "Acme", attachments: [] },
-    });
-    const initial = created.body as Record<string, any>;
-    broker.tasks.set("kb-1", {
-      id: "kb-1",
-      status: "failed",
-      error: { message: "upstream failed" },
-    });
-
-    const retried = await jsonRequest(
-      `/projects/${encodeURIComponent(initial.projectToken)}/retry`,
-      cookie,
-      { method: "POST", body: { input: "Acme", attachments: [] } },
-    );
-    expect(retried.response.status).toBe(201);
-    const payload = retried.body as Record<string, any>;
-    expect(payload.projectToken).not.toBe(initial.projectToken);
-    expect(payload.project.kbTask.status).toBe("running");
-    expect(broker.prompts).toHaveLength(2);
-    expect(broker.prompts.at(-1)).toContain('"rawInput": "Acme"');
-    expect(broker.prompts.at(-1)).not.toContain("唯一一次产物结构修复任务");
-
-    const replayed = await jsonRequest(
-      `/projects/${encodeURIComponent(initial.projectToken)}/retry`,
-      cookie,
-      { method: "POST", body: { input: "Acme", attachments: [] } },
-    );
-    expect(replayed.response.status).toBe(201);
-    expect(broker.prompts).toHaveLength(2);
-  });
-
   it("deduplicates a replayed initial project request within the same session", async () => {
     const { cookie } = await verifyInvite();
     const body = {
@@ -2515,68 +2342,6 @@ describe("GEO API", () => {
       (first.body as any).project.id,
     );
     expect(broker.prompts).toHaveLength(1);
-  });
-
-  it("does not consume the knowledge-base retry when a completed result is temporarily unavailable", async () => {
-    const { cookie } = await verifyInvite();
-    const created = await jsonRequest("/projects", cookie, {
-      method: "POST",
-      body: { input: "Acme", attachments: [] },
-    });
-    const initial = created.body as Record<string, any>;
-    broker.tasks.set("kb-1", {
-      id: "kb-1",
-      status: "completed",
-      output: [],
-    });
-    broker.taskResultErrors.set(
-      "kb-1",
-      new GeoBrokerError(
-        "result is still being published",
-        409,
-        "AGENT_REQUEST_FAILED",
-      ),
-    );
-
-    const unavailable = await jsonRequest(
-      `/projects/${encodeURIComponent(initial.projectToken)}/retry`,
-      cookie,
-      { method: "POST", body: { input: "Acme", attachments: [] } },
-    );
-
-    expect(unavailable.response.status).toBe(502);
-    expect(unavailable.body).toMatchObject({
-      error: { code: "TASK_RESULT_TEMPORARILY_UNAVAILABLE" },
-    });
-    expect(broker.prompts).toHaveLength(1);
-    expect(broker.tasks.has("kb-2")).toBe(false);
-    const initialValue = new GeoTokenCodec(
-      "test-session-secret-at-least-16-characters",
-    ).open<Record<string, unknown>>(initial.projectToken, "project").value;
-    expect(initialValue.knowledgeBaseValidationProfile).toBe("website-lead-v1");
-
-    broker.taskResultErrors.delete("kb-1");
-    broker.taskResults.set("kb-1", {
-      id: "kb-1",
-      status: "completed",
-      output: [],
-    });
-    const structurallyInvalid = await jsonRequest(
-      `/projects/${encodeURIComponent(initial.projectToken)}/retry`,
-      cookie,
-      { method: "POST", body: { input: "Acme", attachments: [] } },
-    );
-
-    expect(structurallyInvalid.response.status).toBe(201);
-    expect(broker.prompts).toHaveLength(2);
-    const retriedPayload = structurallyInvalid.body as Record<string, any>;
-    const retriedValue = new GeoTokenCodec(
-      "test-session-secret-at-least-16-characters",
-    ).open<Record<string, unknown>>(
-      retriedPayload.projectToken,
-      "project",
-    ).value;
-    expect(retriedValue.knowledgeBaseValidationProfile).toBe("website-lead-v1");
   });
 
   it("uses a trusted completed knowledge-base snapshot when the result endpoint is temporarily unavailable", async () => {
@@ -2622,305 +2387,6 @@ describe("GEO API", () => {
         kbTask: { status: "completed" },
         knowledgeBase: { companyName: "Acme" },
       },
-    });
-    expect(broker.prompts).toHaveLength(1);
-  });
-
-  it("does not reinterpret an unrecoverable result error as invalid knowledge-base output", async () => {
-    const { cookie } = await verifyInvite();
-    const created = await jsonRequest("/projects", cookie, {
-      method: "POST",
-      body: { input: "Acme", attachments: [] },
-    });
-    const initial = created.body as Record<string, any>;
-    broker.tasks.set("kb-1", {
-      id: "kb-1",
-      status: "completed",
-      output: [],
-    });
-    broker.taskResultErrors.set(
-      "kb-1",
-      new GeoBrokerError(
-        "result authorization failed",
-        401,
-        "AGENT_AUTH_FAILED",
-      ),
-    );
-
-    const rejected = await jsonRequest(
-      `/projects/${encodeURIComponent(initial.projectToken)}/retry`,
-      cookie,
-      { method: "POST", body: { input: "Acme", attachments: [] } },
-    );
-
-    expect(rejected.response.status).toBe(401);
-    expect(rejected.body).toMatchObject({
-      error: { code: "AGENT_AUTH_FAILED" },
-    });
-    expect(broker.prompts).toHaveLength(1);
-    expect(broker.tasks.has("kb-2")).toBe(false);
-  });
-
-  it("regenerates in the same project when a completed task returns a structurally invalid candidate", async () => {
-    const invalidArchive = new JSZip();
-    invalidArchive.file(
-      "02_run.json",
-      JSON.stringify({ schemaVersion: 1, company: { name: "Acme" } }),
-    );
-    broker.archive = await invalidArchive.generateAsync({ type: "nodebuffer" });
-    const { cookie } = await verifyInvite();
-    const created = await jsonRequest("/projects", cookie, {
-      method: "POST",
-      body: { input: "Acme", attachments: [] },
-    });
-    const initial = created.body as Record<string, any>;
-    broker.tasks.set("kb-1", {
-      id: "kb-1",
-      status: "completed",
-      output: [
-        {
-          role: "assistant",
-          content: [
-            {
-              type: "output_file",
-              file_id: "archive-1",
-              filename: "Acme.zip",
-            },
-          ],
-        },
-      ],
-    });
-
-    const retried = await jsonRequest(
-      `/projects/${encodeURIComponent(initial.projectToken)}/retry`,
-      cookie,
-      { method: "POST", body: { input: "Acme", attachments: [] } },
-    );
-
-    expect(retried.response.status).toBe(201);
-    expect((retried.body as Record<string, any>).project.kbTask.status).toBe(
-      "running",
-    );
-    expect(broker.prompts).toHaveLength(2);
-    expect(broker.prompts.at(-1)).toContain('"rawInput": "Acme"');
-    expect(broker.prompts.at(-1)).toContain("website-lead-candidate-v1");
-    expect(broker.taskAttachments.at(-1)).toEqual([
-      {
-        file_id: "skill-file-2",
-        filename: "website-one-shot-kb-builder.skill.zip",
-      },
-    ]);
-    expect(broker.taskAgentProfiles).toEqual([
-      FRONTMIND_PRO_PROFILE,
-      FRONTMIND_PRO_PROFILE,
-    ]);
-  });
-
-  it("keeps same-project regeneration available after repeated structural failures", async () => {
-    const invalidArchive = new JSZip();
-    invalidArchive.file(
-      "02_run.json",
-      JSON.stringify({ schemaVersion: 1, company: { name: "Acme" } }),
-    );
-    broker.archive = await invalidArchive.generateAsync({ type: "nodebuffer" });
-    const { cookie } = await verifyInvite();
-    const created = await jsonRequest("/projects", cookie, {
-      method: "POST",
-      body: { input: "Acme", attachments: [] },
-    });
-    const initial = created.body as Record<string, any>;
-    broker.tasks.set("kb-1", {
-      id: "kb-1",
-      status: "completed",
-      output: [
-        {
-          role: "assistant",
-          content: [
-            {
-              type: "output_file",
-              file_id: "archive-1",
-              filename: "Acme.zip",
-            },
-          ],
-        },
-      ],
-    });
-
-    const automatic = await jsonRequest(
-      `/projects/${encodeURIComponent(initial.projectToken)}`,
-      cookie,
-    );
-    expect(automatic.response.status).toBe(200);
-    expect(automatic.body).toMatchObject({
-      project: { status: "running", kbTask: { status: "running" } },
-    });
-    const automaticPayload = automatic.body as Record<string, any>;
-    broker.tasks.set("kb-2", {
-      id: "kb-2",
-      status: "completed",
-      output: [
-        {
-          role: "assistant",
-          content: [
-            {
-              type: "output_file",
-              file_id: "archive-2",
-              filename: "Acme-automatic.zip",
-            },
-          ],
-        },
-      ],
-    });
-
-    const firstFailure = await jsonRequest(
-      `/projects/${encodeURIComponent(automaticPayload.projectToken)}`,
-      cookie,
-    );
-    expect(firstFailure.body).toMatchObject({
-      project: {
-        status: "failed",
-        knowledgeBaseRetryAvailable: true,
-      },
-    });
-    const firstFailurePayload = firstFailure.body as Record<string, any>;
-
-    const repaired = await jsonRequest(
-      `/projects/${encodeURIComponent(firstFailurePayload.projectToken)}/retry`,
-      cookie,
-      { method: "POST", body: { input: "Acme", attachments: [] } },
-    );
-    expect(repaired.response.status).toBe(201);
-    const repairedPayload = repaired.body as Record<string, any>;
-    broker.tasks.set("kb-3", {
-      id: "kb-3",
-      status: "completed",
-      output: [
-        {
-          role: "assistant",
-          content: [
-            {
-              type: "output_file",
-              file_id: "archive-3",
-              filename: "Acme-repaired.zip",
-            },
-          ],
-        },
-      ],
-    });
-
-    const secondFailure = await jsonRequest(
-      `/projects/${encodeURIComponent(repairedPayload.projectToken)}`,
-      cookie,
-    );
-    expect(secondFailure.response.status).toBe(200);
-    const secondFailurePayload = secondFailure.body as Record<string, any>;
-    expect(secondFailurePayload.project).toMatchObject({
-      status: "failed",
-      knowledgeBaseRetryAvailable: true,
-      kbTask: {
-        status: "failed",
-        error: "知识库候选文件暂未完成安全整理，可在当前项目中重新生成。",
-      },
-    });
-
-    const regeneratedAgain = await jsonRequest(
-      `/projects/${encodeURIComponent(secondFailurePayload.projectToken)}/retry`,
-      cookie,
-      { method: "POST", body: { input: "Acme", attachments: [] } },
-    );
-    expect(regeneratedAgain.response.status).toBe(201);
-    expect(broker.prompts).toHaveLength(4);
-  });
-
-  it("regenerates idempotently from original input when the invalid candidate is URL-only", async () => {
-    const invalidArchive = new JSZip();
-    invalidArchive.file(
-      "02_run.json",
-      JSON.stringify({ schemaVersion: 1, company: { name: "Acme" } }),
-    );
-    broker.archive = await invalidArchive.generateAsync({ type: "nodebuffer" });
-    const { cookie } = await verifyInvite();
-    const created = await jsonRequest("/projects", cookie, {
-      method: "POST",
-      body: { input: "Acme", attachments: [] },
-    });
-    const initial = created.body as Record<string, any>;
-    broker.tasks.set("kb-1", {
-      id: "kb-1",
-      status: "completed",
-      output: [
-        {
-          role: "assistant",
-          content: [
-            {
-              type: "output_file",
-              file_url: "https://files.example.test/Acme.zip",
-              filename: "Acme.zip",
-            },
-          ],
-        },
-      ],
-    });
-
-    const retryPath = `/projects/${encodeURIComponent(initial.projectToken)}/retry`;
-    const first = await jsonRequest(retryPath, cookie, {
-      method: "POST",
-      body: { input: "Acme", attachments: [] },
-    });
-    const replay = await jsonRequest(retryPath, cookie, {
-      method: "POST",
-      body: { input: "Acme", attachments: [] },
-    });
-
-    expect(first.response.status).toBe(201);
-    expect(replay.response.status).toBe(201);
-    expect(broker.uploads.size).toBe(0);
-    expect(broker.taskAttachments.at(-1)).toEqual([
-      {
-        file_id: "skill-file-2",
-        filename: "website-one-shot-kb-builder.skill.zip",
-      },
-    ]);
-    expect((replay.body as Record<string, any>).project.id).toBe(
-      (first.body as Record<string, any>).project.id,
-    );
-    expect(broker.tasks.has("kb-3")).toBe(false);
-
-    const removed = await jsonRequest(
-      `/projects/${encodeURIComponent(
-        (first.body as Record<string, any>).projectToken,
-      )}`,
-      cookie,
-      { method: "DELETE" },
-    );
-    expect(removed.response.status).toBe(200);
-    expect(broker.deletedFiles).not.toContain("file-1");
-  });
-
-  it("rejects retry attachments that do not belong to the project token", async () => {
-    const { cookie } = await verifyInvite();
-    const created = await jsonRequest("/projects", cookie, {
-      method: "POST",
-      body: { input: "Acme", attachments: [] },
-    });
-    const initial = created.body as Record<string, any>;
-    broker.tasks.set("kb-1", { id: "kb-1", status: "failed" });
-
-    const rejected = await jsonRequest(
-      `/projects/${encodeURIComponent(initial.projectToken)}/retry`,
-      cookie,
-      {
-        method: "POST",
-        body: {
-          input: "Acme",
-          attachments: [{ fileId: "foreign-file", filename: "foreign.pdf" }],
-        },
-      },
-    );
-
-    expect(rejected.response.status).toBe(400);
-    expect(rejected.body).toMatchObject({
-      error: { code: "RETRY_ATTACHMENT_NOT_OWNED" },
     });
     expect(broker.prompts).toHaveLength(1);
   });
@@ -5223,7 +4689,6 @@ describe("GEO API", () => {
 
     expect(initial.project).toMatchObject({
       status: "running",
-      knowledgeBaseRetryAvailable: false,
       knowledgeBaseSupportRequired: false,
       kbTask: { status: "running" },
       executionLog: {
@@ -5266,7 +4731,6 @@ describe("GEO API", () => {
     );
     expect((unknownKnowledgeBase.body as any).project).toMatchObject({
       status: "running",
-      knowledgeBaseRetryAvailable: false,
       knowledgeBaseSupportRequired: false,
       kbTask: {
         status: "running",
@@ -5285,7 +4749,7 @@ describe("GEO API", () => {
       cookie,
       { method: "POST", body: { input: "Acme", attachments: [] } },
     );
-    expect(knowledgeBaseReplay.response.status).toBe(200);
+    expect(knowledgeBaseReplay.response.status).toBe(404);
     expect(broker.prompts).toHaveLength(1);
 
     const ready = await createReadyProject();
