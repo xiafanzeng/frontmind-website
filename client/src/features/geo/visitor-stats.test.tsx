@@ -86,4 +86,44 @@ describe("visitor statistics UI", () => {
       }),
     ).toBeNull();
   });
+
+  it("accepts published region totals that include other and unknown", () => {
+    const normalized = normalizeVisitorStats({
+      totalReads: 8,
+      countryCount: 3,
+      countries: [
+        {
+          country: "Mainland China",
+          iso: "cn",
+          reads: 5,
+          latitude: 35.8617,
+          longitude: 104.1954,
+        },
+        {
+          country: "Other locations",
+          iso: "other",
+          reads: 2,
+          latitude: 0,
+          longitude: 0,
+        },
+        {
+          country: "Unknown",
+          iso: "unknown",
+          reads: 1,
+          latitude: 0,
+          longitude: 0,
+        },
+      ],
+    });
+
+    expect(normalized).toMatchObject({
+      totalReads: 8,
+      countryCount: 3,
+    });
+    expect(normalized?.countries.map((country) => country.iso)).toEqual([
+      "cn",
+      "other",
+      "unknown",
+    ]);
+  });
 });

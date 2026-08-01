@@ -520,9 +520,10 @@ export function normalizeVisitorStats(
     (total, country) => total + country.reads,
     0,
   );
-  const countryCount = countries.filter((country) =>
-    /^[a-z]{2}$/.test(country.iso),
-  ).length;
+  // The published total counts every displayed region bucket, including the
+  // explicit `other` and `unknown` buckets. Keep client validation aligned
+  // with the server so a valid historical snapshot is not rejected.
+  const countryCount = countries.length;
   if (
     totalReads !== candidate.totalReads ||
     countryCount !== candidate.countryCount
