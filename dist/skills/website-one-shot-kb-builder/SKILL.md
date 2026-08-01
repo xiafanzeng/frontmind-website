@@ -1,6 +1,6 @@
 ---
 name: website-one-shot-kb-builder
-description: Build a source-grounded Simplified Chinese enterprise knowledge-base candidate from user uploads and public company sources for the FrontMind website. Use for one-shot company analysis that must emphasize real company and product facts, retain S1 D01-D13 coverage, produce the fixed seven customer-facing sections, and optionally retain one first-party logo.
+description: "Build a source-grounded Simplified Chinese enterprise knowledge-base candidate from user uploads and public company sources for the FrontMind website. Use for one-shot company analysis that must emphasize real company and product facts, retain S1 D01-D13 coverage, meet evidence-backed content floors in the fixed seven customer-facing sections, and actively acquire the company's one permitted image: its official logo."
 ---
 
 # Website Enterprise Knowledge Base
@@ -20,13 +20,15 @@ creates the final schema-v3 archive and all frontend manifests.
 - Write in Simplified Chinese. Preserve proper names and necessary
   source-language terms.
 
-## Four-step workflow
+## Five-step workflow
 
 1. Read every upload and identify the exact company and official website.
 2. Research the company breadth-first, prioritizing official company and
    product text.
 3. Write the two fixed Markdown files.
-4. Run `scripts/build_candidate.py` and attach its single validated output ZIP.
+4. Record source, content-floor, and Logo acquisition results in
+   `02_run.json`.
+5. Run `scripts/build_candidate.py` and attach its single validated output ZIP.
 
 Read `references/dimensions.md` completely before research. It defines the S1
 fact checklist, product-depth requirements, source priority, and publication
@@ -55,6 +57,35 @@ Consolidate aliases, duplicate pages, translations, pagination, and repeated
 SKUs. Do not infer missing team, customer, price, performance, finance,
 certification, or competitive information.
 
+## Customer-content floor
+
+The deterministic packager measures customer-visible Chinese characters,
+letters, and digits after removing Markdown syntax, URLs, evidence markers,
+and punctuation. It enforces these section floors, set from the measured
+baseline in the supplied SiliconFlow candidate and rounded to the required
+delivery thresholds:
+
+- `企业与品牌`: 500 (baseline 210)
+- `团队与组织`: 500 (baseline 190)
+- `产品与服务`: 2500 (baseline 1205)
+- `技术与交付`: 1000 (baseline 403)
+- `客户与行业`: 600 (baseline 290)
+- `服务与合作`: 600 (baseline 311)
+- `可信优势`: 600 (baseline 345)
+
+The combined floor is 6300 visible characters when all seven sections have
+obtainable facts. Research until each applicable section reaches its floor.
+Distribute product content across the real product or service families; do not
+meet a floor with repetition, generic filler, invented facts, or copied source
+boilerplate.
+
+Use `contentFloorExceptions` only when the section is genuinely inapplicable
+or the facts remain unobtainable after at least three relevant public-source
+attempts. Keep the supported facts, include `[待核验]`, and record the exact
+section, a concrete reason, and all attempted URLs in `02_run.json`. A thin
+section is not itself an exception, and a large or well-documented company
+must not use an exception merely to finish early.
+
 ## Evidence markers
 
 End each factual paragraph with at least one marker:
@@ -73,21 +104,32 @@ or model reasoning in `01_customer_draft.md`.
 
 ## Logo-only rule
 
-Images are optional. Retain at most one logo:
+The official company Logo is the only permitted image and is a required
+acquisition target. Retain exactly one whenever a reliable copy is obtainable:
 
-- prefer an uploaded logo;
-- otherwise use a decodable first-party logo from the official website;
-- require provenance in `02_run.json`;
+- first inspect uploads for a supplied logo;
+- otherwise inspect the official homepage header and footer, About, Brand,
+  Media, Press, and contact pages as applicable;
+- inspect first-party HTML `<img>`/`<picture>` sources and CSS background
+  assets, including a clean SVG or decodable raster original;
+- record complete provenance and `logoAcquisition.status = "retained"` in
+  `02_run.json`;
 - store it as `assets/logo.<extension>`.
 
 Do not collect or package favicons, Open Graph images, banners, screenshots,
 product images, diagrams, case images, team images, certificates, colors, or
-fonts. If no reliable logo exists, omit `assets/` and continue.
+fonts. Do not substitute a favicon, Open Graph image, banner crop, screenshot,
+or text recreation for the Logo.
+
+Omit `assets/` only after checking at least two distinct first-party pages and
+finding no reliable Logo. Record `logoAcquisition.status = "unavailable"`, the
+attempted page URLs, and a concrete reason in `02_run.json`. Quietly omitting
+the Logo is invalid.
 
 ## Delivery
 
-Create a working directory containing the two Markdown files and optional
-metadata/logo, then run:
+Create a working directory containing the two Markdown files, required run
+metadata, and the retained Logo when available, then run:
 
 ```bash
 python3 scripts/build_candidate.py \
@@ -95,10 +137,11 @@ python3 scripts/build_candidate.py \
   --output ./website-lead-candidate-v1.zip
 ```
 
-The script validates all 13 fact headings, all seven customer headings,
-evidence markers, optional metadata, the logo-only rule, deterministic ZIP
-metadata, and the written ZIP by reopening it. Fix any reported error and
-rerun it. Never hand-compress the working directory.
+The script validates all 13 fact headings, all seven customer headings, exact
+content floors or documented exceptions, evidence markers, required metadata,
+the Logo acquisition result, deterministic ZIP metadata, and the written ZIP
+by reopening it. Fix any reported error and rerun it. Never hand-compress the
+working directory.
 
 Return exactly one file named `website-lead-candidate-v1.zip`. Do not attach a
 Skill ZIP, working directory, cache, source-page export, log, or second archive.
