@@ -16117,12 +16117,19 @@ async function createGeoTaskWithSkillPackages(broker, input, skillPackages) {
   }
 }
 async function createWebsiteKnowledgeBaseTaskWithSkill(broker, input) {
-  const result = await createGeoTaskWithSkillPackages(broker, input, [
+  const result = await createGeoTaskWithSkillPackages(
+    broker,
     {
-      filename: WEBSITE_KB_SKILL_ARCHIVE_FILENAME,
-      body: await buildWebsiteKnowledgeBaseSkillArchive()
-    }
-  ]);
+      ...input,
+      agentProfile: FRONTMIND_PRO_PROFILE
+    },
+    [
+      {
+        filename: WEBSITE_KB_SKILL_ARCHIVE_FILENAME,
+        body: await buildWebsiteKnowledgeBaseSkillArchive()
+      }
+    ]
+  );
   return {
     task: result.task,
     skillAttachment: result.skillAttachments[0]
@@ -16468,7 +16475,7 @@ function normalizeError(error) {
 
 // server/geo/health.ts
 function geoPublicBuildSha(env = process.env) {
-  const embedded = true ? "373eba16dd584f58743cb6c576d27ac698418152".trim() : "";
+  const embedded = true ? "411c340fe3cae3408592d29f34c50e38761983d5".trim() : "";
   if (/^[a-f0-9]{7,64}$/i.test(embedded)) return embedded.toLowerCase();
   const candidate = (env.FRONTMIND_BUILD_SHA || env.GITHUB_SHA || env.RAILWAY_GIT_COMMIT_SHA || "").trim();
   return /^[a-f0-9]{7,64}$/i.test(candidate) ? candidate.toLowerCase() : null;
