@@ -36,6 +36,15 @@ CUSTOMER_HEADINGS = [
     "服务与合作",
     "可信优势",
 ]
+CUSTOMER_CONTENT_FLOORS = {
+    "企业与品牌": 500,
+    "团队与组织": 500,
+    "产品与服务": 2500,
+    "技术与交付": 1000,
+    "客户与行业": 600,
+    "服务与合作": 600,
+    "可信优势": 600,
+}
 EVIDENCE_MARKER = re.compile(
     r"\[(?:来源|企业主张|权威来源|第三方来源)\]\(https?://[^)\s]+\)"
     r"|\[上传文件：[^\]]+\]|\[待核验\]"
@@ -95,6 +104,95 @@ def validate_markdown(path: Path, expected: list[str]) -> bytes:
     return data
 
 
+def meaningful_character_count(markdown: str) -> int:
+    visible = EVIDENCE_MARKER.sub("", markdown)
+    visible = re.sub(r"!\[[^\]]*\]\([^)]*\)", "", visible)
+    visible = re.sub(r"\[([^\]]+)\]\([^)]*\)", r"\1", visible)
+    visible = re.sub(r"https?://\S+", "", visible)
+    visible = re.sub(r"^#{1,6}\s*", "", visible, flags=re.MULTILINE)
+    return len(re.sub(r"[^\w\u4e00-\u9fff]", "", visible, flags=re.UNICODE))
+
+
+def normalized_url(value: str) -> str:
+    return value.strip().rstrip("/")
+
+
+def validate_content_floors(customer: bytes, run_value: dict[str, object]) -> None:
+    parsed = sections(customer.decode("utf-8"))
+    raw_exceptions = run_value.get("contentFloorExceptions", [])
+    if not isinstance(raw_exceptions, list) or len(raw_exceptions) > len(
+        CUSTOMER_HEADINGS
+    ):
+        raise CandidateError(
+            "02_run.json contentFloorExceptions must contain at most seven items"
+        )
+
+    source_urls = {
+        normalized_url(source["url"])
+        for source in run_value.get("sources", [])
+        if isinstance(source, dict) and isinstance(source.get("url"), str)
+    }
+    exceptions: dict[str, dict[str, object]] = {}
+    for index, exception in enumerate(raw_exceptions):
+        if not isinstance(exception, dict):
+            raise CandidateError(f"contentFloorExceptions[{index}] must be an object")
+        section = exception.get("section")
+        if section not in CUSTOMER_CONTENT_FLOORS:
+            raise CandidateError(f"contentFloorExceptions[{index}].section is invalid")
+        if section in exceptions:
+            raise CandidateError(f"duplicate content-floor exception: {section}")
+        reason = require_text(
+            exception.get("reason"),
+            f"contentFloorExceptions[{index}].reason",
+            1000,
+        )
+        if meaningful_character_count(reason) < 12:
+            raise CandidateError(
+                f"contentFloorExceptions[{index}].reason must be concrete"
+            )
+        attempted = exception.get("attemptedSourceUrls")
+        if not isinstance(attempted, list):
+            raise CandidateError(
+                f"contentFloorExceptions[{index}].attemptedSourceUrls must be an array"
+            )
+        attempted_urls = []
+        for attempted_index, url in enumerate(attempted):
+            if not public_http_url(url):
+                raise CandidateError(
+                    f"contentFloorExceptions[{index}].attemptedSourceUrls[{attempted_index}] must be HTTP(S)"
+                )
+            attempted_urls.append(normalized_url(url))
+        if len(set(attempted_urls)) < 3:
+            raise CandidateError(
+                f"contentFloorExceptions[{index}] must record at least three distinct source attempts"
+            )
+        missing_sources = sorted(set(attempted_urls) - source_urls)
+        if missing_sources:
+            raise CandidateError(
+                f"contentFloorExceptions[{index}] references URLs absent from sources"
+            )
+        exceptions[section] = exception
+
+    for heading, minimum in CUSTOMER_CONTENT_FLOORS.items():
+        body = parsed[heading]
+        actual = meaningful_character_count(body)
+        exception = exceptions.get(heading)
+        if actual >= minimum:
+            if exception is not None:
+                raise CandidateError(
+                    f"content-floor exception is unnecessary for {heading}: {actual} >= {minimum}"
+                )
+            continue
+        if exception is None:
+            raise CandidateError(
+                f"01_customer_draft.md section is below its visible-content floor: {heading} {actual}/{minimum}"
+            )
+        if "[待核验]" not in body:
+            raise CandidateError(
+                f"below-floor exception section must include [待核验]: {heading}"
+            )
+
+
 def safe_logo_path(value: str) -> str | None:
     normalized = str(PurePosixPath(value.replace("\\", "/")))
     if (
@@ -152,9 +250,11 @@ def validate_logo_bytes(relative: str, data: bytes) -> None:
         raise CandidateError(f"logo content does not match its extension: {relative}")
 
 
-def validate_run(path: Path, input_dir: Path) -> tuple[bytes | None, tuple[str, bytes] | None]:
+def validate_run(
+    path: Path, input_dir: Path
+) -> tuple[bytes, tuple[str, bytes] | None, dict[str, object]]:
     if not path.is_file():
-        return None, None
+        raise CandidateError("missing required file: 02_run.json")
     data = path.read_bytes()
     if not data or len(data) > MAX_TEXT_BYTES:
         raise CandidateError("02_run.json is empty or exceeds 2 MiB")
@@ -206,11 +306,34 @@ def validate_run(path: Path, input_dir: Path) -> tuple[bytes | None, tuple[str, 
     if not isinstance(assets, list) or len(assets) > 1:
         raise CandidateError("02_run.json assets must contain at most one logo")
     logo: tuple[str, bytes] | None = None
+    logo_acquisition = value.get("logoAcquisition")
+    if not isinstance(logo_acquisition, dict):
+        raise CandidateError("02_run.json logoAcquisition must be an object")
+    logo_status = logo_acquisition.get("status")
+    if logo_status not in {"retained", "unavailable"}:
+        raise CandidateError(
+            "logoAcquisition.status must be retained or unavailable"
+        )
+    attempted_page_urls = logo_acquisition.get("attemptedPageUrls", [])
+    if not isinstance(attempted_page_urls, list):
+        raise CandidateError("logoAcquisition.attemptedPageUrls must be an array")
+    normalized_attempted_pages: list[str] = []
+    for index, attempted_page_url in enumerate(attempted_page_urls):
+        if not public_http_url(attempted_page_url):
+            raise CandidateError(
+                f"logoAcquisition.attemptedPageUrls[{index}] must be HTTP(S)"
+            )
+        normalized_attempted_pages.append(normalized_url(attempted_page_url))
     if assets:
+        if logo_status != "retained":
+            raise CandidateError(
+                "logoAcquisition.status must be retained when a logo is packaged"
+            )
         asset = assets[0]
         if not isinstance(asset, dict) or asset.get("type") != "brand_identity":
             raise CandidateError("the optional asset must have type brand_identity")
-        if asset.get("sourceKind") not in {
+        source_kind = asset.get("sourceKind")
+        if source_kind not in {
             "official_web",
             "official_document",
             "user_upload",
@@ -220,7 +343,19 @@ def validate_run(path: Path, input_dir: Path) -> tuple[bytes | None, tuple[str, 
         for url_field in ("sourcePageUrl", "sourceAssetUrl"):
             if asset.get(url_field) is not None and not public_http_url(asset[url_field]):
                 raise CandidateError(f"assets[0].{url_field} must be HTTP(S)")
-        if asset.get("sourceDocumentName") is not None:
+        if source_kind == "official_web":
+            for url_field in ("sourcePageUrl", "sourceAssetUrl"):
+                if not public_http_url(asset.get(url_field)):
+                    raise CandidateError(
+                        f"official-web logo requires assets[0].{url_field}"
+                    )
+        if source_kind in {"official_document", "user_upload"}:
+            require_text(
+                asset.get("sourceDocumentName"),
+                "assets[0].sourceDocumentName",
+                512,
+            )
+        elif asset.get("sourceDocumentName") is not None:
             require_text(
                 asset["sourceDocumentName"],
                 "assets[0].sourceDocumentName",
@@ -237,8 +372,43 @@ def validate_run(path: Path, input_dir: Path) -> tuple[bytes | None, tuple[str, 
             raise CandidateError("logo is empty or exceeds 8 MiB")
         validate_logo_bytes(relative, logo_bytes)
         logo = (relative, logo_bytes)
+    else:
+        if logo_status != "unavailable":
+            raise CandidateError(
+                "logoAcquisition.status must be unavailable when no logo is packaged"
+            )
+        reason = require_text(
+            logo_acquisition.get("reason"), "logoAcquisition.reason", 1000
+        )
+        if meaningful_character_count(reason) < 12:
+            raise CandidateError("logoAcquisition.reason must be concrete")
+        if len(set(normalized_attempted_pages)) < 2:
+            raise CandidateError(
+                "unavailable logo must record at least two distinct first-party page attempts"
+            )
+        source_urls = {
+            normalized_url(source["url"])
+            for source in sources
+            if isinstance(source, dict) and isinstance(source.get("url"), str)
+        }
+        if not set(normalized_attempted_pages).issubset(source_urls):
+            raise CandidateError(
+                "logoAcquisition attempted pages must also appear in sources"
+            )
+        if isinstance(official_website, str):
+            official_host = urlparse(official_website).hostname or ""
+            attempted_hosts = [
+                urlparse(page).hostname or "" for page in normalized_attempted_pages
+            ]
+            if any(
+                host != official_host and not host.endswith(f".{official_host}")
+                for host in attempted_hosts
+            ):
+                raise CandidateError(
+                    "unavailable logo attempts must use first-party pages from the official website"
+                )
     canonical = json.dumps(value, ensure_ascii=False, indent=2, sort_keys=True)
-    return f"{canonical}\n".encode(), logo
+    return f"{canonical}\n".encode(), logo, value
 
 
 def write_entry(archive: zipfile.ZipFile, name: str, data: bytes) -> None:
@@ -272,13 +442,13 @@ def build(input_dir: Path, output: Path) -> None:
     customer = validate_markdown(
         input_dir / "01_customer_draft.md", CUSTOMER_HEADINGS
     )
-    run, logo = validate_run(input_dir / "02_run.json", input_dir)
+    run, logo, run_value = validate_run(input_dir / "02_run.json", input_dir)
+    validate_content_floors(customer, run_value)
     entries: list[tuple[str, bytes]] = [
         ("00_brand_facts.md", facts),
         ("01_customer_draft.md", customer),
     ]
-    if run is not None:
-        entries.append(("02_run.json", run))
+    entries.append(("02_run.json", run))
     if logo is not None:
         entries.append(logo)
     output.parent.mkdir(parents=True, exist_ok=True)

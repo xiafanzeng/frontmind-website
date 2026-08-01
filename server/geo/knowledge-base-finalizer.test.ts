@@ -537,6 +537,21 @@ describe("website knowledge-base finalizer", () => {
     const companyOverview = await zip
       .file("01_company_overview/overview.md")!
       .async("string");
+    const overviewDocuments = manifest.documents.filter(
+      (document: any) => document.kind === "overview",
+    );
+    expect(
+      overviewDocuments.every(
+        (document: any) =>
+          !document.title.includes("综述") &&
+          document.dynamicMinimumCharacters === 0,
+      ),
+    ).toBe(true);
+    expect(manifest.branchEvidence).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ dynamicOverviewMinimum: 0 }),
+      ]),
+    );
     const companyLeaf = await zip
       .file(
         leaves.find(
@@ -546,6 +561,18 @@ describe("website knowledge-base finalizer", () => {
       .async("string");
     expect(companyOverview).not.toContain(
       "示例企业面向企业客户提供软件产品",
+    );
+    expect(companyOverview).not.toContain("企业与品牌综述");
+    expect(companyOverview).not.toContain(
+      "企业与品牌分支的事实、来源与待核验边界已按条目分别整理。",
+    );
+    expect(companyOverview).not.toContain("详细事实与来源已按条目分别整理");
+    const teamOverview = await zip
+      .file("02_team/overview.md")!
+      .async("string");
+    expect(teamOverview).not.toContain("团队与组织综述");
+    expect(teamOverview).not.toContain(
+      "团队与组织分支的事实、来源与待核验边界已按条目分别整理。",
     );
     expect(companyOverview).not.toBe(companyLeaf);
     expect(
@@ -581,10 +608,25 @@ describe("website knowledge-base finalizer", () => {
     const productOverview = await zip
       .file("03_products/overview.md")!
       .async("string");
-    expect(productOverview).toContain(
+    const productLeafDocument = leaves.find(
+      (document: any) =>
+        document.branchId === "03_products" &&
+        document.title.includes("平台产品"),
+    );
+    expect(productLeafDocument).toBeTruthy();
+    if (!productLeafDocument) {
+      throw new Error("Expected a platform product leaf document");
+    }
+    const productLeaf = await zip
+      .file(productLeafDocument.path)!
+      .async("string");
+    expect(productLeaf).toContain(
       "MindNexus 智汇：把企业级 AI 工作流接入现有系统",
     );
-    expect(productOverview).not.toMatch(/Mind。\s*$/m);
+    expect(productLeaf).not.toMatch(/Mind。\s*$/m);
+    expect(productOverview).not.toContain(
+      "MindNexus 智汇：把企业级 AI 工作流接入现有系统",
+    );
   });
 
   it("normalizes and packages one traceable first-party logo", async () => {

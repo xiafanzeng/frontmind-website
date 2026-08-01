@@ -4,9 +4,20 @@ import { usePageMeta } from "@/hooks/usePageMeta";
 import SectionLabel from "@/components/SectionLabel";
 import Navbar from "@/components/Navbar";
 import Footer from "@/components/Footer";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogHeader,
+  DialogTitle,
+  DialogTrigger,
+} from "@/components/ui/dialog";
 import { useLang } from "@/contexts/LanguageContext";
-import { FRONTMIND_CONTACT_EMAILS } from "@/lib/frontmind-contact";
-import { ArrowRight, FileText, Mail } from "lucide-react";
+import {
+  FRONTMIND_CONTACT_EMAILS,
+  FRONTMIND_WECHAT_QR_PATH,
+} from "@/lib/frontmind-contact";
+import { ArrowRight, FileText, Mail, MessageCircle } from "lucide-react";
 
 const CTA_IMG =
   "https://d2xsxph8kpxj0f.cloudfront.net/310519663574964680/kqDR6C992NM8WoGVvcwuPU/frontmind-cta-scene-XSQHkwEMYtwgJ8WUCXEzzY.webp";
@@ -213,34 +224,100 @@ export default function Contact({ includeChrome = true }: ContactProps) {
           ref={revealHero.ref}
           className={`container relative z-10 reveal ${revealHero.isVisible ? "visible" : ""}`}
         >
-          <div className="max-w-3xl">
-            <SectionLabel text={t("联系我们", "Contact Us")} color="purple" />
-            <h1
-              className="mb-6 text-4xl font-bold leading-tight text-[#1A1A2E] md:text-5xl"
-              style={{ fontFamily: "'DM Serif Display', serif" }}
-            >
-              {t(
-                <>
-                  与 FrontMind
-                  <br />
-                  开启一次业务讨论
-                </>,
-                <>
-                  Start a Business Conversation
-                  <br />
-                  with FrontMind
-                </>,
-              )}
-            </h1>
-            <p
-              className="max-w-2xl text-lg leading-relaxed text-[#6B7280]"
-              style={{ fontFamily: "'DM Sans', sans-serif" }}
-            >
-              {t(
-                "如果您的企业正在思考 AI 搜索可见度、智能体增长或内部流程 AI 化，欢迎将业务背景与合作方向发送给我们。FrontMind 团队会基于材料判断适合的交流方式。",
-                "If your organization is exploring AI search visibility, agentic growth, or enterprise AI workflows, share your business context and collaboration direction with us. The FrontMind team will review the material and suggest an appropriate next step.",
-              )}
-            </p>
+          <div className="grid items-end gap-10 lg:grid-cols-[minmax(0,1fr)_320px]">
+            <div className="max-w-3xl">
+              <SectionLabel text={t("联系我们", "Contact Us")} color="purple" />
+              <h1
+                className="mb-6 text-4xl font-bold leading-tight text-[#1A1A2E] md:text-5xl"
+                style={{ fontFamily: "'DM Serif Display', serif" }}
+              >
+                {t(
+                  <>
+                    与 FrontMind
+                    <br />
+                    开启一次业务讨论
+                  </>,
+                  <>
+                    Start a Business Conversation
+                    <br />
+                    with FrontMind
+                  </>,
+                )}
+              </h1>
+              <p
+                className="max-w-2xl text-lg leading-relaxed text-[#6B7280]"
+                style={{ fontFamily: "'DM Sans', sans-serif" }}
+              >
+                {t(
+                  "如果您的企业正在思考 AI 搜索可见度、智能体增长或内部流程 AI 化，欢迎将业务背景与合作方向发送给我们。FrontMind 团队会基于材料判断适合的交流方式。",
+                  "If your organization is exploring AI search visibility, agentic growth, or enterprise AI workflows, share your business context and collaboration direction with us. The FrontMind team will review the material and suggest an appropriate next step.",
+                )}
+              </p>
+            </div>
+
+            <Dialog>
+              <DialogTrigger asChild>
+                <button
+                  type="button"
+                  className="fm-card group flex w-full items-center justify-between gap-4 p-5 text-left transition-transform hover:-translate-y-0.5 md:p-6"
+                >
+                  <span className="flex min-w-0 items-center gap-4">
+                    <span className="fm-icon-panel flex h-12 w-12 shrink-0 items-center justify-center text-[#3D1560]">
+                      <MessageCircle size={22} />
+                    </span>
+                    <span>
+                      <span
+                        className="block text-xs font-bold uppercase tracking-[0.16em] text-[#C5A24D]"
+                        style={{ fontFamily: "'DM Sans', sans-serif" }}
+                      >
+                        {t("企业微信", "WeCom")}
+                      </span>
+                      <strong
+                        className="mt-1 block text-base text-[#1A1A2E]"
+                        style={{ fontFamily: "'DM Sans', sans-serif" }}
+                      >
+                        {t("扫码联系 FrontMind", "Scan to contact FrontMind")}
+                      </strong>
+                    </span>
+                  </span>
+                  <ArrowRight
+                    size={18}
+                    className="shrink-0 text-[#3D1560] transition-transform group-hover:translate-x-1"
+                  />
+                </button>
+              </DialogTrigger>
+              <DialogContent className="max-h-[calc(100dvh-2rem)] overflow-y-auto border-[#E5E7EB] bg-white p-0 sm:max-w-md">
+                <DialogHeader className="border-b border-[#E5E7EB] px-6 pb-5 pt-6 text-left">
+                  <DialogTitle
+                    className="pr-8 text-2xl text-[#1A1A2E]"
+                    style={{ fontFamily: "'DM Serif Display', serif" }}
+                  >
+                    {t("企业微信联系", "Contact via WeCom")}
+                  </DialogTitle>
+                  <DialogDescription
+                    className="leading-6 text-[#6B7280]"
+                    style={{ fontFamily: "'DM Sans', sans-serif" }}
+                  >
+                    {t(
+                      "使用企业微信扫描二维码，添加后请备注企业名称与希望讨论的业务方向。",
+                      "Scan the QR code with WeCom and include your company name and discussion topic when adding us.",
+                    )}
+                  </DialogDescription>
+                </DialogHeader>
+                <div className="px-6 pb-6 pt-5">
+                  <div className="overflow-hidden rounded-2xl border border-[#E5E7EB] bg-[#FAFAFA] p-3">
+                    <img
+                      src={FRONTMIND_WECHAT_QR_PATH}
+                      alt={t(
+                        "FrontMind 企业微信二维码",
+                        "FrontMind WeCom QR code",
+                      )}
+                      className="mx-auto block max-h-[62dvh] w-full object-contain"
+                    />
+                  </div>
+                </div>
+              </DialogContent>
+            </Dialog>
           </div>
         </div>
       </section>

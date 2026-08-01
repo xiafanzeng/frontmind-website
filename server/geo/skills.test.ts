@@ -66,7 +66,7 @@ describe("website one-shot knowledge-base skill", () => {
   it("keeps the Base skill focused on research and candidate output", async () => {
     const skill = await loadWebsiteKnowledgeBaseSkill();
     expect(Buffer.byteLength(skill, "utf8")).toBeGreaterThanOrEqual(9_000);
-    expect(Buffer.byteLength(skill, "utf8")).toBeLessThanOrEqual(30_000);
+    expect(Buffer.byteLength(skill, "utf8")).toBeLessThanOrEqual(40_000);
     for (const invariant of [
       "ordinary Agent browsing",
       "D01–D13",
@@ -76,6 +76,9 @@ describe("website one-shot knowledge-base skill", () => {
       "references/candidate-format.md",
       "assets/logo.<extension>",
       "Do not collect or package favicons",
+      "logoAcquisition.status",
+      "6300 visible characters",
+      "contentFloorExceptions",
       "scripts/build_candidate.py",
     ]) {
       expect(skill).toContain(invariant);
@@ -177,21 +180,66 @@ describe("website one-shot knowledge-base skill", () => {
             ][index]
           }\n\n公开资料暂未提供可核验信息。[待核验]`,
       ).join("\n\n");
-      const customer = [
-        "企业与品牌",
-        "团队与组织",
-        "产品与服务",
-        "技术与交付",
-        "客户与行业",
-        "服务与合作",
-        "可信优势",
-      ]
-        .map((title) => `## ${title}\n\n公开资料暂未提供可核验信息。[待核验]`)
+      const contentFloors = new Map([
+        ["企业与品牌", 500],
+        ["团队与组织", 500],
+        ["产品与服务", 2500],
+        ["技术与交付", 1000],
+        ["客户与行业", 600],
+        ["服务与合作", 600],
+        ["可信优势", 600],
+      ]);
+      const customer = Array.from(contentFloors)
+        .map(
+          ([title, floor], index) =>
+            `## ${title}\n\n${`可核验的企业业务产品技术客户服务事实说明${index + 1}`.repeat(
+              Math.ceil(floor / 20) + 1,
+            )}。[来源](https://example.com/section-${index + 1})`,
+        )
         .join("\n\n");
       fs.writeFileSync(path.join(temporaryRoot, "00_brand_facts.md"), facts);
       fs.writeFileSync(
         path.join(temporaryRoot, "01_customer_draft.md"),
         customer,
+      );
+      const assetsRoot = path.join(temporaryRoot, "assets");
+      fs.mkdirSync(assetsRoot);
+      fs.writeFileSync(
+        path.join(assetsRoot, "logo.svg"),
+        '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 10 10"><path d="M0 0h10v10H0z"/></svg>',
+      );
+      fs.writeFileSync(
+        path.join(temporaryRoot, "02_run.json"),
+        JSON.stringify({
+          schemaVersion: 1,
+          company: {
+            name: "示例企业",
+            officialWebsite: "https://example.com",
+            industryCluster: "C3",
+          },
+          sources: Array.from(contentFloors).map((_, index) => ({
+            title: `版块来源 ${index + 1}`,
+            kind: "official_web",
+            status: "read",
+            url: `https://example.com/section-${index + 1}`,
+          })),
+          queries: ["示例企业 产品"],
+          contentFloorExceptions: [],
+          logoAcquisition: {
+            status: "retained",
+            attemptedPageUrls: ["https://example.com"],
+          },
+          assets: [
+            {
+              path: "assets/logo.svg",
+              type: "brand_identity",
+              sourceKind: "official_web",
+              sourcePageUrl: "https://example.com",
+              sourceAssetUrl: "https://example.com/logo.svg",
+              caption: "示例企业 Logo",
+            },
+          ],
+        }),
       );
       const firstRoot = path.join(temporaryRoot, "first");
       const secondRoot = path.join(temporaryRoot, "second");
@@ -224,10 +272,139 @@ describe("website one-shot knowledge-base skill", () => {
       expect(Object.keys(zip.files).sort()).toEqual([
         "00_brand_facts.md",
         "01_customer_draft.md",
+        "02_run.json",
+        "assets/logo.svg",
       ]);
       const parsed = await parseKnowledgeBaseCandidate(fs.readFileSync(first));
       expect(parsed.factSections.size).toBe(13);
       expect(parsed.customerSections.size).toBe(7);
+    } finally {
+      fs.rmSync(temporaryRoot, { recursive: true, force: true });
+    }
+  });
+
+  it("rejects thin content and a quietly omitted logo", async () => {
+    const temporaryRoot = fs.mkdtempSync(
+      path.join(os.tmpdir(), "website-kb-skill-invalid-"),
+    );
+    try {
+      const facts = Array.from(
+        { length: 13 },
+        (_, index) =>
+          `## D${String(index + 1).padStart(2, "0")} ${
+            [
+              "企业基础",
+              "团队",
+              "产品服务",
+              "技术能力",
+              "客户案例",
+              "资质认证",
+              "财务融资",
+              "竞争信息",
+              "市场信息",
+              "品牌资产",
+              "渠道",
+              "公开意图",
+              "公共情报",
+            ][index]
+          }\n\n公开资料暂未提供可核验信息。[待核验]`,
+      ).join("\n\n");
+      const customer = [
+        "企业与品牌",
+        "团队与组织",
+        "产品与服务",
+        "技术与交付",
+        "客户与行业",
+        "服务与合作",
+        "可信优势",
+      ]
+        .map((title) => `## ${title}\n\n内容很少。[待核验]`)
+        .join("\n\n");
+      fs.writeFileSync(path.join(temporaryRoot, "00_brand_facts.md"), facts);
+      fs.writeFileSync(
+        path.join(temporaryRoot, "01_customer_draft.md"),
+        customer,
+      );
+      fs.writeFileSync(
+        path.join(temporaryRoot, "02_run.json"),
+        JSON.stringify({
+          schemaVersion: 1,
+          company: {
+            name: "示例企业",
+            officialWebsite: "https://example.com",
+          },
+          sources: [],
+          queries: [],
+          contentFloorExceptions: [],
+          logoAcquisition: { status: "retained", attemptedPageUrls: [] },
+          assets: [],
+        }),
+      );
+      const script = path.resolve(
+        process.cwd(),
+        "server/skills/website-one-shot-kb-builder/scripts/build_candidate.py",
+      );
+      const output = path.join(temporaryRoot, "website-lead-candidate-v1.zip");
+      await expect(
+        execFileAsync("python3", [
+          script,
+          "--input-dir",
+          temporaryRoot,
+          "--output",
+          output,
+        ]),
+      ).rejects.toMatchObject({
+        stderr: expect.stringContaining(
+          "logoAcquisition.status must be unavailable",
+        ),
+      });
+
+      fs.writeFileSync(
+        path.join(temporaryRoot, "02_run.json"),
+        JSON.stringify({
+          schemaVersion: 1,
+          company: {
+            name: "示例企业",
+            officialWebsite: "https://example.com",
+          },
+          sources: [
+            {
+              title: "企业官网",
+              kind: "official_web",
+              status: "read",
+              url: "https://example.com",
+            },
+            {
+              title: "企业关于页",
+              kind: "official_web",
+              status: "read",
+              url: "https://example.com/about",
+            },
+          ],
+          queries: [],
+          contentFloorExceptions: [],
+          logoAcquisition: {
+            status: "unavailable",
+            attemptedPageUrls: [
+              "https://example.com",
+              "https://example.com/about",
+            ],
+            reason: "两个第一方页面均未提供可解码的官方 Logo 原始资源。",
+          },
+          assets: [],
+        }),
+      );
+      await expect(
+        execFileAsync("python3", [
+          script,
+          "--input-dir",
+          temporaryRoot,
+          "--output",
+          output,
+        ]),
+      ).rejects.toMatchObject({
+        stderr: expect.stringContaining("below its visible-content floor"),
+      });
     } finally {
       fs.rmSync(temporaryRoot, { recursive: true, force: true });
     }
@@ -249,6 +426,9 @@ describe("website one-shot knowledge-base skill", () => {
       expect(dimensions).toContain(cluster);
     }
     expect(candidateFormat).toContain('"schemaVersion": 1');
+    expect(candidateFormat).toMatch(/\| 企业与品牌\s+\|\s+210 \|\s+500 \|/);
+    expect(candidateFormat).toMatch(/\| 合计\s+\|\s+2954 \|\s+6300 \|/);
+    expect(candidateFormat).toContain("logoAcquisition");
     expect(candidateFormat).toContain("00_brand_facts.md");
     expect(candidateFormat).toContain("01_customer_draft.md");
     expect(candidateFormat).not.toContain("00_package_manifest.json");

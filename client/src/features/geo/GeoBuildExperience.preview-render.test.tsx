@@ -263,13 +263,13 @@ describe("GEO style preview rendering", () => {
 
     expect(html).toContain("知识库结构校验已通过");
     expect(html).toContain("摘要暂不可用");
-    expect(html).toContain("暂无可展示摘要");
+    expect(html).toContain("暂无知识条目");
     expect(html).not.toContain("全面抓取已完成");
     expect(html).not.toContain("官网与权威公开来源");
     expect(html).not.toContain("已完成系统整理");
   });
 
-  it("renders the branch overview and every knowledge leaf directly without asset or report views", () => {
+  it("renders every knowledge leaf without the low-value branch overview", () => {
     const fixture = createGeoStylePreviewProject();
     const project = {
       ...fixture,
@@ -323,8 +323,9 @@ describe("GEO style preview rendering", () => {
     );
 
     expect(html).toContain("KNOWLEDGE BRANCH");
-    expect(html).toContain("正式产品综述");
-    expect(html).toContain("这是整理后的客户可见正文");
+    expect(html).not.toContain("正式产品综述");
+    expect(html).not.toContain("这是整理后的客户可见正文");
+    expect(html).not.toContain("正式产品综述摘要");
     expect(html).toContain("API 服务");
     expect(html).toContain("叶子正文仅在切换后显示");
     expect(html).not.toContain("该分支公开证据有限");
@@ -339,7 +340,7 @@ describe("GEO style preview rendering", () => {
     expect(html).not.toContain("这段抓取报告不应混入默认知识正文");
   });
 
-  it("does not borrow leaf images when the overview has an explicit empty image binding", () => {
+  it("does not render a branch overview or borrow leaf images", () => {
     const fixture = createGeoStylePreviewProject();
     const project = {
       ...fixture,
@@ -389,7 +390,8 @@ describe("GEO style preview rendering", () => {
       />,
     );
 
-    expect(html).toContain("本综述没有关联图片");
+    expect(html).not.toContain("本综述没有关联图片");
+    expect(html).toContain("叶子正文");
     expect(html).not.toContain("geo-section-media-image");
     expect(html).not.toContain('src="/api/assets/leaf"');
   });

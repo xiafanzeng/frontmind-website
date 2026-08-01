@@ -518,33 +518,13 @@ function normalizeOverviewNarrative(value: string) {
   return value.replace(/\s+/g, " ").trim();
 }
 
-function structuralOverviewNarrative(
-  display: (typeof DISPLAY_BRANCHES)[number],
-  leaves: LeafDraft[],
-) {
-  const leafTitles = Array.from(
-    new Set(
-      leaves
-        .map((leaf) => leaf.title.trim())
-        .filter((title) => title && title !== display.customerTitle),
-    ),
-  ).slice(0, 3);
-  return leafTitles.length
-    ? `${display.title}分支涵盖${leafTitles.join("、")}，详细事实与来源已按条目分别整理。`
-    : `${display.title}分支的事实、来源与待核验边界已按条目分别整理。`;
-}
-
 function buildOverviewNarrative(input: {
-  display: (typeof DISPLAY_BRANCHES)[number];
   intro: string;
   leaves: LeafDraft[];
   hasEvidence: boolean;
   sourceRecords: SourceRecord[];
 }) {
-  const fallback = structuralOverviewNarrative(input.display, input.leaves);
-  if (!input.hasEvidence) {
-    return `公开资料暂未提供${input.display.title}的充分可核验信息。`;
-  }
+  if (!input.hasEvidence) return "";
   const introSourceIds = sourceIdsForMarkdown(
     input.intro,
     input.sourceRecords,
@@ -559,15 +539,7 @@ function buildOverviewNarrative(input: {
         normalizedNarrativeSimilarity(narrative, leaf.narrative) >= 0.55,
     )
   ) {
-    narrative = fallback;
-  }
-  if (
-    input.leaves.some(
-      (leaf) =>
-        normalizedNarrativeSimilarity(narrative, leaf.narrative) >= 0.55,
-    )
-  ) {
-    narrative = `${input.display.title}：${input.leaves.length} 个独立条目已完成来源关联。`;
+    return "";
   }
   return normalizeOverviewNarrative(narrative);
 }
@@ -1422,7 +1394,6 @@ export async function finalizeKnowledgeBaseCandidate(input: {
       : "needs_verification";
     const intro = introByDisplay.get(display.id) || "";
     const narrative = buildOverviewNarrative({
-      display,
       intro,
       leaves: branchLeaves,
       hasEvidence: evidenceForOverview.length > 0,
@@ -1435,7 +1406,7 @@ export async function finalizeKnowledgeBaseCandidate(input: {
       id: documentId,
       path: documentPath,
       kind: "overview",
-      title: `${display.title}综述`,
+      title: display.title,
       branchId: display.overviewBranch,
       order: 0,
       evidenceStatus: status,
@@ -1447,7 +1418,7 @@ export async function finalizeKnowledgeBaseCandidate(input: {
         (total, entry) => total + entry.characters,
         0,
       ),
-      dynamicMinimumCharacters: 8,
+      dynamicMinimumCharacters: 0,
       evidenceDocumentIds: evidenceForOverview.map(
         (entry) => entry.document.id,
       ),
@@ -1644,7 +1615,7 @@ export async function finalizeKnowledgeBaseCandidate(input: {
           ? ("limited_evidence" as const)
           : ("needs_verification" as const),
       deduplicatedEvidenceCharacters,
-      dynamicOverviewMinimum: 8,
+      dynamicOverviewMinimum: 0,
       checkedSourceCount: checkedSourceCountForDisplay(display, documents),
     };
   });

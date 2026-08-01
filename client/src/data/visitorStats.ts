@@ -8,11 +8,7 @@ export type VisitorCountry = {
 
 export type VisitorCountryMetadata = Omit<VisitorCountry, "reads">;
 
-/**
- * Display metadata only. Visit counts must always come from the production
- * server store; keeping a count baseline in the browser would turn an API
- * outage into fabricated "live" statistics.
- */
+/** Display metadata used by the server summary and the client map. */
 export const visitorCountryCatalog: VisitorCountryMetadata[] = [
   {
     country: "Mainland China",
@@ -158,3 +154,80 @@ export const visitorCountryCatalog: VisitorCountryMetadata[] = [
   { country: "Other locations", iso: "other", latitude: 0, longitude: 0 },
   { country: "Unknown", iso: "unknown", latitude: 0, longitude: 0 },
 ];
+
+/**
+ * Published cumulative snapshot from before live server-side collection was
+ * introduced. It remains part of the lifetime total; newer persisted visits
+ * are added by the server instead of replacing this history.
+ */
+const historicalReadsByIso: Record<string, number> = {
+  cn: 930,
+  hk: 112,
+  us: 48,
+  sg: 38,
+  tw: 36,
+  jp: 28,
+  kr: 24,
+  de: 18,
+  gb: 15,
+  ca: 13,
+  au: 12,
+  my: 11,
+  vn: 10,
+  in: 9,
+  fr: 8,
+  th: 8,
+  ae: 6,
+  id: 6,
+  nl: 5,
+  it: 5,
+  es: 4,
+  ch: 4,
+  nz: 4,
+  br: 3,
+  se: 3,
+  ph: 3,
+  ru: 3,
+  sa: 3,
+  tr: 2,
+  be: 2,
+  pt: 2,
+  il: 2,
+  qa: 2,
+  ie: 2,
+  bd: 2,
+  pk: 2,
+  lk: 2,
+  eg: 1,
+  fi: 1,
+  no: 1,
+  at: 1,
+  lu: 1,
+  ma: 1,
+  np: 1,
+  ng: 1,
+  cl: 1,
+  ro: 1,
+  ua: 1,
+  pl: 1,
+  mx: 1,
+  za: 1,
+  other: 5,
+  unknown: 1,
+};
+
+export const visitorHistoricalBaseline: VisitorCountry[] = visitorCountryCatalog
+  .map((country) => ({
+    ...country,
+    reads: historicalReadsByIso[country.iso] ?? 0,
+  }))
+  .filter((country) => country.reads > 0);
+
+export const visitorHistoricalBaselineSummary = {
+  capturedAt: "2026-06-23",
+  totalReads: visitorHistoricalBaseline.reduce(
+    (total, country) => total + country.reads,
+    0,
+  ),
+  countryCount: visitorHistoricalBaseline.length,
+};

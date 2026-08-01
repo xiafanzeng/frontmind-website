@@ -2683,7 +2683,7 @@ async function validateWebsiteLeadPackageBudgets(
       }
       const expectedMinimum =
         packageManifest.schemaVersion === 3
-          ? 8
+          ? 0
           : websiteLeadV2OverviewMinimum(
               actualBranchEvidenceCharacters,
               evidence.branchId,

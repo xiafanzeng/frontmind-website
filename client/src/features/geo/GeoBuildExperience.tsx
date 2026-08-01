@@ -4565,12 +4565,6 @@ export function EnterpriseAnalysis({
     ) ??
     sections[0];
   const activeLeaves = activeSection?.leaves ?? [];
-  const activeOverview = activeSection?.overview;
-  const activeMarkdown = expandLegacyTruncatedOverview(
-    activeOverview?.markdown || activeSection?.markdown || "",
-    activeSection?.title || "",
-    activeLeaves,
-  );
 
   return (
     <div className="geo-analysis-shell">
@@ -4710,7 +4704,7 @@ export function EnterpriseAnalysis({
                     <small>
                       {section.evidenceCount
                         ? `${section.evidenceCount} 条证据`
-                        : section.summary || "暂无可展示摘要"}
+                        : `${section.leaves?.length ?? 0} 个知识条目`}
                     </small>
                   </span>
                 </button>
@@ -4724,9 +4718,6 @@ export function EnterpriseAnalysis({
                 </div>
               </header>
               <div className="geo-knowledge-copy geo-knowledge-copy-all">
-                <LightweightMarkdown
-                  markdown={activeMarkdown || knowledgeBase.reportMarkdown}
-                />
                 {activeLeaves.map((leaf, index) => (
                   <section className="geo-knowledge-leaf-section" key={leaf.id}>
                     <header>
@@ -4739,6 +4730,13 @@ export function EnterpriseAnalysis({
                     <LightweightMarkdown markdown={leaf.markdown} />
                   </section>
                 ))}
+                {activeLeaves.length === 0 && (
+                  <EmptyKnowledgeState
+                    icon={<BookOpenText size={22} />}
+                    title="暂无知识条目"
+                    copy="该分支当前没有可展示的事实条目。"
+                  />
+                )}
               </div>
             </article>
           </div>
