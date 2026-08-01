@@ -6,7 +6,7 @@ const secondVisitor = "b".repeat(64);
 const thirdVisitor = "c".repeat(64);
 
 describe("visitor statistics summary", () => {
-  it("adds persisted visits to the published historical snapshot", () => {
+  it("derives every total from persisted visits without a fabricated baseline", () => {
     const store: VisitorStore = {
       visitors: {
         [firstVisitor]: {
@@ -37,34 +37,32 @@ describe("visitor statistics summary", () => {
 
     const summary = summarizeVisitorStore(store);
 
-    expect(summary.totalReads).toBe(1416);
+    expect(summary.totalReads).toBe(9);
     expect(summary.pageviews).toBe(9);
-    expect(summary.countryCount).toBe(53);
-    expect(summary.baselineReads).toBe(1407);
-    expect(summary.liveReads).toBe(9);
+    expect(summary.countryCount).toBe(2);
+    expect(summary).not.toHaveProperty("baselineReads");
+    expect(summary).not.toHaveProperty("liveReads");
     expect(summary.countries).toEqual(
       expect.arrayContaining([
-        expect.objectContaining({ iso: "cn", reads: 933 }),
-        expect.objectContaining({ iso: "us", reads: 50 }),
-        expect.objectContaining({ iso: "unknown", reads: 5 }),
+        expect.objectContaining({ iso: "cn", reads: 3 }),
+        expect.objectContaining({ iso: "us", reads: 2 }),
+        expect.objectContaining({ iso: "unknown", reads: 4 }),
       ]),
     );
   });
 
-  it("retains the historical distribution for a fresh live store", () => {
+  it("reports a fresh store honestly as zero visits and zero regions", () => {
     const summary = summarizeVisitorStore({
       visitors: {},
       pageviews: 0,
     });
 
     expect(summary).toMatchObject({
-      totalReads: 1407,
-      countryCount: 53,
+      totalReads: 0,
+      countryCount: 0,
       pageviews: 0,
-      baselineReads: 1407,
-      liveReads: 0,
+      countries: [],
     });
-    expect(summary.countries).toHaveLength(53);
   });
 
   it("keeps missing or invalid geography under Unknown instead of China", () => {
@@ -81,15 +79,13 @@ describe("visitor statistics summary", () => {
       pageviews: 1,
     });
 
-    expect(summary.countryCount).toBe(53);
-    expect(summary.countries).toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({
-          country: "Unknown",
-          iso: "unknown",
-          reads: 2,
-        }),
-      ]),
-    );
+    expect(summary.countryCount).toBe(0);
+    expect(summary.countries).toEqual([
+      expect.objectContaining({
+        country: "Unknown",
+        iso: "unknown",
+        reads: 1,
+      }),
+    ]);
   });
 });
