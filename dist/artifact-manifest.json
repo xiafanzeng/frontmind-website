@@ -1,0 +1,2390 @@
+{
+  "schemaVersion": 1,
+  "buildSourceSha": "95d050d0fed63208bb2aabb366e79ce42659328e",
+  "excludedPaths": [
+    "artifact-manifest.json"
+  ],
+  "files": [
+    {
+      "path": "build-source.json",
+      "bytes": 89,
+      "sha256": "fe0bccb73cac7a9de21b4d99223295ac26f74a4ade7c12c5190d05ce5900f8e2"
+    },
+    {
+      "path": "index.js",
+      "bytes": 765325,
+      "sha256": "528331697d4839c55547582a1274217019a1f406dd81ec833433f9b43ee8fcc4"
+    },
+    {
+      "path": "public/.gitkeep",
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "public/about/cuhk-ai-lab-hero.webp",
+      "bytes": 311500,
+      "sha256": "cfc27a3308b1b03d59ca7b6dcfe2d17d360eeb3470663f63d61fe90368c6ddd1"
+    },
+    {
+      "path": "public/about/geo-academic-tracking.webp",
+      "bytes": 132252,
+      "sha256": "92f1c97808f9e14d2b8dece449242b782ccdb750951878c04aa63bbf2e62f4f4"
+    },
+    {
+      "path": "public/about/index.html",
+      "bytes": 4131,
+      "sha256": "fd59a4815ae4c6c3f6b5a560a6fcc3334f65057183d48fa81e902967c73dbf15"
+    },
+    {
+      "path": "public/assets/About-Bx5o6tB3.js",
+      "bytes": 11927,
+      "sha256": "fb39dedcace17e1ac405e9e9e00e7bc96b124383ddbb0db23b4ae6bc9466a8a3"
+    },
+    {
+      "path": "public/assets/AnimatedWidgets-BlSd1twN.js",
+      "bytes": 19687,
+      "sha256": "630322dcc242791ec689d24a16c250ba6f50b8a4c481c2e06c2b43cee4c38880"
+    },
+    {
+      "path": "public/assets/Contact-0S1wjoGX.js",
+      "bytes": 17905,
+      "sha256": "64b7b649b8f8ddf8144141b4505c7ad5c0f215a3d6cab25ca3f40684aff39c82"
+    },
+    {
+      "path": "public/assets/GeoCommunity-CwKaExy6.js",
+      "bytes": 70480,
+      "sha256": "21290c34b27c1b9eedb9a11510c9e7946b36c3421137eaf06e0d1498798a68c2"
+    },
+    {
+      "path": "public/assets/GeoCommunityBlog-D4HLLKrk.js",
+      "bytes": 11972,
+      "sha256": "f76519ab224e3846c8ec77409b51c271c51bd6b84350ab65798001165fafc4f4"
+    },
+    {
+      "path": "public/assets/MindNexus-Cd2Xv8iT.js",
+      "bytes": 297,
+      "sha256": "341bc7e33a756fb89121a5df27d7bee1c85cb5729cf3f1c7917f1727f60d81fe"
+    },
+    {
+      "path": "public/assets/MindPromise-yrU0mQdg.js",
+      "bytes": 299,
+      "sha256": "d9b84055a572043698f769ee4963ed02d813a94c84e54349da016e216cdc3906"
+    },
+    {
+      "path": "public/assets/MindReach-Cxk1RWRs.js",
+      "bytes": 297,
+      "sha256": "19c8cc952562bfa89114765ef484cd45bf488c3a34aae4da00928e1c4bc9a5b0"
+    },
+    {
+      "path": "public/assets/News-CZaZjJnM.js",
+      "bytes": 52168,
+      "sha256": "fb792a37ccbd11d9435fb4e19d494f59db85623888d77b32a181ffeb09c3f500"
+    },
+    {
+      "path": "public/assets/NotFound-9gfp2hgW.js",
+      "bytes": 3145,
+      "sha256": "430ad18ef8d8ce589db49553e5f423b2ebe12a27b66a8f18dcb4b814f1a88b35"
+    },
+    {
+      "path": "public/assets/Platform-DURqfBSL.js",
+      "bytes": 13507,
+      "sha256": "d33639e6d931c6ac2edd667fb3dc76c44b422b3d6ee3abe625a117cc2854c269"
+    },
+    {
+      "path": "public/assets/Privacy-r4HIXALU.js",
+      "bytes": 5032,
+      "sha256": "d535eede6a1f72a01f91eeb42805d4b4ea56a23f0b5e50f6950ca3fbfce314fe"
+    },
+    {
+      "path": "public/assets/ProductIntro-DsbIK6mT.js",
+      "bytes": 37594,
+      "sha256": "f39af75083aa860b8ff9531d35ed39c454ecda65fe017d1d030b2f37f0aaa48e"
+    },
+    {
+      "path": "public/assets/Research-CkI0i3c1.js",
+      "bytes": 8943,
+      "sha256": "61688111cc988184965411be7e04e10b4e115a5f87943d5fe537730a91361ff4"
+    },
+    {
+      "path": "public/assets/Solutions-KFPWSeLI.js",
+      "bytes": 16388,
+      "sha256": "bfa2d56584e7f27d24b642540380aba73a3093c9da6aefe5f3b09c7a1c555496"
+    },
+    {
+      "path": "public/assets/Terms-zb1enUyW.js",
+      "bytes": 4391,
+      "sha256": "1f346836dbffcf1e19fbbfe14724b84b63de9be6aa2d9829790269446dda2aa2"
+    },
+    {
+      "path": "public/assets/about-CBcyRJ3X.js",
+      "bytes": 28081,
+      "sha256": "462a3688f2b8dc67059945f5fc126e0c5a6b2fb75e448a192fafa1e725bf4170"
+    },
+    {
+      "path": "public/assets/ai-for-seo-Ca6Qnzv9.js",
+      "bytes": 9863,
+      "sha256": "56928b9415a5f64937d133c9c636bc04f046a3de08e8b9250ac74658e10c66fb"
+    },
+    {
+      "path": "public/assets/benchmarks-CB5a_KtO.js",
+      "bytes": 15286,
+      "sha256": "57c2dea1fd54056781310902766d22cf0d55fed4d14e7326ce926c7397b45614"
+    },
+    {
+      "path": "public/assets/blogs-vmo1n5X7.js",
+      "bytes": 8584,
+      "sha256": "2204db96bc93d9023e8001e4811a69e32680fdc6d39e1135cd36e6351786307c"
+    },
+    {
+      "path": "public/assets/communityPostsCn-O26U_NP4.js",
+      "bytes": 1948457,
+      "sha256": "776473625c4999f4a0b6aacb46f5e094f61849039b6db2dcc34ffa4cdf4d1a6d"
+    },
+    {
+      "path": "public/assets/fkgl-calculator-DHetqght.js",
+      "bytes": 2824,
+      "sha256": "10b4ebd42577af7340c7803ba75e33371329895145b07c3251bd948e62b9a363"
+    },
+    {
+      "path": "public/assets/flesch-calculator-CCW2h0Au.js",
+      "bytes": 3094,
+      "sha256": "d1602da0dbb3b3420af930003cef7f7e6c13629c2550202327b9bdce04893582"
+    },
+    {
+      "path": "public/assets/generative-engine-optimization-resources-courses-tutorials-xtYybWPn.js",
+      "bytes": 62258,
+      "sha256": "e4b03e6ca441c769ebc184fa488bbc9fe12bdb2b42fbae0ac35f4d2c59afa77d"
+    },
+    {
+      "path": "public/assets/geo-framework-2jNOsxfh.js",
+      "bytes": 64461,
+      "sha256": "63080df9638bc5efdb1ee953f0950affb91b714271d6a37190576505a52a3d31"
+    },
+    {
+      "path": "public/assets/geo-glossary-vOrz_l1_.js",
+      "bytes": 63646,
+      "sha256": "8cc332227a3a07d4d328ffdd505d50f138c0c5a52b194a416e1ca7ad1ebe8c77"
+    },
+    {
+      "path": "public/assets/google-algorithm-history-gwiwNQqZ.js",
+      "bytes": 15828,
+      "sha256": "285fa994852ef634e4482a1569758a6243a21e45522b0ab80b735af61fa58d6c"
+    },
+    {
+      "path": "public/assets/google-algorithm-updates-DXDFTVdq.js",
+      "bytes": 13866,
+      "sha256": "5ccaaf2550f36f8dc2db1b65ff74de7ed01f3a36c50d21fa14189cb3dad0c17a"
+    },
+    {
+      "path": "public/assets/google-search-status-By5-Tzdx.js",
+      "bytes": 2078,
+      "sha256": "d4718aa3a206683bbdec3ab07450910ab093c7dafe022cf170a42a6c9f33f8c7"
+    },
+    {
+      "path": "public/assets/gunning-fog-calculator-RwIkUI-d.js",
+      "bytes": 2750,
+      "sha256": "24441d5e254dc9b44aa0d42c776f436b9f249f520810a607179762b2856b1e13"
+    },
+    {
+      "path": "public/assets/how-to-learn-geo-generative-engine-optimization-gABw3mhn.js",
+      "bytes": 59279,
+      "sha256": "ffc29044a4530cc98ef85edc044155b2d18deeeaa658e539c818f688bde26315"
+    },
+    {
+      "path": "public/assets/ideas-Bub2A8mh.js",
+      "bytes": 1817,
+      "sha256": "7e11c50023a9fdd63f56e3dc7a2af724231eb8d69350f041b664d4c20371349e"
+    },
+    {
+      "path": "public/assets/index-88Foe03X.js",
+      "bytes": 10193,
+      "sha256": "4d0820ce6505b5ac41f566cae74b3816bdd1911bd00f6213a38ec7b4bb6236bc"
+    },
+    {
+      "path": "public/assets/index-CrAo2nmt.js",
+      "bytes": 343551,
+      "sha256": "556199c6659d212eb6e2710ec9680e61a1e278bde01836a951914e313e10000c"
+    },
+    {
+      "path": "public/assets/index-DaLpcG3P.css",
+      "bytes": 378723,
+      "sha256": "133c4bb55cc0cb81e6570e30f233bcfb7f2d77a80289163018161cf347e8bce6"
+    },
+    {
+      "path": "public/assets/llm-evals-sU39AioZ.js",
+      "bytes": 9507,
+      "sha256": "bf2d3af67fa3b22dc4297b3685b950de34f097ace5e62a829797d80a03edab75"
+    },
+    {
+      "path": "public/assets/maps/world.svg",
+      "bytes": 1236510,
+      "sha256": "d24eb37d623d85b2f618a8ccdc5963b4c16f3ce36a3d6b73eaa5110c21dbe8b2"
+    },
+    {
+      "path": "public/assets/paperclip-for-seo-ig3okGEM.js",
+      "bytes": 11108,
+      "sha256": "9b6a5e066eeb1817eec2afab3daf39c1331bcc5b2a5e4760435c36e4baa12235"
+    },
+    {
+      "path": "public/assets/prompt-library-BvlZ9-d0.js",
+      "bytes": 14390,
+      "sha256": "4413e5f659b78c5dc556a09b289594b212e1038cc179150831dabd670fc931ed"
+    },
+    {
+      "path": "public/assets/smog-calculator-D2Kt6Mc6.js",
+      "bytes": 2824,
+      "sha256": "e8cbb74e308b677d314a00619c81ab1c33b519adecdbd7bb9e9976afddc937e5"
+    },
+    {
+      "path": "public/assets/start-baTW9Nc0.js",
+      "bytes": 19644,
+      "sha256": "0aa38d5b122dad502638f880f1639734484695e8069215b01e0b01f567b569d5"
+    },
+    {
+      "path": "public/assets/submissions-LESW2wF7.js",
+      "bytes": 2511,
+      "sha256": "1ade2c7316a4672a83b3dd411733068c181e554b5c21c673d877b2f158ecae09"
+    },
+    {
+      "path": "public/assets/transformer-visualization-Bfn-hf4H.js",
+      "bytes": 8664,
+      "sha256": "96a76c3d03e9cfbb416b20d9f85b466dc093209f9d6c55d6831c7c30b06ed75c"
+    },
+    {
+      "path": "public/assets/translations-CDmqg7aK.js",
+      "bytes": 6436,
+      "sha256": "d66f648d7ece12622f8b0d7759233d4742cd8aa82f72cd44b1de43fbc4e97ec1"
+    },
+    {
+      "path": "public/assets/vendor-CmT5bYEn.js",
+      "bytes": 299617,
+      "sha256": "69d9545d9940594c88ca8499cae49d1a17c4e4421b9bc2496c63e894c492ef16"
+    },
+    {
+      "path": "public/assets/vendor-radix-Dc_FVRD7.js",
+      "bytes": 139,
+      "sha256": "6c489d47438ce6adb2724221cb1432ef8c5fd30e5be7210c6ccff9f2a5c5462d"
+    },
+    {
+      "path": "public/assets/vendor-react-BjUAR4DP.js",
+      "bytes": 314013,
+      "sha256": "fa2a75cd49e73e8e2fff6296a703087dc73519870ed7d9626a9cbd3535327216"
+    },
+    {
+      "path": "public/assets/waitlist-BjpIp61S.js",
+      "bytes": 1834,
+      "sha256": "363e700c59f843a007e9d5180daa64a42000a58afa448a76c8a342e4f0102617"
+    },
+    {
+      "path": "public/baidu_verify_codeva-rrF9nE7nS0.html",
+      "bytes": 32,
+      "sha256": "3c7518c0454b197619adc049ca28b3a580c7ab1a913471af757f81cb38fdb5c1"
+    },
+    {
+      "path": "public/blog/30-40-percent-retrieval-edge-ai-agents-disrupting-paid-backlinks/index.html",
+      "bytes": 6719,
+      "sha256": "838d0ddd69f44e25121ff2adcf14ef1599674ae78778ddafec3c46f7506bdee5"
+    },
+    {
+      "path": "public/blog/aeo-vs-geo-microsoft/index.html",
+      "bytes": 5437,
+      "sha256": "794fb7d2a57b2b747980ceae7577bd958640bb5a1419d95883cb9e264d076742"
+    },
+    {
+      "path": "public/blog/ai-brand-rulebook-sample/index.html",
+      "bytes": 5946,
+      "sha256": "e51dbc0a6b6220769cf874b11339a90b56f7f2384b197e0072f6b41a9d313970"
+    },
+    {
+      "path": "public/blog/ai-search-casting-call-retrieval/index.html",
+      "bytes": 5759,
+      "sha256": "a3b5881243c97f9580bdb513b87f5a295d3a0743fa08bc5968586d2e27c02580"
+    },
+    {
+      "path": "public/blog/ai-search-compression-engine-brand-positioning/index.html",
+      "bytes": 6003,
+      "sha256": "02f0d02bd62e19d57a76fc61ff1e42f8f96835cc58b4756a672146a346b4775d"
+    },
+    {
+      "path": "public/blog/ai-search-courtroom-corroboration/index.html",
+      "bytes": 5865,
+      "sha256": "eb22dae7b51317ee90c6b0196f661dbe2935f5856f684a8024a6015a584f7732"
+    },
+    {
+      "path": "public/blog/ai-search-credit-score-brand-authority/index.html",
+      "bytes": 6020,
+      "sha256": "e2fc6399388666f87ea76f9452948ab4ef10a33019e4d61932e46feae7b8f133"
+    },
+    {
+      "path": "public/blog/ai-search-dark-funnel-answer-influence/index.html",
+      "bytes": 5915,
+      "sha256": "d51f06650ea8c78b478025eda6e2ea5feba957cc7954ede5286dd771bbbc6202"
+    },
+    {
+      "path": "public/blog/ai-search-matchmaker-recommendation-fit/index.html",
+      "bytes": 6028,
+      "sha256": "af5d74b5fc3b1a9c696a43714a23911e74690aff8c65a360ee419217ce564cae"
+    },
+    {
+      "path": "public/blog/ai-search-rorschach-test-prompt-intent/index.html",
+      "bytes": 6010,
+      "sha256": "612f33e6de283a6e2893eee39c34076fbf118a387a3596437156d8e0e6452a8f"
+    },
+    {
+      "path": "public/blog/ai-search-supply-chain-original-research/index.html",
+      "bytes": 6008,
+      "sha256": "0d6d7875510cde59e20c076fe3f799148ecf9f5a00ea7a91457d61754b477fe9"
+    },
+    {
+      "path": "public/blog/ai-search-telephone-game-claim-drift/index.html",
+      "bytes": 5929,
+      "sha256": "feb7778d4057c08ccc88d107bf2e57984da5870d04663ba2979c372dffdc4647"
+    },
+    {
+      "path": "public/blog/ai-search-weather-system-visibility-variance/index.html",
+      "bytes": 5989,
+      "sha256": "bb4b9aed21bca0fdc8ccbd4089f3bf9e7b94da2aefce848615fa709222ed2a5f"
+    },
+    {
+      "path": "public/blog/ai-visibility-operation-provenance-lattice-construction-using-doi-records/index.html",
+      "bytes": 6231,
+      "sha256": "ac2fb028f7cdb57578e4bfd4b9f2cd0f0044481697c08121093237c9ef2d8b18"
+    },
+    {
+      "path": "public/blog/ai-world-models-layoffs-judgment-gap/index.html",
+      "bytes": 5816,
+      "sha256": "9dc4801d00e167fd87eebdd30a86304a7366dd182214b32b8594c30dd0d6393e"
+    },
+    {
+      "path": "public/blog/algorithm-crash-test-blog/index.html",
+      "bytes": 6230,
+      "sha256": "35fab11846879054ac88357e6981c2ef1a11005f459ab4ca9cc43cc92cfadb9a"
+    },
+    {
+      "path": "public/blog/arize-phoenix-llm-observability/index.html",
+      "bytes": 5787,
+      "sha256": "f50b8ce0210a9a35556ca6bc954874888cc3bf3039fdf77327adce7aea79e170"
+    },
+    {
+      "path": "public/blog/autogeo-framework-iclr-2026-cmu/index.html",
+      "bytes": 6210,
+      "sha256": "67cb7fa041b3175cd165df1adbab2d329f6ea23ee365282c7cc3d35cd51dcc02"
+    },
+    {
+      "path": "public/blog/autoregressive-ranking-dual-cross-encoders-paper/index.html",
+      "bytes": 6332,
+      "sha256": "2a2b24591ad1b6349aaa999c37df21d2afd7a2a2f1aa0dca08ccbbcc13e1aae3"
+    },
+    {
+      "path": "public/blog/best-courses-ai-seo-aeo-geo-2026/index.html",
+      "bytes": 6159,
+      "sha256": "beffcd83eba4cef25ffdd397e4941ae03ed3ca1bf80f8779b40c221f4533833c"
+    },
+    {
+      "path": "public/blog/braintrust-llm-evaluation/index.html",
+      "bytes": 5900,
+      "sha256": "2b90dd5d82d4c73d46a6340c907b3124443b3b239c8b2ef67c3eba33d9bd4357"
+    },
+    {
+      "path": "public/blog/brand-guardrails-ai-hallucinations/index.html",
+      "bytes": 5976,
+      "sha256": "fc9edbd45c90bdff8823cedf10acc6ce30ad1e42e8e27748e872ef231c083259"
+    },
+    {
+      "path": "public/blog/browsecomp-benchmark-browsing-agents-geo/index.html",
+      "bytes": 6271,
+      "sha256": "dfe8c2a5d4591b49b4be6ad5a9afabc9af548f2d13e6bffcfd4fdaba2b2098c6"
+    },
+    {
+      "path": "public/blog/c-seo-bench-does-conversational-seo-work/index.html",
+      "bytes": 5771,
+      "sha256": "75ce38624d4aff68809629d880c67a16a9af3bb766f5e66e71931921b787d515"
+    },
+    {
+      "path": "public/blog/cc-gseo-bench-source-influence-generative-search/index.html",
+      "bytes": 6525,
+      "sha256": "b4f6928cdfb749fca41722bc0f4b99bcc05c1581d197652fa0657396e4328c09"
+    },
+    {
+      "path": "public/blog/chain-of-thought-prompting-content-strategy/index.html",
+      "bytes": 5991,
+      "sha256": "b030648a86f5e51490a8371541bf41a1a4df4f3f0f041305205aa0be956568be"
+    },
+    {
+      "path": "public/blog/chatgpt-atlas-direct-website-reading-geo/index.html",
+      "bytes": 6254,
+      "sha256": "60ffec2d57a680a07355074c088ceea98b5a90c61e92f2fe58e6d3c99dc129f4"
+    },
+    {
+      "path": "public/blog/chunking-metadata-filters-rag/index.html",
+      "bytes": 5691,
+      "sha256": "3107d9a0791d2f01c38de406978d962ebca48109102f5ea9b5a4a20db57cd9a3"
+    },
+    {
+      "path": "public/blog/claude-competitor-content-analysis/index.html",
+      "bytes": 6001,
+      "sha256": "5cf9727d46696ec98424df204ea6ecf9f93011e6cde10cf2e558114259f9e33d"
+    },
+    {
+      "path": "public/blog/claude-content-briefs-seo/index.html",
+      "bytes": 5922,
+      "sha256": "d4ae814b380ccf9f71f2063d2f6f8a9e2d73f5f10b32060b8603ed07c9e81229"
+    },
+    {
+      "path": "public/blog/claude-content-gap-analysis-seo/index.html",
+      "bytes": 6112,
+      "sha256": "2cbe14c2e51b123646c4371b6b9721feec481856836d12120b38922710cb0388"
+    },
+    {
+      "path": "public/blog/claude-for-seo-complete-guide/index.html",
+      "bytes": 6172,
+      "sha256": "d555a55706e12b857bca37893493a8128565ed402c0033418e82aca905697c78"
+    },
+    {
+      "path": "public/blog/claude-internal-linking-strategy/index.html",
+      "bytes": 5964,
+      "sha256": "92d3df2234099579b34ef3da395c93a795bc8c843069b57f8968a8617236ebd0"
+    },
+    {
+      "path": "public/blog/claude-keyword-research-seo/index.html",
+      "bytes": 5912,
+      "sha256": "4533b70937bbed2975eb0f19c1930e1b42250320eda9fce5cce534a7731b748e"
+    },
+    {
+      "path": "public/blog/claude-on-page-seo-audit/index.html",
+      "bytes": 5912,
+      "sha256": "a56796b68704a8b1b447d0f1056fc21364a382d71b23723589aa769b34adc48f"
+    },
+    {
+      "path": "public/blog/claude-schema-markup-json-ld-generator/index.html",
+      "bytes": 6157,
+      "sha256": "1838743eed0c240eb56c7033cfd771aae6783deacbc1e1d4ab66b0267e7c6bc2"
+    },
+    {
+      "path": "public/blog/claude-seo-reporting-data-interpretation/index.html",
+      "bytes": 6171,
+      "sha256": "d95c3eae9ef99f86166aef832e0b885c74c63d4a02181a88752989d64731e6f0"
+    },
+    {
+      "path": "public/blog/claude-title-tags-meta-descriptions-scale/index.html",
+      "bytes": 6250,
+      "sha256": "cb0d1aa3ff60d3bc1452e5c3886fd762e1d2e4f40ccf0dafef7f8c884fe67d5b"
+    },
+    {
+      "path": "public/blog/colbert-idf-token-weights-ai-retrieval-geo/index.html",
+      "bytes": 6697,
+      "sha256": "4e1e0ef4e28b92af72ee6be8f1415d3e6b71c1b1cc9db5e63230d831eb6eee21"
+    },
+    {
+      "path": "public/blog/connect-google-analytics-mcp-to-claude/index.html",
+      "bytes": 6047,
+      "sha256": "cc28b24cf5fb817f0006b7940320baf651cae4965c9c8b006a92db6e802d04f7"
+    },
+    {
+      "path": "public/blog/context-graphs-entity-seo-llms/index.html",
+      "bytes": 5719,
+      "sha256": "e447398475ed026048c79cdb6656e0ab5dc8f4b629104868068d48a673b74b79"
+    },
+    {
+      "path": "public/blog/conversation-analytics-chat-is-the-new-funnel/index.html",
+      "bytes": 5946,
+      "sha256": "bed4ebb2cb59960bd4811804b42d9d2d3bfb660495e73d965c58e25f91a6d7fd"
+    },
+    {
+      "path": "public/blog/cosine-similarity-tweaking-backfire-reranker-experiment/index.html",
+      "bytes": 6304,
+      "sha256": "9b0b0f72069759b5e30b4880d2cb29d7caea0fc3b83c0fdbf344a7ca8769d2de"
+    },
+    {
+      "path": "public/blog/crawlability-seo-geo-two-meanings/index.html",
+      "bytes": 6151,
+      "sha256": "0c826e526a04cfa5dc22f6a1f14cd07c49f8cb05fbc847314934df5d25118ba7"
+    },
+    {
+      "path": "public/blog/custom-ai-search-channel-group-ga4/index.html",
+      "bytes": 6062,
+      "sha256": "dc59786cf17aaa38cb9093c168fbb21031a3b0c431086de1550b76c97e948560"
+    },
+    {
+      "path": "public/blog/deepeval-pytest-style-rag-tests/index.html",
+      "bytes": 5663,
+      "sha256": "4e276318a3ef7505232882797460eccb9af1614fbaf1e23479fbc910401c24c7"
+    },
+    {
+      "path": "public/blog/deepseek-v4-hybrid-attention-1m-context-memory/index.html",
+      "bytes": 6225,
+      "sha256": "ef47dc680725d9eadba886d87ca1b179ead4af72ab54a6115493bbbc0c8b482d"
+    },
+    {
+      "path": "public/blog/e-geo-paper-ecommerce-geo/index.html",
+      "bytes": 5843,
+      "sha256": "c832725f89b0b3f272a406f04cb8ba7974825a834a4391796344397a95ff6cc2"
+    },
+    {
+      "path": "public/blog/embedding-architecture-ai-retrieval/index.html",
+      "bytes": 5963,
+      "sha256": "b17a03d3f5381d5e4a2ea9ede5ba21a3c56d7049105b177ff3d5d3ead118b305"
+    },
+    {
+      "path": "public/blog/emotion-concepts-llm-function-claude-sonnet-45-arxiv-2604-07729/index.html",
+      "bytes": 6419,
+      "sha256": "f798e91476c97cb99e58e4ba11a8559f48f476d56e051d2df88315825cdb75fd"
+    },
+    {
+      "path": "public/blog/feat-geo-paper-feature-level-optimization/index.html",
+      "bytes": 6182,
+      "sha256": "7546b3c11e44e7690240856230e67377137947cf66c8e1ddd036b960c1b70c7c"
+    },
+    {
+      "path": "public/blog/flesch-kincaid-grade-level-marketing-ai/index.html",
+      "bytes": 6264,
+      "sha256": "5ebf6ffe3f8d08006351666a8ab2204b39199b0f70ab9f84a299ef8a0f645da1"
+    },
+    {
+      "path": "public/blog/flesch-reading-ease-marketing-ai/index.html",
+      "bytes": 6202,
+      "sha256": "159f4edd5e88e48bb3ef4a78127acd3e67f9bcd08d94a3d4ef2f8f5bab795b19"
+    },
+    {
+      "path": "public/blog/flywheel-content-strategy-geo/index.html",
+      "bytes": 5968,
+      "sha256": "684d364085b2729cfadd77c64fb6a922518e6a0a79691a274fc429e1a205112d"
+    },
+    {
+      "path": "public/blog/ga4-for-ai-search-measure-ai-traffic-geo-performance-conversions/index.html",
+      "bytes": 6445,
+      "sha256": "82795668bcc19f8c1424ba7116296bd9f7644fee293c6fc87080756f09e3a5cd"
+    },
+    {
+      "path": "public/blog/ga4-regex-chatgpt-perplexity-gemini-claude-copilot/index.html",
+      "bytes": 6364,
+      "sha256": "d4403cb9e09550fb687477e3df93afffbd2104676a60ececf1964bf25b17986b"
+    },
+    {
+      "path": "public/blog/galileo-hallucination-detection/index.html",
+      "bytes": 5717,
+      "sha256": "dc5ce7269d53aed23aa811b4dd06c6d988d9ab194626a28e87bc14d270ed477f"
+    },
+    {
+      "path": "public/blog/generative-engine-optimization-resources-courses-tutorials/index.html",
+      "bytes": 6223,
+      "sha256": "ac2e922fb2c3afcdc38be918d0b89c7a7689b2f9a7d2ea1200bdabb55934703e"
+    },
+    {
+      "path": "public/blog/geo-dominate-ai-search-comparative-study/index.html",
+      "bytes": 6345,
+      "sha256": "ee33f2e6fac4936078674c089c8295fb85edab11d199ae8ac1bb4d27a2b73596"
+    },
+    {
+      "path": "public/blog/geo-framework/index.html",
+      "bytes": 5639,
+      "sha256": "327f7048942a4325ad5632649cb8a736b258519040053c920686725d71de837b"
+    },
+    {
+      "path": "public/blog/geo-princeton-paper-original-study/index.html",
+      "bytes": 6272,
+      "sha256": "917cc36e7f1d4f030521f294dfb3850dacce45d038aa4663572da1d6ce58621c"
+    },
+    {
+      "path": "public/blog/geo-sfe-structural-feature-engineering-citation/index.html",
+      "bytes": 6700,
+      "sha256": "4ea521f8b0d37ae0785afff73f15e8168c3c2ffcd033f67ed04752c4008e7f0a"
+    },
+    {
+      "path": "public/blog/geo-vs-seo-user-funnel/index.html",
+      "bytes": 5720,
+      "sha256": "2cb55d329da9018114fa839c24935921ca85527572139305a9c7584375264580"
+    },
+    {
+      "path": "public/blog/google-agentic-resource-discovery-specification/index.html",
+      "bytes": 6174,
+      "sha256": "7c73dd4222dc18b872fada5972dcae0c2bcccd62784ccf7f6f7a39a86027fe9c"
+    },
+    {
+      "path": "public/blog/google-ai-optimization-guide-geo-hype/index.html",
+      "bytes": 6288,
+      "sha256": "17bb1b6207ce4be81f6f0a32052140964b14990f07c65b322fefc2e40b872fc6"
+    },
+    {
+      "path": "public/blog/google-analytics-ai-assistant-channel-native-tracking/index.html",
+      "bytes": 6596,
+      "sha256": "28a4b6417ad6d47267a94e6ce0eebfafabf55b039e975ff0de096d661a599c2e"
+    },
+    {
+      "path": "public/blog/google-rag-attribution-patent-citations-not-post-hoc/index.html",
+      "bytes": 6100,
+      "sha256": "83a32ae8a338009332bdc0ebaa58707c2fb5ecf42995cecf81592932ae148cbd"
+    },
+    {
+      "path": "public/blog/gpt-5-4-benchmark-wins-brand-mentions/index.html",
+      "bytes": 6082,
+      "sha256": "4725e90314bd538c3352da30e0f21587857a10f5aa8bab3ffe0d659a366f6f3f"
+    },
+    {
+      "path": "public/blog/gpt-5-4-benchmarks-geo-implications/index.html",
+      "bytes": 6101,
+      "sha256": "c85e20a6c59fe43d8fe1dbb7ade101bf312ce61156f8d08daec40e353238a15a"
+    },
+    {
+      "path": "public/blog/gpt-5-4-web-benchmarks-geo-professionals/index.html",
+      "bytes": 6274,
+      "sha256": "45a95c9c804f5a611499906d519ee3e045bb798a1d4e6b6c30322a37af7355d3"
+    },
+    {
+      "path": "public/blog/graphite-seo-traffic-hasnt-dramatically-declined/index.html",
+      "bytes": 6322,
+      "sha256": "59eb479e71174969be8945d335cb22aa5fa2d2a15af138d8fd2e1661c7f1dc76"
+    },
+    {
+      "path": "public/blog/gunning-fog-index-marketing-ai/index.html",
+      "bytes": 6018,
+      "sha256": "5e76df7b028acc98040cd0680caba8fc157e9335bdcd309cc99401f8239d118b"
+    },
+    {
+      "path": "public/blog/hidden-intent-map-behind-ai-search/index.html",
+      "bytes": 5757,
+      "sha256": "4b9025a1404e232c50b0ef52ecb240a48d7a7026683c005706e4eaefa11c915e"
+    },
+    {
+      "path": "public/blog/hnsw-and-geo-retrieval-layer/index.html",
+      "bytes": 5616,
+      "sha256": "1c355f740f2e9360d42cfc27739913d362373ed22d631864cc1086c716cfe143"
+    },
+    {
+      "path": "public/blog/how-to-find-ai-referral-traffic-ga4/index.html",
+      "bytes": 5889,
+      "sha256": "4d7b8a864fe6642c17fe2200c750403483534f9c81ed5fa7c0e3fff96d345b73"
+    },
+    {
+      "path": "public/blog/how-to-learn-geo-generative-engine-optimization/index.html",
+      "bytes": 6140,
+      "sha256": "916a50db8b6d8937b9e69f41874e984e7cf18e0ee192d32bbc7acaf09ea74c36"
+    },
+    {
+      "path": "public/blog/how-to-measure-geo-success-ga4-beyond-traffic-counts/index.html",
+      "bytes": 6399,
+      "sha256": "c6977f3141ace7c7ee18f79f988e8c3daa94c425140e1d3e87e1dd65a3e26938"
+    },
+    {
+      "path": "public/blog/human-vs-llm-judge-evaluation/index.html",
+      "bytes": 5924,
+      "sha256": "93b648d275b59c5a552bc40b14caadad7c48bf2a441eb116fc6e99e94f790ffc"
+    },
+    {
+      "path": "public/blog/hybrid-search-bm25-vectors-rag/index.html",
+      "bytes": 5658,
+      "sha256": "aab84c13482fb32d4f358b6091b3d93c4f1e9ca14166a85820b3add3cc020221"
+    },
+    {
+      "path": "public/blog/index.html",
+      "bytes": 4234,
+      "sha256": "a241c8f0070fe0cf42648a974192bdb9df0181ab1499c49acf19f7fd54cbabac"
+    },
+    {
+      "path": "public/blog/indexnow-microsoft-ai-visibility/index.html",
+      "bytes": 6025,
+      "sha256": "cc9838339f604470f82a43e4fc3efe532e4df756834b87c3633555064fc93d00"
+    },
+    {
+      "path": "public/blog/langextract-gemini-generative-engine-optimization/index.html",
+      "bytes": 6239,
+      "sha256": "12a58d5e4a660fd4e8349391f76da19796829cec21b1f3ce63753065af9fd70f"
+    },
+    {
+      "path": "public/blog/langsmith-tracing-evaluation/index.html",
+      "bytes": 5933,
+      "sha256": "af7ba045eb421c2dad4a31fbd45bc81a0b3295ab87d89f49755f60fb34d87e4e"
+    },
+    {
+      "path": "public/blog/language-models-injective-invertible-arxiv-2510-15511/index.html",
+      "bytes": 6400,
+      "sha256": "7da3fba9dd06f71e60098ca47fed2676ae38bf70f67ef2a17342893e34740d82"
+    },
+    {
+      "path": "public/blog/latent-authority-perplexity-patent/index.html",
+      "bytes": 6109,
+      "sha256": "54035fbb65d6fd04a079d2e1cb7a5b78f2082339432b33fe4ca11b128c731f16"
+    },
+    {
+      "path": "public/blog/llm-eval-metrics-taxonomy/index.html",
+      "bytes": 5867,
+      "sha256": "ab5bc196d471f2e4f0cf0f1fcd4fd375e31585b4b83cba4a22c93eef02d71068"
+    },
+    {
+      "path": "public/blog/llm-evals-landscape-comparison/index.html",
+      "bytes": 6159,
+      "sha256": "df793bde72b99e5fda0b9052a76b3e142e8170c72d2b407d6bb66ce5187b0f33"
+    },
+    {
+      "path": "public/blog/llm-model-council-multi-model-consensus/index.html",
+      "bytes": 5852,
+      "sha256": "5509f27c418c2697048613e05137ad8647a8fa7ba14d9374c233b59637909624"
+    },
+    {
+      "path": "public/blog/llm-multi-format-robustness-arxiv-2606-11643-geo/index.html",
+      "bytes": 6196,
+      "sha256": "a57ad0881633f81e3985acb946fc457e18c49fcb3abd5903b1cb2effe0bfecf4"
+    },
+    {
+      "path": "public/blog/llms-txt-spa-hydration-gaps/index.html",
+      "bytes": 5937,
+      "sha256": "fe8770b4db2347499b68c6ab12cf227377c4bd1a63deff5ddda0a518df842360"
+    },
+    {
+      "path": "public/blog/log-file-analysis-ai-bots-geo/index.html",
+      "bytes": 6264,
+      "sha256": "50677fc822c5129bbd30b7bbc6d31223894a74c1bee456f6ee8a9820e9f57440"
+    },
+    {
+      "path": "public/blog/mageo-multi-agent-geo-reusable-strategy-learning/index.html",
+      "bytes": 6360,
+      "sha256": "fca7a57a7ad02087ca53d975277e047f2d71a974ea1a32db46fe9cab527a3cbf"
+    },
+    {
+      "path": "public/blog/mentioned-isnt-enough-brand-citations-ai-answers/index.html",
+      "bytes": 6183,
+      "sha256": "e3cd3401d71ccd22d65ed2325e81e77d7bd5362dd0d1b4dc2bda2ac923bb6c90"
+    },
+    {
+      "path": "public/blog/meta-ai-shopping-research-geo/index.html",
+      "bytes": 6071,
+      "sha256": "f1ec4cb38343a0254c6a37384dc60fdc6a90625bca9ecaa0784c88281680cacc"
+    },
+    {
+      "path": "public/blog/microsoft-clarity-ai-bot-activity/index.html",
+      "bytes": 6271,
+      "sha256": "989899ad7366d1dcd98efd608a9df76745fd43e8cca045b80192b241781ab03f"
+    },
+    {
+      "path": "public/blog/openai-evals-guide/index.html",
+      "bytes": 5756,
+      "sha256": "4bf3a299175fd2d6b60b0b2aaae4ed665f8f86027bca12c486d431ff9e6aeb16"
+    },
+    {
+      "path": "public/blog/paperclip-automated-keyword-research/index.html",
+      "bytes": 6043,
+      "sha256": "f86a519a572c256cd528810190fae19a0aef7ddcbcf3ebb17c91169001d00455"
+    },
+    {
+      "path": "public/blog/paperclip-automated-seo-reporting/index.html",
+      "bytes": 6078,
+      "sha256": "2232ae6bb92d42daf6b81c377095a6a0908404a9cfd163014a0d0f391df94582"
+    },
+    {
+      "path": "public/blog/paperclip-competitor-monitoring-heartbeats/index.html",
+      "bytes": 5875,
+      "sha256": "2d73bae37370a625e794c55e8c9a7dc6de82b80efa4ffc0c23a612a7004e5025"
+    },
+    {
+      "path": "public/blog/paperclip-content-brief-pipeline/index.html",
+      "bytes": 5848,
+      "sha256": "43914ff5d903203436fbbaad6954cef26afb9f567d07771526c9a1f85296d36f"
+    },
+    {
+      "path": "public/blog/paperclip-content-gap-analysis-agents/index.html",
+      "bytes": 5933,
+      "sha256": "9dd9d67fc510452623bf0d2705400408f360fee69031c8f0dba9dbe9d91dbfed"
+    },
+    {
+      "path": "public/blog/paperclip-cost-controlled-seo-agencies/index.html",
+      "bytes": 6070,
+      "sha256": "128ffc601d756d1d9cb5a42f74f0c26717316a1c4b115d9ec5ed29b417365adf"
+    },
+    {
+      "path": "public/blog/paperclip-for-seo-complete-guide/index.html",
+      "bytes": 5873,
+      "sha256": "2641f01b20a09d2f6af742dfdb3dc37befd383c0002d4143da29aa71df583e38"
+    },
+    {
+      "path": "public/blog/paperclip-internal-linking-agents/index.html",
+      "bytes": 5792,
+      "sha256": "998b15c22d981184e1d059a858ef21d83a76bae45e7190edd4aac8d01673e2d1"
+    },
+    {
+      "path": "public/blog/paperclip-multi-agent-content-review/index.html",
+      "bytes": 6040,
+      "sha256": "66cec4399ced08251462a5d8d07229abc237b38e1ba516a2acf2c0d41e7cb3ed"
+    },
+    {
+      "path": "public/blog/paperclip-multi-client-seo-agency/index.html",
+      "bytes": 5972,
+      "sha256": "c28b7efdcf854d427d007d8b5d2994d86c552602d71b926d401c4b7e37b92a04"
+    },
+    {
+      "path": "public/blog/paperclip-publishing-at-scale-startups/index.html",
+      "bytes": 6029,
+      "sha256": "c8f71d84218db8628ef5bbf8e814b343032183b37610ad40894d5b5d1f1d1450"
+    },
+    {
+      "path": "public/blog/paperclip-recurring-seo-reports-heartbeats/index.html",
+      "bytes": 5874,
+      "sha256": "b5d5ebab385cc8ca4e62b4d3d4f3580b0baa9a0ef341911fb97341e8bcc1d060"
+    },
+    {
+      "path": "public/blog/paperclip-schema-markup-at-scale/index.html",
+      "bytes": 5829,
+      "sha256": "9b89ee56dcb1bbb4f94d3d3ccc9f2b38507073512b1ff1e832e57a41e692f99f"
+    },
+    {
+      "path": "public/blog/paperclip-seo-first-agent-setup/index.html",
+      "bytes": 5802,
+      "sha256": "6ff38e554df7672dd23c3ac49510c7bd47b00bd67e506ab7c44308844c8b2fd9"
+    },
+    {
+      "path": "public/blog/paperclip-seo-governance-audit-logs/index.html",
+      "bytes": 5977,
+      "sha256": "b0826897f3573c661826bd02c276089a110e281ebffc7d2216aa661371366c99"
+    },
+    {
+      "path": "public/blog/paperclip-seo-org-chart/index.html",
+      "bytes": 5963,
+      "sha256": "79a342577eb11f62f0149d927dfe15fe7a1b6c449133d8eac58b508b2bb275ea"
+    },
+    {
+      "path": "public/blog/paperclip-seo-what-is-paperclip/index.html",
+      "bytes": 5723,
+      "sha256": "aa8ee232ac2e55a5bc960e076d091a51b40ee2283ce312786fa0ff11f4398094"
+    },
+    {
+      "path": "public/blog/paperclip-technical-seo-audits-heartbeats/index.html",
+      "bytes": 5935,
+      "sha256": "3f88798242256830e3fc4a844c93d59c4813c377f22731aaca4cfe3cc69e86b8"
+    },
+    {
+      "path": "public/blog/perplexity-augmented-search-loop/index.html",
+      "bytes": 5767,
+      "sha256": "8ceebbf1eae4ca53c8ea0e9a6cb6790bc85c28c7b0a968ede8f1a064771e40cb"
+    },
+    {
+      "path": "public/blog/perplexity-open-source-embeddings-geo/index.html",
+      "bytes": 6061,
+      "sha256": "93a31a93a85be1d4750cb8c37a669716d93d68bc64f170516833674f9801bdc1"
+    },
+    {
+      "path": "public/blog/prompt-chaining-seo-workflows/index.html",
+      "bytes": 5808,
+      "sha256": "a030693c12ee1833d678d654ffa4230d1ad6689dacb195ec94bfb46772df5e07"
+    },
+    {
+      "path": "public/blog/prompt-testing-iteration-evaluate-improve/index.html",
+      "bytes": 5868,
+      "sha256": "eb08e731f3578466dfe58c45e2a31fa1c13430abddd282d9596524b5c70c0c2c"
+    },
+    {
+      "path": "public/blog/promptfoo-rag-regression-testing/index.html",
+      "bytes": 5654,
+      "sha256": "1939a0ddefbed061ca282a9ccc0cc679d5bbf43126c77e15fb0ac57743b19e0f"
+    },
+    {
+      "path": "public/blog/pyversity-the-python-library-every-geo-researcher-needs-in-their-toolkit/index.html",
+      "bytes": 6613,
+      "sha256": "c9a61482b492600b4a12e9763344d9891a7e3984dc8590a4ef8d96c362159f0f"
+    },
+    {
+      "path": "public/blog/query-rewriting-multiquery-rag/index.html",
+      "bytes": 5785,
+      "sha256": "b14187d15ff90d7b8e31689f6421f685ba1f20cef310c6824dc6efeebda9e996"
+    },
+    {
+      "path": "public/blog/ragas-rag-evaluation/index.html",
+      "bytes": 5567,
+      "sha256": "0286b37545a844ba2bc39d847f8c19de0dd92142977ab7d78287cc37c9595991"
+    },
+    {
+      "path": "public/blog/raid-geo-intent-driven-generative-search-optimization/index.html",
+      "bytes": 6636,
+      "sha256": "61edb1b8e68e1283cf01ab00df732fe68327e953e3be80a37a231711f4fdf15d"
+    },
+    {
+      "path": "public/blog/red-teaming-llm-safety-evaluation/index.html",
+      "bytes": 5933,
+      "sha256": "a00030e5c80bbc2eeb651e720b9b823b5d988e04836bc0a5a5273cdd08bddacc"
+    },
+    {
+      "path": "public/blog/reranking-cross-encoder-llm-reranker/index.html",
+      "bytes": 5741,
+      "sha256": "4b24ffccf0e587e1c74ae67b0389feaad8f4acbc502155b76ffcf0259602ee84"
+    },
+    {
+      "path": "public/blog/robots-txt-ai-bots/index.html",
+      "bytes": 5696,
+      "sha256": "90f40ce5cec5b24255e9d1f2c801ec9319c8c81e22bb0db7a37937cad81f5e20"
+    },
+    {
+      "path": "public/blog/sageo-arena-realistic-geo-benchmark/index.html",
+      "bytes": 6255,
+      "sha256": "dfc95b5fea491add3b79cf76e05ea7d4b04ca3d6fdd2c3dabce843b5651e6aac"
+    },
+    {
+      "path": "public/blog/scroll-depth-analysis-ga4-gtm/index.html",
+      "bytes": 5832,
+      "sha256": "b8390aa66ece53be777f8ca92df769166704cc1eeaeeaa4e5be7b47b2c8d8b02"
+    },
+    {
+      "path": "public/blog/search-everywhere-optimization-thematic-search/index.html",
+      "bytes": 6503,
+      "sha256": "393035f9b83e1205f6bdc6d295fd8a0d6b641ce8662aaeeb282c6a8f19815009"
+    },
+    {
+      "path": "public/blog/semantic-visualization-experiment-embedding-space/index.html",
+      "bytes": 6152,
+      "sha256": "d2702b92e1a0254d7d74248c48d5e0120ed2aa40fdfdaaefdb777280785049b1"
+    },
+    {
+      "path": "public/blog/seo-geo-consultant-attitude/index.html",
+      "bytes": 5984,
+      "sha256": "5814e48fa5f1d20fd1805e0c7ab05aa835d84cb188f2e3878d26ac451f095290"
+    },
+    {
+      "path": "public/blog/shopify-chatgpt-instant-checkout-fee/index.html",
+      "bytes": 6079,
+      "sha256": "4210a673373eba1b0c62eca2d2990b14663c0509033fa8d4911f01da124f0f7b"
+    },
+    {
+      "path": "public/blog/smog-index-marketing-ai/index.html",
+      "bytes": 5768,
+      "sha256": "aabe46c7257a5c87a70aca1d710b35556c4d381cf7931e807a6ae2b66cde32c3"
+    },
+    {
+      "path": "public/blog/system-prompts-role-prompting-brand-voice/index.html",
+      "bytes": 6019,
+      "sha256": "6632e0ddf9cc52247cd8af112dc1c93f92345aeb5a8a727d02cf12da93980a9d"
+    },
+    {
+      "path": "public/blog/top-10-seo-skills-github-stars/index.html",
+      "bytes": 5898,
+      "sha256": "084205b869ebe97c657af80b0a24d4e86b3d485a94f8307d80f1a086cf894d6c"
+    },
+    {
+      "path": "public/blog/top-ai-search-geo-experts/index.html",
+      "bytes": 5700,
+      "sha256": "4b8b57d04144e85b3945677e14f7db117649f3ec1e9eab7b83b63cc7114ef004"
+    },
+    {
+      "path": "public/blog/tracing-observability-rag/index.html",
+      "bytes": 5747,
+      "sha256": "1169ae10994734da0d3bcd522658abdcc550cc65c71aba4ceaaa753848ae5313"
+    },
+    {
+      "path": "public/blog/tweak-cosine-similarity-advice-seo-aeo-geo/index.html",
+      "bytes": 6204,
+      "sha256": "07fd6e803a288554fadbee20a0159eadf38a6b9cea94273410711bf5ea2f2d95"
+    },
+    {
+      "path": "public/blog/verifiability-generative-search-engines-emnlp-2023/index.html",
+      "bytes": 6678,
+      "sha256": "b15432971d9d70046fd97cd5c8b5ed80cbae66692f111d88d7fe77f6a4d28438"
+    },
+    {
+      "path": "public/blog/webknograph-gnn-internal-linking-seo/index.html",
+      "bytes": 6207,
+      "sha256": "42a9d19f9427d68bd3117bb5b80017419eaa69f4370e3876a7eb58140f45f03b"
+    },
+    {
+      "path": "public/blog/webmcp-history-timeline-15-months-7-engineers-3-companies/index.html",
+      "bytes": 6655,
+      "sha256": "e85cd238ea94f35ce0a8ad15ba607b5bda0d3ae60402fe243a17c9bc2662e6f1"
+    },
+    {
+      "path": "public/blog/website-ai-agent-readiness-lighthouse-audit/index.html",
+      "bytes": 6405,
+      "sha256": "0383b1c946070fe687b1b7aff746ae79f2eca214efc49c30a21fa940f4b94ca2"
+    },
+    {
+      "path": "public/blog/weights-biases-weave-llm-evaluation/index.html",
+      "bytes": 5826,
+      "sha256": "924d1fa60001587a6bc14214993239af5c49c52d4498b39be190e8926123b9f6"
+    },
+    {
+      "path": "public/blog/what-are-llm-evals/index.html",
+      "bytes": 5686,
+      "sha256": "d3fd492a43af895b5d40c3f4d5d334d3147c3fd26021602476e587138360353f"
+    },
+    {
+      "path": "public/blog/what-is-corroboration-authority/index.html",
+      "bytes": 5880,
+      "sha256": "cf28b3090e4d8c079db1d5d764ed7d6c11d7929458a6e8b52460b82440cfb25f"
+    },
+    {
+      "path": "public/blog/why-ai-content-works-at-scale/index.html",
+      "bytes": 6141,
+      "sha256": "1eb75ff1be71eacdc101ae7756a7a016a04e8e61687da67a4f594fb1204ad5f1"
+    },
+    {
+      "path": "public/blog/why-ga4-underreports-ai-search-traffic-dark-traffic/index.html",
+      "bytes": 6300,
+      "sha256": "d0bd4f82fea6aad09c62efdcfc7d54b7ec2d1d975ec7d87bc43246234a8c0808"
+    },
+    {
+      "path": "public/blog/why-json-ld-is-important-google/index.html",
+      "bytes": 6092,
+      "sha256": "67d3ffd0aad08418fd52d16345996853acf92a89e8625dba4d54466d01d1f231"
+    },
+    {
+      "path": "public/blog/why-llm-answers-dont-show-citations/index.html",
+      "bytes": 6041,
+      "sha256": "d1129b64fe1bb813b61d7a7094adace2712fed057d50297f1ede3b8c666ec423"
+    },
+    {
+      "path": "public/blog/why-llm-evals-matter/index.html",
+      "bytes": 5837,
+      "sha256": "0fcfeaad74c6d5947f933f46e0e778be71a728865304df16e7ed3daf84606c60"
+    },
+    {
+      "path": "public/blog/world-first-ai-scientist-geo-research/index.html",
+      "bytes": 5760,
+      "sha256": "d521d47c0d5b679439a3ebf98daa395f99c4f84df66f82932f8ec0584821aa50"
+    },
+    {
+      "path": "public/blog/zero-shot-vs-few-shot-prompting-seo-content/index.html",
+      "bytes": 6120,
+      "sha256": "d5ca66f007f4fe3d02ce64168f06984b8b737f1e151ac0ee3fd70a29b3fe8aff"
+    },
+    {
+      "path": "public/brand/frontmind-logo.svg",
+      "bytes": 5618,
+      "sha256": "56a3fcdef2aeef145c2b597095bc60c0c534cf88a5194a66a1eee6c80527c503"
+    },
+    {
+      "path": "public/contact/index.html",
+      "bytes": 4174,
+      "sha256": "b07a3fa982c204b61488fea80135457f33546e82c76cb0d2070e0e7ebb4700e6"
+    },
+    {
+      "path": "public/contracts/frontmind-geo-monthly-optimization-service-agreement.html",
+      "bytes": 53156,
+      "sha256": "c496b98b7875f308b4387bf9c75a19c3a1f4acdb066e06c7bcac2c5900592bec"
+    },
+    {
+      "path": "public/favicon.svg",
+      "bytes": 289,
+      "sha256": "3db37667bb93e9dae6a904812ceebc85ac599f2df2190edf20a1ef2d308b748b"
+    },
+    {
+      "path": "public/geo-builder/channels/baidu-baike.svg",
+      "bytes": 1480,
+      "sha256": "6b86e1bbff7edb56d0bf92b6208dd79936835f88e96ac36bfa09463e509bbed7"
+    },
+    {
+      "path": "public/geo-builder/channels/douyin-baike.svg",
+      "bytes": 3078,
+      "sha256": "49a15063442b482e6774b748f74cad95beb657b175f9d13baee9ad538bdda19c"
+    },
+    {
+      "path": "public/geo-builder/channels/douyin.svg",
+      "bytes": 2030,
+      "sha256": "66e05c1d761432e2256286bcc51e7f066f6bf22714f00efbd941f6b743c1015f"
+    },
+    {
+      "path": "public/geo-builder/channels/frontmind.svg",
+      "bytes": 5624,
+      "sha256": "dfed2aa3cd04399395f9dc8bb2f5760080c7534befbdd568b1ef27edfb2b46b0"
+    },
+    {
+      "path": "public/geo-builder/channels/jd.svg",
+      "bytes": 28137,
+      "sha256": "d700ef28dcf7d5a2fdd67f096a2a321dec0e480f248953c952424c00eacc360c"
+    },
+    {
+      "path": "public/geo-builder/channels/meituan.svg",
+      "bytes": 1194,
+      "sha256": "2510af5c6e0a135121c8c57a45c994b443679207454692950913b344a46261ec"
+    },
+    {
+      "path": "public/geo-builder/channels/netease.png",
+      "bytes": 4706,
+      "sha256": "0fd65e4cb39a4cfce671cf188715231f0091a7db306f52209d313eb17076e50a"
+    },
+    {
+      "path": "public/geo-builder/channels/sina.png",
+      "bytes": 5041,
+      "sha256": "d4aa9e98c437e4100a54e944e614e680cd1bbb9231593d9a5ff7edad0b9ad8d1"
+    },
+    {
+      "path": "public/geo-builder/channels/sohu.png",
+      "bytes": 5759,
+      "sha256": "cf71cbcf71f07e5c335f9d24224c3e923df414132c3f724facef1806e9e60e36"
+    },
+    {
+      "path": "public/geo-builder/channels/taobao.svg",
+      "bytes": 4379,
+      "sha256": "3654cc4ddd9706ea4241520f6c24c15585f0b77673e1ff1ac526ef524a1920f5"
+    },
+    {
+      "path": "public/geo-builder/channels/tencent-news.png",
+      "bytes": 95969,
+      "sha256": "35d74452179ce4d7fead2d3a70302313b938b8218bc0d1c1910a8b5f1d2a3c8f"
+    },
+    {
+      "path": "public/geo-builder/channels/toutiao.png",
+      "bytes": 8536,
+      "sha256": "169f720a86a6b521eb1f0314799fa6be5b4937739929982edaf313e7e9ff1f73"
+    },
+    {
+      "path": "public/geo-builder/channels/wechat-channels.svg",
+      "bytes": 2877,
+      "sha256": "bb80a209f0c36012ddb990fc6f36d0980656090e3ca324257373410f77a558f6"
+    },
+    {
+      "path": "public/geo-builder/channels/wechat.svg",
+      "bytes": 1325,
+      "sha256": "34731c12b917d8124fb1cbc6fc4ec97fb97c71de94e035a3013b43caced34e52"
+    },
+    {
+      "path": "public/geo-builder/channels/xiaohongshu.svg",
+      "bytes": 3574,
+      "sha256": "ab4c64c5b8409411a843d4132640b5f9b485c0dcec0a7b70a8a2fbcf83b1ca2e"
+    },
+    {
+      "path": "public/geo-builder/channels/zhihu.svg",
+      "bytes": 914,
+      "sha256": "82883332e0e0bd2368149cf82953b63be379ecd083928344497da2afa0c6520a"
+    },
+    {
+      "path": "public/geo-builder/contact-wechat.png",
+      "bytes": 392485,
+      "sha256": "b199c392f709780128b2e020f476905793d1b1b83bcf0e4cb62c1c16f2cffdbe"
+    },
+    {
+      "path": "public/geo-builder/knowledge-foundation-launch.webp",
+      "bytes": 124406,
+      "sha256": "aea2a470ffde09dc73f74a4c4a01c9040b8df9a9316aca5835d8b185987fefd7"
+    },
+    {
+      "path": "public/geo-builder/payments/alipay.svg",
+      "bytes": 909,
+      "sha256": "8fba59262c1622512cb21e8f4f003380b31f8475057f9ab47900a4fa090a3dc2"
+    },
+    {
+      "path": "public/geo-builder/payments/wechat-pay.svg",
+      "bytes": 1405,
+      "sha256": "6ff6a6a2a467f1ce2f34f5289f8fde98c71f85d72d2b6970efbe280e9403e509"
+    },
+    {
+      "path": "public/geo-builder/platforms/baiduai.svg",
+      "bytes": 1353,
+      "sha256": "17a2051c4f16640af130e5552b0664e6455d8f611fadae00f4c5646226c54b91"
+    },
+    {
+      "path": "public/geo-builder/platforms/deepseek.ico",
+      "bytes": 209762,
+      "sha256": "30a4420e6e4dcb17fd7de560c5004346c2bc8cd971d2d5f5ee15326603e51321"
+    },
+    {
+      "path": "public/geo-builder/platforms/doubao.png",
+      "bytes": 17843,
+      "sha256": "bf8e41bcc864c00099a98080825ea42aba7cf481303dad3312f44a5da68c3f3b"
+    },
+    {
+      "path": "public/geo-builder/platforms/kimi.ico",
+      "bytes": 15086,
+      "sha256": "df91c1ecf1d4894cf05845cdce44549ed3ccca3478b97a70972d1bc82ac4f2d1"
+    },
+    {
+      "path": "public/geo-builder/platforms/qianwen.png",
+      "bytes": 1658,
+      "sha256": "cd9390bc4209c319121d111f3a1f535b3c7dd909b8f860d41acc9744138d58df"
+    },
+    {
+      "path": "public/geo-builder/platforms/yuanbao.png",
+      "bytes": 4176,
+      "sha256": "8f3ae0d03e06de5e3f3179d05045f0915e9548d3e74bd8bfe2969d2ddea902c5"
+    },
+    {
+      "path": "public/geo-community-blogs-cn/images/30-40-percent-retrieval-edge-ai-agents-disrupting-paid-backlinks-cn.webp",
+      "bytes": 37896,
+      "sha256": "664fc5dc430eca7053e5ed89177d575241e09245969eb2c7a0976d5d2c095fe6"
+    },
+    {
+      "path": "public/geo-community-blogs-cn/images/aeo-geo-microsoft-cn.webp",
+      "bytes": 60164,
+      "sha256": "8ca311f6b45fb762231126373f10a50eec020eb67172b04ca843978bb59660e2"
+    },
+    {
+      "path": "public/geo-community-blogs-cn/images/ai-brand-rulebook-sample-cn.webp",
+      "bytes": 25434,
+      "sha256": "f39a212851ce73b9b05bd9dd388c9a5d237b5f15ed6ec5967368b3c8702ab172"
+    },
+    {
+      "path": "public/geo-community-blogs-cn/images/ai-search-casting-call-retrieval-cn.webp",
+      "bytes": 128062,
+      "sha256": "16e7c3687272a6e027a9cb999858902036acbd390f291c543433a1ebf8c5edfc"
+    },
+    {
+      "path": "public/geo-community-blogs-cn/images/ai-search-compression-engine-brand-positioning-cn.webp",
+      "bytes": 128720,
+      "sha256": "1f2aa7723c13774a9af35c02ac6acd11f959978eaffe981ba2e1c3339a8e9603"
+    },
+    {
+      "path": "public/geo-community-blogs-cn/images/ai-search-courtroom-corroboration-cn.webp",
+      "bytes": 134220,
+      "sha256": "867d46e699a7225c1afae8d82bdc7b0ee088bb536af90542090bba3a7f315a6e"
+    },
+    {
+      "path": "public/geo-community-blogs-cn/images/ai-search-credit-score-brand-authority-cn.webp",
+      "bytes": 133070,
+      "sha256": "53531ce401a52ce1a5ec0d8530cc5abf0cd5d4a4e9ffa7cacf164c0657f08c7f"
+    },
+    {
+      "path": "public/geo-community-blogs-cn/images/ai-search-dark-funnel-answer-influence-cn.webp",
+      "bytes": 137752,
+      "sha256": "bcc4d414f9316668923485c7d76e3b0346b474b6552e4eb50821abfe6d04dd8d"
+    },
+    {
+      "path": "public/geo-community-blogs-cn/images/ai-search-matchmaker-recommendation-fit-cn.webp",
+      "bytes": 139280,
+      "sha256": "8a79018ff984ddca6269f825e53b0cbfd7607e8d0e1e260358cb0c4552e04f37"
+    },
+    {
+      "path": "public/geo-community-blogs-cn/images/ai-search-rorschach-test-prompt-intent-cn.webp",
+      "bytes": 134800,
+      "sha256": "23a531cbdd271954f61d29136fc0c12241ec62859c01af2ba5ad2b0343bba279"
+    },
+    {
+      "path": "public/geo-community-blogs-cn/images/ai-search-supply-chain-original-research-cn.webp",
+      "bytes": 130286,
+      "sha256": "7b1c2830f148c5987a65625b2d9c39e8ed4a7442a9facf94fee703d14558578a"
+    },
+    {
+      "path": "public/geo-community-blogs-cn/images/ai-search-telephone-game-claim-drift-cn.webp",
+      "bytes": 136288,
+      "sha256": "c422bccf5e8e2a551bf3c909abe5b2d07b0bc9d5be555b3133841e362aa4306d"
+    },
+    {
+      "path": "public/geo-community-blogs-cn/images/ai-search-weather-system-visibility-variance-cn.webp",
+      "bytes": 134360,
+      "sha256": "0b32f9afd80a1670e41fc7fb802768d65b4f3fd0c846450de9d281f9778762b3"
+    },
+    {
+      "path": "public/geo-community-blogs-cn/images/ai-visibility-operation-provenance-lattice-construction-using-doi-records-cn.webp",
+      "bytes": 81090,
+      "sha256": "fd3905e0fa1c7de17bc2d1094f16b7cb10c0e4fa0b9113dac6908c86a41ca097"
+    },
+    {
+      "path": "public/geo-community-blogs-cn/images/ai-world-models-layoffs-judgment-gap-cn.webp",
+      "bytes": 30830,
+      "sha256": "8ee3c88a0ba2b5a56482fddf90c492beb4ae1c48e3864c1667411024a3d24bc3"
+    },
+    {
+      "path": "public/geo-community-blogs-cn/images/algorithm-crash-test-blog-cn.webp",
+      "bytes": 19744,
+      "sha256": "0915f941ff5e681dd0a0c128de01750d41b6d49b0fdae527f7d8ee6cd8f00d68"
+    },
+    {
+      "path": "public/geo-community-blogs-cn/images/arize-phoenix-llm-observability-cn.webp",
+      "bytes": 20576,
+      "sha256": "6ff31de75a76c1bcf0189ba65111de5f5b3e6ab205038af53f352a61ea04110a"
+    },
+    {
+      "path": "public/geo-community-blogs-cn/images/autogeo-framework-iclr-2026-cmu-cn.webp",
+      "bytes": 30912,
+      "sha256": "490394bb6181acb74a1b38d6813f53c5403f331e2cb668b037745299a75f4f3a"
+    },
+    {
+      "path": "public/geo-community-blogs-cn/images/best-courses-ai-seo-aeo-geo-2026-cn.webp",
+      "bytes": 47188,
+      "sha256": "2b93cf9c654566f4617c472218972a17abc3142210587a93680d6a19b28c7e7e"
+    },
+    {
+      "path": "public/geo-community-blogs-cn/images/braintrust-llm-evaluation-cn.webp",
+      "bytes": 19774,
+      "sha256": "9d1e2de274e73469edb6a056c789ce4af2f5097830dd59bad9697ecc059f4cb3"
+    },
+    {
+      "path": "public/geo-community-blogs-cn/images/brand-guardrails-ai-hallucinations-cn.webp",
+      "bytes": 29360,
+      "sha256": "544fa2c2b005a0e30497d3ffd6cf1ae82e2a4e865e6e2e25027a319acc1ab221"
+    },
+    {
+      "path": "public/geo-community-blogs-cn/images/browsecomp-benchmark-browsing-agents-geo-cn.webp",
+      "bytes": 13964,
+      "sha256": "fc74f41a91f4288b5cee10cb5ccdd99b06044eb0f4fab4b80e71b10a2f2abc6d"
+    },
+    {
+      "path": "public/geo-community-blogs-cn/images/c-seo-bench-does-conversational-seo-work-cn.webp",
+      "bytes": 104648,
+      "sha256": "01dc4de049528e422069531b5006b74eb9bcd303c2885970179fd3a0c435d851"
+    },
+    {
+      "path": "public/geo-community-blogs-cn/images/cc-gseo-bench-source-influence-generative-search-cn.webp",
+      "bytes": 36144,
+      "sha256": "9b37322d48ef481d99c18630fff6ed52aa42f326b6bd144551153ed1afb68bb8"
+    },
+    {
+      "path": "public/geo-community-blogs-cn/images/chain-of-thought-prompting-content-strategy-cn.webp",
+      "bytes": 40728,
+      "sha256": "8fe97d1c419449a08226a6aaafa19a3595efe52ec0a853a5843ac16c66c691b3"
+    },
+    {
+      "path": "public/geo-community-blogs-cn/images/chatgpt-atlas-direct-website-reading-geo-cn.webp",
+      "bytes": 9438,
+      "sha256": "4a1d0ce70d59f5b4f6f9e96732f03c66a3f37e1b77cc2db676a69aa42f1d512a"
+    },
+    {
+      "path": "public/geo-community-blogs-cn/images/claude-competitor-content-analysis-cn.webp",
+      "bytes": 31886,
+      "sha256": "5e51415b1f4db7dda90e0b7153e9ae0d9e151c5e4d5a802b173d23ed7b42a724"
+    },
+    {
+      "path": "public/geo-community-blogs-cn/images/claude-content-briefs-seo-cn.webp",
+      "bytes": 33340,
+      "sha256": "e9cc0544aabdf054e4e4e4a93c190d30909929df21b6132d8af161b273a74d49"
+    },
+    {
+      "path": "public/geo-community-blogs-cn/images/claude-content-gap-analysis-seo-cn.webp",
+      "bytes": 31206,
+      "sha256": "4fb89d1914af5dcd83de72c17604ead4f8e9904c578c7703e295860c6b5fec8e"
+    },
+    {
+      "path": "public/geo-community-blogs-cn/images/claude-for-seo-complete-guide-cn.webp",
+      "bytes": 33590,
+      "sha256": "d5c70b7ac28d153bb9f70ba4f7383a1991fc4aa5fd1fe51260d149accd9c87c3"
+    },
+    {
+      "path": "public/geo-community-blogs-cn/images/claude-internal-linking-strategy-cn.webp",
+      "bytes": 35756,
+      "sha256": "05c4000a661c4c8017e2624c72d1cd8ed0eada1b06495d00bf996f52810c5c26"
+    },
+    {
+      "path": "public/geo-community-blogs-cn/images/claude-keyword-research-seo-cn.webp",
+      "bytes": 38482,
+      "sha256": "5ecd0d52e0108ab1785a19077b10c281f08741c2c749d6cfb8255c1c13b54e16"
+    },
+    {
+      "path": "public/geo-community-blogs-cn/images/claude-on-page-seo-audit-cn.webp",
+      "bytes": 35054,
+      "sha256": "13125af68a15c890a8cc17afd44f0d6bd4daf565620a8694c9af3287dfd2343b"
+    },
+    {
+      "path": "public/geo-community-blogs-cn/images/claude-schema-markup-json-ld-generator-cn.webp",
+      "bytes": 36904,
+      "sha256": "283c83c6005cc19d7445a15595b45e254b82835652993f4876867905bec71c39"
+    },
+    {
+      "path": "public/geo-community-blogs-cn/images/claude-seo-reporting-data-interpretation-cn.webp",
+      "bytes": 33278,
+      "sha256": "1ae732ed855a05fb43b9d471344bf8daf89a98808b08899e5b350e824110c83a"
+    },
+    {
+      "path": "public/geo-community-blogs-cn/images/claude-title-tags-meta-descriptions-scale-cn.webp",
+      "bytes": 34406,
+      "sha256": "f1d4f321f89beaf1ee3ad33e3075f1d9fdadcbeac796a008eacee6625f0ff071"
+    },
+    {
+      "path": "public/geo-community-blogs-cn/images/colbert-idf-token-weights-ai-retrieval-geo-cn.webp",
+      "bytes": 50288,
+      "sha256": "cc5014a5c7d9e62803150e4c8d873bdf55afa42a670b6b736340caa33600ee4d"
+    },
+    {
+      "path": "public/geo-community-blogs-cn/images/connect-google-analytics-mcp-to-claude-cn.webp",
+      "bytes": 74668,
+      "sha256": "06ddc8186e46ae9237dd8c09c0e73d1e30faa57cb1cc12e1da7eeabbbbb41b09"
+    },
+    {
+      "path": "public/geo-community-blogs-cn/images/context-graphs-entity-seo-llms-cn.webp",
+      "bytes": 77674,
+      "sha256": "7bdc9d053c928135d683cf9aca9d5e7c7cd33491cba1280c5798172c43dd9e96"
+    },
+    {
+      "path": "public/geo-community-blogs-cn/images/conversation-analytics-chat-is-the-new-funnel-cn.webp",
+      "bytes": 127084,
+      "sha256": "84610186370eb830eeb05400d9e0bf3bd2c62ddf71f1ea3272157f835d94bc9e"
+    },
+    {
+      "path": "public/geo-community-blogs-cn/images/cosine-similarity-tweaking-backfire-reranker-experiment-cn.webp",
+      "bytes": 75020,
+      "sha256": "c21d0b3d19e9839632a78632e42aab0aa2a733f97acf9872ef23b8cdd6ae718e"
+    },
+    {
+      "path": "public/geo-community-blogs-cn/images/crawlability-seo-geo-two-meanings-cn.webp",
+      "bytes": 27754,
+      "sha256": "393d609bdbd5f667a0fb33dabc37ded83c590acf852d078c943e4e47d0815b1b"
+    },
+    {
+      "path": "public/geo-community-blogs-cn/images/custom-ai-search-channel-group-ga4-cn.webp",
+      "bytes": 50046,
+      "sha256": "77537bcdbf8ae105f638abb85023d0944d3c0ba9fda2dba2af0146950cdec07d"
+    },
+    {
+      "path": "public/geo-community-blogs-cn/images/deepseek_v4_hybrid_attention-cn.webp",
+      "bytes": 45460,
+      "sha256": "fdccb1c910301a8c061ecd0c728688a0244a220ae6526270d991c921e410acd5"
+    },
+    {
+      "path": "public/geo-community-blogs-cn/images/dual_encoders_dimensions_banner-cn.webp",
+      "bytes": 50648,
+      "sha256": "c3be37845342fd798223a8d170f954e13c256d01b46374af4bd5621f938fbac0"
+    },
+    {
+      "path": "public/geo-community-blogs-cn/images/e-geo-paper-ecommerce-cn.webp",
+      "bytes": 103018,
+      "sha256": "7077141f6e6e5e6d9fb16a237b55d6344890af8c78de162324bb10b3d7c9066a"
+    },
+    {
+      "path": "public/geo-community-blogs-cn/images/embedding-architecture-ai-retrieval-cn.webp",
+      "bytes": 27298,
+      "sha256": "1f4f8c038289ee73c5ac61c7a1b16e2b8df488b4b29bba29c5e4e927fc2397cb"
+    },
+    {
+      "path": "public/geo-community-blogs-cn/images/emotion-concepts-llm-function-claude-sonnet-45-arxiv-2604-07729-cn.webp",
+      "bytes": 139272,
+      "sha256": "0981406eaa407928f4789a01cbe1dd5079ca604cb42af2bcacc4843c3588452e"
+    },
+    {
+      "path": "public/geo-community-blogs-cn/images/featgeo_banner-cn.webp",
+      "bytes": 49588,
+      "sha256": "45d6bda81fda86056be242fe20e83d5eb7d793fb2c365439cf2c93f4f204466f"
+    },
+    {
+      "path": "public/geo-community-blogs-cn/images/flesch-kincaid-grade-level-marketing-ai-cn.webp",
+      "bytes": 22426,
+      "sha256": "f6fdd6800fe1e9aa5c2085ad9717b5383784eda751e23dd6d48886b607c0165c"
+    },
+    {
+      "path": "public/geo-community-blogs-cn/images/flesch-reading-ease-marketing-ai-cn.webp",
+      "bytes": 31620,
+      "sha256": "b5703703e90f1eaa2b0d075dd4f91ae7f45e5cc69048ad65c24d654bf1f04301"
+    },
+    {
+      "path": "public/geo-community-blogs-cn/images/flywheel-content-strategy-geo-hero-cn.webp",
+      "bytes": 11044,
+      "sha256": "496f1efe3e8556027c4f4a6ceaf47ba715ed209b7837053813e709185300347d"
+    },
+    {
+      "path": "public/geo-community-blogs-cn/images/ga4-for-ai-search-measure-ai-traffic-geo-performance-conversions-cn.webp",
+      "bytes": 55310,
+      "sha256": "6c1cf8cc13c0175519addebf46c80afa699bae615b179706759cf19829316320"
+    },
+    {
+      "path": "public/geo-community-blogs-cn/images/ga4-regex-chatgpt-perplexity-gemini-claude-copilot-cn.webp",
+      "bytes": 52892,
+      "sha256": "c59edbd0494657ac8fb205964c991e842659f95116ad87f5284f8ba3deba828e"
+    },
+    {
+      "path": "public/geo-community-blogs-cn/images/galileo-hallucination-detection-cn.webp",
+      "bytes": 25726,
+      "sha256": "98a29e2a03b33d3e06b046959ab34610d147c8d3e480332ab38663d4fe868c99"
+    },
+    {
+      "path": "public/geo-community-blogs-cn/images/geo-dominate-ai-search-comparative-study-cn.webp",
+      "bytes": 41826,
+      "sha256": "ddc0a38707a56897d060a6f7ee4060984ae450a438a6e340fec18370985fb275"
+    },
+    {
+      "path": "public/geo-community-blogs-cn/images/geo-princeton-paper-original-study-cn.webp",
+      "bytes": 28842,
+      "sha256": "806db004fb1abf906fac09cf0333f45a0b19f466c3e62871583dca4fde154aab"
+    },
+    {
+      "path": "public/geo-community-blogs-cn/images/geo-sfe-structural-feature-engineering-citation-cn.webp",
+      "bytes": 47928,
+      "sha256": "76d8cf665f94b5f84de32e97742e66227bbd6cebf695970429f8733cd1bd9b56"
+    },
+    {
+      "path": "public/geo-community-blogs-cn/images/geo-vs-seo-user-funnel-cn.webp",
+      "bytes": 54272,
+      "sha256": "e4e6e6cd9b7511bf6a121a3cb0a02308e2c6eb2988a3f5dcfa593df8a51643e5"
+    },
+    {
+      "path": "public/geo-community-blogs-cn/images/geo_banner_resources_2026-cn.webp",
+      "bytes": 67572,
+      "sha256": "eecd1ed7add2425a3952bdb1ebde33fab6b725222b64c08a534fc9e3d8520a66"
+    },
+    {
+      "path": "public/geo-community-blogs-cn/images/geo_framework_ai_search_2026-cn.webp",
+      "bytes": 60256,
+      "sha256": "16f37bbc0a86157742033221a852eece4142b6a600d4a6c2bc1f86c74f6a3b25"
+    },
+    {
+      "path": "public/geo-community-blogs-cn/images/geo_roadmap_seo_professionals-cn.webp",
+      "bytes": 66774,
+      "sha256": "76c1b85424721d74c4955ae4f9380d77da73abaddc1b7344f55d0704e803fdb8"
+    },
+    {
+      "path": "public/geo-community-blogs-cn/images/google-agentic-resource-discovery-specification-cn.webp",
+      "bytes": 144300,
+      "sha256": "15a5fe7496d7587b26bc299901bcc915848c6a97552787f12be5959f9eeed18c"
+    },
+    {
+      "path": "public/geo-community-blogs-cn/images/google-ai-optimization-guide-geo-hype-cn.webp",
+      "bytes": 48956,
+      "sha256": "bb1edab9a797019d8c2868bf2eb898fe6c66a8adb17692c1759086d6c8feab23"
+    },
+    {
+      "path": "public/geo-community-blogs-cn/images/google-analytics-ai-assistant-channel-native-tracking-cn.webp",
+      "bytes": 78030,
+      "sha256": "aa704ff7bdf7ac0858ca820568674c6b7c4ab406efdb829660251d82d184a85b"
+    },
+    {
+      "path": "public/geo-community-blogs-cn/images/google-rag-attribution-patent-citations-not-post-hoc-cn.webp",
+      "bytes": 20072,
+      "sha256": "687a93008f4ea36aeec5f28bf6deb00d9686919e366dddb6f9cc9b79743fa15f"
+    },
+    {
+      "path": "public/geo-community-blogs-cn/images/gpt-5-4-benchmark-wins-brand-mentions-cn.webp",
+      "bytes": 33406,
+      "sha256": "ae1820f17f94e02bdfded3c3c1ee4d6fdfdf59b7a00b67ccf5eeab9bfb2c2360"
+    },
+    {
+      "path": "public/geo-community-blogs-cn/images/gpt-5-4-benchmarks-geo-implications-cn.webp",
+      "bytes": 38528,
+      "sha256": "c635949629907fddb205a4d5321d58969dc0e3e2714625ae1c8b051a04180f0e"
+    },
+    {
+      "path": "public/geo-community-blogs-cn/images/gpt-5-4-web-benchmarks-geo-professionals-cn.webp",
+      "bytes": 46818,
+      "sha256": "12a415aaee152c9c7c8329a46935422c0f3bf60cfc4aa6c703792c4c563ed57a"
+    },
+    {
+      "path": "public/geo-community-blogs-cn/images/graphite-seo-traffic-hasnt-dramatically-declined-cn.webp",
+      "bytes": 128858,
+      "sha256": "642cbe7840a56aa9b25f7a80d2cb52f7b26fda32e4dd07e69246461a3c3291ec"
+    },
+    {
+      "path": "public/geo-community-blogs-cn/images/gunning-fog-index-marketing-ai-cn.webp",
+      "bytes": 28238,
+      "sha256": "9c099fe56009374152b42b4ac041e3ef125789ace619338a8f288af0ab6b2fc0"
+    },
+    {
+      "path": "public/geo-community-blogs-cn/images/hidden-intent-map-behind-ai-search-cn.webp",
+      "bytes": 118982,
+      "sha256": "aab447626c49af584aea871424576ad0a4c05a57f829c76a0b1fdc6bf25f9502"
+    },
+    {
+      "path": "public/geo-community-blogs-cn/images/hnsw-and-geo-retrieval-layer-cn.webp",
+      "bytes": 120410,
+      "sha256": "621577d8cfdd7e249797ed6b45d9d2984146a85557f8a56711664d246c344bfc"
+    },
+    {
+      "path": "public/geo-community-blogs-cn/images/how-to-find-ai-referral-traffic-ga4-cn.webp",
+      "bytes": 48648,
+      "sha256": "a2355e64125136ed3ecf8cd6e613b33b4b789402768009ef603b84a2a99ee710"
+    },
+    {
+      "path": "public/geo-community-blogs-cn/images/how-to-measure-geo-success-ga4-beyond-traffic-counts-cn.webp",
+      "bytes": 48732,
+      "sha256": "1bf77e16613902c71aa15175713874708f86a2455e40a18aa605cb06dd42c495"
+    },
+    {
+      "path": "public/geo-community-blogs-cn/images/human-vs-llm-judge-evaluation-cn.webp",
+      "bytes": 25650,
+      "sha256": "20030244ffad1caec38e1685fd9bff35a4cd36eed93041c6988876c74ceb8465"
+    },
+    {
+      "path": "public/geo-community-blogs-cn/images/indexnow-microsoft-ai-visibility-cn.webp",
+      "bytes": 50568,
+      "sha256": "c2316d5fe7ad33425d2e7ee016a56d292c4beb49e431fad2bee8268b3c51e56f"
+    },
+    {
+      "path": "public/geo-community-blogs-cn/images/langextract-gemini-generative-engine-optimization-cn.webp",
+      "bytes": 15056,
+      "sha256": "cf33576492022dc055e04225b469f7dd40aebe7b8e4d01c9f35d8cb070a25e83"
+    },
+    {
+      "path": "public/geo-community-blogs-cn/images/langsmith-tracing-evaluation-cn.webp",
+      "bytes": 19602,
+      "sha256": "8c26d282da700f6401e60b8155039eb11c81cd0c03b42fd049987b3561eb5693"
+    },
+    {
+      "path": "public/geo-community-blogs-cn/images/language-models-injective-invertible-arxiv-2510-15511-cn.webp",
+      "bytes": 139394,
+      "sha256": "e9fc3e4f7159913bc4b73e9ec539f5a20cfb6e62d74b02ed4f57e4e7ece8260d"
+    },
+    {
+      "path": "public/geo-community-blogs-cn/images/latent-authority-perplexity-patent-cn.webp",
+      "bytes": 140276,
+      "sha256": "9f0cbd70792c5e33e56ad074a93b69bebaa1d2e0d252dee7a69049b77450f3cc"
+    },
+    {
+      "path": "public/geo-community-blogs-cn/images/llm-eval-metrics-taxonomy-cn.webp",
+      "bytes": 23224,
+      "sha256": "cb11e10a67b910f3b811b5510949a533adb907fc7815e48436c86bd5cd92e821"
+    },
+    {
+      "path": "public/geo-community-blogs-cn/images/llm-evals-landscape-comparison-cn.webp",
+      "bytes": 21974,
+      "sha256": "72352b14ecc82ef3277127af61051dadecf8128ea4f03ba10fcf34327d48b68f"
+    },
+    {
+      "path": "public/geo-community-blogs-cn/images/llm-model-council-multi-model-consensus-cn.webp",
+      "bytes": 90606,
+      "sha256": "ca9ce6632d8843364a5fa39d674f6c2a0e08bafe097ea938836f6b7683ecb119"
+    },
+    {
+      "path": "public/geo-community-blogs-cn/images/llm-multi-format-robustness-arxiv-2606-11643-geo-cn.webp",
+      "bytes": 133422,
+      "sha256": "15301f0c3bec5698d0fa666edd23db186ba01a1228218d11d13ebf22be81f224"
+    },
+    {
+      "path": "public/geo-community-blogs-cn/images/llms-txt-spa-hydration-gaps-cn.webp",
+      "bytes": 60162,
+      "sha256": "2c9fbffd919e8d202bc40f7d7405d0a39c9ca12fbb48ad06fadc5652c50f4282"
+    },
+    {
+      "path": "public/geo-community-blogs-cn/images/log-file-analysis-ai-bots-geo-cn.webp",
+      "bytes": 40810,
+      "sha256": "c851449e931e923f14e4316b9ae9dfeab2955a24293233b8668c5e8d4d585f8d"
+    },
+    {
+      "path": "public/geo-community-blogs-cn/images/mageo-multi-agent-geo-reusable-strategy-learning-cn.webp",
+      "bytes": 80432,
+      "sha256": "620ec55851c459833b34aad2d3c4346acc0ec7ca5f0a4fd03680868e85d7bda3"
+    },
+    {
+      "path": "public/geo-community-blogs-cn/images/mentioned-isnt-enough-brand-citations-ai-answers-cn.webp",
+      "bytes": 135078,
+      "sha256": "6a9b161e9d6800f62a46d00eb954ec5bf16d25a981b04725dfdb5dd1ccc5a71a"
+    },
+    {
+      "path": "public/geo-community-blogs-cn/images/meta-ai-shopping-research-geo-cn.webp",
+      "bytes": 82512,
+      "sha256": "655281cdcf5b65ad00052d1d4f9bb3d8b271d5f769c76b212fb704e1d7f1f35a"
+    },
+    {
+      "path": "public/geo-community-blogs-cn/images/microsoft-clarity-ai-bot-activity-cn.webp",
+      "bytes": 78156,
+      "sha256": "2dafdd7599ab5a9f00ebaf23348c00261aaf102ce31c23a7cdba9ced703f62ad"
+    },
+    {
+      "path": "public/geo-community-blogs-cn/images/openai-evals-guide-cn.webp",
+      "bytes": 22356,
+      "sha256": "71316ceba9a47707a1879c7ac6c8ec5c4109a3a3ecfc31cab956f44962e1d93b"
+    },
+    {
+      "path": "public/geo-community-blogs-cn/images/paperclip-for-seo-complete-guide-cn.webp",
+      "bytes": 17606,
+      "sha256": "c8e90a48b15fe866614b03e806def250a39ea556f47a5b1b30734d0f7d6272c4"
+    },
+    {
+      "path": "public/geo-community-blogs-cn/images/paperclip_01_what_is_paperclip-cn.webp",
+      "bytes": 60572,
+      "sha256": "4b64d6f4b9c65adcbd21149fc59525c460586a0a1dc7a52ae8e9ce51ec8903fd"
+    },
+    {
+      "path": "public/geo-community-blogs-cn/images/paperclip_02_setup_first_agent-cn.webp",
+      "bytes": 81472,
+      "sha256": "abda5edc84a448b274a824c50bf1110a6d6b81d63e8c2bcbba967a04b4398bd5"
+    },
+    {
+      "path": "public/geo-community-blogs-cn/images/paperclip_03_ai_seo_org_chart-cn.webp",
+      "bytes": 92192,
+      "sha256": "8f3275ed2e1bc5ec0a89421b8b8d70f10a56732f8934cb590ed67007e06b157f"
+    },
+    {
+      "path": "public/geo-community-blogs-cn/images/paperclip_04_automated_keyword_research-cn.webp",
+      "bytes": 108398,
+      "sha256": "2d17a8c2619bb97cd559aacad5132ddd7f1d78619d370b8376b1701b7653edb0"
+    },
+    {
+      "path": "public/geo-community-blogs-cn/images/paperclip_05_content_gap_analysis-cn.webp",
+      "bytes": 119620,
+      "sha256": "fa683964216e624ecfaf12d039ec996cec06a003344ef1bf0ec6ea820aad853b"
+    },
+    {
+      "path": "public/geo-community-blogs-cn/images/paperclip_06_competitor_monitoring-cn.webp",
+      "bytes": 57150,
+      "sha256": "d57c5712ac19580a39259aabb15f6991a1245a3b3394aab8263a05695a8ec0a5"
+    },
+    {
+      "path": "public/geo-community-blogs-cn/images/paperclip_07_content_brief_pipeline-cn.webp",
+      "bytes": 60610,
+      "sha256": "cac2174892bbb6901e4dc6774527bf635383341ad0fea1ed6509945a8b72ea74"
+    },
+    {
+      "path": "public/geo-community-blogs-cn/images/paperclip_08_publishing_at_scale-cn.webp",
+      "bytes": 45328,
+      "sha256": "d15f75f9d1633594fb820486c5b6479830ca029645645c7c4d8e14e3b1ee3445"
+    },
+    {
+      "path": "public/geo-community-blogs-cn/images/paperclip_09_multi_agent_review-cn.webp",
+      "bytes": 87346,
+      "sha256": "80c78ae847e153d523c250a74811d4fbaf08f7c54f2f6ac2a55922f140bf738c"
+    },
+    {
+      "path": "public/geo-community-blogs-cn/images/paperclip_10_technical_seo_audits-cn.webp",
+      "bytes": 47970,
+      "sha256": "8edef6ab2bd625324dab9ecf2e19de5f7466fe5578a4d3e49d789a5b608cde6f"
+    },
+    {
+      "path": "public/geo-community-blogs-cn/images/paperclip_11_automated_internal_linking-cn.webp",
+      "bytes": 113146,
+      "sha256": "c6781f85ef3c48f124bbb6b382e4efa272992086fb7d816df304cd07801b7a49"
+    },
+    {
+      "path": "public/geo-community-blogs-cn/images/paperclip_12_schema_markup_generation-cn.webp",
+      "bytes": 111000,
+      "sha256": "83e57587bccfc30b8191d9ecf528008bd7078bb9a509b87ff4e8890a4595755f"
+    },
+    {
+      "path": "public/geo-community-blogs-cn/images/paperclip_13_multi_client_management-cn.webp",
+      "bytes": 60696,
+      "sha256": "b76846d650dc3e061c01f3407d5ebfe2e354c5e3216f1ad13830f57b8ec7cb1f"
+    },
+    {
+      "path": "public/geo-community-blogs-cn/images/paperclip_14_cost_controlled_ai_seo-cn.webp",
+      "bytes": 89518,
+      "sha256": "1c3d84c3df394dd30d2ed1b3e2ab63485f344a13c5330f455dad435c21f043f1"
+    },
+    {
+      "path": "public/geo-community-blogs-cn/images/paperclip_15_seo_governance-cn.webp",
+      "bytes": 71848,
+      "sha256": "ae28c1d182e18dba29ce25acf33b95a1a0f77f5c23aeaa4a445d7a1d83dcef20"
+    },
+    {
+      "path": "public/geo-community-blogs-cn/images/paperclip_16_seo_reporting_audit_trail-cn.webp",
+      "bytes": 80736,
+      "sha256": "6f9dbd2607fcc8ca2730d67acd521d18290f7e209b3c38c27c9318b273389d2c"
+    },
+    {
+      "path": "public/geo-community-blogs-cn/images/paperclip_17_recurring_seo_reports-cn.webp",
+      "bytes": 67512,
+      "sha256": "b4461551be8c08a6039b53e4eef0caabe92af6bca5bcd1eb990dd443a844b1aa"
+    },
+    {
+      "path": "public/geo-community-blogs-cn/images/perplexity-augmented-search-loop-cn.webp",
+      "bytes": 78908,
+      "sha256": "f51aad1ba59b9566cb8765938bc06d55062423e356abbf5d17ab65a18b6fc379"
+    },
+    {
+      "path": "public/geo-community-blogs-cn/images/perplexity-open-source-embeddings-geo-cn.webp",
+      "bytes": 62868,
+      "sha256": "e79119e4bc2ff72306913c28063729e84e65841d2ad78530e331fb0d0f8b8761"
+    },
+    {
+      "path": "public/geo-community-blogs-cn/images/prompt-chaining-seo-workflows-cn-v3.webp",
+      "bytes": 88850,
+      "sha256": "9a92da78fb4b1899554d1d54367d931d0dc89821e736e29a80d9e013ef0696cf"
+    },
+    {
+      "path": "public/geo-community-blogs-cn/images/prompt-testing-iteration-evaluate-improve-cn.webp",
+      "bytes": 53284,
+      "sha256": "68bb6076322d5e01476ec4b5d8ff6099b4b2e035761fdb914b50e009f6f22348"
+    },
+    {
+      "path": "public/geo-community-blogs-cn/images/pyversity-the-python-library-every-geo-researcher-needs-in-their-toolkit-cn.webp",
+      "bytes": 18864,
+      "sha256": "0db7a915905bc8b005dc7f07fd20be5070c27b35807e7722b2fbdc9ec0abaf85"
+    },
+    {
+      "path": "public/geo-community-blogs-cn/images/raid-geo-intent-driven-generative-search-optimization-cn.webp",
+      "bytes": 71074,
+      "sha256": "5710340455f4d6b64e2f150edf1b0813c20ee22db936f80da2ecf613942cbe8c"
+    },
+    {
+      "path": "public/geo-community-blogs-cn/images/red-teaming-llm-safety-evaluation-cn.webp",
+      "bytes": 18310,
+      "sha256": "a853252e16599dd26ddef9916fe55b87f2394cb8207416f6f6c4933949f7ce88"
+    },
+    {
+      "path": "public/geo-community-blogs-cn/images/robots-txt-ai-bots-cn.webp",
+      "bytes": 107376,
+      "sha256": "8abad082245b70902ba4dbeab2826bcd5d24481543ce144415742e486c557eb1"
+    },
+    {
+      "path": "public/geo-community-blogs-cn/images/sageo-arena-realistic-geo-benchmark-cn.webp",
+      "bytes": 35190,
+      "sha256": "6a5967320d48f2ebf4ae220527df11d93d3605ca31e00eda10eeea5715302202"
+    },
+    {
+      "path": "public/geo-community-blogs-cn/images/scroll-depth-analysis-ga4-gtm-cn.webp",
+      "bytes": 30188,
+      "sha256": "29ffd9234d2a685fd101a4ba2f99bbfa4a0feeedc38a0f0603ffaf3381251254"
+    },
+    {
+      "path": "public/geo-community-blogs-cn/images/search-everywhere-optimization-thematic-search-cn.webp",
+      "bytes": 34444,
+      "sha256": "70c14a5c666f07a12e39c369c2986ce68d8adcf088b8908f08fd15922cd67503"
+    },
+    {
+      "path": "public/geo-community-blogs-cn/images/semantic-visualization-experiment-embedding-space-cn.webp",
+      "bytes": 83124,
+      "sha256": "b5172016261e3a9b83f3b91c4ee760c7b5182a7677377906c060136fba7ce21b"
+    },
+    {
+      "path": "public/geo-community-blogs-cn/images/seo-geo-consultant-attitude-cn.webp",
+      "bytes": 47806,
+      "sha256": "39def4e8991bb33decb50955711dc25fc5ec4ed8d562fcf81caac2d02ca284d9"
+    },
+    {
+      "path": "public/geo-community-blogs-cn/images/shopify-chatgpt-instant-checkout-fee-cn.webp",
+      "bytes": 80550,
+      "sha256": "8d21628dc37001c59bd1b65a0b18ab240ff02aa9d67ed3ec091ff771a2b1083f"
+    },
+    {
+      "path": "public/geo-community-blogs-cn/images/smog-index-marketing-ai-cn.webp",
+      "bytes": 27552,
+      "sha256": "e0112994d401f12d1be3c8d8aa589c3ca666d00447b01ea297aee770ab845564"
+    },
+    {
+      "path": "public/geo-community-blogs-cn/images/system-prompts-role-prompting-brand-voice-cn.webp",
+      "bytes": 55454,
+      "sha256": "fbcca9b8f2eceb74321f9014c9d29c1ac0b8403e3140ea983a48cbaff5615b8c"
+    },
+    {
+      "path": "public/geo-community-blogs-cn/images/top-10-seo-skills-github-stars-cn.webp",
+      "bytes": 131648,
+      "sha256": "9721b8bb81a26f1e8b3671acc7583ad29c9510e05bd9c7f2e263138532d56b73"
+    },
+    {
+      "path": "public/geo-community-blogs-cn/images/top-ai-search-geo-experts-cn.webp",
+      "bytes": 130522,
+      "sha256": "20b870b2e2fe94db15f15b776afaf197456107f5d472a542a4f55ca8b22616f5"
+    },
+    {
+      "path": "public/geo-community-blogs-cn/images/tweak-cosine-similarity-advice-seo-aeo-geo-cn.webp",
+      "bytes": 84622,
+      "sha256": "99b1163f9b4b79133352c66a7141ebe4f03eb2b6965c77c7a6eac587ba252c7b"
+    },
+    {
+      "path": "public/geo-community-blogs-cn/images/verifiability-generative-search-engines-emnlp-2023-cn.webp",
+      "bytes": 28062,
+      "sha256": "d57182f6ad2763b6946b005fa49dfedadae6f67f178e3623691dc99663b774cf"
+    },
+    {
+      "path": "public/geo-community-blogs-cn/images/webknograph-gnn-internal-linking-seo-cn.webp",
+      "bytes": 51066,
+      "sha256": "3e499ee718e729b611140d453bb27fdcec984b84a20ff3e4564c0fa63a0aa7b3"
+    },
+    {
+      "path": "public/geo-community-blogs-cn/images/webmcp-history-timeline-15-months-7-engineers-3-companies-cn.webp",
+      "bytes": 79010,
+      "sha256": "5cddf77739721684f2deefd5a7a8c6ecd0bf004361d281a093fd141517cb872c"
+    },
+    {
+      "path": "public/geo-community-blogs-cn/images/website-ai-agent-readiness-lighthouse-audit-cn.webp",
+      "bytes": 55986,
+      "sha256": "2c6ccda15387a9869b138728886c6018a2d18f6ca2ea1682c715d7fa1ea3516a"
+    },
+    {
+      "path": "public/geo-community-blogs-cn/images/weights-biases-weave-llm-evaluation-cn.webp",
+      "bytes": 22182,
+      "sha256": "eeb2eadb3d5cbd321ed829dff5b5887166c6280f9e8e790c166a2f4943af0493"
+    },
+    {
+      "path": "public/geo-community-blogs-cn/images/what-are-llm-evals-cn.webp",
+      "bytes": 22726,
+      "sha256": "dc4abfbaaee0cc2d5adbacf64be1541f380ab520175c40bb829abd6a7cab2782"
+    },
+    {
+      "path": "public/geo-community-blogs-cn/images/what-is-corroboration-authority-cn.webp",
+      "bytes": 130408,
+      "sha256": "343e465dbf85fefa307f82ffaac32e06bc77cbb73eb3e445be5e14140bb739a9"
+    },
+    {
+      "path": "public/geo-community-blogs-cn/images/why-ai-content-works-at-scale-cn.webp",
+      "bytes": 31602,
+      "sha256": "1f42195a48ac95eaede53975729a796505aeef15692b827ef04c7580b2859c3d"
+    },
+    {
+      "path": "public/geo-community-blogs-cn/images/why-ga4-underreports-ai-search-traffic-dark-traffic-cn.webp",
+      "bytes": 54318,
+      "sha256": "b4ad799af85e0eac8236aae0f8b80dc000e4fe52ab7cfd61582448a769b8104e"
+    },
+    {
+      "path": "public/geo-community-blogs-cn/images/why-json-ld-is-important-google-cn.webp",
+      "bytes": 55836,
+      "sha256": "934ef00489a7ae91d1fc421d7671de04fb96b60ce15ba7967d9c15035f7f13c4"
+    },
+    {
+      "path": "public/geo-community-blogs-cn/images/why-llm-answers-dont-show-citations-cn.webp",
+      "bytes": 137042,
+      "sha256": "3a3f8fd2ce6f9b603cbd321a413be7d4e0664e8862cb4442f899b365ee307915"
+    },
+    {
+      "path": "public/geo-community-blogs-cn/images/why-llm-evals-matter-cn.webp",
+      "bytes": 25710,
+      "sha256": "87c298aa105a524d06f3c89dc18065a5e07f445fb8677954e4e1469d8a81447d"
+    },
+    {
+      "path": "public/geo-community-blogs-cn/images/world-first-ai-scientist-geo-research-cn.webp",
+      "bytes": 121828,
+      "sha256": "7410b10bee959fe481d45e679f9572c06e0f5dbea1a25f5cd1566e55453a944f"
+    },
+    {
+      "path": "public/geo-community-blogs-cn/images/zero-shot-vs-few-shot-prompting-seo-content-cn.webp",
+      "bytes": 46858,
+      "sha256": "9522cef85b48cadb6e8ca39bbbf1de5028ce64cfa2022ccf9371d14a7a2ccd51"
+    },
+    {
+      "path": "public/geo-community/favicon.svg",
+      "bytes": 475,
+      "sha256": "aa3d85de5bcac0afd200913b31a0f53a1e562b0740caebe2e7eeb65fbedcf26f"
+    },
+    {
+      "path": "public/geo-community/icons.svg",
+      "bytes": 5031,
+      "sha256": "b45fa506195cfcdef406ba9f0c77b36ddc1a7c224040926ec70abc2fdea7b93a"
+    },
+    {
+      "path": "public/geo-community/logo.svg",
+      "bytes": 644,
+      "sha256": "97748b355915f8ed4f8ab5d2866553940cc844ef7b2bc5d3f698e06916e35ade"
+    },
+    {
+      "path": "public/home/agent-deployment-news-wall.webp",
+      "bytes": 243008,
+      "sha256": "4e05359d5f6c351f07c2e7c7f403035049b86d272100676b6883c032670a5fc9"
+    },
+    {
+      "path": "public/home/agent-methodology-wide.webp",
+      "bytes": 345708,
+      "sha256": "8fb5f3faa6feb35a8420cb3e0af491526ca13c62adccc6fc53e894b57019d8dc"
+    },
+    {
+      "path": "public/home/alibaba-wukong-cuhk-shenzhen-ai-growth.webp",
+      "bytes": 183926,
+      "sha256": "a2dc3da9ca51300444aace60a316f065afdb7b67f4fbe9704f0117c2d9577ff7"
+    },
+    {
+      "path": "public/home/chaozhou-entrepreneurs-cuhk-visit.webp",
+      "bytes": 477142,
+      "sha256": "7169b4ee4cffd636d1aa3ae03699945c3e29ed2b771e3f995d29a7b2e00eeceb"
+    },
+    {
+      "path": "public/home/china-innovation-competition-qianhai.webp",
+      "bytes": 303120,
+      "sha256": "066f6b2c5389b7ad2c196d59e51f01b6ae90db9cf5364f93095d74647f353519"
+    },
+    {
+      "path": "public/home/cuhk-innovation-10th-anniversary.webp",
+      "bytes": 200894,
+      "sha256": "ae39f302db011e7bfa6b34da02cd4443ebfb3f05eaa49d491dea466c922c193a"
+    },
+    {
+      "path": "public/home/cuhk-qs-business-analytics-2026.webp",
+      "bytes": 213924,
+      "sha256": "ac1d9a491380d0941b4199fd872402da80859c86fbc604449a58c6bca78ebf7c"
+    },
+    {
+      "path": "public/home/cuhk-qs-business-analytics-wide.webp",
+      "bytes": 238492,
+      "sha256": "df5e1b3a5980da8be64435e2c0027a51bedcc0b7781db47ffbea6cb7dda312a7"
+    },
+    {
+      "path": "public/home/cuhk-shenzhen-logo.webp",
+      "bytes": 110536,
+      "sha256": "ee0561f109079ab8231e93868325b9a7fd34a7e6a7dc1bdd45815b29fe0b4a3f"
+    },
+    {
+      "path": "public/home/shenzhen-hongkong-incubator-logo.webp",
+      "bytes": 106246,
+      "sha256": "aec3ca381fec741fe1a26e6c9898f0a2b0c7c8e004d8f890bcfb7b03097f1687"
+    },
+    {
+      "path": "public/images/after-ai-driven.webp",
+      "bytes": 133038,
+      "sha256": "4d8cb18f9eb3477c470667d0b9e3400e9f27513dbce8c243be8a80641961fca4"
+    },
+    {
+      "path": "public/images/before-traditional.webp",
+      "bytes": 118872,
+      "sha256": "0b70bb3a92299af061879ab4b0cd9ceb82f18e4d1b1659c0993ee950e29d2d08"
+    },
+    {
+      "path": "public/index.html",
+      "bytes": 4626,
+      "sha256": "210c071fbc2e173e1137588eb4581c00385b499f1869ecc5c81d9b7a52fdfab4"
+    },
+    {
+      "path": "public/llms.txt",
+      "bytes": 31080,
+      "sha256": "dfe7b6e746e0fccbc2c884633ea74ec3a27229d818a900a3ef509a992f8f4bc8"
+    },
+    {
+      "path": "public/mindnexus/index.html",
+      "bytes": 4337,
+      "sha256": "04748c2036fa487577792924b80267c95742af5e6129f1ed29786bdcda16c949"
+    },
+    {
+      "path": "public/mindpromise/index.html",
+      "bytes": 4411,
+      "sha256": "7e5a054df1938ff4fc173e89c8b6ce175c406c27323f6f7dc1734338ee495cbc"
+    },
+    {
+      "path": "public/mindreach/index.html",
+      "bytes": 4273,
+      "sha256": "0ef152f52c3cc639766b86a2baff9d29f8e3c9af5de28c2f92eb7b6eb7ab3a27"
+    },
+    {
+      "path": "public/news/ai-brand-visibility.webp",
+      "bytes": 117388,
+      "sha256": "d414d68113f618242f3b43cd5370bbf3ef4ebcb6333a4843f9d502051a4c008a"
+    },
+    {
+      "path": "public/news/ai-platform-traffic-share.webp",
+      "bytes": 43294,
+      "sha256": "1d97c687937ddf80931109ad65835e8c75f7176f0e83c0209dcbf6d7199e5471"
+    },
+    {
+      "path": "public/news/ai-search-market-size.webp",
+      "bytes": 48054,
+      "sha256": "9a0c0e7fdb9d9b5f16171da53dad1aafc856ca46b1e60f2195062993760c6b89"
+    },
+    {
+      "path": "public/news/ai-search-optimization.webp",
+      "bytes": 139772,
+      "sha256": "8b872cad08e2aeb6f8eaa84a2b9968db87af07bde4d489b5d4778d3f4a8e96ed"
+    },
+    {
+      "path": "public/news/aio-ctr-impact.webp",
+      "bytes": 40132,
+      "sha256": "eba9c377e44b4602ca77ec3a97ca6de7a141ee4b56c38b6ae3ed8eb55957e488"
+    },
+    {
+      "path": "public/news/chatgpt-800m-users-brand-citation/index.html",
+      "bytes": 5775,
+      "sha256": "3bb4dc02067b94a4ad5044a779aba56bc15f12332a902772a0e31723c9b8a051"
+    },
+    {
+      "path": "public/news/geo-conversion-data.webp",
+      "bytes": 36374,
+      "sha256": "daa089bbe94066a7ce6f636e54413db6f150c0ea1a00c0a69546a94485e386d1"
+    },
+    {
+      "path": "public/news/geo-marketing-ai.webp",
+      "bytes": 58488,
+      "sha256": "2f64181d1d237539acf8ea3143884e00bdd84c251445c88d54d2f7c967cdc1aa"
+    },
+    {
+      "path": "public/news/geo-replaces-seo-brand-visibility/index.html",
+      "bytes": 5832,
+      "sha256": "8a13c016d0efa7b5dd6bc1e708b15de77fd2eacf587c86a908f1afde09453d5f"
+    },
+    {
+      "path": "public/news/google-ai-search-optimization-guide/index.html",
+      "bytes": 5767,
+      "sha256": "c667cca72b88a2546cc1c5ef44a78b3e50291b3d2de969e31d46659b44728a95"
+    },
+    {
+      "path": "public/news/index.html",
+      "bytes": 3948,
+      "sha256": "59f48da59980c487dd49546a8582ee192a5000488fe79b2057e39e5f94604383"
+    },
+    {
+      "path": "public/platform/index.html",
+      "bytes": 4247,
+      "sha256": "1d35b580d2d9e925089a51862463e2e1639fe93b8b8178c7bdc61a3c082b7f05"
+    },
+    {
+      "path": "public/privacy/index.html",
+      "bytes": 4120,
+      "sha256": "95bc19fdf0075beb328a4740915aa39956cabc1980a83a7cf541db149f329e58"
+    },
+    {
+      "path": "public/products/mindnexus/index.html",
+      "bytes": 4337,
+      "sha256": "04748c2036fa487577792924b80267c95742af5e6129f1ed29786bdcda16c949"
+    },
+    {
+      "path": "public/products/mindpromise-hero.webp",
+      "bytes": 350254,
+      "sha256": "65431c79f823a98c6954f954f4df134f139e6abfb0a80362a7d6976405fa462f"
+    },
+    {
+      "path": "public/products/mindpromise/index.html",
+      "bytes": 4411,
+      "sha256": "7e5a054df1938ff4fc173e89c8b6ce175c406c27323f6f7dc1734338ee495cbc"
+    },
+    {
+      "path": "public/products/mindreach/index.html",
+      "bytes": 4273,
+      "sha256": "0ef152f52c3cc639766b86a2baff9d29f8e3c9af5de28c2f92eb7b6eb7ab3a27"
+    },
+    {
+      "path": "public/research/community/about/index.html",
+      "bytes": 4920,
+      "sha256": "e2057f8dcb7f5e583e4f4f5e66129ee043d9c2e40f79af0fdb74d436b7ae71bd"
+    },
+    {
+      "path": "public/research/community/ai-for-seo/index.html",
+      "bytes": 4703,
+      "sha256": "f947465cae254f8b7853639e8dba31a576694972dd8c2277b3838258b822dbf0"
+    },
+    {
+      "path": "public/research/community/benchmarks/index.html",
+      "bytes": 4779,
+      "sha256": "f288ea7d792d392cbeed13b7d43203cf57d6468b95908cae143bf6faa27d3968"
+    },
+    {
+      "path": "public/research/community/community/submissions/index.html",
+      "bytes": 4800,
+      "sha256": "47a7517f203c98a1065868382ec64d52e20f5c82da5e1ffd06756099bf84c0dc"
+    },
+    {
+      "path": "public/research/community/generative-engine-optimization-resources-courses-tutorials/index.html",
+      "bytes": 5156,
+      "sha256": "8269f8a0980260f661c1e3b68b61a0ffb7db1f2204bfe04c07e78cf2e377a16b"
+    },
+    {
+      "path": "public/research/community/geo-framework/index.html",
+      "bytes": 4838,
+      "sha256": "675339d346d457c19846777b0bb0207b9230b382e9c1061c438793e92b9c356c"
+    },
+    {
+      "path": "public/research/community/how-to-learn-geo-generative-engine-optimization/index.html",
+      "bytes": 4961,
+      "sha256": "48823d66e29a681ecc0fc3622bea188b286d95b3ec59773990003ebf3a3a5566"
+    },
+    {
+      "path": "public/research/community/ideas/index.html",
+      "bytes": 4577,
+      "sha256": "ac79297c8709cd7555deafb2c66c3e4a9d548c58300faa04928b80c600e29843"
+    },
+    {
+      "path": "public/research/community/index.html",
+      "bytes": 4394,
+      "sha256": "46ee843b32f6a630337727ea39ad3aeb457e952e255b2ce9dde58a6657edfa3b"
+    },
+    {
+      "path": "public/research/community/paperclip-for-seo/index.html",
+      "bytes": 4825,
+      "sha256": "5016ae9e74fb98f7121d80488261da2ce26b1dd41f5dcbb8de5ce5e54afeca28"
+    },
+    {
+      "path": "public/research/community/resources/geo-glossary/index.html",
+      "bytes": 4813,
+      "sha256": "c4c70b9f88da29f33c0086fce6cb0d8271224b8de2a39abaa04bfee0cbcb0864"
+    },
+    {
+      "path": "public/research/community/resources/google-algorithm-history/index.html",
+      "bytes": 5037,
+      "sha256": "590d33baec9e849735de61768f8af9432afd5428cb42b1c271a1dff7d3513352"
+    },
+    {
+      "path": "public/research/community/resources/google-algorithm-updates/index.html",
+      "bytes": 4908,
+      "sha256": "3173558cb2f566078599d1f48f7a3a9711774f1544c313ad895e921aefa955d2"
+    },
+    {
+      "path": "public/research/community/resources/google-search-status/index.html",
+      "bytes": 4762,
+      "sha256": "0c4f1c5d9b247e7716ccda121614b11eb3b06c9a57681b615bc492cf7936a02b"
+    },
+    {
+      "path": "public/research/community/resources/llm-evals/index.html",
+      "bytes": 4631,
+      "sha256": "2199485605f0e04f03f1e8ed32ab3274f4e747a12b5c1d774bac7fa9553f7368"
+    },
+    {
+      "path": "public/research/community/resources/prompt-library/index.html",
+      "bytes": 4858,
+      "sha256": "85cb0365ffbff66d7e7d0dfe2bbd4cd3c4b4da72c7bd1f3835ed931977e4429b"
+    },
+    {
+      "path": "public/research/community/resources/transformer-visualization/index.html",
+      "bytes": 4982,
+      "sha256": "f25ff8fbe941e1f28efe79e5daf146caaa4d377352deb04eedb559483c3ae02a"
+    },
+    {
+      "path": "public/research/community/start/index.html",
+      "bytes": 4643,
+      "sha256": "ee6fa16e4fecc19853e8958b4f2da8454a8f047693bc62305f3b884072d67e99"
+    },
+    {
+      "path": "public/research/community/tools/fkgl-calculator/index.html",
+      "bytes": 4872,
+      "sha256": "475057f2f7f5276399766fe929a73910152b702e45087fa25121d22adeb500a8"
+    },
+    {
+      "path": "public/research/community/tools/flesch-calculator/index.html",
+      "bytes": 4829,
+      "sha256": "26c1370ec28f43e7fb4201a8643933ea6c350dbf65a8cbaf59a109e46ec0fac5"
+    },
+    {
+      "path": "public/research/community/tools/gunning-fog-calculator/index.html",
+      "bytes": 4858,
+      "sha256": "90295a870f6929c9640ed6cfb880506a3036e4b754826e6a08251fcb938d1b8c"
+    },
+    {
+      "path": "public/research/community/tools/smog-calculator/index.html",
+      "bytes": 4746,
+      "sha256": "7ecb729708a371bba9cc7ce226891def9d9e5764754e77c806bfb36b957d01be"
+    },
+    {
+      "path": "public/research/community/waitlist/index.html",
+      "bytes": 4575,
+      "sha256": "9b4076a2e341c4b0b87383ed31859274c897c6f4819ecbf16f3a2aebdbc9a427"
+    },
+    {
+      "path": "public/research/geo-academic-tracking-wide.webp",
+      "bytes": 211174,
+      "sha256": "931d69fe532db139f01ee61fe7f9f63e2d3dd04fc0b63729f994219ac8dd4411"
+    },
+    {
+      "path": "public/research/geo-academic-tracking.webp",
+      "bytes": 144398,
+      "sha256": "069d58f89a7a217e18f21a51fcaf68d5441f06107debb0fa832ecee8c1f2faa7"
+    },
+    {
+      "path": "public/research/index.html",
+      "bytes": 4177,
+      "sha256": "ba9186f6728c7aa45c192e9b8307d70d6a6d7aa5ca721e4b38cbc0a205e512ba"
+    },
+    {
+      "path": "public/robots.txt",
+      "bytes": 2204,
+      "sha256": "33f3f8e91a88eca71f62c7ccb29d0d7e1ac06d585c88b166fc1b36bd292b70e1"
+    },
+    {
+      "path": "public/sitemap.xml",
+      "bytes": 37750,
+      "sha256": "7835a7de2b42ba3147b7c2c941db86e91c56241fbff783bacc7a1f6d3b6d81dd"
+    },
+    {
+      "path": "public/solutions/index.html",
+      "bytes": 4425,
+      "sha256": "0cc957026e540e547aa57ea4e28e0313dfc5b8a0b5d7b56a9062f8e4300ef6de"
+    },
+    {
+      "path": "public/terms/index.html",
+      "bytes": 4078,
+      "sha256": "31a29f9318f97341bb4dd9b420f12de6383fe3dab3dddfbc3038136b6d59d3b3"
+    },
+    {
+      "path": "public/videos/frontmind-industry-ranking-permission-explainer-66s-poster.jpg",
+      "bytes": 248382,
+      "sha256": "83bd59352c55f08e092dd05807bf1e78f6d1744ef84e144450341e37041eee90"
+    },
+    {
+      "path": "public/videos/frontmind-industry-ranking-permission-explainer-66s.mp4",
+      "bytes": 20276350,
+      "sha256": "87826f8a6140a2c92aa704203b5b3dfc1fa582a8ece6131d59198c3c813686d3"
+    },
+    {
+      "path": "public/videos/frontmind-industry-ranking-permission-explainer-poster.jpg",
+      "bytes": 248382,
+      "sha256": "83bd59352c55f08e092dd05807bf1e78f6d1744ef84e144450341e37041eee90"
+    },
+    {
+      "path": "public/videos/frontmind-industry-ranking-permission-explainer-zh-CN.vtt",
+      "bytes": 1112,
+      "sha256": "89d7440fb4b84220f435a1c4aa967efab49c0b32a8b7d0bdf2b6395f585b0720"
+    },
+    {
+      "path": "skills/geo-current-state-evaluator/SKILL.md",
+      "bytes": 4395,
+      "sha256": "b6b9b4486ddb67696a943664a1e92e68221fd9bd668e88dee6b7e4478ec7f4fc"
+    },
+    {
+      "path": "skills/geo-current-state-evaluator/agents/openai.yaml",
+      "bytes": 305,
+      "sha256": "e16ad55dde6757763abdb0ceec3e252922b8844a4cfbceff99e6530ce5c13585"
+    },
+    {
+      "path": "skills/geo-current-state-evaluator/references/bsas-baseline-methodology.md",
+      "bytes": 6020,
+      "sha256": "2f21069ebc24f12d82c9fad90419c9045a565c4a28c4903685c87870b2d9b352"
+    },
+    {
+      "path": "skills/geo-current-state-evaluator/references/raw-output-schema.json",
+      "bytes": 14256,
+      "sha256": "c7b19b342cc4bd1aa6d2763c0c08956d632ef1a2792f3b01747654bad7e5ac8e"
+    },
+    {
+      "path": "skills/geo-custom-question-classifier/SKILL.md",
+      "bytes": 4161,
+      "sha256": "1470c2ec020c1ee71d3cb32a4b6f5478c86afd4af9f963c6f8b35a6d62f32e7f"
+    },
+    {
+      "path": "skills/geo-custom-question-classifier/agents/openai.yaml",
+      "bytes": 306,
+      "sha256": "6a06c56f92bd645f18172df85197d5d7b8b44cc573e5cfa157170d73f54d12c7"
+    },
+    {
+      "path": "skills/geo-custom-question-classifier/references/output-schema.json",
+      "bytes": 2401,
+      "sha256": "9b3cb2db1472e95db816cf86cd789630ea30c18f0277843b583118d9ad9f2127"
+    },
+    {
+      "path": "skills/geo-knowledge-answer-verifier/SKILL.md",
+      "bytes": 2469,
+      "sha256": "d97acc7e03a3f59db5e8aa3223b82933ae919eb3bff69ebe188879a2cc0672e6"
+    },
+    {
+      "path": "skills/geo-knowledge-answer-verifier/agents/openai.yaml",
+      "bytes": 287,
+      "sha256": "66ee3e797daef53343ed169f1030ab1781206e0e54a1b6757fc3a01b078cbac3"
+    },
+    {
+      "path": "skills/geo-knowledge-answer-verifier/references/comparison-contract.json",
+      "bytes": 2851,
+      "sha256": "902754c0753f7ac90594013555f86be41f1dfb13af6168e00a47fb2d6f8e2215"
+    },
+    {
+      "path": "skills/geo-optimization-outcome-forecaster/SKILL.md",
+      "bytes": 6017,
+      "sha256": "867c7a795c7d6c9efbdadf2ac12991f163c0782b28499a1fe8649e3ace81ea99"
+    },
+    {
+      "path": "skills/geo-optimization-outcome-forecaster/agents/openai.yaml",
+      "bytes": 378,
+      "sha256": "76e5ce24e9d2dec9954ef6bee9e5156331d7e9a0423488842dc60d5399947086"
+    },
+    {
+      "path": "skills/geo-optimization-outcome-forecaster/references/impact-forecast-methodology.md",
+      "bytes": 9783,
+      "sha256": "723ce5c7ca5ee3dd228349d0b960a9ab410d614cb586c0bb3278a954beeb91a4"
+    },
+    {
+      "path": "skills/geo-optimization-outcome-forecaster/references/output-schema.json",
+      "bytes": 10084,
+      "sha256": "39aa184d0cdbe59e50174dd2120b2f8e8eff81d533abdbf62603bb7f16f8cfc1"
+    },
+    {
+      "path": "skills/geo-optimization-outcome-forecaster/references/source-manifest.json",
+      "bytes": 2549,
+      "sha256": "38421742c7bb1becd0eb32c0596e36489ca4bbb91998612c2f0fbba378d566a9"
+    },
+    {
+      "path": "skills/geo-question-recommender/SKILL.md",
+      "bytes": 14553,
+      "sha256": "0544a0b01e1ae5be2b1b676693d3fc631caedcfebe9d25d0c2910d242f9b1085"
+    },
+    {
+      "path": "skills/geo-question-recommender/agents/openai.yaml",
+      "bytes": 264,
+      "sha256": "7df2884b61b2f7636b48bc9079dbd5db80795823e802cb5232f3f90bdb47f474"
+    },
+    {
+      "path": "skills/geo-question-recommender/references/demark-question-logic.md",
+      "bytes": 7152,
+      "sha256": "757b402d50d538aa01963aee60c8f95002440ffbcb692db56f9d39bafec79958"
+    },
+    {
+      "path": "skills/geo-question-recommender/references/output-schema.json",
+      "bytes": 4376,
+      "sha256": "177fc1809cc5ecc1bfe93ab8562814e55b5bb8b5ea42c8ad6c0191a79d62bba3"
+    },
+    {
+      "path": "skills/website-one-shot-kb-builder/SKILL.md",
+      "bytes": 7455,
+      "sha256": "de9450fb5a0a4bd04deb8595eabc539995eff1fdbc32db12aba2d8aa61a8368c"
+    },
+    {
+      "path": "skills/website-one-shot-kb-builder/agents/openai.yaml",
+      "bytes": 280,
+      "sha256": "7a2006846a731bcb08a9f521bd14db2aa5eb3017c8e7fb985a349a75e59c49d9"
+    },
+    {
+      "path": "skills/website-one-shot-kb-builder/references/candidate-format.md",
+      "bytes": 5332,
+      "sha256": "3c80241f9975738a7d479a20ce0710779dc1489d98eb81628443056fd859c978"
+    },
+    {
+      "path": "skills/website-one-shot-kb-builder/references/dimensions.md",
+      "bytes": 5008,
+      "sha256": "0605dcc0eaa12acb099f2c5ff24ee01ab0dd679adf0b63232bc56e652c51f1ad"
+    },
+    {
+      "path": "skills/website-one-shot-kb-builder/scripts/build_candidate.py",
+      "bytes": 21731,
+      "sha256": "733f40d1fbf098f90a201fc56538940d8953f1df44b51925d10536de715d77ae"
+    },
+    {
+      "path": "verify-live-payment.js",
+      "bytes": 48044,
+      "sha256": "9ce3a0e8720fba8a22f5e1d7d7a892d94d2cac6aa0565be4d91d20c98d532ad4"
+    }
+  ],
+  "rootSha256": "db6c6d7f6b71d3222e383cfd091b3b081ddc57ca902f30e6d5c6684a5723972c"
+}

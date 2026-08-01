@@ -1,1 +1,0 @@
-import{j as r}from"./vendor-react-BjUAR4DP.js";import{P as t}from"./ProductIntro-DNnmb3WY.js";import"./vendor-radix-Dc_FVRD7.js";import"./vendor-CmT5bYEn.js";import"./index-DBRKoywU.js";import"./AnimatedWidgets-BlSd1twN.js";function s(){return r.jsx(t,{product:"mindnexus"})}export{s as default};

@@ -2,8 +2,8 @@
 import express2 from "express";
 import compression from "compression";
 import { createServer } from "http";
-import { createHash as createHash5 } from "node:crypto";
-import path8 from "path";
+import { createHash as createHash6 } from "node:crypto";
+import path11 from "path";
 import { fileURLToPath } from "url";
 import { existsSync } from "fs";
 
@@ -509,10 +509,10 @@ function sendJson(res, status, payload) {
 }
 
 // server/geo/router.ts
-import crypto5 from "node:crypto";
+import crypto6 from "node:crypto";
 import { Readable } from "node:stream";
 import express from "express";
-import { ZodError } from "zod";
+import { z as z11, ZodError } from "zod";
 
 // server/geo/archive.ts
 import { createHash } from "node:crypto";
@@ -4119,6 +4119,9 @@ function normalizeCustomQuestionText(value) {
   return normalized ? `${normalized}\uFF1F` : normalized;
 }
 var CreateCustomQuestionRequestSchema = z2.object({
+  // Optional only for the bounded legacy bridge. Current clients always send
+  // a UUID; old cached clients are mapped to a deterministic server UUID.
+  clientRequestId: z2.string().uuid().optional(),
   question: z2.string().max(240).transform(normalizeCustomQuestionText).pipe(z2.string().min(4).max(120))
 }).strict();
 function isIndustryRankingQuestion(question) {
@@ -6286,7 +6289,14 @@ function normalizeTaskStatus(value) {
   if (["running", "in_progress", "processing"].includes(status))
     return "running";
   if (["paused", "waiting", "pending_sync"].includes(status)) return "waiting";
-  if (["completed", "complete", "succeeded", "success", "done"].includes(status))
+  if ([
+    "completed",
+    "complete",
+    "succeeded",
+    "success",
+    "done",
+    "finished"
+  ].includes(status))
     return "completed";
   if (["failed", "error", "errored"].includes(status)) return "failed";
   if (["cancelled", "canceled"].includes(status)) return "cancelled";
@@ -6330,12 +6340,12 @@ function inspectQuestionSetFromTask(value) {
     const issues = Array.from(
       new Set(
         parsed.error.issues.map((issue) => {
-          const path9 = issue.path.reduce((result, part) => {
+          const path12 = issue.path.reduce((result, part) => {
             if (typeof part === "number") return `${result}[${part}]`;
             const key = String(part);
             return result ? `${result}.${key}` : key;
           }, "");
-          return `${path9 || "root"}: ${issue.message}`;
+          return `${path12 || "root"}: ${issue.message}`;
         })
       )
     );
@@ -6848,7 +6858,7 @@ var GeoMonitorContractError = class extends Error {
 function asRecord4(value) {
   return value && typeof value === "object" && !Array.isArray(value) ? value : {};
 }
-function normalizeMonitorRun(payload, expected) {
+function normalizeMonitorRun(payload, expected, options = {}) {
   const root = asRecord4(payload);
   const candidate = root.run ?? root.data ?? payload;
   const parsed = RunSchema.safeParse(candidate);
@@ -6917,7 +6927,7 @@ function normalizeMonitorRun(payload, expected) {
       throw new GeoMonitorContractError("\u76D1\u63A7\u8BB0\u5F55\u72B6\u6001\u4E0E\u6C47\u603B\u6570\u91CF\u4E0D\u4E00\u81F4");
     }
   }
-  if (["completed", "partial_review_required"].includes(run.status) && (records?.length !== run.expectedItems || records.some(
+  if (["completed", "partial_review_required"].includes(run.status) && !(options.allowTerminalSummaryWithoutRecords === true && records === void 0) && (records?.length !== run.expectedItems || records.some(
     (record) => !["completed", "failed", "stopped", "error"].includes(record.status)
   ))) {
     throw new GeoMonitorContractError("\u76D1\u63A7\u5B8C\u6210\u5FEB\u7167\u4E0D\u5B8C\u6574");
@@ -9100,8 +9110,8 @@ var GeoPurchaseProvisionRequestV2Schema = z8.object({
       value.service.startsAt === value.order.paidAt ? "" : "service startsAt must match order paidAt"
     ]
   ];
-  mismatches.forEach(([path9, message]) => {
-    if (message) context.addIssue({ code: "custom", path: path9, message });
+  mismatches.forEach(([path12, message]) => {
+    if (message) context.addIssue({ code: "custom", path: path12, message });
   });
 });
 var purchaseStatusSchema = z8.enum([
@@ -11167,6 +11177,1460 @@ function possibleJsonObjects4(value) {
   return Array.from(results);
 }
 
+// server/geo/custom-question-validation-store.ts
+import crypto5 from "node:crypto";
+import fs5 from "node:fs/promises";
+import path8 from "node:path";
+import { z as z10 } from "zod";
+var STORE_SCHEMA_VERSION = 1;
+var DEFAULT_LEASE_MS = 3e4;
+var DEFAULT_TOMBSTONE_TTL_MS = 7 * 24 * 60 * 60 * 1e3;
+var STALE_TEMPORARY_FILE_AGE_MS = 60 * 60 * 1e3;
+var ORPHAN_FILE_MARKER_GRACE_MS = 5 * 60 * 1e3;
+var VERSION_WIDTH = 12;
+var StoredAttachmentSchema = z10.object({
+  fileId: z10.string().min(1).max(200),
+  filename: z10.string().min(1).max(512),
+  temporary: z10.boolean()
+}).strict();
+var StoredErrorSchema = z10.object({
+  code: z10.string().min(1).max(120),
+  message: z10.string().min(1).max(500),
+  status: z10.number().int().min(400).max(599),
+  retryable: z10.boolean()
+}).strict();
+var ActiveLeaseSchema = z10.object({
+  token: z10.string().uuid(),
+  fence: z10.number().int().nonnegative(),
+  expiresAt: z10.string().datetime({ offset: true })
+}).strict();
+var KnowledgeBaseArtifactSchema = z10.object({
+  fileId: z10.string().min(1).max(200),
+  filename: z10.string().min(1).max(512),
+  sha256: z10.string().regex(/^[a-f0-9]{64}$/).optional(),
+  packageManifestSha256: z10.string().regex(/^[a-f0-9]{64}$/).optional()
+}).strict();
+var CleanupTargetSchema = z10.object({
+  taskId: z10.string().min(1).max(200).optional(),
+  temporaryFileIds: z10.array(z10.string().min(1).max(200)).max(22).default([])
+}).strict();
+var CustomQuestionValidationRecordSchema = z10.object({
+  schemaVersion: z10.literal(STORE_SCHEMA_VERSION),
+  key: z10.string().regex(/^[a-f0-9]{64}$/),
+  storeVersion: z10.number().int().nonnegative(),
+  commitId: z10.string().uuid(),
+  fencingToken: z10.number().int().nonnegative(),
+  activeLease: ActiveLeaseSchema.optional(),
+  projectId: z10.string().min(1).max(200),
+  ownerSessionHash: z10.string().regex(/^[a-f0-9]{64}$/),
+  clientRequestId: z10.string().uuid(),
+  requestHash: z10.string().regex(/^[a-f0-9]{64}$/),
+  question: z10.string().min(1).max(240),
+  questionHash: z10.string().regex(/^[a-f0-9]{64}$/),
+  companyName: z10.string().min(1).max(200),
+  knowledgeBaseTaskId: z10.string().min(1).max(200),
+  knowledgeBaseValidationProfile: z10.literal("website-lead-v1").optional(),
+  knowledgeBaseArtifact: KnowledgeBaseArtifactSchema,
+  state: z10.enum([
+    "reserved",
+    "prepared",
+    "submitted",
+    "completed",
+    "rejected",
+    "failed"
+  ]),
+  archiveAttachment: StoredAttachmentSchema.optional(),
+  skillAttachment: StoredAttachmentSchema.optional(),
+  archiveStagingAttachment: StoredAttachmentSchema.optional(),
+  skillStagingAttachment: StoredAttachmentSchema.optional(),
+  orphanedTemporaryFileIds: z10.array(z10.string().min(1).max(200)).max(20).default([]),
+  attachmentRebuildCount: z10.number().int().min(0).max(10).default(0),
+  taskId: z10.string().min(1).max(200).optional(),
+  result: GeoQuestionSchema.optional(),
+  completionMode: z10.literal("existing_recommended_question").optional(),
+  error: StoredErrorSchema.optional(),
+  supersededByClientRequestId: z10.string().uuid().optional(),
+  supersededAt: z10.string().datetime({ offset: true }).optional(),
+  unknownStatusCount: z10.number().int().min(0).max(100).default(0),
+  firstUnknownStatusAt: z10.string().datetime({ offset: true }).optional(),
+  transientErrorCount: z10.number().int().min(0).max(100).default(0),
+  firstTransientErrorAt: z10.string().datetime({ offset: true }).optional(),
+  lastObservedStatus: z10.string().max(100).optional(),
+  lastTransientError: z10.string().max(500).optional(),
+  cleanupCompleted: z10.boolean().default(false),
+  createdAt: z10.string().datetime({ offset: true }),
+  updatedAt: z10.string().datetime({ offset: true }),
+  expiresAt: z10.string().datetime({ offset: true })
+}).strict();
+var ProjectSlotSchema = z10.object({
+  schemaVersion: z10.literal(STORE_SCHEMA_VERSION),
+  projectHash: z10.string().regex(/^[a-f0-9]{64}$/),
+  storeVersion: z10.number().int().nonnegative(),
+  commitId: z10.string().uuid(),
+  active: z10.object({
+    key: z10.string().regex(/^[a-f0-9]{64}$/),
+    clientRequestId: z10.string().uuid(),
+    expiresAt: z10.string().datetime({ offset: true })
+  }).strict().optional(),
+  deletionFence: z10.object({
+    token: z10.string().uuid(),
+    createdAt: z10.string().datetime({ offset: true })
+  }).strict().optional(),
+  updatedAt: z10.string().datetime({ offset: true })
+}).strict().superRefine((value, context) => {
+  if (value.active && value.deletionFence) {
+    context.addIssue({
+      code: z10.ZodIssueCode.custom,
+      message: "project slot cannot be active while deletion is fenced"
+    });
+  }
+});
+var TombstoneSchema = z10.object({
+  schemaVersion: z10.literal(STORE_SCHEMA_VERSION),
+  key: z10.string().regex(/^[a-f0-9]{64}$/),
+  deletedAt: z10.string().datetime({ offset: true }),
+  expiresAt: z10.string().datetime({ offset: true }),
+  cleanupTarget: CleanupTargetSchema.optional()
+}).strict();
+var CleanupCompleteMarkerSchema = z10.object({
+  schemaVersion: z10.literal(STORE_SCHEMA_VERSION),
+  key: z10.string().regex(/^[a-f0-9]{64}$/),
+  completedAt: z10.string().datetime({ offset: true })
+}).strict();
+var OrphanFileMarkerSchema = z10.object({
+  schemaVersion: z10.literal(STORE_SCHEMA_VERSION),
+  recordKey: z10.string().regex(/^[a-f0-9]{64}$/),
+  fileId: z10.string().min(1).max(200),
+  createdAt: z10.string().datetime({ offset: true })
+}).strict();
+function cloneRecord(record) {
+  return structuredClone(record);
+}
+function recordKey(projectId, clientRequestId) {
+  return crypto5.createHash("sha256").update(`${projectId}
+${clientRequestId}`, "utf8").digest("hex");
+}
+function projectHash(projectId) {
+  return crypto5.createHash("sha256").update(projectId, "utf8").digest("hex");
+}
+function parseRecord(value) {
+  return CustomQuestionValidationRecordSchema.parse(value);
+}
+function isTerminal(record) {
+  return ["completed", "rejected", "failed"].includes(record.state);
+}
+function compareRecoveryCandidates(left, right) {
+  return Date.parse(left.createdAt) - Date.parse(right.createdAt) || left.key.localeCompare(right.key);
+}
+function isRecoverableNonterminal(record, nowMs) {
+  return !isTerminal(record) && Date.parse(record.expiresAt) > nowMs;
+}
+function isPristineReservationLoser(record) {
+  return record.state === "reserved" && record.storeVersion === 0 && record.fencingToken === 0 && !record.activeLease && !record.archiveAttachment && !record.skillAttachment && !record.archiveStagingAttachment && !record.skillStagingAttachment && record.orphanedTemporaryFileIds.length === 0 && record.attachmentRebuildCount === 0 && !record.taskId && !record.result && !record.error && record.unknownStatusCount === 0 && !record.firstUnknownStatusAt && record.transientErrorCount === 0 && !record.firstTransientErrorAt && !record.lastObservedStatus && !record.lastTransientError && !record.cleanupCompleted;
+}
+function supersededReservation(current, winnerClientRequestId, nowMs) {
+  const now = new Date(nowMs).toISOString();
+  return parseRecord({
+    ...current,
+    storeVersion: current.storeVersion + 1,
+    commitId: crypto5.randomUUID(),
+    state: "failed",
+    error: {
+      code: "CUSTOM_QUESTION_RESERVATION_SUPERSEDED",
+      message: "\u8BE5\u95EE\u9898\u9A8C\u8BC1\u8BF7\u6C42\u672A\u83B7\u5F97\u9879\u76EE\u6267\u884C\u6743\uFF0C\u5DF2\u7531\u5F53\u524D\u6743\u5A01\u8BF7\u6C42\u66FF\u4EE3",
+      status: 409,
+      retryable: false
+    },
+    supersededByClientRequestId: winnerClientRequestId,
+    supersededAt: now,
+    cleanupCompleted: true,
+    updatedAt: now
+  });
+}
+function cleanupTargetFromRecord(record) {
+  return CleanupTargetSchema.parse({
+    taskId: record.taskId,
+    temporaryFileIds: Array.from(
+      /* @__PURE__ */ new Set([
+        ...record.orphanedTemporaryFileIds,
+        ...record.skillAttachment?.temporary ? [record.skillAttachment.fileId] : [],
+        ...record.archiveAttachment?.temporary ? [record.archiveAttachment.fileId] : [],
+        ...record.skillStagingAttachment?.temporary ? [record.skillStagingAttachment.fileId] : [],
+        ...record.archiveStagingAttachment?.temporary ? [record.archiveStagingAttachment.fileId] : []
+      ])
+    )
+  });
+}
+function initialRecord(input, nowMs) {
+  const now = new Date(nowMs).toISOString();
+  return parseRecord({
+    schemaVersion: STORE_SCHEMA_VERSION,
+    key: recordKey(input.projectId, input.clientRequestId),
+    storeVersion: 0,
+    commitId: crypto5.randomUUID(),
+    fencingToken: 0,
+    ...input,
+    state: "reserved",
+    orphanedTemporaryFileIds: [],
+    attachmentRebuildCount: 0,
+    unknownStatusCount: 0,
+    transientErrorCount: 0,
+    cleanupCompleted: false,
+    createdAt: now,
+    updatedAt: now
+  });
+}
+function initialCompletedReceipt(input, result, nowMs) {
+  return parseRecord({
+    ...initialRecord(input, nowMs),
+    state: "completed",
+    result: GeoQuestionSchema.parse(result),
+    completionMode: "existing_recommended_question",
+    cleanupCompleted: true
+  });
+}
+function assertReservationMatches(record, input) {
+  if (record.projectId !== input.projectId || record.clientRequestId !== input.clientRequestId || record.ownerSessionHash !== input.ownerSessionHash || record.requestHash !== input.requestHash || record.questionHash !== input.questionHash || record.question !== input.question || record.companyName !== input.companyName || record.knowledgeBaseTaskId !== input.knowledgeBaseTaskId || record.knowledgeBaseArtifact.fileId !== input.knowledgeBaseArtifact.fileId) {
+    throw new GeoCustomQuestionValidationStoreError(
+      "IDEMPOTENCY_CONFLICT",
+      "\u8BE5 clientRequestId \u5DF2\u7528\u4E8E\u4E0D\u540C\u7684\u81EA\u5B9A\u4E49\u95EE\u9898\u9A8C\u8BC1\u8BF7\u6C42"
+    );
+  }
+}
+function assertCompletedReceiptMatches(record, input, result) {
+  assertReservationMatches(record, input);
+  const expectedResult = GeoQuestionSchema.parse(result);
+  if (record.state !== "completed" || record.completionMode !== "existing_recommended_question" || !record.result || JSON.stringify(record.result) !== JSON.stringify(expectedResult)) {
+    throw new GeoCustomQuestionValidationStoreError(
+      "IDEMPOTENCY_CONFLICT",
+      "\u8BE5 clientRequestId \u5DF2\u7528\u4E8E\u4E0D\u540C\u7684\u81EA\u5B9A\u4E49\u95EE\u9898\u9A8C\u8BC1\u8BF7\u6C42"
+    );
+  }
+}
+var GeoCustomQuestionValidationStoreError = class extends Error {
+  constructor(code, message, activeOperation2) {
+    super(message);
+    this.code = code;
+    this.activeOperation = activeOperation2;
+    this.name = "GeoCustomQuestionValidationStoreError";
+  }
+};
+function activeOperation(record) {
+  return {
+    clientRequestId: record.clientRequestId,
+    question: record.question,
+    state: record.state,
+    expiresAt: record.expiresAt
+  };
+}
+function assertLeaseOwner(record, lease, nowMs) {
+  if (record.activeLease?.token !== lease.token || record.activeLease.fence !== lease.fence || Date.parse(record.activeLease.expiresAt) <= nowMs) {
+    throw new GeoCustomQuestionValidationStoreError(
+      "LEASE_LOST",
+      "\u81EA\u5B9A\u4E49\u95EE\u9898\u9A8C\u8BC1\u79DF\u7EA6\u5DF2\u5931\u6548"
+    );
+  }
+}
+function storedLease(lease) {
+  return {
+    token: lease.token,
+    fence: lease.fence,
+    expiresAt: lease.expiresAt
+  };
+}
+function nextRecord(current, value, nowMs) {
+  return parseRecord({
+    ...value,
+    key: current.key,
+    projectId: current.projectId,
+    clientRequestId: current.clientRequestId,
+    storeVersion: current.storeVersion + 1,
+    commitId: crypto5.randomUUID(),
+    fencingToken: current.fencingToken,
+    activeLease: current.activeLease,
+    createdAt: current.createdAt,
+    updatedAt: new Date(nowMs).toISOString()
+  });
+}
+var FileGeoCustomQuestionValidationStore = class {
+  constructor(directory, hooks = {}, security = {}) {
+    this.directory = directory;
+    this.hooks = hooks;
+    this.security = security;
+  }
+  now() {
+    return this.hooks.now?.() ?? Date.now();
+  }
+  async assertReady() {
+    await this.assertDirectory();
+    await this.cleanupStaleTemporaryFiles(this.now());
+    await this.assertManagedFilePermissions();
+    await this.persistenceIdentity();
+    const probe = path8.join(
+      this.directory,
+      `.readiness-${process.pid}-${crypto5.randomUUID()}`
+    );
+    await this.writeDurableFile(probe, "ok\n", "wx");
+    await fs5.unlink(probe);
+    await this.syncDirectory();
+    await this.assertManagedFilePermissions();
+  }
+  async persistenceIdentity() {
+    await this.assertDirectory();
+    const target = path8.join(this.directory, ".persistence-sentinel.json");
+    try {
+      const value = JSON.parse(await fs5.readFile(target, "utf8"));
+      if (typeof value.id === "string" && /^[0-9a-f-]{36}$/i.test(value.id))
+        return value.id;
+      throw new Error("invalid persistence sentinel");
+    } catch (error) {
+      if (!isFileNotFoundError(error)) {
+        throw new GeoCustomQuestionValidationStoreError(
+          "STORE_CORRUPT",
+          "\u81EA\u5B9A\u4E49\u95EE\u9898\u9A8C\u8BC1\u6301\u4E45\u5377\u6807\u8BC6\u65E0\u6CD5\u8BFB\u53D6"
+        );
+      }
+    }
+    const id = crypto5.randomUUID();
+    const temporary = this.temporaryPath("persistence-sentinel");
+    try {
+      await this.writeDurableFile(
+        temporary,
+        `${JSON.stringify({ id, createdAt: new Date(this.now()).toISOString() })}
+`,
+        "wx"
+      );
+      try {
+        await fs5.link(temporary, target);
+        await this.syncDirectory();
+        return id;
+      } catch (error) {
+        if (!isFileExistsError(error)) throw error;
+      }
+    } finally {
+      await fs5.unlink(temporary).catch(() => void 0);
+    }
+    return this.persistenceIdentity();
+  }
+  async reserve(input) {
+    await this.assertDirectory();
+    const key = recordKey(input.projectId, input.clientRequestId);
+    await this.assertProjectNotDeletionFenced(input.projectId);
+    if (await this.hasLiveTombstone(key)) {
+      throw new GeoCustomQuestionValidationStoreError(
+        "RESERVATION_EXPIRED",
+        "\u8BE5\u81EA\u5B9A\u4E49\u95EE\u9898\u9A8C\u8BC1\u8BF7\u6C42\u5DF2\u8FC7\u671F\uFF0C\u8BF7\u5237\u65B0\u540E\u91CD\u65B0\u63D0\u4EA4"
+      );
+    }
+    let record = await this.readCurrentRecord(key);
+    let created = false;
+    if (!record) {
+      const candidate = initialRecord(input, this.now());
+      created = await this.commitInitialRecord(candidate);
+      record = await this.readCurrentRecord(key);
+      if (!record) throw this.storeCorrupt("\u81EA\u5B9A\u4E49\u95EE\u9898\u9A8C\u8BC1\u9884\u7559\u672A\u80FD\u6301\u4E45\u5316");
+      if (created) {
+        await this.hooks.afterInitialRecordCommit?.(cloneRecord(record));
+      }
+    }
+    assertReservationMatches(record, input);
+    if (isTerminal(record)) {
+      await this.assertProjectNotDeletionFenced(input.projectId);
+      return { record, created };
+    }
+    const hash = projectHash(input.projectId);
+    for (let attempt = 0; attempt < 8; attempt += 1) {
+      const slot = await this.readCurrentProjectSlot(hash);
+      if (slot?.deletionFence) throw this.projectDeletionFenced();
+      if (slot?.active?.key === key) return { record, created };
+      if (slot?.active) {
+        const active = await this.readCurrentRecord(slot.active.key);
+        if (active && !isTerminal(active)) {
+          await this.supersedePristineRecord(key, active.clientRequestId);
+          if (Date.parse(active.expiresAt) <= this.now()) {
+            throw new GeoCustomQuestionValidationStoreError(
+              "RESERVATION_EXPIRED",
+              "\u9879\u76EE\u4E2D\u5DF2\u6709\u8FC7\u671F\u9A8C\u8BC1\u6B63\u5728\u5B89\u5168\u6E05\u7406\uFF0C\u8BF7\u7A0D\u540E\u91CD\u8BD5",
+              activeOperation(active)
+            );
+          }
+          throw new GeoCustomQuestionValidationStoreError(
+            "ACTIVE_RESERVATION_CONFLICT",
+            "\u5F53\u524D\u9879\u76EE\u5DF2\u6709\u53E6\u4E00\u4E2A\u95EE\u9898\u6B63\u5728\u9A8C\u8BC1",
+            activeOperation(active)
+          );
+        }
+      }
+      const claimed = await this.commitProjectSlot(hash, slot, {
+        key,
+        clientRequestId: input.clientRequestId,
+        expiresAt: input.expiresAt
+      });
+      if (claimed) return { record, created };
+    }
+    throw this.storeCorrupt("\u81EA\u5B9A\u4E49\u95EE\u9898\u9A8C\u8BC1\u9879\u76EE\u5360\u4F4D\u7ADE\u4E89\u672A\u80FD\u6536\u655B");
+  }
+  async reserveCompletedReceipt(input, result) {
+    await this.assertDirectory();
+    const key = recordKey(input.projectId, input.clientRequestId);
+    await this.assertProjectNotDeletionFenced(input.projectId);
+    if (await this.hasLiveTombstone(key)) {
+      throw new GeoCustomQuestionValidationStoreError(
+        "RESERVATION_EXPIRED",
+        "\u8BE5\u81EA\u5B9A\u4E49\u95EE\u9898\u9A8C\u8BC1\u8BF7\u6C42\u5DF2\u8FC7\u671F\uFF0C\u8BF7\u5237\u65B0\u540E\u91CD\u65B0\u63D0\u4EA4"
+      );
+    }
+    let record = await this.readCurrentRecord(key);
+    if (record) {
+      await this.assertProjectNotDeletionFenced(input.projectId);
+      assertCompletedReceiptMatches(record, input, result);
+      await this.clearProjectSlotIfOwned(record);
+      return { record, created: false };
+    }
+    const slot = await this.readCurrentProjectSlot(
+      projectHash(input.projectId)
+    );
+    if (slot?.active?.key !== key) {
+      const active = slot?.active ? await this.readCurrentRecord(slot.active.key) : void 0;
+      if (active && !isTerminal(active)) {
+        if (Date.parse(active.expiresAt) <= this.now()) {
+          throw new GeoCustomQuestionValidationStoreError(
+            "RESERVATION_EXPIRED",
+            "\u9879\u76EE\u4E2D\u5DF2\u6709\u8FC7\u671F\u9A8C\u8BC1\u6B63\u5728\u5B89\u5168\u6E05\u7406\uFF0C\u8BF7\u7A0D\u540E\u91CD\u8BD5",
+            activeOperation(active)
+          );
+        }
+        throw new GeoCustomQuestionValidationStoreError(
+          "ACTIVE_RESERVATION_CONFLICT",
+          "\u5F53\u524D\u9879\u76EE\u5DF2\u6709\u53E6\u4E00\u4E2A\u95EE\u9898\u6B63\u5728\u9A8C\u8BC1",
+          activeOperation(active)
+        );
+      }
+    }
+    const candidate = initialCompletedReceipt(input, result, this.now());
+    const created = await this.commitInitialRecord(candidate);
+    record = await this.readCurrentRecord(key);
+    if (!record) throw this.storeCorrupt("\u81EA\u5B9A\u4E49\u95EE\u9898\u9A8C\u8BC1\u7EC8\u6001\u56DE\u6267\u672A\u80FD\u6301\u4E45\u5316");
+    assertCompletedReceiptMatches(record, input, result);
+    await this.assertProjectNotDeletionFenced(input.projectId);
+    await this.clearProjectSlotIfOwned(record);
+    if (created) {
+      await this.hooks.afterInitialRecordCommit?.(cloneRecord(record));
+    }
+    return { record, created };
+  }
+  async get(projectId, clientRequestId) {
+    await this.assertDirectory();
+    const key = recordKey(projectId, clientRequestId);
+    if (await this.hasLiveTombstone(key)) {
+      throw new GeoCustomQuestionValidationStoreError(
+        "RESERVATION_EXPIRED",
+        "\u8BE5\u81EA\u5B9A\u4E49\u95EE\u9898\u9A8C\u8BC1\u8BF7\u6C42\u5DF2\u8FC7\u671F"
+      );
+    }
+    return this.readCurrentRecord(key);
+  }
+  async getActive(projectId) {
+    await this.assertDirectory();
+    const slot = await this.readCurrentProjectSlot(projectHash(projectId));
+    if (slot?.deletionFence) return void 0;
+    if (!slot?.active) return void 0;
+    const record = await this.readCurrentRecord(slot.active.key);
+    return record;
+  }
+  async ensureActive(projectId, clientRequestId) {
+    await this.assertDirectory();
+    const key = recordKey(projectId, clientRequestId);
+    await this.assertProjectNotDeletionFenced(projectId);
+    let requested = await this.readCurrentRecord(key);
+    if (!requested || await this.hasLiveTombstone(key)) {
+      throw new GeoCustomQuestionValidationStoreError(
+        "RESERVATION_EXPIRED",
+        "\u8BE5\u81EA\u5B9A\u4E49\u95EE\u9898\u9A8C\u8BC1\u8BF7\u6C42\u4E0D\u5B58\u5728\u6216\u5DF2\u8FC7\u671F"
+      );
+    }
+    if (requested.projectId !== projectId) {
+      throw this.storeCorrupt("\u81EA\u5B9A\u4E49\u95EE\u9898\u9A8C\u8BC1\u9884\u7559\u9879\u76EE\u8EAB\u4EFD\u51B2\u7A81");
+    }
+    if (isTerminal(requested)) return requested;
+    if (Date.parse(requested.expiresAt) <= this.now()) {
+      throw new GeoCustomQuestionValidationStoreError(
+        "RESERVATION_EXPIRED",
+        "\u8BE5\u81EA\u5B9A\u4E49\u95EE\u9898\u9A8C\u8BC1\u8BF7\u6C42\u5DF2\u8FC7\u671F",
+        activeOperation(requested)
+      );
+    }
+    const authority = await this.recoverProjectAuthority(projectId);
+    requested = await this.readCurrentRecord(key) ?? requested;
+    if (isTerminal(requested)) return requested;
+    if (Date.parse(requested.expiresAt) <= this.now()) {
+      throw new GeoCustomQuestionValidationStoreError(
+        "RESERVATION_EXPIRED",
+        "\u8BE5\u81EA\u5B9A\u4E49\u95EE\u9898\u9A8C\u8BC1\u8BF7\u6C42\u5DF2\u8FC7\u671F",
+        activeOperation(requested)
+      );
+    }
+    if (!authority) {
+      throw this.storeCorrupt("\u81EA\u5B9A\u4E49\u95EE\u9898\u9A8C\u8BC1\u5B64\u7ACB\u9884\u7559\u672A\u80FD\u6062\u590D\u6743\u5A01\u5360\u4F4D");
+    }
+    if (authority.key === key) return authority;
+    if (!isTerminal(authority) && Date.parse(authority.expiresAt) <= this.now()) {
+      throw new GeoCustomQuestionValidationStoreError(
+        "RESERVATION_EXPIRED",
+        "\u9879\u76EE\u4E2D\u5DF2\u6709\u8FC7\u671F\u9A8C\u8BC1\u6B63\u5728\u5B89\u5168\u6E05\u7406\uFF0C\u8BF7\u7A0D\u540E\u91CD\u8BD5",
+        activeOperation(authority)
+      );
+    }
+    throw new GeoCustomQuestionValidationStoreError(
+      "ACTIVE_RESERVATION_CONFLICT",
+      "\u5F53\u524D\u9879\u76EE\u5DF2\u6709\u53E6\u4E00\u4E2A\u95EE\u9898\u6B63\u5728\u9A8C\u8BC1",
+      activeOperation(authority)
+    );
+  }
+  async fenceProjectDeletion(projectId) {
+    await this.assertDirectory();
+    const hash = projectHash(projectId);
+    for (let attempt = 0; attempt < 16; attempt += 1) {
+      const slot = await this.readCurrentProjectSlot(hash);
+      if (slot?.active) {
+        const current = await this.readCurrentRecord(slot.active.key);
+        if (current && !await this.hasLiveTombstone(current.key)) {
+          throw this.projectDeletionBlocked(current);
+        }
+        if (await this.commitProjectSlot(hash, slot, void 0)) continue;
+        continue;
+      }
+      if (!slot?.deletionFence) {
+        const fenced = await this.commitProjectSlot(hash, slot, void 0, {
+          token: crypto5.randomUUID(),
+          createdAt: new Date(this.now()).toISOString()
+        });
+        if (!fenced) continue;
+        continue;
+      }
+      const orphan = (await this.readProjectRecords(projectId)).filter((record) => !isTerminal(record)).sort(compareRecoveryCandidates)[0];
+      if (!orphan) return;
+      const restored = await this.commitProjectSlot(hash, slot, {
+        key: orphan.key,
+        clientRequestId: orphan.clientRequestId,
+        expiresAt: orphan.expiresAt
+      });
+      if (!restored) continue;
+      await this.supersedePristineProjectLosers(projectId, orphan);
+      throw this.projectDeletionBlocked(orphan);
+    }
+    throw this.storeCorrupt("\u81EA\u5B9A\u4E49\u95EE\u9898\u9A8C\u8BC1\u5220\u9664\u6805\u680F\u7ADE\u4E89\u672A\u80FD\u6536\u655B");
+  }
+  async acknowledgeTerminal(projectId, clientRequestId, ownerSessionHash) {
+    await this.assertDirectory();
+    const key = recordKey(projectId, clientRequestId);
+    const record = await this.readCurrentRecord(key);
+    if (!record || await this.hasLiveTombstone(key)) {
+      throw new GeoCustomQuestionValidationStoreError(
+        "RESERVATION_EXPIRED",
+        "\u8BE5\u81EA\u5B9A\u4E49\u95EE\u9898\u9A8C\u8BC1\u8BF7\u6C42\u4E0D\u5B58\u5728\u6216\u5DF2\u8FC7\u671F"
+      );
+    }
+    if (record.projectId !== projectId || record.ownerSessionHash !== ownerSessionHash) {
+      throw new GeoCustomQuestionValidationStoreError(
+        "RESERVATION_OWNER_MISMATCH",
+        "\u8BE5\u81EA\u5B9A\u4E49\u95EE\u9898\u9A8C\u8BC1\u8BF7\u6C42\u4E0D\u5C5E\u4E8E\u5F53\u524D\u9879\u76EE"
+      );
+    }
+    if (!isTerminal(record)) {
+      throw new GeoCustomQuestionValidationStoreError(
+        "RESERVATION_NOT_TERMINAL",
+        "\u95EE\u9898\u9A8C\u8BC1\u5C1A\u672A\u5B8C\u6210\uFF0C\u4E0D\u80FD\u786E\u8BA4\u6301\u4E45\u5316"
+      );
+    }
+    const hash = projectHash(projectId);
+    for (let attempt = 0; attempt < 8; attempt += 1) {
+      const slot = await this.readCurrentProjectSlot(hash);
+      if (!slot?.active || slot.active.key !== key) return record;
+      await this.supersedePristineProjectLosers(projectId, record);
+      if (await this.commitProjectSlot(hash, slot, void 0)) return record;
+    }
+    throw this.storeCorrupt("\u81EA\u5B9A\u4E49\u95EE\u9898\u9A8C\u8BC1\u786E\u8BA4\u7ADE\u4E89\u672A\u80FD\u6536\u655B");
+  }
+  async retainTemporaryFileForCleanup(projectId, clientRequestId, fileId) {
+    await this.assertDirectory();
+    const key = recordKey(projectId, clientRequestId);
+    const marker = OrphanFileMarkerSchema.parse({
+      schemaVersion: STORE_SCHEMA_VERSION,
+      recordKey: key,
+      fileId,
+      createdAt: new Date(this.now()).toISOString()
+    });
+    await this.createOrphanFileMarker(marker);
+    for (let attempt = 0; attempt < 8; attempt += 1) {
+      const current = await this.readCurrentRecord(key);
+      if (!current || await this.hasLiveTombstone(key)) {
+        throw new GeoCustomQuestionValidationStoreError(
+          "RESERVATION_EXPIRED",
+          "\u8BE5\u81EA\u5B9A\u4E49\u95EE\u9898\u9A8C\u8BC1\u8BF7\u6C42\u4E0D\u5B58\u5728\u6216\u5DF2\u8FC7\u671F"
+        );
+      }
+      if (current.orphanedTemporaryFileIds.includes(fileId)) {
+        await this.removeOrphanFileMarker(marker).catch(() => void 0);
+        return current;
+      }
+      const next = nextRecord(
+        current,
+        {
+          ...current,
+          orphanedTemporaryFileIds: [
+            ...current.orphanedTemporaryFileIds,
+            fileId
+          ]
+        },
+        this.now()
+      );
+      await this.hooks.beforeRecordCommit?.({
+        operation: "retain",
+        current: cloneRecord(current),
+        next: cloneRecord(next)
+      });
+      if (await this.commitRecord(current, next)) {
+        await this.removeOrphanFileMarker(marker).catch(() => void 0);
+        return next;
+      }
+    }
+    throw this.storeCorrupt("\u81EA\u5B9A\u4E49\u95EE\u9898\u9A8C\u8BC1\u4E34\u65F6\u6587\u4EF6\u8FFD\u8E2A\u7ADE\u4E89\u672A\u80FD\u6536\u655B");
+  }
+  async listActive(limit = 100) {
+    await this.assertDirectory();
+    const names = await fs5.readdir(this.directory);
+    const keys = /* @__PURE__ */ new Set();
+    for (const name of names) {
+      const match = /^([a-f0-9]{64})\.record\.v\d{12}\.json$/.exec(name);
+      if (match?.[1]) keys.add(match[1]);
+    }
+    const projectIds = /* @__PURE__ */ new Set();
+    for (const key of Array.from(keys).sort()) {
+      if (await this.hasLiveTombstone(key)) continue;
+      const record = await this.readCurrentRecord(key);
+      if (record) projectIds.add(record.projectId);
+    }
+    const records = [];
+    for (const projectId of Array.from(projectIds).sort()) {
+      const record = await this.recoverProjectAuthority(projectId);
+      if (record && isRecoverableNonterminal(record, this.now())) {
+        records.push(record);
+      }
+      if (records.length >= limit) break;
+    }
+    return records;
+  }
+  async tryAcquireLease(projectId, clientRequestId, leaseMs = DEFAULT_LEASE_MS) {
+    const key = recordKey(projectId, clientRequestId);
+    const active = await this.getActive(projectId);
+    if (!active || active.key !== key) return void 0;
+    for (let attempt = 0; attempt < 4; attempt += 1) {
+      const current = await this.readCurrentRecord(key);
+      if (!current) return void 0;
+      if (isTerminal(current)) {
+        if (current.supersededByClientRequestId) {
+          await this.clearProjectSlotIfOwned(current);
+        }
+        return void 0;
+      }
+      const now = this.now();
+      if (Date.parse(current.expiresAt) <= now) {
+        throw new GeoCustomQuestionValidationStoreError(
+          "RESERVATION_EXPIRED",
+          "\u8BE5\u81EA\u5B9A\u4E49\u95EE\u9898\u9A8C\u8BC1\u8BF7\u6C42\u5DF2\u8FC7\u671F"
+        );
+      }
+      if (current.activeLease && Date.parse(current.activeLease.expiresAt) > now) {
+        return void 0;
+      }
+      const fence = current.fencingToken + 1;
+      const lease = {
+        key,
+        token: crypto5.randomUUID(),
+        fence,
+        expiresAt: new Date(now + leaseMs).toISOString()
+      };
+      const next = parseRecord({
+        ...current,
+        storeVersion: current.storeVersion + 1,
+        commitId: crypto5.randomUUID(),
+        fencingToken: fence,
+        activeLease: storedLease(lease),
+        updatedAt: new Date(now).toISOString()
+      });
+      await this.hooks.beforeRecordCommit?.({
+        operation: "acquire",
+        current: cloneRecord(current),
+        next: cloneRecord(next)
+      });
+      if (await this.commitRecord(current, next)) return lease;
+    }
+    return void 0;
+  }
+  async renewLease(lease, leaseMs = DEFAULT_LEASE_MS) {
+    const current = await this.readCurrentRecord(lease.key);
+    if (!current) throw this.leaseLost();
+    assertLeaseOwner(current, lease, this.now());
+    const renewed = {
+      ...lease,
+      expiresAt: new Date(this.now() + leaseMs).toISOString()
+    };
+    const next = parseRecord({
+      ...current,
+      storeVersion: current.storeVersion + 1,
+      commitId: crypto5.randomUUID(),
+      activeLease: storedLease(renewed),
+      updatedAt: new Date(this.now()).toISOString()
+    });
+    await this.hooks.beforeRecordCommit?.({
+      operation: "renew",
+      current: cloneRecord(current),
+      next: cloneRecord(next)
+    });
+    if (!await this.commitRecord(current, next)) throw this.leaseLost();
+    return renewed;
+  }
+  async update(record, lease) {
+    const current = await this.readCurrentRecord(record.key);
+    if (!current) throw this.leaseLost();
+    assertLeaseOwner(current, lease, this.now());
+    const parsed = nextRecord(current, record, this.now());
+    await this.hooks.beforeRecordCommit?.({
+      operation: "update",
+      current: cloneRecord(current),
+      next: cloneRecord(parsed)
+    });
+    if (!await this.commitRecord(current, parsed)) throw this.leaseLost();
+    return parsed;
+  }
+  async releaseLease(lease) {
+    const current = await this.readCurrentRecord(lease.key);
+    if (!current || current.activeLease?.token !== lease.token || current.activeLease.fence !== lease.fence) {
+      return;
+    }
+    const next = parseRecord({
+      ...current,
+      storeVersion: current.storeVersion + 1,
+      commitId: crypto5.randomUUID(),
+      activeLease: void 0,
+      updatedAt: new Date(this.now()).toISOString()
+    });
+    await this.hooks.beforeRecordCommit?.({
+      operation: "release",
+      current: cloneRecord(current),
+      next: cloneRecord(next)
+    });
+    await this.commitRecord(current, next);
+  }
+  async collectGarbage(input) {
+    await this.assertDirectory();
+    const now = input.now?.getTime() ?? this.now();
+    await this.cleanupStaleTemporaryFiles(now);
+    const result = {
+      scanned: 0,
+      deleted: 0,
+      retained: 0,
+      tombstonesDeleted: 0
+    };
+    const orphanMarkers = await this.cleanupOrphanFileMarkers(
+      now,
+      input.cleanup
+    );
+    result.scanned += orphanMarkers.scanned;
+    result.retained += orphanMarkers.retained;
+    const names = await fs5.readdir(this.directory);
+    const recordKeys = /* @__PURE__ */ new Set();
+    const tombstoneKeys = /* @__PURE__ */ new Set();
+    for (const name of names) {
+      const recordMatch = /^([a-f0-9]{64})\.record\.v\d{12}\.json$/.exec(name);
+      if (recordMatch?.[1]) recordKeys.add(recordMatch[1]);
+      const tombstoneMatch = /^([a-f0-9]{64})\.tombstone\.json$/.exec(name);
+      if (tombstoneMatch?.[1]) tombstoneKeys.add(tombstoneMatch[1]);
+    }
+    const keys = /* @__PURE__ */ new Set([
+      ...Array.from(recordKeys),
+      ...Array.from(tombstoneKeys)
+    ]);
+    for (const key of Array.from(keys)) {
+      result.scanned += 1;
+      const existingTombstone = await this.readTombstone(key);
+      if (existingTombstone) {
+        let cleanupCompleted2 = !existingTombstone.cleanupTarget || await this.hasCleanupCompleteMarker(key);
+        if (!cleanupCompleted2 && existingTombstone.cleanupTarget) {
+          try {
+            await input.cleanup(existingTombstone.cleanupTarget);
+            await this.createCleanupCompleteMarker(key, now);
+            cleanupCompleted2 = true;
+          } catch {
+            result.retained += 1;
+          }
+        }
+        try {
+          await this.deleteRecordVersions(key);
+          if (recordKeys.has(key)) result.deleted += 1;
+        } catch {
+          result.retained += 1;
+        }
+        continue;
+      }
+      const record = await this.readCurrentRecord(key);
+      if (!record) continue;
+      const expired = Date.parse(record.expiresAt) <= now;
+      const terminalCleanupPending = isTerminal(record) && !record.cleanupCompleted;
+      if (!expired && !terminalCleanupPending) continue;
+      if (record.activeLease && Date.parse(record.activeLease.expiresAt) > now) {
+        result.retained += 1;
+        continue;
+      }
+      const fence = record.fencingToken + 1;
+      const lease = {
+        key,
+        token: crypto5.randomUUID(),
+        fence,
+        expiresAt: new Date(now + DEFAULT_LEASE_MS).toISOString()
+      };
+      const claimed = parseRecord({
+        ...record,
+        storeVersion: record.storeVersion + 1,
+        commitId: crypto5.randomUUID(),
+        fencingToken: fence,
+        activeLease: storedLease(lease),
+        updatedAt: new Date(now).toISOString()
+      });
+      await this.hooks.beforeRecordCommit?.({
+        operation: "gc",
+        current: cloneRecord(record),
+        next: cloneRecord(claimed)
+      });
+      if (!await this.commitRecord(record, claimed)) {
+        result.retained += 1;
+        continue;
+      }
+      const cleanupTarget = cleanupTargetFromRecord(claimed);
+      let cleanupCompleted = claimed.cleanupCompleted;
+      if (!cleanupCompleted) {
+        try {
+          await input.cleanup(cleanupTarget);
+          cleanupCompleted = true;
+        } catch {
+          result.retained += 1;
+          if (!expired) {
+            await this.releaseLease(lease).catch(() => void 0);
+            continue;
+          }
+        }
+      }
+      const authoritative = await this.readCurrentRecord(key);
+      if (!authoritative || authoritative.activeLease?.token !== lease.token || authoritative.activeLease.fence !== lease.fence) {
+        result.retained += 1;
+        continue;
+      }
+      if (!expired) {
+        const cleaned = parseRecord({
+          ...authoritative,
+          storeVersion: authoritative.storeVersion + 1,
+          commitId: crypto5.randomUUID(),
+          cleanupCompleted,
+          activeLease: void 0,
+          updatedAt: new Date(now).toISOString()
+        });
+        if (!await this.commitRecord(authoritative, cleaned)) {
+          result.retained += 1;
+        }
+        continue;
+      }
+      const projectSlot = await this.readCurrentProjectSlot(
+        projectHash(authoritative.projectId)
+      );
+      if (authoritative.state === "completed" && projectSlot?.active?.key === authoritative.key) {
+        const retained = parseRecord({
+          ...authoritative,
+          storeVersion: authoritative.storeVersion + 1,
+          commitId: crypto5.randomUUID(),
+          cleanupCompleted,
+          activeLease: void 0,
+          updatedAt: new Date(now).toISOString()
+        });
+        await this.commitRecord(authoritative, retained);
+        result.retained += 1;
+        continue;
+      }
+      const tombstone = TombstoneSchema.parse({
+        schemaVersion: STORE_SCHEMA_VERSION,
+        key,
+        deletedAt: new Date(now).toISOString(),
+        expiresAt: new Date(
+          now + (input.tombstoneTtlMs ?? DEFAULT_TOMBSTONE_TTL_MS)
+        ).toISOString(),
+        cleanupTarget: cleanupCompleted ? void 0 : cleanupTarget
+      });
+      if (projectSlot?.active?.key === authoritative.key) {
+        await this.supersedePristineProjectLosers(
+          authoritative.projectId,
+          authoritative
+        );
+      }
+      await this.createTombstone(tombstone);
+      if (cleanupCompleted) await this.createCleanupCompleteMarker(key, now);
+      await this.clearProjectSlotIfOwned(authoritative);
+      try {
+        await this.deleteRecordVersions(key);
+        result.deleted += 1;
+      } catch {
+        result.retained += 1;
+      }
+    }
+    await this.syncDirectory();
+    return result;
+  }
+  async commitInitialRecord(record) {
+    const target = this.recordVersionPath(record.key, 0);
+    return this.linkImmutableJson(target, record);
+  }
+  async readProjectRecords(projectId) {
+    const keys = /* @__PURE__ */ new Set();
+    for (const name of await fs5.readdir(this.directory)) {
+      const match = /^([a-f0-9]{64})\.record\.v\d{12}\.json$/.exec(name);
+      if (match?.[1]) keys.add(match[1]);
+    }
+    const records = [];
+    for (const key of Array.from(keys).sort()) {
+      if (await this.hasLiveTombstone(key)) continue;
+      const record = await this.readCurrentRecord(key);
+      if (record?.projectId === projectId) records.push(record);
+    }
+    return records;
+  }
+  async supersedePristineRecord(key, winnerClientRequestId) {
+    for (let attempt = 0; attempt < 8; attempt += 1) {
+      const current = await this.readCurrentRecord(key);
+      if (!current || await this.hasLiveTombstone(key)) return current;
+      if (!isPristineReservationLoser(current)) return current;
+      const next = supersededReservation(
+        current,
+        winnerClientRequestId,
+        this.now()
+      );
+      await this.hooks.beforeRecordCommit?.({
+        operation: "supersede",
+        current: cloneRecord(current),
+        next: cloneRecord(next)
+      });
+      if (!await this.commitRecord(current, next)) continue;
+      await this.clearProjectSlotIfOwned(next);
+      return next;
+    }
+    throw this.storeCorrupt("\u81EA\u5B9A\u4E49\u95EE\u9898\u9A8C\u8BC1\u51B2\u7A81\u9884\u7559\u6DD8\u6C70\u7ADE\u4E89\u672A\u80FD\u6536\u655B");
+  }
+  async supersedePristineProjectLosers(projectId, winner) {
+    const losers = (await this.readProjectRecords(projectId)).filter((record) => record.key !== winner.key).sort(compareRecoveryCandidates);
+    for (const loser of losers) {
+      await this.supersedePristineRecord(loser.key, winner.clientRequestId);
+    }
+  }
+  async recoverProjectAuthority(projectId) {
+    const hash = projectHash(projectId);
+    for (let attempt = 0; attempt < 8; attempt += 1) {
+      const slot = await this.readCurrentProjectSlot(hash);
+      if (slot?.deletionFence) return void 0;
+      if (slot?.active) {
+        const current = await this.readCurrentRecord(slot.active.key);
+        const tombstoned = await this.hasLiveTombstone(slot.active.key);
+        if (current && !tombstoned) {
+          if (current.projectId !== projectId) {
+            throw this.storeCorrupt("\u81EA\u5B9A\u4E49\u95EE\u9898\u9A8C\u8BC1\u9879\u76EE\u5360\u4F4D\u8EAB\u4EFD\u51B2\u7A81");
+          }
+          if (current.supersededByClientRequestId) {
+            await this.clearProjectSlotIfOwned(current);
+            continue;
+          }
+          await this.supersedePristineProjectLosers(projectId, current);
+          return current;
+        }
+      }
+      const candidate = (await this.readProjectRecords(projectId)).filter((record) => isRecoverableNonterminal(record, this.now())).sort(compareRecoveryCandidates)[0];
+      if (!candidate) {
+        if (!slot?.active) return void 0;
+        if (await this.commitProjectSlot(hash, slot, void 0))
+          return void 0;
+        continue;
+      }
+      const claimed = await this.commitProjectSlot(hash, slot, {
+        key: candidate.key,
+        clientRequestId: candidate.clientRequestId,
+        expiresAt: candidate.expiresAt
+      });
+      if (!claimed) continue;
+      const authority = await this.readCurrentRecord(candidate.key);
+      if (!authority || await this.hasLiveTombstone(candidate.key)) continue;
+      if (authority.projectId !== projectId) {
+        throw this.storeCorrupt("\u81EA\u5B9A\u4E49\u95EE\u9898\u9A8C\u8BC1\u6062\u590D\u5360\u4F4D\u8EAB\u4EFD\u51B2\u7A81");
+      }
+      if (authority.supersededByClientRequestId) {
+        await this.clearProjectSlotIfOwned(authority);
+        continue;
+      }
+      if (isRecoverableNonterminal(authority, this.now())) {
+        await this.supersedePristineProjectLosers(projectId, authority);
+      }
+      const latest = await this.readCurrentRecord(authority.key);
+      if (latest?.supersededByClientRequestId) {
+        await this.clearProjectSlotIfOwned(latest);
+        continue;
+      }
+      return latest ?? authority;
+    }
+    throw this.storeCorrupt("\u81EA\u5B9A\u4E49\u95EE\u9898\u9A8C\u8BC1\u6062\u590D\u5360\u4F4D\u7ADE\u4E89\u672A\u80FD\u6536\u655B");
+  }
+  async commitRecord(current, next) {
+    if (await this.hasLiveTombstone(current.key)) return false;
+    const target = this.recordVersionPath(
+      current.key,
+      current.storeVersion + 1
+    );
+    const linked = await this.linkImmutableJson(target, next);
+    const authority = await this.readCurrentRecord(current.key);
+    const won = linked && authority?.storeVersion === next.storeVersion && authority.commitId === next.commitId;
+    if (won) await this.compactRecordVersions(current.key, next.storeVersion);
+    return won;
+  }
+  async commitProjectSlot(hash, current, active, deletionFence) {
+    const version = (current?.storeVersion ?? -1) + 1;
+    const next = ProjectSlotSchema.parse({
+      schemaVersion: STORE_SCHEMA_VERSION,
+      projectHash: hash,
+      storeVersion: version,
+      commitId: crypto5.randomUUID(),
+      active,
+      deletionFence,
+      updatedAt: new Date(this.now()).toISOString()
+    });
+    const linked = await this.linkImmutableJson(
+      this.projectVersionPath(hash, version),
+      next
+    );
+    const authority = await this.readCurrentProjectSlot(hash);
+    const won = linked && authority?.storeVersion === version && authority.commitId === next.commitId;
+    if (won) await this.compactProjectVersions(hash, version);
+    return won;
+  }
+  async clearProjectSlotIfOwned(record) {
+    const hash = projectHash(record.projectId);
+    for (let attempt = 0; attempt < 4; attempt += 1) {
+      const slot = await this.readCurrentProjectSlot(hash);
+      if (!slot?.active || slot.active.key !== record.key) return;
+      if (await this.commitProjectSlot(hash, slot, void 0)) return;
+    }
+  }
+  async assertProjectNotDeletionFenced(projectId) {
+    const slot = await this.readCurrentProjectSlot(projectHash(projectId));
+    if (slot?.deletionFence) throw this.projectDeletionFenced();
+  }
+  async readCurrentRecord(key) {
+    return this.readLatestVersion(
+      new RegExp(`^${key}\\.record\\.v(\\d{${VERSION_WIDTH}})\\.json$`),
+      (version) => this.recordVersionPath(key, version),
+      parseRecord
+    );
+  }
+  async readCurrentProjectSlot(hash) {
+    return this.readLatestVersion(
+      new RegExp(`^${hash}\\.project\\.v(\\d{${VERSION_WIDTH}})\\.json$`),
+      (version) => this.projectVersionPath(hash, version),
+      (value) => ProjectSlotSchema.parse(value)
+    );
+  }
+  async readLatestVersion(pattern, target, parse) {
+    for (let retry = 0; retry < 3; retry += 1) {
+      const versions = (await fs5.readdir(this.directory)).map((name) => Number(pattern.exec(name)?.[1] ?? -1)).filter((version) => Number.isSafeInteger(version) && version >= 0).sort((left, right) => right - left);
+      if (!versions.length) return void 0;
+      for (const version of versions) {
+        try {
+          return parse(JSON.parse(await fs5.readFile(target(version), "utf8")));
+        } catch (error) {
+          if (isFileNotFoundError(error)) continue;
+          throw this.storeCorrupt("\u81EA\u5B9A\u4E49\u95EE\u9898\u9A8C\u8BC1\u72B6\u6001\u6587\u4EF6\u65E0\u6CD5\u8BFB\u53D6");
+        }
+      }
+    }
+    return void 0;
+  }
+  async hasLiveTombstone(key) {
+    return Boolean(await this.readTombstone(key));
+  }
+  async readTombstone(key) {
+    try {
+      return TombstoneSchema.parse(
+        JSON.parse(await fs5.readFile(this.tombstonePath(key), "utf8"))
+      );
+    } catch (error) {
+      if (isFileNotFoundError(error)) return void 0;
+      throw this.storeCorrupt("\u81EA\u5B9A\u4E49\u95EE\u9898\u9A8C\u8BC1\u6E05\u7406\u6807\u8BB0\u65E0\u6CD5\u8BFB\u53D6");
+    }
+  }
+  async hasCleanupCompleteMarker(key) {
+    try {
+      const marker = CleanupCompleteMarkerSchema.parse(
+        JSON.parse(
+          await fs5.readFile(this.cleanupCompleteMarkerPath(key), "utf8")
+        )
+      );
+      if (marker.key !== key)
+        throw this.storeCorrupt("\u81EA\u5B9A\u4E49\u95EE\u9898\u9A8C\u8BC1\u6E05\u7406\u5B8C\u6210\u6807\u8BB0\u51B2\u7A81");
+      return true;
+    } catch (error) {
+      if (isFileNotFoundError(error)) return false;
+      if (error instanceof GeoCustomQuestionValidationStoreError) throw error;
+      throw this.storeCorrupt("\u81EA\u5B9A\u4E49\u95EE\u9898\u9A8C\u8BC1\u6E05\u7406\u5B8C\u6210\u6807\u8BB0\u65E0\u6CD5\u8BFB\u53D6");
+    }
+  }
+  async createCleanupCompleteMarker(key, now) {
+    const marker = CleanupCompleteMarkerSchema.parse({
+      schemaVersion: STORE_SCHEMA_VERSION,
+      key,
+      completedAt: new Date(now).toISOString()
+    });
+    const target = this.cleanupCompleteMarkerPath(key);
+    const created = await this.linkImmutableJson(target, marker);
+    if (created) return;
+    if (!await this.hasCleanupCompleteMarker(key)) {
+      throw this.storeCorrupt("\u81EA\u5B9A\u4E49\u95EE\u9898\u9A8C\u8BC1\u6E05\u7406\u5B8C\u6210\u6807\u8BB0\u672A\u80FD\u6301\u4E45\u5316");
+    }
+  }
+  async createOrphanFileMarker(marker) {
+    const target = this.orphanFileMarkerPath(marker.recordKey, marker.fileId);
+    const created = await this.linkImmutableJson(target, marker);
+    if (created) return;
+    const existing = OrphanFileMarkerSchema.parse(
+      JSON.parse(await fs5.readFile(target, "utf8"))
+    );
+    if (existing.recordKey !== marker.recordKey || existing.fileId !== marker.fileId) {
+      throw this.storeCorrupt("\u81EA\u5B9A\u4E49\u95EE\u9898\u9A8C\u8BC1\u5B64\u513F\u6587\u4EF6\u6807\u8BB0\u51B2\u7A81");
+    }
+  }
+  async removeOrphanFileMarker(marker) {
+    await fs5.unlink(this.orphanFileMarkerPath(marker.recordKey, marker.fileId)).catch((error) => {
+      if (!isFileNotFoundError(error)) throw error;
+    });
+    await this.syncDirectory();
+  }
+  async cleanupOrphanFileMarkers(nowMs, cleanup) {
+    const result = { scanned: 0, retained: 0 };
+    const pattern = /^([a-f0-9]{64})\.([a-f0-9]{64})\.orphan-file\.json$/;
+    for (const name of await fs5.readdir(this.directory)) {
+      const identity = pattern.exec(name);
+      if (!identity) continue;
+      result.scanned += 1;
+      const target = path8.join(this.directory, name);
+      const metadata = await fs5.lstat(target);
+      if (!metadata.isFile() || metadata.isSymbolicLink() || (metadata.mode & 511) !== 384) {
+        throw this.storeCorrupt("\u81EA\u5B9A\u4E49\u95EE\u9898\u9A8C\u8BC1\u5B64\u513F\u6587\u4EF6\u6807\u8BB0\u6743\u9650\u65E0\u6548");
+      }
+      const marker = OrphanFileMarkerSchema.parse(
+        JSON.parse(await fs5.readFile(target, "utf8"))
+      );
+      const expectedFileHash = crypto5.createHash("sha256").update(marker.fileId, "utf8").digest("hex");
+      if (marker.recordKey !== identity[1] || expectedFileHash !== identity[2]) {
+        throw this.storeCorrupt("\u81EA\u5B9A\u4E49\u95EE\u9898\u9A8C\u8BC1\u5B64\u513F\u6587\u4EF6\u6807\u8BB0\u8EAB\u4EFD\u4E0E\u6587\u4EF6\u540D\u4E0D\u4E00\u81F4");
+      }
+      const current = await this.readCurrentRecord(marker.recordKey);
+      const tracked = Boolean(
+        current && [
+          ...current.orphanedTemporaryFileIds,
+          current.archiveAttachment?.fileId,
+          current.skillAttachment?.fileId,
+          current.archiveStagingAttachment?.fileId,
+          current.skillStagingAttachment?.fileId
+        ].includes(marker.fileId)
+      );
+      if (tracked) {
+        await this.removeOrphanFileMarker(marker);
+        continue;
+      }
+      if (current && !isTerminal(current) && nowMs - Date.parse(marker.createdAt) < ORPHAN_FILE_MARKER_GRACE_MS) {
+        result.retained += 1;
+        continue;
+      }
+      try {
+        await cleanup({ temporaryFileIds: [marker.fileId] });
+        await this.removeOrphanFileMarker(marker);
+      } catch {
+        result.retained += 1;
+      }
+    }
+    return result;
+  }
+  async createTombstone(value) {
+    const target = this.tombstonePath(value.key);
+    const created = await this.linkImmutableJson(target, value);
+    if (created) return;
+    const existing = TombstoneSchema.parse(
+      JSON.parse(await fs5.readFile(target, "utf8"))
+    );
+    if (existing.key !== value.key)
+      throw this.storeCorrupt("\u81EA\u5B9A\u4E49\u95EE\u9898\u9A8C\u8BC1\u6E05\u7406\u6807\u8BB0\u51B2\u7A81");
+  }
+  async linkImmutableJson(target, value) {
+    const temporary = this.temporaryPath(path8.basename(target));
+    try {
+      await this.writeDurableFile(
+        temporary,
+        `${JSON.stringify(value)}
+`,
+        "wx"
+      );
+      try {
+        await fs5.link(temporary, target);
+        await this.syncDirectory();
+        return true;
+      } catch (error) {
+        if (isFileExistsError(error)) return false;
+        throw error;
+      }
+    } finally {
+      await fs5.unlink(temporary).catch(() => void 0);
+    }
+  }
+  async writeDurableFile(target, content, flag) {
+    const handle = await fs5.open(target, flag, 384);
+    try {
+      await handle.writeFile(content, "utf8");
+      await handle.sync();
+    } finally {
+      await handle.close();
+    }
+  }
+  async compactRecordVersions(key, keepVersion) {
+    await this.compactVersions(
+      new RegExp(`^${key}\\.record\\.v(\\d{${VERSION_WIDTH}})\\.json$`),
+      keepVersion
+    );
+  }
+  async compactProjectVersions(hash, keepVersion) {
+    await this.compactVersions(
+      new RegExp(`^${hash}\\.project\\.v(\\d{${VERSION_WIDTH}})\\.json$`),
+      keepVersion
+    );
+  }
+  async compactVersions(pattern, keepVersion) {
+    const names = await fs5.readdir(this.directory);
+    await Promise.all(
+      names.map(async (name) => {
+        const version = Number(pattern.exec(name)?.[1] ?? -1);
+        if (version < 0 || version >= keepVersion) return;
+        await fs5.unlink(path8.join(this.directory, name)).catch(() => void 0);
+      })
+    );
+  }
+  async deleteRecordVersions(key) {
+    const pattern = new RegExp(
+      `^${key}\\.record\\.v\\d{${VERSION_WIDTH}}\\.json$`
+    );
+    const names = await fs5.readdir(this.directory);
+    for (const name of names.filter((candidate) => pattern.test(candidate))) {
+      const target = path8.join(this.directory, name);
+      await this.hooks.beforeDeleteRecordVersion?.(target);
+      try {
+        await fs5.unlink(target);
+      } catch (error) {
+        if (!isFileNotFoundError(error)) throw error;
+      }
+    }
+    const remaining = (await fs5.readdir(this.directory)).filter(
+      (name) => pattern.test(name)
+    );
+    if (remaining.length > 0) {
+      throw new Error("custom-question record versions remain after cleanup");
+    }
+  }
+  async assertDirectory() {
+    await fs5.mkdir(this.directory, { recursive: true, mode: 448 });
+    if (!this.security.requireSecurePermissions) return;
+    const metadata = await fs5.lstat(this.directory);
+    const [realDirectory, realParent] = await Promise.all([
+      fs5.realpath(this.directory),
+      fs5.realpath(path8.dirname(this.directory))
+    ]);
+    const expectedRealDirectory = path8.join(
+      realParent,
+      path8.basename(this.directory)
+    );
+    if (metadata.isSymbolicLink() || !metadata.isDirectory() || path8.resolve(realDirectory) !== path8.resolve(expectedRealDirectory) || (metadata.mode & 18) !== 0) {
+      throw this.storeCorrupt(
+        "\u81EA\u5B9A\u4E49\u95EE\u9898\u9A8C\u8BC1\u6301\u4E45\u76EE\u5F55\u5FC5\u987B\u662F\u771F\u5B9E\u76EE\u5F55\uFF0C\u4E14\u4E0D\u5F97\u5141\u8BB8\u540C\u7EC4\u6216\u5176\u4ED6\u7528\u6237\u5199\u5165"
+      );
+    }
+  }
+  async assertManagedFilePermissions() {
+    if (!this.security.requireSecurePermissions) return;
+    const managedFilePattern = /^(?:\.persistence-sentinel\.json|[a-f0-9]{64}\.(?:record\.v\d{12}|project\.v\d{12}|tombstone|cleanup-complete)\.json|[a-f0-9]{64}\.[a-f0-9]{64}\.orphan-file\.json)$/;
+    for (const name of await fs5.readdir(this.directory)) {
+      if (!managedFilePattern.test(name)) continue;
+      const metadata = await fs5.lstat(path8.join(this.directory, name));
+      if (!metadata.isFile() || (metadata.mode & 511) !== 384) {
+        throw this.storeCorrupt(
+          "\u81EA\u5B9A\u4E49\u95EE\u9898\u9A8C\u8BC1\u6301\u4E45\u6587\u4EF6\u5FC5\u987B\u662F\u6743\u9650 0600 \u7684\u666E\u901A\u6587\u4EF6"
+        );
+      }
+    }
+  }
+  async cleanupStaleTemporaryFiles(nowMs) {
+    const ownedTemporaryPattern = new RegExp(
+      "^\\.(?:persistence-sentinel|[a-f0-9]{64}\\.(?:record\\.v\\d{12}|project\\.v\\d{12}|tombstone|cleanup-complete)\\.json|[a-f0-9]{64}\\.[a-f0-9]{64}\\.orphan-file\\.json)\\.\\d+\\.[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\\.tmp$"
+    );
+    for (const name of await fs5.readdir(this.directory)) {
+      if (!ownedTemporaryPattern.test(name)) continue;
+      const target = path8.join(this.directory, name);
+      let metadata;
+      try {
+        metadata = await fs5.lstat(target);
+      } catch (error) {
+        if (isFileNotFoundError(error)) continue;
+        throw error;
+      }
+      if (!metadata.isFile() || metadata.isSymbolicLink() || (metadata.mode & 511) !== 384 || nowMs - metadata.mtimeMs < STALE_TEMPORARY_FILE_AGE_MS) {
+        continue;
+      }
+      await fs5.unlink(target).catch((error) => {
+        if (!isFileNotFoundError(error)) throw error;
+      });
+    }
+    await this.syncDirectory();
+  }
+  recordVersionPath(key, version) {
+    return path8.join(
+      this.directory,
+      `${key}.record.v${String(version).padStart(VERSION_WIDTH, "0")}.json`
+    );
+  }
+  projectVersionPath(hash, version) {
+    return path8.join(
+      this.directory,
+      `${hash}.project.v${String(version).padStart(VERSION_WIDTH, "0")}.json`
+    );
+  }
+  tombstonePath(key) {
+    return path8.join(this.directory, `${key}.tombstone.json`);
+  }
+  cleanupCompleteMarkerPath(key) {
+    return path8.join(this.directory, `${key}.cleanup-complete.json`);
+  }
+  orphanFileMarkerPath(recordKeyValue, fileId) {
+    const fileHash = crypto5.createHash("sha256").update(fileId, "utf8").digest("hex");
+    return path8.join(
+      this.directory,
+      `${recordKeyValue}.${fileHash}.orphan-file.json`
+    );
+  }
+  temporaryPath(key) {
+    return path8.join(
+      this.directory,
+      `.${key}.${process.pid}.${crypto5.randomUUID()}.tmp`
+    );
+  }
+  async syncDirectory() {
+    const handle = await fs5.open(this.directory, "r");
+    try {
+      await handle.sync();
+    } finally {
+      await handle.close();
+    }
+  }
+  leaseLost() {
+    return new GeoCustomQuestionValidationStoreError(
+      "LEASE_LOST",
+      "\u81EA\u5B9A\u4E49\u95EE\u9898\u9A8C\u8BC1\u79DF\u7EA6\u5DF2\u5931\u6548"
+    );
+  }
+  projectDeletionFenced() {
+    return new GeoCustomQuestionValidationStoreError(
+      "PROJECT_DELETION_FENCED",
+      "\u9879\u76EE\u6B63\u5728\u5220\u9664\uFF0C\u4E0D\u80FD\u518D\u521B\u5EFA\u6216\u6062\u590D\u81EA\u5B9A\u4E49\u95EE\u9898\u9A8C\u8BC1"
+    );
+  }
+  projectDeletionBlocked(record) {
+    return new GeoCustomQuestionValidationStoreError(
+      "PROJECT_DELETION_BLOCKED",
+      "\u5F53\u524D\u9879\u76EE\u4ECD\u6709\u81EA\u5B9A\u4E49\u95EE\u9898\u9A8C\u8BC1\u7B49\u5F85\u6062\u590D\u3001\u6301\u4E45\u5316\u6216\u786E\u8BA4\uFF0C\u5B8C\u6210\u540E\u624D\u80FD\u5220\u9664",
+      activeOperation(record)
+    );
+  }
+  storeCorrupt(message) {
+    return new GeoCustomQuestionValidationStoreError("STORE_CORRUPT", message);
+  }
+};
+function createGeoCustomQuestionValidationStore(options = {}) {
+  const env = options.env ?? process.env;
+  const configured = env.FRONTMIND_GEO_CUSTOM_QUESTION_STORE_DIR?.trim();
+  if (env.NODE_ENV === "production" && !configured) {
+    throw new Error(
+      "FRONTMIND_GEO_CUSTOM_QUESTION_STORE_DIR must name a persistent directory in production"
+    );
+  }
+  if (configured && !path8.isAbsolute(configured)) {
+    throw new Error(
+      "FRONTMIND_GEO_CUSTOM_QUESTION_STORE_DIR must be an absolute path"
+    );
+  }
+  const directory = configured ? path8.resolve(configured) : path8.resolve(
+    process.cwd(),
+    ".frontmind-state",
+    "custom-question-validations"
+  );
+  return new FileGeoCustomQuestionValidationStore(
+    directory,
+    {},
+    {
+      requireSecurePermissions: env.NODE_ENV === "production"
+    }
+  );
+}
+function geoCustomQuestionOwnerSessionHash(sessionId) {
+  return crypto5.createHash("sha256").update(sessionId, "utf8").digest("hex");
+}
+function geoCustomQuestionRequestHash(input) {
+  return crypto5.createHash("sha256").update(
+    JSON.stringify({
+      projectId: input.projectId,
+      knowledgeBaseTaskId: input.knowledgeBaseTaskId,
+      question: input.question
+    }),
+    "utf8"
+  ).digest("hex");
+}
+function geoCustomQuestionHash(question) {
+  return crypto5.createHash("sha256").update(question, "utf8").digest("hex");
+}
+function legacyGeoCustomQuestionClientRequestId(input) {
+  const bytes = crypto5.createHash("sha256").update(
+    `legacy-custom-question
+${input.projectId}
+${input.ownerSessionHash}
+${input.questionHash}`,
+    "utf8"
+  ).digest().subarray(0, 16);
+  bytes[6] = bytes[6] & 15 | 80;
+  bytes[8] = bytes[8] & 63 | 128;
+  const hex = bytes.toString("hex");
+  return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20)}`;
+}
+function geoCustomQuestionOperationKey(record) {
+  return [
+    "geo",
+    record.projectId,
+    "custom-question-classifier",
+    record.clientRequestId,
+    record.questionHash.slice(0, 24)
+  ].join(":");
+}
+function isFileExistsError(error) {
+  return error?.code === "EEXIST";
+}
+function isFileNotFoundError(error) {
+  return error?.code === "ENOENT";
+}
+
 // server/geo/prompts.ts
 async function buildWebsiteKnowledgeBasePrompt(input) {
   const attachmentNames = input.attachments.map((item) => item.filename);
@@ -11286,6 +12750,8 @@ function createByteLimitTransform(maxBytes) {
 
 // server/geo/router.ts
 var SESSION_COOKIE = "frontmind_geo_session";
+var GEO_LEGACY_CUSTOM_QUESTION_COMPATIBILITY_WAIT_MS = 15e3;
+var GEO_LEGACY_CUSTOM_QUESTION_COMPATIBILITY_POLL_MS = 500;
 var SESSION_TTL_MS = 365 * 24 * 60 * 60 * 1e3;
 var PROJECT_TTL_MS = 365 * 24 * 60 * 60 * 1e3;
 var PAYMENT_INTENT_TTL_MS = 24 * 60 * 60 * 1e3;
@@ -11295,8 +12761,15 @@ var MAX_ARCHIVE_COPY_BYTES = 150 * 1024 * 1024;
 var MAX_VALIDATED_ARCHIVE_BYTES = MAX_KNOWLEDGE_ARCHIVE_CANDIDATE_BYTES;
 var MAX_ASSESSMENT_INPUT_BYTES = 12 * 1024 * 1024;
 var MAX_FORECAST_INPUT_BYTES = 12 * 1024 * 1024;
-var CUSTOM_QUESTION_CLASSIFIER_TIMEOUT_MS = 15e3;
-var CUSTOM_QUESTION_CLASSIFIER_POLL_MS = 400;
+var CUSTOM_QUESTION_CLASSIFIER_CLIENT_POLL_MS = 1500;
+var CUSTOM_QUESTION_CLASSIFIER_UNKNOWN_MAX_OBSERVATIONS = 3;
+var CUSTOM_QUESTION_CLASSIFIER_TRANSIENT_MAX_OBSERVATIONS = 3;
+var CUSTOM_QUESTION_CLASSIFIER_TRANSIENT_MAX_MS = 3e4;
+var CUSTOM_QUESTION_CLASSIFIER_ATTACHMENT_REBUILD_MAX = 2;
+var CUSTOM_QUESTION_CLASSIFIER_LEASE_MS = 3e4;
+var CUSTOM_QUESTION_CLASSIFIER_LEASE_RENEW_MS = 1e4;
+var CUSTOM_QUESTION_VALIDATION_TTL_MS = 24 * 60 * 60 * 1e3;
+var CUSTOM_QUESTION_TERMINAL_RETENTION_MS = 24 * 60 * 60 * 1e3;
 var SESSION_RATE_LIMIT_WINDOW_MS = 60 * 60 * 1e3;
 var GEO_MANUAL_CONTRACT_TEMPLATE_VERSION = "basic-2026.07-v2";
 var KNOWLEDGE_BASE_VALIDATION_PUBLIC_ERRORS = {
@@ -11350,7 +12823,7 @@ async function verifyUploadedKnowledgeBaseArchive(broker, input) {
       "FINAL_ARCHIVE_READBACK_FAILED"
     );
   }
-  const actualSha256 = crypto5.createHash("sha256").update(bytes).digest("hex");
+  const actualSha256 = crypto6.createHash("sha256").update(bytes).digest("hex");
   if (actualSha256 !== input.expectedSha256 || !bytes.equals(input.expectedBytes)) {
     throw new GeoHttpError(
       "\u77E5\u8BC6\u5E93\u6B63\u5F0F\u6587\u4EF6\u4F20\u8F93\u6821\u9A8C\u5931\u8D25\uFF0C\u8BF7\u7A0D\u540E\u91CD\u8BD5",
@@ -11405,7 +12878,14 @@ function createGeoRouter(options = {}) {
   const adminNotifier = options.adminNotifier ?? createGeoAdminNotifierFromEnv({ env });
   const knowledgeImporter = options.knowledgeImporter ?? createGeoKnowledgeImporter({ env });
   const projectOrderRegistry = options.projectOrderRegistry ?? createGeoProjectOrderRegistry({ env });
+  const customQuestionValidationStore = options.customQuestionValidationStore ?? createGeoCustomQuestionValidationStore({ env });
   const knowledgeBaseFinalizer = options.knowledgeBaseFinalizer ?? finalizeKnowledgeBaseCandidate;
+  const legacyCustomQuestionCompatibilityWaitMs = options.legacyCustomQuestionCompatibilityWaitMs ?? GEO_LEGACY_CUSTOM_QUESTION_COMPATIBILITY_WAIT_MS;
+  const legacyCustomQuestionCompatibilityPollMs = options.legacyCustomQuestionCompatibilityPollMs ?? GEO_LEGACY_CUSTOM_QUESTION_COMPATIBILITY_POLL_MS;
+  const customQuestionValidationNow = options.customQuestionValidationNow ?? Date.now;
+  if (!Number.isInteger(legacyCustomQuestionCompatibilityWaitMs) || legacyCustomQuestionCompatibilityWaitMs <= 0 || !Number.isInteger(legacyCustomQuestionCompatibilityPollMs) || legacyCustomQuestionCompatibilityPollMs <= 0) {
+    throw new Error("custom-question legacy compatibility timing is invalid");
+  }
   const failedInvites = /* @__PURE__ */ new Map();
   const sessionRates = /* @__PURE__ */ new Map();
   const identityRates = /* @__PURE__ */ new Map();
@@ -11577,7 +13057,7 @@ function createGeoRouter(options = {}) {
         }
       };
     }
-    const candidateSha = crypto5.createHash("sha256").update(candidateBytes).digest("hex");
+    const candidateSha = crypto6.createHash("sha256").update(candidateBytes).digest("hex");
     const recordedFinalization = value.knowledgeBaseFinalization;
     if (recordedFinalization?.state === "failed_internal" && recordedFinalization.finalizerVersion === WEBSITE_KB_FINALIZER_VERSION && recordedFinalization.candidateSha256 === candidateSha) {
       return { value };
@@ -11832,7 +13312,7 @@ function createGeoRouter(options = {}) {
   };
   const createCheckoutIntent = async (value, purchaseType, amountFen) => {
     const eventAt = (/* @__PURE__ */ new Date()).toISOString();
-    const nonce = crypto5.randomUUID();
+    const nonce = crypto6.randomUUID();
     return writeProjectOrder({
       orderId: `intent-${nonce}`,
       projectId: value.projectId,
@@ -12221,7 +13701,7 @@ function createGeoRouter(options = {}) {
       serviceProvisionedAt: response.order.status === "active" ? response.order.updatedAt : value.serviceProvisionedAt
     };
   };
-  const mergeKnowledgeImport = (value, response, sha2563, idempotencyKey) => {
+  const mergeKnowledgeImport = (value, response, sha2564, idempotencyKey) => {
     if (response.knowledgeImport.projectId !== value.projectId) {
       throw new GeoHttpError(
         "\u77E5\u8BC6\u5E93\u63A5\u5165\u7ED3\u679C\u4E0E\u5F53\u524D\u9879\u76EE\u4E0D\u5339\u914D",
@@ -12236,7 +13716,7 @@ function createGeoRouter(options = {}) {
       serviceKnowledgeImportMessage: response.knowledgeImport.message,
       serviceKnowledgeImportRetryable: response.knowledgeImport.retryable,
       serviceKnowledgeImportUpdatedAt: response.knowledgeImport.updatedAt,
-      serviceKnowledgeArtifactSha256: sha2563,
+      serviceKnowledgeArtifactSha256: sha2564,
       serviceKnowledgeIdempotencyKey: idempotencyKey,
       serviceWorkspaceUrl: response.knowledgeImport.workspaceUrl || value.serviceWorkspaceUrl,
       serviceActivatedAt: response.knowledgeImport.status === "ready" ? response.knowledgeImport.updatedAt : value.serviceActivatedAt
@@ -12599,7 +14079,7 @@ function createGeoRouter(options = {}) {
       }
       const token = codec.seal(
         "session",
-        { scope: "geo", nonce: nonce || crypto5.randomUUID() },
+        { scope: "geo", nonce: nonce || crypto6.randomUUID() },
         SESSION_TTL_MS
       );
       res.cookie(SESSION_COOKIE, token, {
@@ -12682,7 +14162,7 @@ function createGeoRouter(options = {}) {
         String(res.locals.geoSessionId || ""),
         input.clientRequestId,
         input
-      ) : crypto5.randomUUID();
+      ) : crypto6.randomUUID();
       const created = await createWebsiteKnowledgeBaseTaskWithSkill(broker, {
         projectId,
         prompt: await buildWebsiteKnowledgeBasePrompt(input),
@@ -12904,6 +14384,92 @@ function createGeoRouter(options = {}) {
       res.status(201).json({ projectToken, project });
     })
   );
+  const sendCustomQuestionValidationObservation = async (input) => {
+    const isExistingRecommendedQuestion = input.record.state === "completed" && input.record.completionMode === "existing_recommended_question";
+    const validation = {
+      schemaVersion: 1,
+      clientRequestId: input.record.clientRequestId,
+      question: input.record.question,
+      state: input.record.state,
+      acknowledgement: isExistingRecommendedQuestion ? "not_required" : "required",
+      completionMode: isExistingRecommendedQuestion ? "existing_recommended_question" : "reservation",
+      nextPollMs: CUSTOM_QUESTION_CLASSIFIER_CLIENT_POLL_MS,
+      ...input.record.lastTransientError ? { notice: "\u95EE\u9898\u9A8C\u8BC1\u4ECD\u5728\u6062\u590D\u4E2D\uFF0C\u7CFB\u7EDF\u5C06\u7EE7\u7EED\u67E5\u8BE2\u540C\u4E00\u4EFB\u52A1\u3002" } : {},
+      ...input.record.error ? { error: input.record.error } : {}
+    };
+    if (input.record.state === "completed" && input.record.result) {
+      const nextValue = isExistingRecommendedQuestion ? input.value : {
+        ...input.value,
+        customQuestion: input.record.result
+      };
+      const projectToken = isExistingRecommendedQuestion ? input.projectToken : codec.seal("project", nextValue, PROJECT_TTL_MS);
+      const project = await buildProjectView(
+        broker,
+        nextValue,
+        projectToken,
+        input.knowledgeBaseTask,
+        input.questionTask
+      );
+      input.res.status(input.completedStatus ?? 200).json({
+        validation,
+        projectToken,
+        question: input.record.result,
+        project
+      });
+      return;
+    }
+    if (input.record.error && isTerminalCustomQuestionValidation(input.record)) {
+      input.res.status(input.record.error.status).json({
+        ok: false,
+        validation,
+        error: {
+          code: input.record.error.code,
+          message: input.record.error.message
+        }
+      });
+      return;
+    }
+    input.res.status(202).json({ validation });
+  };
+  const loadCustomQuestionContext = async (value) => {
+    if (value.monitorRunId) {
+      throw new GeoHttpError(
+        "\u8BE5\u9879\u76EE\u7684\u76D1\u63A7\u4EFB\u52A1\u5DF2\u7ECF\u521B\u5EFA\uFF0C\u4E0D\u80FD\u518D\u66F4\u6362\u95EE\u9898",
+        409,
+        "MONITOR_ALREADY_CREATED"
+      );
+    }
+    if (!value.questionTaskId) {
+      throw new GeoHttpError(
+        "\u63A8\u8350\u95EE\u9898\u751F\u6210\u540E\u624D\u80FD\u6DFB\u52A0\u81EA\u5B9A\u4E49\u95EE\u9898",
+        409,
+        "QUESTIONS_NOT_READY"
+      );
+    }
+    const [knowledgeBaseTask, questionTask] = await Promise.all([
+      getResolvedTask(broker, value.knowledgeBaseTaskId),
+      getResolvedTask(broker, value.questionTaskId)
+    ]);
+    const trackedValue = await resolveCanonicalCompanyIdentity(
+      broker,
+      value,
+      knowledgeBaseTask
+    );
+    const generatedQuestions = parseQuestionSetFromTask(questionTask)?.questions;
+    if (!generatedQuestions) {
+      throw new GeoHttpError(
+        "\u63A8\u8350\u95EE\u9898\u5C1A\u672A\u51C6\u5907\u5B8C\u6210",
+        409,
+        "QUESTIONS_NOT_READY"
+      );
+    }
+    return {
+      knowledgeBaseTask,
+      questionTask,
+      trackedValue,
+      generatedQuestions
+    };
+  };
   router.post(
     "/projects/:projectToken/questions/custom",
     requireConfiguration,
@@ -12912,37 +14478,12 @@ function createGeoRouter(options = {}) {
     asyncHandler(async (req, res) => {
       const value = openOwnedProject(req, res);
       const input = CreateCustomQuestionRequestSchema.parse(req.body);
-      if (value.monitorRunId) {
-        throw new GeoHttpError(
-          "\u8BE5\u9879\u76EE\u7684\u76D1\u63A7\u4EFB\u52A1\u5DF2\u7ECF\u521B\u5EFA\uFF0C\u4E0D\u80FD\u518D\u66F4\u6362\u95EE\u9898",
-          409,
-          "MONITOR_ALREADY_CREATED"
-        );
-      }
-      if (!value.questionTaskId) {
-        throw new GeoHttpError(
-          "\u63A8\u8350\u95EE\u9898\u751F\u6210\u540E\u624D\u80FD\u6DFB\u52A0\u81EA\u5B9A\u4E49\u95EE\u9898",
-          409,
-          "QUESTIONS_NOT_READY"
-        );
-      }
-      const [knowledgeBaseTask, questionTask] = await Promise.all([
-        getResolvedTask(broker, value.knowledgeBaseTaskId),
-        getResolvedTask(broker, value.questionTaskId)
-      ]);
-      const trackedValue = await resolveCanonicalCompanyIdentity(
-        broker,
-        value,
-        knowledgeBaseTask
-      );
-      const generatedQuestions = parseQuestionSetFromTask(questionTask)?.questions;
-      if (!generatedQuestions) {
-        throw new GeoHttpError(
-          "\u63A8\u8350\u95EE\u9898\u5C1A\u672A\u51C6\u5907\u5B8C\u6210",
-          409,
-          "QUESTIONS_NOT_READY"
-        );
-      }
+      const {
+        knowledgeBaseTask,
+        questionTask,
+        trackedValue,
+        generatedQuestions
+      } = await loadCustomQuestionContext(value);
       if (isIndustryRankingQuestion(input.question)) {
         throw new GeoHttpError(
           "\u8BE5\u95EE\u9898\u5C5E\u4E8E\u884C\u4E1A\u6392\u540D\u6216\u54C1\u724C\u63A8\u8350\u7C7B\u95EE\u9898\uFF0C\u9700\u8981\u5168\u57DF\u8425\u9500\u6743\u9650",
@@ -12953,8 +14494,18 @@ function createGeoRouter(options = {}) {
       const duplicate = generatedQuestions.find(
         (candidate) => normalizeQuestionIdentity(candidate.question) === normalizeQuestionIdentity(input.question)
       );
-      if (duplicate) {
-        const project2 = await buildProjectView(
+      const ownerSessionHash = geoCustomQuestionOwnerSessionHash(
+        String(res.locals.geoSessionId || "")
+      );
+      const questionHash = geoCustomQuestionHash(input.question);
+      const legacyClient = !input.clientRequestId;
+      const clientRequestId = input.clientRequestId ?? legacyGeoCustomQuestionClientRequestId({
+        projectId: trackedValue.projectId,
+        ownerSessionHash,
+        questionHash
+      });
+      if (duplicate && legacyClient) {
+        const project = await buildProjectView(
           broker,
           trackedValue,
           req.params.projectToken,
@@ -12962,63 +14513,283 @@ function createGeoRouter(options = {}) {
           questionTask
         );
         res.json({
+          validation: {
+            schemaVersion: 1,
+            clientRequestId: input.clientRequestId,
+            question: input.question,
+            state: "completed",
+            acknowledgement: "not_required",
+            completionMode: "existing_recommended_question"
+          },
           projectToken: req.params.projectToken,
           question: duplicate,
-          project: project2
+          project
         });
         return;
       }
-      const classification = await classifyCustomQuestion({
-        broker,
-        value: trackedValue,
-        knowledgeBaseTask,
-        question: input.question
-      });
-      if (classification.decision === "reject") {
-        if (classification.category === "industry_ranking") {
-          throw new GeoHttpError(
-            "\u8BE5\u95EE\u9898\u5C5E\u4E8E\u884C\u4E1A\u6392\u540D\u6216\u54C1\u724C\u63A8\u8350\u7C7B\u95EE\u9898\uFF0C\u9700\u8981\u5168\u57DF\u8425\u9500\u6743\u9650",
-            422,
-            "INDUSTRY_RANKING_QUESTION"
-          );
-        }
-        if (classification.category === "ambiguous") {
-          throw new GeoHttpError(
-            `\u65E0\u6CD5\u786E\u8BA4\u8BE5\u95EE\u9898\u4E0E\u300C${trackedValue.companyName}\u300D\u7684\u5173\u7CFB\uFF0C\u8BF7\u660E\u786E\u5199\u51FA\u4F01\u4E1A\u3001\u54C1\u724C\u6216\u77E5\u8BC6\u5E93\u4E2D\u7684\u5177\u4F53\u4EA7\u54C1\u540D\u79F0`,
-            422,
-            "CUSTOM_QUESTION_AMBIGUOUS"
-          );
-        }
+      const archive = resolveKnowledgeBaseArtifact(
+        trackedValue,
+        knowledgeBaseTask
+      );
+      if (!archive?.fileId) {
         throw new GeoHttpError(
-          `\u8BE5\u95EE\u9898\u4E0E\u300C${trackedValue.companyName}\u300D\u7684\u4F01\u4E1A\u3001\u4EA7\u54C1\u6216\u670D\u52A1\u6CA1\u6709\u660E\u786E\u5173\u7CFB\uFF0C\u8BF7\u4FEE\u6539\u540E\u91CD\u8BD5`,
-          422,
-          "CUSTOM_QUESTION_ENTERPRISE_UNRELATED"
+          "\u4F01\u4E1A\u77E5\u8BC6\u5E93\u51C6\u5907\u5B8C\u6210\u540E\u624D\u80FD\u9A8C\u8BC1\u81EA\u5B9A\u4E49\u95EE\u9898",
+          409,
+          "ARCHIVE_NOT_READY"
         );
       }
-      const id = customQuestionId(input.question);
-      const question = GeoQuestionSchema.parse({
-        id,
-        category: classification.category,
+      const archiveFileId = archive.fileId;
+      const reservationInput = (expiresAt) => ({
+        projectId: trackedValue.projectId,
+        ownerSessionHash,
+        clientRequestId,
+        requestHash: geoCustomQuestionRequestHash({
+          projectId: trackedValue.projectId,
+          knowledgeBaseTaskId: trackedValue.knowledgeBaseTaskId,
+          question: input.question
+        }),
         question: input.question,
-        rationale: classification.reason,
-        ...classification.enterpriseAnchor ? { enterpriseAnchor: classification.enterpriseAnchor } : {},
-        ...classification.offeringAnchor ? { offeringAnchor: classification.offeringAnchor } : {},
-        evidenceRefs: classification.evidenceRefs,
-        selectable: true
+        questionHash,
+        companyName: trackedValue.companyName,
+        knowledgeBaseTaskId: trackedValue.knowledgeBaseTaskId,
+        knowledgeBaseValidationProfile: trackedValue.knowledgeBaseValidationProfile,
+        knowledgeBaseArtifact: {
+          fileId: archiveFileId,
+          filename: archive.filename,
+          sha256: archive.sha256,
+          packageManifestSha256: archive.packageManifestSha256
+        },
+        expiresAt
       });
-      const nextValue = {
-        ...trackedValue,
-        customQuestion: question
-      };
-      const projectToken = codec.seal("project", nextValue, PROJECT_TTL_MS);
-      const project = await buildProjectView(
-        broker,
-        nextValue,
-        projectToken,
-        knowledgeBaseTask,
-        questionTask
+      if (duplicate) {
+        const receipt = await customQuestionValidationStore.reserveCompletedReceipt(
+          reservationInput(
+            new Date(
+              Date.now() + CUSTOM_QUESTION_TERMINAL_RETENTION_MS
+            ).toISOString()
+          ),
+          duplicate
+        );
+        await sendCustomQuestionValidationObservation({
+          res,
+          projectToken: req.params.projectToken,
+          value: trackedValue,
+          knowledgeBaseTask,
+          questionTask,
+          record: receipt.record
+        });
+        return;
+      }
+      const reservation = await customQuestionValidationStore.reserve(
+        reservationInput(
+          new Date(
+            Date.now() + CUSTOM_QUESTION_VALIDATION_TTL_MS
+          ).toISOString()
+        )
       );
-      res.status(201).json({ projectToken, question, project });
+      let record = await advanceCustomQuestionValidation({
+        broker,
+        store: customQuestionValidationStore,
+        record: reservation.record,
+        knowledgeBaseTask,
+        now: customQuestionValidationNow
+      });
+      if (legacyClient && !isTerminalCustomQuestionValidation(record)) {
+        const deadline = Date.now() + legacyCustomQuestionCompatibilityWaitMs;
+        while (!isTerminalCustomQuestionValidation(record) && Date.now() < deadline) {
+          await waitForCustomQuestionRecovery(
+            legacyCustomQuestionCompatibilityPollMs
+          );
+          const current = await customQuestionValidationStore.get(
+            trackedValue.projectId,
+            clientRequestId
+          );
+          if (!current) break;
+          record = await advanceCustomQuestionValidation({
+            broker,
+            store: customQuestionValidationStore,
+            record: current,
+            knowledgeBaseTask,
+            now: customQuestionValidationNow
+          });
+        }
+        if (!isTerminalCustomQuestionValidation(record)) {
+          throw new GeoHttpError(
+            "\u95EE\u9898\u9A8C\u8BC1\u4ECD\u5728\u540E\u53F0\u7EE7\u7EED\uFF1B\u8BF7\u5237\u65B0\u9875\u9762\uFF0C\u7CFB\u7EDF\u4F1A\u6062\u590D\u540C\u4E00\u8BF7\u6C42",
+            504,
+            "CUSTOM_QUESTION_LEGACY_CLIENT_REFRESH_REQUIRED"
+          );
+        }
+      }
+      await sendCustomQuestionValidationObservation({
+        res,
+        projectToken: req.params.projectToken,
+        value: trackedValue,
+        knowledgeBaseTask,
+        questionTask,
+        record,
+        completedStatus: 201
+      });
+    })
+  );
+  router.get(
+    "/projects/:projectToken/questions/custom/:clientRequestId([0-9a-fA-F-]{36})",
+    requireConfiguration,
+    requireSession,
+    requireSessionRate("custom-question-status", 120, 60 * 1e3),
+    asyncHandler(async (req, res) => {
+      const value = openOwnedProject(req, res);
+      const clientRequestId = z11.string().uuid().parse(req.params.clientRequestId);
+      const stored = await customQuestionValidationStore.get(
+        value.projectId,
+        clientRequestId
+      );
+      if (!stored) {
+        throw new GeoHttpError(
+          "\u81EA\u5B9A\u4E49\u95EE\u9898\u9A8C\u8BC1\u8BF7\u6C42\u4E0D\u5B58\u5728",
+          404,
+          "CUSTOM_QUESTION_VALIDATION_NOT_FOUND"
+        );
+      }
+      const ownerSessionHash = geoCustomQuestionOwnerSessionHash(
+        String(res.locals.geoSessionId || "")
+      );
+      if (stored.projectId !== value.projectId || stored.ownerSessionHash !== ownerSessionHash) {
+        throw new GeoHttpError(
+          "\u81EA\u5B9A\u4E49\u95EE\u9898\u9A8C\u8BC1\u8BF7\u6C42\u4E0D\u5C5E\u4E8E\u5F53\u524D\u9879\u76EE",
+          403,
+          "CUSTOM_QUESTION_VALIDATION_FORBIDDEN"
+        );
+      }
+      const { knowledgeBaseTask, questionTask, trackedValue } = await loadCustomQuestionContext(value);
+      const expectedRequestHash = geoCustomQuestionRequestHash({
+        projectId: trackedValue.projectId,
+        knowledgeBaseTaskId: trackedValue.knowledgeBaseTaskId,
+        question: stored.question
+      });
+      if (stored.requestHash !== expectedRequestHash) {
+        throw new GeoHttpError(
+          "\u9879\u76EE\u72B6\u6001\u5DF2\u53D8\u5316\uFF0C\u4E0D\u80FD\u7EE7\u7EED\u65E7\u7684\u95EE\u9898\u9A8C\u8BC1\u8BF7\u6C42",
+          409,
+          "CUSTOM_QUESTION_VALIDATION_PROJECT_CHANGED"
+        );
+      }
+      const authoritative = await customQuestionValidationStore.ensureActive(
+        value.projectId,
+        clientRequestId
+      );
+      const record = await advanceCustomQuestionValidation({
+        broker,
+        store: customQuestionValidationStore,
+        record: authoritative,
+        knowledgeBaseTask,
+        now: customQuestionValidationNow
+      });
+      await sendCustomQuestionValidationObservation({
+        res,
+        projectToken: req.params.projectToken,
+        value: trackedValue,
+        knowledgeBaseTask,
+        questionTask,
+        record
+      });
+    })
+  );
+  router.post(
+    "/projects/:projectToken/questions/custom/:clientRequestId([0-9a-fA-F-]{36})/ack",
+    requireConfiguration,
+    requireSession,
+    requireSessionRate("custom-question-ack", 120, 60 * 1e3),
+    asyncHandler(async (req, res) => {
+      const value = openOwnedProject(req, res);
+      const clientRequestId = z11.string().uuid().parse(req.params.clientRequestId);
+      const ownerSessionHash = geoCustomQuestionOwnerSessionHash(
+        String(res.locals.geoSessionId || "")
+      );
+      const stored = await customQuestionValidationStore.get(
+        value.projectId,
+        clientRequestId
+      );
+      if (!stored) {
+        throw new GeoHttpError(
+          "\u81EA\u5B9A\u4E49\u95EE\u9898\u9A8C\u8BC1\u8BF7\u6C42\u4E0D\u5B58\u5728",
+          404,
+          "CUSTOM_QUESTION_VALIDATION_NOT_FOUND"
+        );
+      }
+      if (stored.projectId !== value.projectId || stored.ownerSessionHash !== ownerSessionHash) {
+        throw new GeoHttpError(
+          "\u81EA\u5B9A\u4E49\u95EE\u9898\u9A8C\u8BC1\u8BF7\u6C42\u4E0D\u5C5E\u4E8E\u5F53\u524D\u9879\u76EE",
+          403,
+          "CUSTOM_QUESTION_VALIDATION_FORBIDDEN"
+        );
+      }
+      if (!isTerminalCustomQuestionValidation(stored)) {
+        throw new GeoHttpError(
+          "\u95EE\u9898\u9A8C\u8BC1\u5C1A\u672A\u5B8C\u6210\uFF0C\u4E0D\u80FD\u786E\u8BA4\u6301\u4E45\u5316",
+          409,
+          "CUSTOM_QUESTION_VALIDATION_NOT_TERMINAL"
+        );
+      }
+      const acknowledged = await customQuestionValidationStore.acknowledgeTerminal(
+        value.projectId,
+        clientRequestId,
+        ownerSessionHash
+      );
+      res.json({
+        ok: true,
+        validation: {
+          schemaVersion: 1,
+          clientRequestId,
+          state: acknowledged.state,
+          acknowledged: true
+        }
+      });
+    })
+  );
+  router.get(
+    "/projects/:projectToken/questions/custom/active",
+    requireConfiguration,
+    requireSession,
+    requireSessionRate("custom-question-active", 120, 60 * 1e3),
+    asyncHandler(async (req, res) => {
+      const value = openOwnedProject(req, res);
+      const stored = await customQuestionValidationStore.getActive(
+        value.projectId
+      );
+      if (!stored) {
+        throw new GeoHttpError(
+          "\u5F53\u524D\u9879\u76EE\u6CA1\u6709\u5F85\u6062\u590D\u7684\u95EE\u9898\u9A8C\u8BC1",
+          404,
+          "CUSTOM_QUESTION_VALIDATION_NOT_FOUND"
+        );
+      }
+      const ownerSessionHash = geoCustomQuestionOwnerSessionHash(
+        String(res.locals.geoSessionId || "")
+      );
+      if (stored.ownerSessionHash !== ownerSessionHash) {
+        throw new GeoHttpError(
+          "\u81EA\u5B9A\u4E49\u95EE\u9898\u9A8C\u8BC1\u8BF7\u6C42\u4E0D\u5C5E\u4E8E\u5F53\u524D\u9879\u76EE",
+          403,
+          "CUSTOM_QUESTION_VALIDATION_FORBIDDEN"
+        );
+      }
+      const { knowledgeBaseTask, questionTask, trackedValue } = await loadCustomQuestionContext(value);
+      const record = await advanceCustomQuestionValidation({
+        broker,
+        store: customQuestionValidationStore,
+        record: stored,
+        knowledgeBaseTask,
+        now: customQuestionValidationNow
+      });
+      await sendCustomQuestionValidationObservation({
+        res,
+        projectToken: req.params.projectToken,
+        value: trackedValue,
+        knowledgeBaseTask,
+        questionTask,
+        record
+      });
     })
   );
   router.post(
@@ -13169,7 +14940,7 @@ function createGeoRouter(options = {}) {
         "paid",
         { paidAt: receipt.paidAt }
       );
-      const idempotencyKey = `geo-monitor:${crypto5.createHash("sha256").update(
+      const idempotencyKey = `geo-monitor:${crypto6.createHash("sha256").update(
         JSON.stringify({
           projectId: value.projectId,
           orderId: receipt.orderId,
@@ -14654,6 +16425,7 @@ function createGeoRouter(options = {}) {
         );
       }
       await assertProjectOrderAllowsDeletion(value);
+      await customQuestionValidationStore.fenceProjectDeletion(value.projectId);
       const protectedMonitorRunId = projectOrderProtections.get(value.projectId)?.monitoring?.runId;
       const taskIds = [
         value.knowledgeBaseTaskId,
@@ -14717,7 +16489,8 @@ function createGeoRouter(options = {}) {
       const normalized = normalizeError(error);
       res.status(normalized.status).json({
         ok: false,
-        error: { code: normalized.code, message: normalized.message }
+        error: { code: normalized.code, message: normalized.message },
+        ...error instanceof GeoCustomQuestionValidationStoreError && error.activeOperation ? { activeOperation: error.activeOperation } : {}
       });
     }
   );
@@ -14727,7 +16500,7 @@ function normalizeQuestionIdentity(question) {
   return question.normalize("NFKC").toLocaleLowerCase("zh-CN").replace(/[\u200b-\u200f\u202a-\u202e\u2060-\u206f\ufeff]/g, "").replace(/[\s?？]+/g, "");
 }
 function customQuestionId(question) {
-  return `custom-${crypto5.createHash("sha256").update(normalizeQuestionIdentity(question)).digest("hex").slice(0, 20)}`;
+  return `custom-${crypto6.createHash("sha256").update(normalizeQuestionIdentity(question)).digest("hex").slice(0, 20)}`;
 }
 function validCustomQuestion(value) {
   const parsed = GeoQuestionSchema.safeParse(value.customQuestion);
@@ -15367,7 +17140,7 @@ async function loadKnowledgeBaseManifest(broker, taskId, task, companyName, arch
         "ARCHIVE_READ_FAILED"
       );
     }
-    if (archive.sha256 && crypto5.createHash("sha256").update(bytes).digest("hex") !== archive.sha256) {
+    if (archive.sha256 && crypto6.createHash("sha256").update(bytes).digest("hex") !== archive.sha256) {
       throw new GeoHttpError(
         "\u77E5\u8BC6\u5E93\u6B63\u5F0F\u6587\u4EF6\u4F20\u8F93\u6821\u9A8C\u5931\u8D25\uFF0C\u8BF7\u7A0D\u540E\u91CD\u8BD5",
         502,
@@ -15487,10 +17260,14 @@ function isRecoverableTaskResultError(error) {
   return [404, 409, 425, 429].includes(error.status) || error.status >= 500 && error.status <= 599;
 }
 async function getResolvedMonitorRun(broker, runId, expected) {
-  const status = normalizeMonitorRun(await broker.getMonitorRun(runId), {
-    ...expected,
-    runId
-  });
+  const status = normalizeMonitorRun(
+    await broker.getMonitorRun(runId),
+    {
+      ...expected,
+      runId
+    },
+    { allowTerminalSummaryWithoutRecords: true }
+  );
   const terminal = [
     "completed",
     "partial_review_required",
@@ -15521,20 +17298,16 @@ function isRecoverableMonitorResultError(error) {
   }
   return [404, 409, 425, 429].includes(error.status) || error.status >= 500 && error.status <= 599;
 }
-async function materializeArchiveAttachment(broker, taskId, archive) {
-  if (archive.fileId)
+async function materializeArchiveAttachment(broker, taskId, archive, options = {}) {
+  if (archive.fileId && !options.forceCopy && !options.stagingAttachment)
     return {
       file_id: archive.fileId,
       filename: archive.filename,
       temporary: false
     };
-  if (!archive.url)
+  if (!archive.fileId && !archive.url)
     throw new GeoHttpError("\u77E5\u8BC6\u5E93 ZIP \u7F3A\u5C11\u4E0B\u8F7D\u5730\u5740", 409, "ARCHIVE_NOT_READY");
-  const response = await broker.downloadTaskOutput(
-    taskId,
-    archive.url,
-    archive.filename
-  );
+  const response = archive.fileId ? await broker.downloadFile(archive.fileId) : await broker.downloadTaskOutput(taskId, archive.url, archive.filename);
   const length = Number(response.headers.get("content-length") || 0);
   if (length > MAX_ARCHIVE_COPY_BYTES) {
     throw new GeoHttpError(
@@ -15559,11 +17332,28 @@ async function materializeArchiveAttachment(broker, taskId, archive) {
   if (!body.length || body.length > MAX_ARCHIVE_COPY_BYTES) {
     throw new GeoHttpError("\u77E5\u8BC6\u5E93 ZIP \u65E0\u6548\u6216\u8FC7\u5927", 413, "ARCHIVE_TOO_LARGE");
   }
-  const file = await broker.createFile({
+  const file = options.stagingAttachment ? {
+    id: options.stagingAttachment.fileId,
+    filename: options.stagingAttachment.filename,
+    proxy_upload_ticket: void 0
+  } : await broker.createFile({
     filename: archive.filename,
     mimeType: "application/zip",
-    sizeBytes: body.length
+    sizeBytes: body.length,
+    ...options.idempotencyKey ? { idempotencyKey: options.idempotencyKey } : {}
   });
+  if (!options.stagingAttachment) {
+    try {
+      await options.onTemporaryFileCreated?.({
+        fileId: file.id,
+        filename: file.filename || archive.filename,
+        temporary: true
+      });
+    } catch (error) {
+      await broker.deleteFile(file.id).catch(() => void 0);
+      throw error;
+    }
+  }
   await broker.uploadFile(
     file.id,
     body,
@@ -15576,154 +17366,662 @@ async function materializeArchiveAttachment(broker, taskId, archive) {
     temporary: true
   };
 }
-async function classifyCustomQuestion(input) {
-  const archive = resolveKnowledgeBaseArtifact(
-    input.value,
-    input.knowledgeBaseTask
+async function advanceCustomQuestionValidation(input) {
+  const validationNow = input.now ?? Date.now;
+  const lease = await input.store.tryAcquireLease(
+    input.record.projectId,
+    input.record.clientRequestId,
+    CUSTOM_QUESTION_CLASSIFIER_LEASE_MS
   );
-  if (!archive) {
-    throw new GeoHttpError(
-      "\u4F01\u4E1A\u77E5\u8BC6\u5E93\u51C6\u5907\u5B8C\u6210\u540E\u624D\u80FD\u9A8C\u8BC1\u81EA\u5B9A\u4E49\u95EE\u9898",
-      409,
-      "ARCHIVE_NOT_READY"
-    );
+  if (!lease) {
+    return await input.store.get(
+      input.record.projectId,
+      input.record.clientRequestId
+    ) ?? input.record;
   }
-  const manifest = await loadKnowledgeBaseManifest(
-    input.broker,
-    input.value.knowledgeBaseTaskId,
-    input.knowledgeBaseTask,
-    input.value.companyName,
-    archive,
-    input.value.knowledgeBaseValidationProfile
+  let activeLease = lease;
+  let leaseFailure;
+  let leaseOperations = Promise.resolve();
+  const enqueueLeaseOperation = (operation) => {
+    const current = leaseOperations.then(async () => {
+      if (leaseFailure) throw leaseFailure;
+      return operation();
+    });
+    leaseOperations = current.then(
+      () => void 0,
+      (error) => {
+        leaseFailure ??= error;
+      }
+    );
+    return current;
+  };
+  const renewLease = () => {
+    void enqueueLeaseOperation(async () => {
+      activeLease = await input.store.renewLease(
+        activeLease,
+        CUSTOM_QUESTION_CLASSIFIER_LEASE_MS
+      );
+    }).catch((error) => {
+      leaseFailure ??= error;
+    });
+  };
+  const leaseTimer = setInterval(
+    renewLease,
+    CUSTOM_QUESTION_CLASSIFIER_LEASE_RENEW_MS
   );
-  const archiveAttachment = await materializeArchiveAttachment(
-    input.broker,
-    input.value.knowledgeBaseTaskId,
-    archive
-  );
-  let taskId;
-  let skillFileIds = [];
+  leaseTimer.unref?.();
   try {
-    const created = await createGeoTaskWithSkillPackages(
-      input.broker,
-      {
-        projectId: input.value.projectId,
-        prompt: buildGeoCustomQuestionClassifierPrompt({
-          companyName: input.value.companyName,
-          question: input.question,
-          archiveFilename: archiveAttachment.filename
-        }),
-        attachments: [archiveAttachment],
-        idempotencyKey: [
-          "geo",
-          input.value.projectId,
-          "custom-question-classifier",
-          crypto5.createHash("sha256").update(normalizeQuestionIdentity(input.question)).digest("hex").slice(0, 24),
-          crypto5.randomUUID()
-        ].join(":")
-      },
-      [
-        {
-          filename: CUSTOM_QUESTION_CLASSIFIER_SKILL_ARCHIVE_FILENAME,
-          body: await buildGeoCustomQuestionClassifierSkillArchive()
+    let record = await input.store.get(
+      input.record.projectId,
+      input.record.clientRequestId
+    ) ?? input.record;
+    const persist = async (next) => {
+      record = await enqueueLeaseOperation(
+        () => input.store.update(next, activeLease)
+      );
+      return record;
+    };
+    const cleanup = (current) => cleanupCustomQuestionValidation(input.broker, current, persist);
+    const persistTransientFailure = async (error, code, message) => {
+      const now = validationNow();
+      const diagnostic = safeCustomQuestionDiagnostic(error);
+      const sameObservation = record.lastTransientError === diagnostic;
+      const firstTransientErrorAt = sameObservation && record.firstTransientErrorAt ? record.firstTransientErrorAt : new Date(now).toISOString();
+      const transientErrorCount = nextCustomQuestionTransientErrorCount(
+        record.transientErrorCount,
+        sameObservation
+      );
+      const exhausted = transientErrorCount >= CUSTOM_QUESTION_CLASSIFIER_TRANSIENT_MAX_OBSERVATIONS && now - Date.parse(firstTransientErrorAt) >= CUSTOM_QUESTION_CLASSIFIER_TRANSIENT_MAX_MS;
+      record = await persist({
+        ...record,
+        ...exhausted ? {
+          state: "failed",
+          expiresAt: new Date(
+            now + CUSTOM_QUESTION_TERMINAL_RETENTION_MS
+          ).toISOString(),
+          error: {
+            code,
+            message,
+            status: 502,
+            retryable: true
+          }
+        } : {},
+        transientErrorCount,
+        firstTransientErrorAt,
+        lastTransientError: diagnostic
+      });
+      return exhausted ? cleanup(record) : record;
+    };
+    if (isTerminalCustomQuestionValidation(record)) {
+      return await cleanup(record);
+    }
+    const archive = record.knowledgeBaseArtifact;
+    const attachmentOperationKey = (kind) => `geo-custom-question-file:${record.key}:${kind}:${record.attachmentRebuildCount}:v1`;
+    if (!record.archiveAttachment) {
+      try {
+        const attachment = await materializeArchiveAttachment(
+          input.broker,
+          record.knowledgeBaseTaskId,
+          archive,
+          {
+            // The durable knowledge-base artifact can belong to a credential
+            // retired after API-key rotation. Always copy it into the current
+            // credential generation before combining it with the current
+            // classifier Skill. If rotation lands between the two creates,
+            // the Dashboard rejects the mixed task and the next generation
+            // rebuilds both attachments under the then-current credential.
+            forceCopy: true,
+            idempotencyKey: attachmentOperationKey("archive"),
+            stagingAttachment: record.archiveStagingAttachment ? {
+              ...record.archiveStagingAttachment,
+              temporary: true
+            } : void 0,
+            onTemporaryFileCreated: async (stagingAttachment) => {
+              record = await enqueueLeaseOperation(
+                () => input.store.retainTemporaryFileForCleanup(
+                  record.projectId,
+                  record.clientRequestId,
+                  stagingAttachment.fileId
+                )
+              );
+              await persist({
+                ...record,
+                state: "prepared",
+                archiveStagingAttachment: stagingAttachment
+              });
+            }
+          }
+        );
+        await persist({
+          ...record,
+          state: "prepared",
+          archiveAttachment: {
+            fileId: attachment.file_id,
+            filename: attachment.filename,
+            temporary: attachment.temporary
+          },
+          archiveStagingAttachment: void 0,
+          transientErrorCount: 0,
+          firstTransientErrorAt: void 0,
+          lastTransientError: void 0
+        });
+      } catch (error) {
+        return await persistTransientFailure(
+          error,
+          "CUSTOM_QUESTION_ARCHIVE_PREPARATION_UNAVAILABLE",
+          "\u4F01\u4E1A\u77E5\u8BC6\u5E93\u9644\u4EF6\u6301\u7EED\u65E0\u6CD5\u51C6\u5907\uFF0C\u8BF7\u91CD\u8BD5\u5F53\u524D\u95EE\u9898"
+        );
+      }
+    }
+    if (!record.skillAttachment) {
+      try {
+        const body = await buildGeoCustomQuestionClassifierSkillArchive();
+        let stagingAttachment = record.skillStagingAttachment;
+        let uploadTicket;
+        if (!stagingAttachment) {
+          const file = await input.broker.createFile({
+            filename: CUSTOM_QUESTION_CLASSIFIER_SKILL_ARCHIVE_FILENAME,
+            mimeType: "application/zip",
+            sizeBytes: body.length,
+            idempotencyKey: attachmentOperationKey("skill")
+          });
+          uploadTicket = file.proxy_upload_ticket;
+          stagingAttachment = {
+            fileId: file.id,
+            filename: file.filename || CUSTOM_QUESTION_CLASSIFIER_SKILL_ARCHIVE_FILENAME,
+            temporary: true
+          };
+          try {
+            record = await enqueueLeaseOperation(
+              () => input.store.retainTemporaryFileForCleanup(
+                record.projectId,
+                record.clientRequestId,
+                stagingAttachment.fileId
+              )
+            );
+            await persist({
+              ...record,
+              state: "prepared",
+              skillStagingAttachment: stagingAttachment
+            });
+          } catch (error) {
+            await input.broker.deleteFile(file.id).catch(() => void 0);
+            throw error;
+          }
         }
-      ]
-    );
-    skillFileIds = created.skillAttachments.map(
-      (attachment) => attachment.file_id
-    );
-    taskId = taskIdFrom(created.task);
-    if (!taskId) {
-      throw new GeoHttpError(
-        "\u521B\u5EFA\u95EE\u9898\u9A8C\u8BC1\u4EFB\u52A1\u5931\u8D25\uFF1A\u7F3A\u5C11\u4EFB\u52A1 ID",
-        502,
-        "CUSTOM_QUESTION_CLASSIFIER_TASK_ID_MISSING"
+        await input.broker.uploadFile(
+          stagingAttachment.fileId,
+          body,
+          "application/zip",
+          uploadTicket
+        );
+        await persist({
+          ...record,
+          state: "prepared",
+          skillAttachment: stagingAttachment,
+          skillStagingAttachment: void 0,
+          transientErrorCount: 0,
+          firstTransientErrorAt: void 0,
+          lastTransientError: void 0
+        });
+      } catch (error) {
+        return await persistTransientFailure(
+          error,
+          "CUSTOM_QUESTION_SKILL_PREPARATION_UNAVAILABLE",
+          "\u95EE\u9898\u9A8C\u8BC1\u534F\u8BAE\u9644\u4EF6\u6301\u7EED\u65E0\u6CD5\u51C6\u5907\uFF0C\u8BF7\u91CD\u8BD5\u5F53\u524D\u95EE\u9898"
+        );
+      }
+    }
+    let observedTask;
+    if (!record.taskId) {
+      try {
+        observedTask = await input.broker.createTask({
+          projectId: record.projectId,
+          prompt: buildGeoCustomQuestionClassifierPrompt({
+            companyName: record.companyName,
+            question: record.question,
+            archiveFilename: record.archiveAttachment.filename
+          }),
+          attachments: [
+            {
+              file_id: record.skillAttachment.fileId,
+              filename: record.skillAttachment.filename
+            },
+            {
+              file_id: record.archiveAttachment.fileId,
+              filename: record.archiveAttachment.filename
+            }
+          ],
+          idempotencyKey: geoCustomQuestionOperationKey(record),
+          agentProfile: FRONTMIND_BASE_PROFILE
+        });
+      } catch (error) {
+        if (isInvalidCustomQuestionAttachmentError(error)) {
+          if (record.attachmentRebuildCount >= CUSTOM_QUESTION_CLASSIFIER_ATTACHMENT_REBUILD_MAX) {
+            return await persistTransientFailure(
+              error,
+              "CUSTOM_QUESTION_CLASSIFIER_ATTACHMENTS_INVALID",
+              "\u95EE\u9898\u9A8C\u8BC1\u9644\u4EF6\u6301\u7EED\u5931\u6548\uFF0C\u8BF7\u91CD\u65B0\u63D0\u4EA4\u95EE\u9898"
+            );
+          }
+          const orphanedTemporaryFileIds = Array.from(
+            /* @__PURE__ */ new Set([
+              ...record.orphanedTemporaryFileIds,
+              ...record.skillAttachment?.temporary ? [record.skillAttachment.fileId] : [],
+              ...record.archiveAttachment?.temporary ? [record.archiveAttachment.fileId] : [],
+              ...record.skillStagingAttachment?.temporary ? [record.skillStagingAttachment.fileId] : [],
+              ...record.archiveStagingAttachment?.temporary ? [record.archiveStagingAttachment.fileId] : []
+            ])
+          ).slice(-20);
+          return await persist({
+            ...record,
+            state: "reserved",
+            archiveAttachment: void 0,
+            skillAttachment: void 0,
+            archiveStagingAttachment: void 0,
+            skillStagingAttachment: void 0,
+            orphanedTemporaryFileIds,
+            attachmentRebuildCount: record.attachmentRebuildCount + 1,
+            transientErrorCount: 0,
+            firstTransientErrorAt: void 0,
+            lastTransientError: "\u95EE\u9898\u9A8C\u8BC1\u9644\u4EF6\u5DF2\u5931\u6548\uFF0C\u6B63\u5728\u5B89\u5168\u91CD\u5EFA\u540C\u4E00\u8BF7\u6C42\u3002"
+          });
+        }
+        if (isRecoverableCustomQuestionSubmissionError(error)) {
+          return await persistTransientFailure(
+            error,
+            "CUSTOM_QUESTION_CLASSIFIER_SUBMISSION_UNAVAILABLE",
+            "\u95EE\u9898\u9A8C\u8BC1\u4EFB\u52A1\u6682\u65F6\u65E0\u6CD5\u63D0\u4EA4\uFF0C\u8BF7\u91CD\u8BD5\u5F53\u524D\u95EE\u9898"
+          );
+        }
+        return await persistTransientFailure(
+          error,
+          "CUSTOM_QUESTION_CLASSIFIER_SUBMISSION_FAILED",
+          "\u95EE\u9898\u9A8C\u8BC1\u4EFB\u52A1\u63D0\u4EA4\u5931\u8D25\uFF0C\u8BF7\u91CD\u8BD5\u5F53\u524D\u95EE\u9898"
+        );
+      }
+      const taskId = taskIdFrom(observedTask);
+      if (!taskId) {
+        return await persist({
+          ...record,
+          state: "failed",
+          expiresAt: new Date(
+            validationNow() + CUSTOM_QUESTION_TERMINAL_RETENTION_MS
+          ).toISOString(),
+          error: {
+            code: "CUSTOM_QUESTION_CLASSIFIER_TASK_ID_MISSING",
+            message: "\u521B\u5EFA\u95EE\u9898\u9A8C\u8BC1\u4EFB\u52A1\u5931\u8D25\uFF0C\u8BF7\u7A0D\u540E\u91CD\u8BD5",
+            status: 502,
+            retryable: true
+          }
+        });
+      }
+      await persist({
+        ...record,
+        state: "submitted",
+        taskId,
+        transientErrorCount: 0,
+        firstTransientErrorAt: void 0,
+        lastTransientError: void 0
+      });
+    }
+    if (!observedTask) {
+      try {
+        observedTask = await input.broker.getTask(record.taskId);
+      } catch (error) {
+        return await persistTransientFailure(
+          error,
+          "CUSTOM_QUESTION_CLASSIFIER_TASK_UNAVAILABLE",
+          "\u95EE\u9898\u9A8C\u8BC1\u4EFB\u52A1\u6301\u7EED\u65E0\u6CD5\u8BFB\u53D6\uFF0C\u8BF7\u91CD\u8BD5\u5F53\u524D\u95EE\u9898"
+        );
+      }
+    }
+    const normalizedStatus = normalizeTaskStatus(observedTask.status);
+    const rawStatus = String(observedTask.status ?? "unknown").slice(0, 100);
+    if (["queued", "running", "waiting"].includes(normalizedStatus)) {
+      return await persist({
+        ...record,
+        state: "submitted",
+        unknownStatusCount: 0,
+        firstUnknownStatusAt: void 0,
+        transientErrorCount: 0,
+        firstTransientErrorAt: void 0,
+        lastObservedStatus: rawStatus,
+        lastTransientError: void 0
+      });
+    }
+    if (normalizedStatus === "failed" || normalizedStatus === "cancelled") {
+      record = await persist({
+        ...record,
+        state: "failed",
+        expiresAt: new Date(
+          validationNow() + CUSTOM_QUESTION_TERMINAL_RETENTION_MS
+        ).toISOString(),
+        lastObservedStatus: rawStatus,
+        error: {
+          code: "CUSTOM_QUESTION_CLASSIFIER_FAILED",
+          message: "\u8BE5\u95EE\u9898\u672A\u80FD\u901A\u8FC7\u9A8C\u8BC1\uFF0C\u8BF7\u4FEE\u6539\u95EE\u9898\u540E\u91CD\u65B0\u63D0\u4EA4",
+          status: 422,
+          retryable: false
+        }
+      });
+      return await cleanup(record);
+    }
+    if (normalizedStatus === "unknown") {
+      const unknownStatusCount = record.unknownStatusCount + 1;
+      if (unknownStatusCount >= CUSTOM_QUESTION_CLASSIFIER_UNKNOWN_MAX_OBSERVATIONS) {
+        record = await persist({
+          ...record,
+          state: "failed",
+          expiresAt: new Date(
+            validationNow() + CUSTOM_QUESTION_TERMINAL_RETENTION_MS
+          ).toISOString(),
+          unknownStatusCount,
+          firstUnknownStatusAt: record.firstUnknownStatusAt ?? new Date(validationNow()).toISOString(),
+          lastObservedStatus: rawStatus,
+          error: {
+            code: "CUSTOM_QUESTION_CLASSIFIER_UNKNOWN_STATUS",
+            message: "\u95EE\u9898\u9A8C\u8BC1\u4EFB\u52A1\u8FD4\u56DE\u4E86\u65E0\u6CD5\u8BC6\u522B\u7684\u72B6\u6001\uFF0C\u8BF7\u91CD\u65B0\u63D0\u4EA4\u95EE\u9898",
+            status: 502,
+            retryable: false
+          }
+        });
+        return await cleanup(record);
+      }
+      return await persist({
+        ...record,
+        state: "submitted",
+        unknownStatusCount,
+        firstUnknownStatusAt: record.firstUnknownStatusAt ?? new Date(validationNow()).toISOString(),
+        lastObservedStatus: rawStatus
+      });
+    }
+    let resolvedTask;
+    try {
+      resolvedTask = await getResolvedTask(input.broker, record.taskId);
+    } catch (error) {
+      return await persistTransientFailure(
+        error,
+        "CUSTOM_QUESTION_CLASSIFIER_RESULT_UNAVAILABLE",
+        "\u95EE\u9898\u9A8C\u8BC1\u7ED3\u679C\u6301\u7EED\u65E0\u6CD5\u8BFB\u53D6\uFF0C\u8BF7\u91CD\u8BD5\u5F53\u524D\u95EE\u9898"
       );
     }
-    const resolvedTask = await waitForCustomQuestionClassification(
-      input.broker,
-      taskId,
-      created.task
-    );
     const classification = parseCustomQuestionClassificationTaskOutput(resolvedTask);
     if (!classification) {
       console.warn("[GEO custom question]", {
         event: "classifier_output_rejected",
-        projectId: input.value.projectId,
-        taskId,
+        projectId: record.projectId,
+        taskId: record.taskId,
         diagnosticCode: "CUSTOM_QUESTION_CLASSIFIER_INVALID_RESPONSE"
       });
-      throw new GeoHttpError(
-        "\u95EE\u9898\u9A8C\u8BC1\u7ED3\u679C\u6682\u65F6\u65E0\u6CD5\u8BFB\u53D6\uFF0C\u8BF7\u7A0D\u540E\u91CD\u8BD5",
-        502,
-        "CUSTOM_QUESTION_CLASSIFIER_INVALID_RESPONSE"
+      record = await persist({
+        ...record,
+        state: "failed",
+        expiresAt: new Date(
+          validationNow() + CUSTOM_QUESTION_TERMINAL_RETENTION_MS
+        ).toISOString(),
+        error: {
+          code: "CUSTOM_QUESTION_CLASSIFIER_INVALID_RESPONSE",
+          message: "\u95EE\u9898\u9A8C\u8BC1\u7ED3\u679C\u65E0\u6CD5\u8BFB\u53D6\uFF0C\u8BF7\u4FEE\u6539\u95EE\u9898\u540E\u91CD\u65B0\u63D0\u4EA4",
+          status: 502,
+          retryable: false
+        }
+      });
+      return await cleanup(record);
+    }
+    if (classification.decision === "reject") {
+      record = await persist({
+        ...record,
+        state: "rejected",
+        error: rejectedCustomQuestionError(
+          classification.category,
+          record.companyName
+        ),
+        expiresAt: new Date(
+          validationNow() + CUSTOM_QUESTION_TERMINAL_RETENTION_MS
+        ).toISOString()
+      });
+      return await cleanup(record);
+    }
+    let manifest;
+    try {
+      manifest = await loadKnowledgeBaseManifest(
+        input.broker,
+        record.knowledgeBaseTaskId,
+        input.knowledgeBaseTask,
+        record.companyName,
+        archive,
+        record.knowledgeBaseValidationProfile
+      );
+    } catch (error) {
+      return await persistTransientFailure(
+        error,
+        "CUSTOM_QUESTION_KNOWLEDGE_BASE_UNAVAILABLE",
+        "\u4F01\u4E1A\u77E5\u8BC6\u5E93\u6301\u7EED\u65E0\u6CD5\u8BFB\u53D6\uFF0C\u8BF7\u91CD\u8BD5\u5F53\u524D\u95EE\u9898"
       );
     }
-    if (classification.decision === "accept") {
-      const grounding = validateAcceptedCustomQuestionGrounding(
-        classification,
-        {
-          question: input.question,
-          companyName: input.value.companyName,
-          manifest
+    const grounding = validateAcceptedCustomQuestionGrounding(classification, {
+      question: record.question,
+      companyName: record.companyName,
+      manifest
+    });
+    if (!grounding.ok) {
+      console.warn("[GEO custom question]", {
+        event: "classifier_acceptance_blocked",
+        projectId: record.projectId,
+        taskId: record.taskId,
+        diagnosticCode: grounding.kind === "invalid_evidence" ? "CUSTOM_QUESTION_CLASSIFIER_INVALID_EVIDENCE" : "CUSTOM_QUESTION_ENTERPRISE_ANCHOR_MISSING",
+        reason: grounding.reason
+      });
+      record = await persist({
+        ...record,
+        state: grounding.kind === "invalid_evidence" ? "failed" : "rejected",
+        expiresAt: new Date(
+          validationNow() + CUSTOM_QUESTION_TERMINAL_RETENTION_MS
+        ).toISOString(),
+        error: grounding.kind === "invalid_evidence" ? {
+          code: "CUSTOM_QUESTION_CLASSIFIER_INVALID_RESPONSE",
+          message: "\u95EE\u9898\u9A8C\u8BC1\u7ED3\u679C\u672A\u901A\u8FC7\u77E5\u8BC6\u5E93\u8BC1\u636E\u6821\u9A8C\uFF0C\u8BF7\u91CD\u65B0\u63D0\u4EA4\u95EE\u9898",
+          status: 502,
+          retryable: false
+        } : {
+          code: "CUSTOM_QUESTION_ENTERPRISE_UNRELATED",
+          message: `\u65E0\u6CD5\u786E\u8BA4\u8BE5\u95EE\u9898\u4E0E\u300C${record.companyName}\u300D\u7684\u5173\u7CFB\uFF0C\u8BF7\u660E\u786E\u5199\u51FA\u4F01\u4E1A\u3001\u54C1\u724C\u6216\u77E5\u8BC6\u5E93\u4E2D\u7684\u5177\u4F53\u4EA7\u54C1\u540D\u79F0`,
+          status: 422,
+          retryable: false
         }
-      );
-      if (!grounding.ok) {
-        console.warn("[GEO custom question]", {
-          event: "classifier_acceptance_blocked",
-          projectId: input.value.projectId,
-          taskId,
-          diagnosticCode: grounding.kind === "invalid_evidence" ? "CUSTOM_QUESTION_CLASSIFIER_INVALID_EVIDENCE" : "CUSTOM_QUESTION_ENTERPRISE_ANCHOR_MISSING",
-          reason: grounding.reason
-        });
-        if (grounding.kind === "invalid_evidence") {
-          throw new GeoHttpError(
-            "\u95EE\u9898\u9A8C\u8BC1\u7ED3\u679C\u672A\u901A\u8FC7\u77E5\u8BC6\u5E93\u8BC1\u636E\u6821\u9A8C\uFF0C\u8BF7\u7A0D\u540E\u91CD\u8BD5",
-            502,
-            "CUSTOM_QUESTION_CLASSIFIER_INVALID_RESPONSE"
-          );
-        }
-        throw new GeoHttpError(
-          `\u65E0\u6CD5\u786E\u8BA4\u8BE5\u95EE\u9898\u4E0E\u300C${input.value.companyName}\u300D\u7684\u5173\u7CFB\uFF0C\u8BF7\u660E\u786E\u5199\u51FA\u4F01\u4E1A\u3001\u54C1\u724C\u6216\u77E5\u8BC6\u5E93\u4E2D\u7684\u5177\u4F53\u4EA7\u54C1\u540D\u79F0`,
-          422,
-          "CUSTOM_QUESTION_ENTERPRISE_UNRELATED"
-        );
-      }
+      });
+      return await cleanup(record);
     }
-    return classification;
+    const question = GeoQuestionSchema.parse({
+      id: customQuestionId(record.question),
+      category: classification.category,
+      question: record.question,
+      rationale: classification.reason,
+      ...classification.enterpriseAnchor ? { enterpriseAnchor: classification.enterpriseAnchor } : {},
+      ...classification.offeringAnchor ? { offeringAnchor: classification.offeringAnchor } : {},
+      evidenceRefs: classification.evidenceRefs,
+      selectable: true
+    });
+    record = await persist({
+      ...record,
+      state: "completed",
+      expiresAt: new Date(
+        validationNow() + CUSTOM_QUESTION_TERMINAL_RETENTION_MS
+      ).toISOString(),
+      result: question,
+      error: void 0,
+      transientErrorCount: 0,
+      firstTransientErrorAt: void 0,
+      lastTransientError: void 0
+    });
+    return await cleanup(record);
   } finally {
-    await Promise.allSettled([
-      ...taskId ? [input.broker.deleteTask(taskId)] : [],
-      ...skillFileIds.map((fileId) => input.broker.deleteFile(fileId)),
-      ...archiveAttachment.temporary ? [input.broker.deleteFile(archiveAttachment.file_id)] : []
-    ]);
+    clearInterval(leaseTimer);
+    await leaseOperations;
+    await input.store.releaseLease(activeLease).catch(() => void 0);
   }
 }
-async function waitForCustomQuestionClassification(broker, taskId, initialTask) {
-  const deadline = Date.now() + CUSTOM_QUESTION_CLASSIFIER_TIMEOUT_MS;
-  let task = initialTask;
-  while (true) {
-    const status = normalizeTaskStatus(task.status);
-    if (status === "completed") return getResolvedTask(broker, taskId);
-    if (status === "failed" || status === "cancelled") {
-      throw new GeoHttpError(
-        "\u95EE\u9898\u9A8C\u8BC1\u6682\u65F6\u672A\u5B8C\u6210\uFF0C\u8BF7\u7A0D\u540E\u91CD\u8BD5",
-        502,
-        "CUSTOM_QUESTION_CLASSIFIER_FAILED"
-      );
-    }
-    if (Date.now() >= deadline) {
-      throw new GeoHttpError(
-        "\u95EE\u9898\u9A8C\u8BC1\u8D85\u65F6\uFF0C\u8BF7\u7A0D\u540E\u91CD\u8BD5",
-        504,
-        "CUSTOM_QUESTION_CLASSIFIER_TIMEOUT"
-      );
-    }
-    await new Promise(
-      (resolve) => setTimeout(resolve, CUSTOM_QUESTION_CLASSIFIER_POLL_MS)
-    );
-    task = await broker.getTask(taskId);
+function isTerminalCustomQuestionValidation(record) {
+  return ["completed", "rejected", "failed"].includes(record.state);
+}
+async function cleanupCustomQuestionValidation(broker, record, persist) {
+  if (record.cleanupCompleted) return record;
+  const temporaryFileIds = Array.from(
+    /* @__PURE__ */ new Set([
+      ...record.orphanedTemporaryFileIds,
+      ...record.skillAttachment?.temporary ? [record.skillAttachment.fileId] : [],
+      ...record.archiveAttachment?.temporary ? [record.archiveAttachment.fileId] : [],
+      ...record.skillStagingAttachment?.temporary ? [record.skillStagingAttachment.fileId] : [],
+      ...record.archiveStagingAttachment?.temporary ? [record.archiveStagingAttachment.fileId] : []
+    ])
+  );
+  const results = await Promise.allSettled([
+    ...record.taskId ? [broker.deleteTask(record.taskId)] : [],
+    ...temporaryFileIds.map((fileId) => broker.deleteFile(fileId))
+  ]);
+  const failed = results.filter(
+    (result) => result.status === "rejected" && !isAlreadyDeletedCustomQuestionResource(result.reason)
+  );
+  if (failed.length > 0) {
+    return persist({
+      ...record,
+      cleanupCompleted: false,
+      lastTransientError: `\u95EE\u9898\u9A8C\u8BC1\u8D44\u6E90\u4ECD\u5728\u6E05\u7406\u4E2D\uFF08${failed.length}/${results.length}\uFF09`
+    });
   }
+  return persist({ ...record, cleanupCompleted: true });
+}
+function isAlreadyDeletedCustomQuestionResource(error) {
+  return error instanceof GeoBrokerError && error.status === 404;
+}
+function createGeoCustomQuestionRecoveryWorker(input) {
+  const intervalMs = Math.max(1e3, input.intervalMs ?? 5e3);
+  const batchSize = Math.max(1, Math.min(100, input.batchSize ?? 20));
+  let timer;
+  let inFlight;
+  const runOnce = () => {
+    if (inFlight) return inFlight;
+    inFlight = (async () => {
+      const records = await input.store.listActive(Number.MAX_SAFE_INTEGER);
+      let nextRecordIndex = 0;
+      const recoverNext = async () => {
+        while (nextRecordIndex < records.length) {
+          const record = records[nextRecordIndex++];
+          if (!record) continue;
+          try {
+            await advanceCustomQuestionValidation({
+              broker: input.broker,
+              store: input.store,
+              record,
+              // The persisted immutable artifact is authoritative. The manifest
+              // loader only needs this task object for URL-only legacy archives;
+              // v1 reservations always freeze a Dashboard fileId.
+              knowledgeBaseTask: {
+                id: record.knowledgeBaseTaskId,
+                status: "completed"
+              },
+              now: input.now
+            });
+          } catch (error) {
+            console.warn("[GEO custom question recovery]", {
+              event: "reservation_recovery_deferred",
+              projectId: record.projectId,
+              clientRequestId: record.clientRequestId,
+              diagnosticCode: error instanceof GeoCustomQuestionValidationStoreError ? error.code : error instanceof GeoBrokerError ? error.code : "RECOVERY_DEFERRED"
+            });
+          }
+        }
+      };
+      await Promise.all(
+        Array.from(
+          { length: Math.min(batchSize, records.length) },
+          recoverNext
+        )
+      );
+      await input.store.collectGarbage({
+        cleanup: async (target) => {
+          const results = await Promise.allSettled([
+            ...target.taskId ? [input.broker.deleteTask(target.taskId)] : [],
+            ...target.temporaryFileIds.map(
+              (fileId) => input.broker.deleteFile(fileId)
+            )
+          ]);
+          const failed = results.filter(
+            (result) => result.status === "rejected" && !isAlreadyDeletedCustomQuestionResource(result.reason)
+          );
+          if (failed.length > 0) {
+            throw new Error(
+              `custom-question cleanup incomplete (${failed.length}/${results.length})`
+            );
+          }
+        }
+      });
+    })().finally(() => {
+      inFlight = void 0;
+    });
+    void inFlight.catch((error) => {
+      console.warn("[GEO custom question recovery]", {
+        event: "worker_cycle_deferred",
+        diagnosticCode: error instanceof GeoCustomQuestionValidationStoreError ? error.code : "RECOVERY_CYCLE_DEFERRED"
+      });
+    });
+    return inFlight;
+  };
+  return {
+    runOnce,
+    start() {
+      if (timer) return;
+      void runOnce();
+      timer = setInterval(() => void runOnce(), intervalMs);
+      timer.unref?.();
+    },
+    stop() {
+      if (timer) clearInterval(timer);
+      timer = void 0;
+    }
+  };
+}
+function rejectedCustomQuestionError(category, companyName) {
+  if (category === "industry_ranking") {
+    return {
+      code: "INDUSTRY_RANKING_QUESTION",
+      message: "\u8BE5\u95EE\u9898\u5C5E\u4E8E\u884C\u4E1A\u6392\u540D\u6216\u54C1\u724C\u63A8\u8350\u7C7B\u95EE\u9898\uFF0C\u9700\u8981\u5168\u57DF\u8425\u9500\u6743\u9650",
+      status: 422,
+      retryable: false
+    };
+  }
+  if (category === "ambiguous") {
+    return {
+      code: "CUSTOM_QUESTION_AMBIGUOUS",
+      message: `\u65E0\u6CD5\u786E\u8BA4\u8BE5\u95EE\u9898\u4E0E\u300C${companyName}\u300D\u7684\u5173\u7CFB\uFF0C\u8BF7\u660E\u786E\u5199\u51FA\u4F01\u4E1A\u3001\u54C1\u724C\u6216\u77E5\u8BC6\u5E93\u4E2D\u7684\u5177\u4F53\u4EA7\u54C1\u540D\u79F0`,
+      status: 422,
+      retryable: false
+    };
+  }
+  return {
+    code: "CUSTOM_QUESTION_ENTERPRISE_UNRELATED",
+    message: `\u8BE5\u95EE\u9898\u4E0E\u300C${companyName}\u300D\u7684\u4F01\u4E1A\u3001\u4EA7\u54C1\u6216\u670D\u52A1\u6CA1\u6709\u660E\u786E\u5173\u7CFB\uFF0C\u8BF7\u4FEE\u6539\u540E\u91CD\u8BD5`,
+    status: 422,
+    retryable: false
+  };
+}
+function isRecoverableCustomQuestionSubmissionError(error) {
+  return error instanceof GeoBrokerError && ([409, 425, 429].includes(error.status) || error.status >= 500);
+}
+function isInvalidCustomQuestionAttachmentError(error) {
+  return error instanceof GeoBrokerError && [400, 404, 409, 410, 422].includes(error.status);
+}
+function waitForCustomQuestionRecovery(delayMs) {
+  return new Promise((resolve) => {
+    setTimeout(resolve, delayMs);
+  });
+}
+function nextCustomQuestionTransientErrorCount(currentCount, sameObservation) {
+  return sameObservation ? Math.min(100, currentCount + 1) : 1;
+}
+function safeCustomQuestionDiagnostic(error) {
+  return (error instanceof Error ? error.message : String(error)).replace(/[\u0000-\u001f\u007f]+/g, " ").replace(/\s+/g, " ").trim().slice(0, 500);
 }
 async function createGeoTaskWithSkillPackages(broker, input, skillPackages) {
   const skillAttachments = [];
@@ -15891,7 +18189,7 @@ function sameStringSet(left, right) {
   return left.length === right.length && Array.from(new Set(left)).sort().join("\0") === Array.from(new Set(right)).sort().join("\0");
 }
 function sha2562(value) {
-  return crypto5.createHash("sha256").update(value, "utf8").digest("hex");
+  return crypto6.createHash("sha256").update(value, "utf8").digest("hex");
 }
 function hasServiceOrderFacts(value) {
   return Boolean(
@@ -15935,7 +18233,7 @@ function isTerminalFailedServiceOrder(value) {
   return manualFailed || provisioningFailed || knowledgeImportFailed;
 }
 function deterministicProjectId(sessionId, clientRequestId, input) {
-  const digest = crypto5.createHash("sha256").update(
+  const digest = crypto6.createHash("sha256").update(
     JSON.stringify({
       sessionId,
       clientRequestId,
@@ -16079,6 +18377,62 @@ function knowledgeBaseValidationReason(error) {
   ).replace(/\s+/g, " ").trim().slice(0, 600);
 }
 function normalizeError(error) {
+  if (error instanceof GeoCustomQuestionValidationStoreError) {
+    if (error.code === "IDEMPOTENCY_CONFLICT") {
+      return new GeoHttpError(
+        error.message,
+        409,
+        "CUSTOM_QUESTION_IDEMPOTENCY_CONFLICT"
+      );
+    }
+    if (error.code === "ACTIVE_RESERVATION_CONFLICT") {
+      return new GeoHttpError(
+        error.message,
+        409,
+        "CUSTOM_QUESTION_ACTIVE_RESERVATION_CONFLICT"
+      );
+    }
+    if (error.code === "RESERVATION_EXPIRED") {
+      return new GeoHttpError(
+        error.message,
+        410,
+        "CUSTOM_QUESTION_VALIDATION_EXPIRED"
+      );
+    }
+    if (error.code === "RESERVATION_OWNER_MISMATCH") {
+      return new GeoHttpError(
+        error.message,
+        403,
+        "CUSTOM_QUESTION_VALIDATION_FORBIDDEN"
+      );
+    }
+    if (error.code === "RESERVATION_NOT_TERMINAL") {
+      return new GeoHttpError(
+        error.message,
+        409,
+        "CUSTOM_QUESTION_VALIDATION_NOT_TERMINAL"
+      );
+    }
+    if (error.code === "PROJECT_DELETION_BLOCKED") {
+      return new GeoHttpError(
+        error.message,
+        409,
+        "CUSTOM_QUESTION_VALIDATION_DELETE_BLOCKED"
+      );
+    }
+    if (error.code === "PROJECT_DELETION_FENCED") {
+      return new GeoHttpError(
+        error.message,
+        409,
+        "CUSTOM_QUESTION_PROJECT_DELETION_FENCED"
+      );
+    }
+    return new GeoHttpError(
+      "\u95EE\u9898\u9A8C\u8BC1\u72B6\u6001\u6682\u65F6\u65E0\u6CD5\u5B89\u5168\u4FDD\u5B58\uFF0C\u8BF7\u4F7F\u7528\u539F\u8BF7\u6C42\u91CD\u8BD5",
+      503,
+      "CUSTOM_QUESTION_VALIDATION_STORE_UNAVAILABLE"
+    );
+  }
   if (error instanceof GeoHttpError || error instanceof GeoBrokerError)
     return error;
   if (error instanceof GeoPaymentVerificationError) return error;
@@ -16103,13 +18457,16 @@ function normalizeError(error) {
   if (error instanceof Error && error.message.includes("request entity too large")) {
     return new GeoHttpError("\u6587\u4EF6\u5927\u5C0F\u4E0D\u80FD\u8D85\u8FC7 50 MB", 413, "UPLOAD_TOO_LARGE");
   }
-  console.error("[GEO API]", error);
+  console.error("[GEO API]", {
+    event: "unhandled_error",
+    diagnosticCode: "INTERNAL_ERROR"
+  });
   return new GeoHttpError("\u670D\u52A1\u6682\u65F6\u4E0D\u53EF\u7528\uFF0C\u8BF7\u7A0D\u540E\u91CD\u8BD5", 500, "INTERNAL_ERROR");
 }
 
 // server/geo/health.ts
 function geoPublicBuildSha(env = process.env) {
-  const embedded = true ? "39dbd8ad6a9c56f4d7bd64c9d69adbfade9975a7".trim() : "";
+  const embedded = true ? "95d050d0fed63208bb2aabb366e79ce42659328e".trim() : "";
   if (/^[a-f0-9]{7,64}$/i.test(embedded)) return embedded.toLowerCase();
   const candidate = (env.FRONTMIND_BUILD_SHA || env.GITHUB_SHA || env.RAILWAY_GIT_COMMIT_SHA || "").trim();
   return /^[a-f0-9]{7,64}$/i.test(candidate) ? candidate.toLowerCase() : null;
@@ -16172,9 +18529,289 @@ function installBaseSecurityHeaders(app) {
   });
 }
 
+// scripts/runtime-artifact-integrity.mjs
+import path10 from "node:path";
+
+// scripts/build-artifact-identity.mjs
+import { createHash as createHash5 } from "node:crypto";
+import { lstat, mkdir, readFile, readdir, writeFile } from "node:fs/promises";
+import path9 from "node:path";
+var BUILD_ARTIFACT_IDENTITY_FILENAME = "build-source.json";
+var BUILD_ARTIFACT_MANIFEST_FILENAME = "artifact-manifest.json";
+function fullSha(value, label) {
+  const sha = String(value || "").trim().toLowerCase();
+  if (!/^[a-f0-9]{40}$/u.test(sha)) throw new Error(label);
+  return sha;
+}
+async function readBuildArtifactIdentity(buildRoot) {
+  let value;
+  try {
+    value = JSON.parse(
+      await readFile(
+        path9.join(path9.resolve(buildRoot), BUILD_ARTIFACT_IDENTITY_FILENAME),
+        "utf8"
+      )
+    );
+  } catch {
+    throw new Error("BUILD_ARTIFACT_IDENTITY_MISSING_OR_INVALID");
+  }
+  if (value?.schemaVersion !== 1 || !/^[a-f0-9]{40}$/u.test(String(value?.buildSourceSha || ""))) {
+    throw new Error("BUILD_ARTIFACT_IDENTITY_MISSING_OR_INVALID");
+  }
+  return {
+    schemaVersion: 1,
+    buildSourceSha: String(value.buildSourceSha).toLowerCase()
+  };
+}
+function sha2563(value) {
+  return createHash5("sha256").update(value).digest("hex");
+}
+function canonicalArtifactManifestPayload(value) {
+  return `${JSON.stringify({
+    schemaVersion: 1,
+    buildSourceSha: value.buildSourceSha,
+    excludedPaths: [BUILD_ARTIFACT_MANIFEST_FILENAME],
+    files: value.files
+  })}
+`;
+}
+async function collectArtifactFiles(buildRoot, directory = buildRoot) {
+  const entries = await readdir(directory, { withFileTypes: true });
+  const files = [];
+  for (const entry of entries) {
+    const absolutePath = path9.join(directory, entry.name);
+    const relativePath = path9.relative(buildRoot, absolutePath).split(path9.sep).join("/");
+    if (relativePath === BUILD_ARTIFACT_MANIFEST_FILENAME) continue;
+    if (entry.isSymbolicLink()) {
+      throw new Error(`BUILD_ARTIFACT_UNSUPPORTED_ENTRY:${relativePath}`);
+    }
+    if (entry.isDirectory()) {
+      files.push(...await collectArtifactFiles(buildRoot, absolutePath));
+      continue;
+    }
+    if (!entry.isFile()) {
+      throw new Error(`BUILD_ARTIFACT_UNSUPPORTED_ENTRY:${relativePath}`);
+    }
+    const fileStat = await lstat(absolutePath);
+    if (!fileStat.isFile()) {
+      throw new Error(`BUILD_ARTIFACT_UNSUPPORTED_ENTRY:${relativePath}`);
+    }
+    const bytes = await readFile(absolutePath);
+    files.push({
+      path: relativePath,
+      bytes: bytes.byteLength,
+      sha256: sha2563(bytes)
+    });
+  }
+  return files.sort(
+    (left, right) => left.path < right.path ? -1 : left.path > right.path ? 1 : 0
+  );
+}
+async function createBuildArtifactManifest(buildRoot, buildSourceSha) {
+  const resolvedBuildRoot = path9.resolve(buildRoot);
+  const sourceSha = fullSha(
+    buildSourceSha,
+    "BUILD_ARTIFACT_SOURCE_SHA_INVALID"
+  );
+  const files = await collectArtifactFiles(resolvedBuildRoot);
+  const frontendJavaScriptFiles = files.filter(
+    (file) => file.path.startsWith("public/assets/") && file.path.endsWith(".js")
+  );
+  if (!files.some((file) => file.path === BUILD_ARTIFACT_IDENTITY_FILENAME) || !files.some((file) => file.path === "index.js") || !files.some((file) => file.path === "verify-live-payment.js") || !files.some((file) => file.path === "public/index.html") || !files.some(
+    (file) => file.path.startsWith("public/assets/") && file.path.endsWith(".css")
+  ) || frontendJavaScriptFiles.length < 2 || !files.some((file) => file.path.startsWith("skills/"))) {
+    throw new Error("BUILD_ARTIFACT_REQUIRED_COVERAGE_MISSING");
+  }
+  const base = {
+    schemaVersion: 1,
+    buildSourceSha: sourceSha,
+    excludedPaths: [BUILD_ARTIFACT_MANIFEST_FILENAME],
+    files
+  };
+  return {
+    ...base,
+    rootSha256: sha2563(canonicalArtifactManifestPayload(base))
+  };
+}
+function assertArtifactManifestShape(value) {
+  if (JSON.stringify(Object.keys(value || {}).sort()) !== JSON.stringify(
+    [
+      "buildSourceSha",
+      "excludedPaths",
+      "files",
+      "rootSha256",
+      "schemaVersion"
+    ].sort()
+  ) || value?.schemaVersion !== 1 || !/^[a-f0-9]{40}$/u.test(String(value?.buildSourceSha || "")) || !/^[a-f0-9]{64}$/u.test(String(value?.rootSha256 || "")) || JSON.stringify(value?.excludedPaths) !== JSON.stringify([BUILD_ARTIFACT_MANIFEST_FILENAME]) || !Array.isArray(value?.files)) {
+    throw new Error("BUILD_ARTIFACT_MANIFEST_INVALID");
+  }
+  let previousPath = "";
+  for (const file of value.files) {
+    if (JSON.stringify(Object.keys(file || {}).sort()) !== JSON.stringify(["bytes", "path", "sha256"].sort()) || typeof file?.path !== "string" || file.path.length === 0 || file.path.startsWith("/") || file.path.includes("\\") || file.path.split("/").some((segment) => !segment || segment === "." || segment === "..") || file.path === BUILD_ARTIFACT_MANIFEST_FILENAME || file.path <= previousPath || !Number.isSafeInteger(file?.bytes) || file.bytes < 0 || !/^[a-f0-9]{64}$/u.test(String(file?.sha256 || ""))) {
+      throw new Error("BUILD_ARTIFACT_MANIFEST_INVALID");
+    }
+    previousPath = file.path;
+  }
+  const calculatedRoot = sha2563(canonicalArtifactManifestPayload(value));
+  if (calculatedRoot !== value.rootSha256) {
+    throw new Error("BUILD_ARTIFACT_MANIFEST_ROOT_MISMATCH");
+  }
+}
+async function readBuildArtifactManifest(buildRoot) {
+  let value;
+  try {
+    value = JSON.parse(
+      await readFile(
+        path9.join(path9.resolve(buildRoot), BUILD_ARTIFACT_MANIFEST_FILENAME),
+        "utf8"
+      )
+    );
+  } catch {
+    throw new Error("BUILD_ARTIFACT_MANIFEST_MISSING_OR_INVALID");
+  }
+  assertArtifactManifestShape(value);
+  return value;
+}
+async function verifyBuildArtifactManifest(buildRoot, options = {}) {
+  const resolvedBuildRoot = path9.resolve(buildRoot);
+  const manifest = await readBuildArtifactManifest(resolvedBuildRoot);
+  const identity = await readBuildArtifactIdentity(resolvedBuildRoot);
+  if (identity.buildSourceSha !== manifest.buildSourceSha) {
+    throw new Error("BUILD_ARTIFACT_IDENTITY_MANIFEST_MISMATCH");
+  }
+  const expectedBuildSourceSha = options.expectedBuildSourceSha ? fullSha(
+    options.expectedBuildSourceSha,
+    "BUILD_ARTIFACT_SOURCE_SHA_INVALID"
+  ) : void 0;
+  if (expectedBuildSourceSha && expectedBuildSourceSha !== manifest.buildSourceSha) {
+    throw new Error("BUILD_ARTIFACT_SOURCE_SHA_MISMATCH");
+  }
+  const actual = await createBuildArtifactManifest(
+    resolvedBuildRoot,
+    manifest.buildSourceSha
+  );
+  if (actual.rootSha256 !== manifest.rootSha256 || JSON.stringify(actual.files) !== JSON.stringify(manifest.files)) {
+    throw new Error("BUILD_ARTIFACT_BYTES_MISMATCH");
+  }
+  return manifest;
+}
+
+// scripts/runtime-artifact-integrity.mjs
+var RUNTIME_ARTIFACT_PROOF_TTL_MS = 5e3;
+function requiredSha256(value, errorCode) {
+  const normalized = String(value || "").trim().toLowerCase();
+  if (!/^[a-f0-9]{64}$/u.test(normalized)) throw new Error(errorCode);
+  return normalized;
+}
+function requiredGitSha(value, errorCode) {
+  const normalized = String(value || "").trim().toLowerCase();
+  if (!/^[a-f0-9]{40}$/u.test(normalized)) throw new Error(errorCode);
+  return normalized;
+}
+async function verifyRuntimeReleaseArtifact(buildRoot, options = {}) {
+  const env = options.env || process.env;
+  const buildSourceSha = requiredGitSha(
+    options.buildSourceSha,
+    "FRONTMIND_RUNTIME_BUILD_SOURCE_SHA_INVALID"
+  );
+  const approvalSha = requiredGitSha(
+    options.approvalSha || env.FRONTMIND_APPROVED_RELEASE_SHA,
+    "FRONTMIND_APPROVED_RELEASE_SHA_REQUIRED"
+  );
+  if (approvalSha === buildSourceSha) {
+    throw new Error("FRONTMIND_APPROVED_RELEASE_SHA_MUST_DIFFER_FROM_SOURCE");
+  }
+  const expectedRootSha256 = requiredSha256(
+    options.expectedRootSha256 || env.FRONTMIND_EXPECTED_ARTIFACT_ROOT_SHA256,
+    "FRONTMIND_EXPECTED_ARTIFACT_ROOT_SHA256_REQUIRED"
+  );
+  const manifest = await verifyBuildArtifactManifest(path10.resolve(buildRoot), {
+    expectedBuildSourceSha: buildSourceSha
+  });
+  if (manifest.rootSha256 !== expectedRootSha256) {
+    throw new Error("FRONTMIND_ARTIFACT_EXTERNAL_ROOT_MISMATCH");
+  }
+  return {
+    approvalSha,
+    buildSourceSha,
+    expectedRootSha256,
+    actualRootSha256: manifest.rootSha256,
+    manifest
+  };
+}
+function createRuntimeReleaseArtifactVerifier(options) {
+  const ttlMs = Number(
+    options.ttlMs === void 0 ? RUNTIME_ARTIFACT_PROOF_TTL_MS : options.ttlMs
+  );
+  if (!Number.isSafeInteger(ttlMs) || ttlMs < 1 || ttlMs > 5e3) {
+    throw new Error("FRONTMIND_ARTIFACT_PROOF_TTL_INVALID");
+  }
+  const now = options.now || Date.now;
+  const verifyArtifact = options.verifyArtifact || (() => verifyRuntimeReleaseArtifact(options.buildRoot, {
+    buildSourceSha: options.buildSourceSha,
+    approvalSha: options.approvalSha,
+    expectedRootSha256: options.expectedRootSha256,
+    env: options.env
+  }));
+  let cachedProof;
+  let cachedFailure;
+  let inFlight;
+  async function verify(verifyOptions = {}) {
+    const observedAt = now();
+    if (verifyOptions.force !== true && cachedFailure && observedAt < cachedFailure.expiresAtEpochMs) {
+      throw cachedFailure.error;
+    }
+    if (verifyOptions.force !== true && cachedProof && observedAt < cachedProof.proofExpiresAtEpochMs) {
+      return cachedProof;
+    }
+    if (inFlight) return inFlight;
+    const currentVerification = Promise.resolve().then(() => verifyArtifact()).then((artifact) => {
+      const verifiedAtEpochMs = now();
+      cachedFailure = void 0;
+      cachedProof = {
+        ...artifact,
+        verifiedAtEpochMs,
+        proofExpiresAtEpochMs: verifiedAtEpochMs + ttlMs,
+        proofTtlMs: ttlMs
+      };
+      return cachedProof;
+    }).catch((error) => {
+      cachedProof = void 0;
+      cachedFailure = {
+        error,
+        expiresAtEpochMs: now() + ttlMs
+      };
+      throw error;
+    });
+    inFlight = currentVerification;
+    try {
+      return await currentVerification;
+    } finally {
+      if (inFlight === currentVerification) inFlight = void 0;
+    }
+  }
+  return { verify };
+}
+function runtimeReleaseArtifactHealth(artifact) {
+  return {
+    verified: true,
+    schemaVersion: artifact.manifest.schemaVersion,
+    approvalSha: artifact.approvalSha,
+    buildSourceSha: artifact.buildSourceSha,
+    expectedRootSha256: artifact.expectedRootSha256,
+    actualRootSha256: artifact.actualRootSha256,
+    rootSha256: artifact.actualRootSha256,
+    fileCount: artifact.manifest.files.length,
+    ...Number.isSafeInteger(artifact.verifiedAtEpochMs) ? {
+      verifiedAt: new Date(artifact.verifiedAtEpochMs).toISOString(),
+      proofTtlMs: artifact.proofTtlMs
+    } : {}
+  };
+}
+
 // server/index.ts
 var __filename = fileURLToPath(import.meta.url);
-var __dirname = path8.dirname(__filename);
+var __dirname = path11.dirname(__filename);
 var GEO_RUNTIME_SKILLS = [
   { name: "website-one-shot-kb-builder", version: 6 },
   { name: "geo-question-recommender", version: 1 },
@@ -16195,13 +18832,25 @@ async function getGeoRuntimeSkillReadiness() {
   return GEO_RUNTIME_SKILLS.map((skill, index) => ({
     ...skill,
     status: "ok",
-    contentHash: createHash5("sha256").update(contents[index], "utf8").digest("hex")
+    contentHash: createHash6("sha256").update(contents[index], "utf8").digest("hex")
   }));
 }
 async function startServer() {
+  const buildSha = geoPublicBuildSha();
+  const releaseArtifactVerifier = process.env.NODE_ENV === "production" ? createRuntimeReleaseArtifactVerifier({
+    buildRoot: __dirname,
+    buildSourceSha: buildSha,
+    env: process.env
+  }) : void 0;
+  const startupReleaseArtifact = releaseArtifactVerifier ? await releaseArtifactVerifier.verify({ force: true }) : void 0;
   const geoBroker = createGeoPresalesBrokerFromEnv();
   const projectOrderRegistry = createGeoProjectOrderRegistry();
   const paymentReceiptStore = createGeoPaymentReceiptStore();
+  const customQuestionValidationStore = createGeoCustomQuestionValidationStore();
+  const customQuestionRecoveryWorker = createGeoCustomQuestionRecoveryWorker({
+    broker: geoBroker,
+    store: customQuestionValidationStore
+  });
   const getGeoDependencyReadiness = createGeoDependencyHealthChecker({
     broker: geoBroker,
     projectOrderRegistry,
@@ -16211,7 +18860,8 @@ async function startServer() {
     assertGeoPaymentConfigurationFromEnv(process.env);
     await Promise.all([
       getGeoRuntimeSkillReadiness(),
-      getGeoDependencyReadiness()
+      getGeoDependencyReadiness(),
+      customQuestionValidationStore.assertReady()
     ]);
   }
   const app = express2();
@@ -16227,15 +18877,29 @@ async function startServer() {
   app.use(compression());
   app.get("/healthz", async (_req, res) => {
     try {
-      const [skills, dependencies] = await Promise.all([
+      const [
+        skills,
+        dependencies,
+        persistenceIdentity,
+        currentReleaseArtifact
+      ] = await Promise.all([
         getGeoRuntimeSkillReadiness(),
-        getGeoDependencyReadiness()
+        getGeoDependencyReadiness(),
+        customQuestionValidationStore.assertReady().then(() => customQuestionValidationStore.persistenceIdentity()),
+        startupReleaseArtifact ? releaseArtifactVerifier.verify() : Promise.resolve(void 0)
       ]);
       res.json({
         status: "ok",
-        buildSha: geoPublicBuildSha(),
+        buildSha,
+        artifact: currentReleaseArtifact ? runtimeReleaseArtifactHealth(currentReleaseArtifact) : void 0,
         skills,
-        dependencies
+        dependencies: {
+          ...dependencies,
+          customQuestionValidationStore: {
+            ready: true,
+            persistenceIdentitySha256: createHash6("sha256").update(persistenceIdentity, "utf8").digest("hex")
+          }
+        }
       });
     } catch (error) {
       console.error(
@@ -16250,8 +18914,14 @@ async function startServer() {
   });
   app.use(
     "/api/geo",
-    createGeoRouter({ broker: geoBroker, projectOrderRegistry })
+    createGeoRouter({
+      broker: geoBroker,
+      projectOrderRegistry,
+      customQuestionValidationStore
+    })
   );
+  customQuestionRecoveryWorker.start();
+  server.on("close", () => customQuestionRecoveryWorker.stop());
   app.get(
     [
       "/blogs",
@@ -16282,12 +18952,12 @@ async function startServer() {
       res.redirect(301, `/blog/${req.params.slug}${query}`);
     }
   );
-  const staticPath = process.env.NODE_ENV === "production" ? path8.resolve(__dirname, "public") : path8.resolve(__dirname, "..", "dist", "public");
+  const staticPath = process.env.NODE_ENV === "production" ? path11.resolve(__dirname, "public") : path11.resolve(__dirname, "..", "dist", "public");
   app.use(
     express2.static(staticPath, {
       redirect: false,
       setHeaders(res, filePath) {
-        const relativePath = path8.relative(staticPath, filePath).split(path8.sep).join("/");
+        const relativePath = path11.relative(staticPath, filePath).split(path11.sep).join("/");
         if (relativePath === "index.html" || relativePath.endsWith("/index.html")) {
           res.setHeader("Cache-Control", "public, max-age=0, must-revalidate");
           return;
@@ -16312,22 +18982,22 @@ async function startServer() {
     })
   );
   app.get("*", (req, res) => {
-    if (path8.extname(req.path)) {
+    if (path11.extname(req.path)) {
       res.status(404).type("text/plain").send("\u9875\u9762\u4E0D\u5B58\u5728");
       return;
     }
     const routePath = req.path === "/" ? "/" : req.path.replace(/\/+$/, "");
-    const routeIndexPath = path8.resolve(
+    const routeIndexPath = path11.resolve(
       staticPath,
       `.${routePath}`,
       "index.html"
     );
-    const staticRoot = `${staticPath}${path8.sep}`;
+    const staticRoot = `${staticPath}${path11.sep}`;
     if (routeIndexPath.startsWith(staticRoot) && existsSync(routeIndexPath)) {
       res.sendFile(routeIndexPath);
       return;
     }
-    res.sendFile(path8.join(staticPath, "index.html"));
+    res.sendFile(path11.join(staticPath, "index.html"));
   });
   const port = process.env.PORT || 8888;
   server.listen(port, () => {

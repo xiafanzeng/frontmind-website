@@ -341,6 +341,9 @@ function normalizeCustomQuestionText(value) {
   return normalized ? `${normalized}\uFF1F` : normalized;
 }
 var CreateCustomQuestionRequestSchema = z.object({
+  // Optional only for the bounded legacy bridge. Current clients always send
+  // a UUID; old cached clients are mapped to a deterministic server UUID.
+  clientRequestId: z.string().uuid().optional(),
   question: z.string().max(240).transform(normalizeCustomQuestionText).pipe(z.string().min(4).max(120))
 }).strict();
 function isIndustryRankingQuestion(question) {
