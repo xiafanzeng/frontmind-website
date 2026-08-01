@@ -414,22 +414,6 @@ var CreateProjectRequestSchema = z.object({
     }
   }
 });
-var RetryProjectRequestSchema = z.object({
-  input: z.string().trim().max(4e3).default(""),
-  trigger: z.enum(["automatic", "manual"]).optional().default("manual"),
-  attachments: z.array(ProjectAttachmentSchema.pick({ fileId: true, filename: true })).max(10).default([])
-}).strict().refine((value) => Boolean(value.input || value.attachments.length), {
-  message: "input or at least one attachment is required"
-}).superRefine((value, context) => {
-  const candidates = value.input.match(/https?:\/\/[^\s<>"']+/gi) || [];
-  if (candidates.some((candidate) => !isPublicHttpUrl(candidate))) {
-    context.addIssue({
-      code: "custom",
-      message: "website URLs must use public HTTP(S) addresses",
-      path: ["input"]
-    });
-  }
-});
 var GeoMonitorPlatformSchema = z.enum(GEO_MONITOR_PLATFORM_IDS);
 var GeoPaymentMethodSchema = z.enum(["alipay", "wxpay"]);
 var GeoPaymentScopeSchema = z.object({

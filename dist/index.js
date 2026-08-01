@@ -4192,22 +4192,6 @@ var CreateProjectRequestSchema = z2.object({
     }
   }
 });
-var RetryProjectRequestSchema = z2.object({
-  input: z2.string().trim().max(4e3).default(""),
-  trigger: z2.enum(["automatic", "manual"]).optional().default("manual"),
-  attachments: z2.array(ProjectAttachmentSchema.pick({ fileId: true, filename: true })).max(10).default([])
-}).strict().refine((value) => Boolean(value.input || value.attachments.length), {
-  message: "input or at least one attachment is required"
-}).superRefine((value, context) => {
-  const candidates = value.input.match(/https?:\/\/[^\s<>"']+/gi) || [];
-  if (candidates.some((candidate) => !isPublicHttpUrl(candidate))) {
-    context.addIssue({
-      code: "custom",
-      message: "website URLs must use public HTTP(S) addresses",
-      path: ["input"]
-    });
-  }
-});
 var GeoMonitorPlatformSchema = z2.enum(GEO_MONITOR_PLATFORM_IDS);
 var GeoPaymentMethodSchema = z2.enum(["alipay", "wxpay"]);
 var GeoPaymentScopeSchema = z2.object({
@@ -11315,12 +11299,12 @@ var CUSTOM_QUESTION_CLASSIFIER_POLL_MS = 400;
 var SESSION_RATE_LIMIT_WINDOW_MS = 60 * 60 * 1e3;
 var GEO_MANUAL_CONTRACT_TEMPLATE_VERSION = "basic-2026.07-v2";
 var KNOWLEDGE_BASE_VALIDATION_PUBLIC_ERRORS = {
-  structure: "\u77E5\u8BC6\u5E93\u5019\u9009\u6587\u4EF6\u6682\u672A\u5B8C\u6210\u5B89\u5168\u6574\u7406\uFF0C\u53EF\u5728\u5F53\u524D\u9879\u76EE\u4E2D\u91CD\u65B0\u751F\u6210\u3002",
+  structure: "\u4F01\u4E1A\u77E5\u8BC6\u5E93\u751F\u6210\u7ED3\u679C\u672A\u901A\u8FC7\u7ED3\u6784\u6821\u9A8C\uFF0C\u8BF7\u8054\u7CFB\u6280\u672F\u652F\u6301\u3002",
   media: "Logo \u7D20\u6750\u672A\u901A\u8FC7\u6821\u9A8C\uFF0C\u7CFB\u7EDF\u4F1A\u5FFD\u7565\u8BE5\u7D20\u6750\u5E76\u7EE7\u7EED\u6574\u7406\u6587\u5B57\u77E5\u8BC6\u5E93\u3002",
-  content: "\u77E5\u8BC6\u5E93\u6587\u5B57\u6682\u672A\u5B8C\u6210\u7ED3\u6784\u5316\u6574\u7406\uFF0C\u53EF\u5728\u5F53\u524D\u9879\u76EE\u4E2D\u91CD\u65B0\u751F\u6210\u3002",
+  content: "\u4F01\u4E1A\u77E5\u8BC6\u5E93\u751F\u6210\u7ED3\u679C\u672A\u901A\u8FC7\u5185\u5BB9\u6821\u9A8C\uFF0C\u8BF7\u8054\u7CFB\u6280\u672F\u652F\u6301\u3002",
   unsafe: "\u77E5\u8BC6\u5E93\u6587\u4EF6\u5B58\u5728\u5B89\u5168\u98CE\u9669\uFF0C\u5DF2\u963B\u6B62\u4E0B\u8F7D\u53CA\u540E\u7EED\u5206\u6790\u3002\u8BF7\u52FF\u7EE7\u7EED\u5904\u7406\u8BE5\u6587\u4EF6\uFF0C\u5E76\u8054\u7CFB\u6280\u672F\u652F\u6301\u3002"
 };
-var KNOWLEDGE_BASE_FINALIZATION_PUBLIC_ERROR = "\u5019\u9009\u8D44\u6599\u5DF2\u5B89\u5168\u4FDD\u7559\uFF0C\u7CFB\u7EDF\u6700\u7EC8\u6574\u7406\u6821\u9A8C\u5F02\u5E38\uFF1B\u4FEE\u590D\u540E\u53EF\u76F4\u63A5\u91CD\u8BD5\u6574\u7406\uFF0C\u65E0\u9700\u91CD\u65B0\u4E0A\u4F20\u3002";
+var KNOWLEDGE_BASE_FINALIZATION_PUBLIC_ERROR = "\u4F01\u4E1A\u77E5\u8BC6\u5E93\u6700\u7EC8\u6574\u7406\u672A\u901A\u8FC7\u6821\u9A8C\uFF0C\u8BF7\u8054\u7CFB\u6280\u672F\u652F\u6301\u3002";
 function knowledgeCandidateDiagnosticCode(value) {
   if (value.startsWith("Selected candidate root:"))
     return "candidate_root_selected";
@@ -11431,10 +11415,8 @@ function createGeoRouter(options = {}) {
   let activeUploads = 0;
   const knowledgeBaseFinalizations = /* @__PURE__ */ new Map();
   const knowledgeBaseFinalizationBackoffs = /* @__PURE__ */ new Map();
-  const knowledgeBaseAutomaticRetries = /* @__PURE__ */ new Map();
-  const knowledgeBaseSourceInputs = /* @__PURE__ */ new Map();
   const router = express.Router();
-  const ensureFinalizedKnowledgeBase = async (value, task, options2 = {}) => {
+  const ensureFinalizedKnowledgeBase = async (value, task) => {
     if (normalizeTaskStatus(task.status) !== "completed") {
       return { value };
     }
@@ -11459,7 +11441,6 @@ function createGeoRouter(options = {}) {
             state: "completed",
             finalizerVersion: existingArtifact.finalizerVersion,
             candidateSha256: existingArtifact.candidate.sha256,
-            retryAvailable: false,
             updatedAt: existingArtifact.final.finalizedAt
           }
         },
@@ -11478,7 +11459,7 @@ function createGeoRouter(options = {}) {
         }
       };
     }
-    if (value.knowledgeBaseFinalization?.state === "failed_internal" && value.knowledgeBaseFinalization.finalizerVersion === WEBSITE_KB_FINALIZER_VERSION && value.knowledgeBaseFinalization.candidateSha256 && !options2.force) {
+    if (value.knowledgeBaseFinalization?.state === "failed_internal" && value.knowledgeBaseFinalization.finalizerVersion === WEBSITE_KB_FINALIZER_VERSION && value.knowledgeBaseFinalization.candidateSha256) {
       return { value };
     }
     const candidateDownloadStartedAt = Date.now();
@@ -11597,15 +11578,8 @@ function createGeoRouter(options = {}) {
     }
     const candidateSha = crypto5.createHash("sha256").update(candidateBytes).digest("hex");
     const recordedFinalization = value.knowledgeBaseFinalization;
-    if (recordedFinalization?.state === "failed_internal" && recordedFinalization.finalizerVersion === WEBSITE_KB_FINALIZER_VERSION && recordedFinalization.candidateSha256 === candidateSha && !options2.force) {
+    if (recordedFinalization?.state === "failed_internal" && recordedFinalization.finalizerVersion === WEBSITE_KB_FINALIZER_VERSION && recordedFinalization.candidateSha256 === candidateSha) {
       return { value };
-    }
-    if (options2.force && recordedFinalization?.state === "failed_internal" && recordedFinalization.candidateSha256 && recordedFinalization.candidateSha256 !== candidateSha) {
-      throw new GeoHttpError(
-        "\u5019\u9009\u8D44\u6599\u7248\u672C\u5DF2\u53D8\u5316\uFF0C\u8BF7\u5237\u65B0\u9879\u76EE\u72B6\u6001\u540E\u91CD\u8BD5",
-        409,
-        "KB_FINALIZATION_CANDIDATE_CHANGED"
-      );
     }
     const candidateDownloadMs = Date.now() - candidateDownloadStartedAt;
     const descriptorHash = knowledgeArchiveDescriptorHash(candidateDescriptor);
@@ -11620,7 +11594,7 @@ function createGeoRouter(options = {}) {
     const now = Date.now();
     pruneExpiringMap(knowledgeBaseFinalizations, now, 200);
     const transientBackoff = knowledgeBaseFinalizationBackoffs.get(finalizationKey);
-    if (transientBackoff && transientBackoff.retryAt > now && !options2.force) {
+    if (transientBackoff && transientBackoff.retryAt > now) {
       throw new GeoHttpError(
         "\u77E5\u8BC6\u5E93\u6700\u7EC8\u6574\u7406\u6587\u4EF6\u4F20\u8F93\u6682\u65F6\u4E0D\u53EF\u7528\uFF0C\u8BF7\u7A0D\u540E\u91CD\u8BD5",
         503,
@@ -11629,8 +11603,7 @@ function createGeoRouter(options = {}) {
     }
     const running = knowledgeBaseFinalizations.get(finalizationKey);
     if (running && running.expiresAt > now) {
-      if (!options2.force || !running.settled) return running.promise;
-      knowledgeBaseFinalizations.delete(finalizationKey);
+      return running.promise;
     }
     let promise;
     promise = (async () => {
@@ -11699,7 +11672,6 @@ function createGeoRouter(options = {}) {
               finalizerVersion: WEBSITE_KB_FINALIZER_VERSION,
               candidateSha256: candidateSha,
               errorCode: "KB_FINALIZER_CONTRACT_VIOLATION",
-              retryAvailable: true,
               updatedAt: (/* @__PURE__ */ new Date()).toISOString()
             }
           }
@@ -11772,7 +11744,6 @@ function createGeoRouter(options = {}) {
           state: "completed",
           finalizerVersion: WEBSITE_KB_FINALIZER_VERSION,
           candidateSha256: candidateSha,
-          retryAvailable: false,
           updatedAt: (/* @__PURE__ */ new Date()).toISOString()
         },
         archiveFileIds: Array.from(
@@ -11821,101 +11792,6 @@ function createGeoRouter(options = {}) {
     knowledgeBaseFinalizations.set(finalizationKey, {
       expiresAt: now + 10 * 60 * 1e3,
       settled: false,
-      promise
-    });
-    return promise;
-  };
-  const maybeAutomaticallyRegenerateKnowledgeBase = async (value, knowledgeBaseTask) => {
-    const status = normalizeTaskStatus(knowledgeBaseTask.status);
-    const failure = value.knowledgeBaseCandidateFailure;
-    const retainedSource = knowledgeBaseSourceInputs.get(value.projectId);
-    const shouldRetry = !value.knowledgeBaseAutomaticRetryUsed && !value.knowledgeBaseRecovery?.automaticAttemptedAt && Boolean(retainedSource && retainedSource.expiresAt > Date.now()) && (["failed", "cancelled"].includes(status) || Boolean(failure && failure.category !== "unsafe"));
-    if (!shouldRetry) return { value, knowledgeBaseTask };
-    const retryKey = `${value.projectId}:${value.knowledgeBaseTaskId}:automatic`;
-    const now = Date.now();
-    pruneExpiringMap(knowledgeBaseAutomaticRetries, now, 200);
-    const running = knowledgeBaseAutomaticRetries.get(retryKey);
-    if (running && running.expiresAt > now) return running.promise;
-    const promise = (async () => {
-      const source = retainedSource.input;
-      try {
-        const created = await createWebsiteKnowledgeBaseTaskWithSkill(broker, {
-          projectId: value.projectId,
-          prompt: await buildWebsiteKnowledgeBasePrompt(source),
-          attachments: source.attachments.map((attachment) => ({
-            file_id: attachment.fileId,
-            filename: attachment.filename
-          })),
-          idempotencyKey: `geo:${value.projectId}:knowledge-base:automatic-regenerate`
-        });
-        const taskId = taskIdFrom(created.task);
-        if (!taskId) {
-          await broker.deleteFile(created.skillAttachment.file_id).catch(() => void 0);
-          throw new Error("automatic knowledge-base task is missing an ID");
-        }
-        console.info("[GEO KB]", {
-          event: "knowledge_base_auto_recovery_submitted",
-          projectId: value.projectId,
-          taskId,
-          sourceTaskId: value.knowledgeBaseTaskId,
-          idempotent: false
-        });
-        return {
-          value: {
-            ...trackArchiveFile(value, knowledgeBaseTask),
-            knowledgeBaseTaskId: taskId,
-            knowledgeBaseSubmittedAt: (/* @__PURE__ */ new Date()).toISOString(),
-            knowledgeBaseAutomaticRetryUsed: true,
-            knowledgeBaseRecovery: {
-              automaticSourceTaskId: value.knowledgeBaseTaskId,
-              automaticAttemptedAt: (/* @__PURE__ */ new Date()).toISOString(),
-              automaticResult: "submitted"
-            },
-            knowledgeBaseCandidateFailure: void 0,
-            knowledgeBaseFinalization: void 0,
-            knowledgeBaseArtifact: void 0,
-            temporaryFileIds: Array.from(
-              /* @__PURE__ */ new Set([
-                ...value.temporaryFileIds || [],
-                created.skillAttachment.file_id
-              ])
-            ),
-            previousKnowledgeBaseTaskIds: Array.from(
-              /* @__PURE__ */ new Set([
-                ...value.previousKnowledgeBaseTaskIds || [],
-                value.knowledgeBaseTaskId
-              ])
-            )
-          },
-          knowledgeBaseTask: created.task
-        };
-      } catch (error) {
-        console.warn("[GEO KB] automatic regeneration failed", {
-          event: "knowledge_base_auto_recovery_skipped",
-          projectId: value.projectId,
-          taskId: value.knowledgeBaseTaskId,
-          diagnosticCode: error instanceof Error ? error.name : "automatic_retry_error"
-        });
-        return {
-          value: {
-            ...value,
-            knowledgeBaseAutomaticRetryUsed: true,
-            knowledgeBaseRecovery: {
-              automaticSourceTaskId: value.knowledgeBaseTaskId,
-              automaticAttemptedAt: (/* @__PURE__ */ new Date()).toISOString(),
-              automaticResult: "failed"
-            },
-            knowledgeBaseCandidateFailure: {
-              category: "structure",
-              message: "\u81EA\u52A8\u91CD\u65B0\u751F\u6210\u672A\u80FD\u542F\u52A8\uFF0C\u539F\u59CB\u8D44\u6599\u5DF2\u4FDD\u7559"
-            }
-          },
-          knowledgeBaseTask
-        };
-      }
-    })();
-    knowledgeBaseAutomaticRetries.set(retryKey, {
-      expiresAt: now + 10 * 60 * 1e3,
       promise
     });
     return promise;
@@ -12826,20 +12702,6 @@ function createGeoRouter(options = {}) {
         );
       }
       const companyIdentity = deriveCompanyIdentity(input);
-      pruneExpiringMap(knowledgeBaseSourceInputs, Date.now(), 2e4);
-      knowledgeBaseSourceInputs.set(projectId, {
-        expiresAt: Date.now() + PROJECT_TTL_MS,
-        input: {
-          input: input.input,
-          ...input.companyName ? { companyName: input.companyName } : {},
-          ...input.companyWebsite ? { companyWebsite: input.companyWebsite } : {},
-          ...input.operatorNotes ? { operatorNotes: input.operatorNotes } : {},
-          attachments: input.attachments.map((attachment) => ({
-            fileId: attachment.fileId,
-            filename: sanitizeFilename(attachment.filename, "company-material")
-          }))
-        }
-      });
       const value = {
         projectId,
         ownerSessionId: String(res.locals.geoSessionId || ""),
@@ -12889,24 +12751,10 @@ function createGeoRouter(options = {}) {
         trackArchiveFile(value, knowledgeBaseTask),
         knowledgeBaseTask
       );
-      const automaticRegeneration = await maybeAutomaticallyRegenerateKnowledgeBase(
-        finalizedKnowledgeBase.value,
-        knowledgeBaseTask
-      );
-      const currentKnowledgeBaseTask = automaticRegeneration.knowledgeBaseTask;
-      const automaticRecoveryFailed = automaticRegeneration.value.knowledgeBaseRecovery?.automaticResult === "submitted" && (["failed", "cancelled"].includes(
-        normalizeTaskStatus(currentKnowledgeBaseTask.status)
-      ) || Boolean(automaticRegeneration.value.knowledgeBaseCandidateFailure));
-      const recoveredValue = automaticRecoveryFailed ? {
-        ...automaticRegeneration.value,
-        knowledgeBaseRecovery: {
-          ...automaticRegeneration.value.knowledgeBaseRecovery,
-          automaticResult: "failed"
-        }
-      } : automaticRegeneration.value;
+      const currentKnowledgeBaseTask = knowledgeBaseTask;
       let currentValue = await resolveCanonicalCompanyIdentity(
         broker,
-        recoveredValue,
+        finalizedKnowledgeBase.value,
         currentKnowledgeBaseTask,
         { allowInvalidArchiveForProjectView: true }
       );
@@ -12933,198 +12781,6 @@ function createGeoRouter(options = {}) {
         optimizationForecastTask
       );
       res.json({ projectToken: currentToken, project });
-    })
-  );
-  router.post(
-    "/projects/:projectToken/knowledge-base/finalization/retry",
-    requireConfiguration,
-    requireSession,
-    requireSessionRate("knowledge-base-finalization-retry", 8, 60 * 1e3),
-    asyncHandler(async (req, res) => {
-      const value = openOwnedProject(req, res);
-      if (value.knowledgeBaseFinalization?.state !== "failed_internal" || value.knowledgeBaseFinalization.retryAvailable !== true) {
-        throw new GeoHttpError(
-          "\u5F53\u524D\u9879\u76EE\u6CA1\u6709\u53EF\u91CD\u8BD5\u7684\u77E5\u8BC6\u5E93\u6700\u7EC8\u6574\u7406\u4EFB\u52A1",
-          409,
-          "KB_FINALIZATION_RETRY_NOT_AVAILABLE"
-        );
-      }
-      const knowledgeBaseTask = await getResolvedTask(
-        broker,
-        value.knowledgeBaseTaskId
-      );
-      if (normalizeTaskStatus(knowledgeBaseTask.status) !== "completed") {
-        throw new GeoHttpError(
-          "\u5019\u9009\u8D44\u6599\u5C1A\u672A\u751F\u6210\u5B8C\u6210\uFF0C\u6682\u4E0D\u80FD\u91CD\u8BD5\u6700\u7EC8\u6574\u7406",
-          409,
-          "KB_FINALIZATION_CANDIDATE_NOT_READY"
-        );
-      }
-      const previousFinalFileId = value.knowledgeBaseArtifact?.final.fileId;
-      const finalized = await ensureFinalizedKnowledgeBase(
-        trackArchiveFile(value, knowledgeBaseTask),
-        knowledgeBaseTask,
-        { force: true }
-      );
-      const nextValue = await resolveCanonicalCompanyIdentity(
-        broker,
-        finalized.value,
-        knowledgeBaseTask,
-        { allowInvalidArchiveForProjectView: true }
-      );
-      let projectToken;
-      try {
-        projectToken = codec.seal("project", nextValue, PROJECT_TTL_MS);
-      } catch (error) {
-        const currentFinalFileId = nextValue.knowledgeBaseArtifact?.final.fileId;
-        if (currentFinalFileId && currentFinalFileId !== previousFinalFileId) {
-          await broker.deleteFile(currentFinalFileId).catch(() => void 0);
-        }
-        throw error;
-      }
-      const questionTask = nextValue.questionTaskId ? await getResolvedTask(broker, nextValue.questionTaskId) : void 0;
-      const project = await buildProjectView(
-        broker,
-        nextValue,
-        projectToken,
-        knowledgeBaseTask,
-        questionTask
-      );
-      res.json({ projectToken, project });
-    })
-  );
-  router.post(
-    "/projects/:projectToken/retry",
-    requireConfiguration,
-    requireSession,
-    requireCostRate("project-retry", 4),
-    asyncHandler(async (req, res) => {
-      let value = openOwnedProject(req, res);
-      const originalValue = value;
-      const retryInput = RetryProjectRequestSchema.parse(req.body);
-      const retryAttachments = validateRetryProjectAttachments(
-        retryInput,
-        value
-      );
-      const currentTask = await getResolvedTask(
-        broker,
-        value.knowledgeBaseTaskId
-      );
-      const currentStatus = normalizeTaskStatus(currentTask.status);
-      if (currentStatus === "completed") {
-        value = (await ensureFinalizedKnowledgeBase(
-          trackArchiveFile(value, currentTask),
-          currentTask
-        )).value;
-      }
-      if (!["failed", "cancelled"].includes(currentStatus) && !value.knowledgeBaseCandidateFailure) {
-        const currentToken = value === originalValue ? req.params.projectToken : codec.seal("project", value, PROJECT_TTL_MS);
-        const project2 = await buildProjectView(
-          broker,
-          value,
-          currentToken,
-          currentTask,
-          void 0
-        );
-        res.json({ projectToken: currentToken, project: project2 });
-        return;
-      }
-      if (value.knowledgeBaseCandidateFailure?.category === "unsafe") {
-        throw new GeoHttpError(
-          KNOWLEDGE_BASE_VALIDATION_PUBLIC_ERRORS.unsafe,
-          422,
-          "KNOWLEDGE_BASE_UNSAFE_BLOCKED"
-        );
-      }
-      if (retryInput.trigger === "automatic" && (value.knowledgeBaseAutomaticRetryUsed || Boolean(value.knowledgeBaseRecovery?.automaticAttemptedAt))) {
-        console.info("[GEO KB]", {
-          event: "knowledge_base_auto_recovery_skipped",
-          projectId: value.projectId,
-          taskId: value.knowledgeBaseTaskId,
-          diagnosticCode: "automatic_recovery_already_attempted",
-          idempotent: true
-        });
-        const currentToken = value === originalValue ? req.params.projectToken : codec.seal("project", value, PROJECT_TTL_MS);
-        const project2 = await buildProjectView(
-          broker,
-          value,
-          currentToken,
-          currentTask,
-          void 0
-        );
-        res.json({ projectToken: currentToken, project: project2 });
-        return;
-      }
-      const normalizedRetryInput = {
-        ...retryInput,
-        attachments: retryAttachments
-      };
-      const created = await createWebsiteKnowledgeBaseTaskWithSkill(broker, {
-        projectId: value.projectId,
-        prompt: await buildWebsiteKnowledgeBasePrompt(normalizedRetryInput),
-        attachments: normalizedRetryInput.attachments.map((attachment) => ({
-          file_id: attachment.fileId,
-          filename: attachment.filename
-        })),
-        idempotencyKey: `geo:${value.projectId}:knowledge-base:regenerate:${value.knowledgeBaseTaskId}`
-      });
-      const task = created.task;
-      const taskId = taskIdFrom(task);
-      if (!taskId) {
-        await broker.deleteFile(created.skillAttachment.file_id).catch(() => void 0);
-        throw new GeoHttpError(
-          "\u91CD\u65B0\u521B\u5EFA\u4F01\u4E1A\u5206\u6790\u4EFB\u52A1\u5931\u8D25\uFF1A\u7F3A\u5C11\u4EFB\u52A1 ID",
-          502,
-          "TASK_ID_MISSING"
-        );
-      }
-      const retrySubmittedAt = (/* @__PURE__ */ new Date()).toISOString();
-      console.info("[GEO KB]", {
-        event: retryInput.trigger === "automatic" ? "knowledge_base_auto_recovery_submitted" : "knowledge_base_manual_retry_submitted",
-        projectId: value.projectId,
-        taskId,
-        sourceTaskId: value.knowledgeBaseTaskId,
-        idempotent: false
-      });
-      const nextValue = {
-        ...trackArchiveFile(value, currentTask),
-        knowledgeBaseTaskId: taskId,
-        knowledgeBaseSubmittedAt: retrySubmittedAt,
-        knowledgeBaseValidationProfile: "website-lead-v1",
-        knowledgeBaseAutomaticRetryUsed: true,
-        knowledgeBaseRecovery: retryInput.trigger === "automatic" ? {
-          automaticSourceTaskId: value.knowledgeBaseTaskId,
-          automaticAttemptedAt: retrySubmittedAt,
-          automaticResult: "submitted"
-        } : value.knowledgeBaseRecovery ? {
-          ...value.knowledgeBaseRecovery,
-          automaticResult: "failed"
-        } : void 0,
-        knowledgeBaseCandidateFailure: void 0,
-        knowledgeBaseFinalization: void 0,
-        knowledgeBaseArtifact: void 0,
-        temporaryFileIds: Array.from(
-          /* @__PURE__ */ new Set([
-            ...value.temporaryFileIds || [],
-            created.skillAttachment.file_id
-          ])
-        ),
-        previousKnowledgeBaseTaskIds: Array.from(
-          /* @__PURE__ */ new Set([
-            ...value.previousKnowledgeBaseTaskIds || [],
-            value.knowledgeBaseTaskId
-          ])
-        )
-      };
-      const projectToken = codec.seal("project", nextValue, PROJECT_TTL_MS);
-      const project = await buildProjectView(
-        broker,
-        nextValue,
-        projectToken,
-        task,
-        void 0
-      );
-      res.status(201).json({ projectToken, project });
     })
   );
   router.post(
@@ -13176,9 +12832,9 @@ function createGeoRouter(options = {}) {
           );
         }
         throw new GeoHttpError(
-          "\u4F01\u4E1A\u77E5\u8BC6\u5E93\u5019\u9009\u6587\u4EF6\u9700\u8981\u5728\u5F53\u524D\u9879\u76EE\u4E2D\u91CD\u65B0\u751F\u6210",
+          "\u4F01\u4E1A\u77E5\u8BC6\u5E93\u751F\u6210\u7ED3\u679C\u672A\u901A\u8FC7\u6821\u9A8C\uFF0C\u8BF7\u8054\u7CFB\u6280\u672F\u652F\u6301",
           409,
-          "KNOWLEDGE_BASE_RETRY_REQUIRED"
+          "KNOWLEDGE_BASE_VALIDATION_FAILED"
         );
       }
       const archive = resolveKnowledgeBaseArtifact(value, knowledgeBaseTask);
@@ -15213,9 +14869,6 @@ async function buildProjectView(broker, value, projectToken, knowledgeBaseTask, 
       knowledgeBaseValidationFailure = error;
     }
   }
-  const knowledgeBaseRetryAvailable = !knowledgeBaseFinalizationFailure && (Boolean(knowledgeBaseValidationFailure) && knowledgeBaseValidationFailure?.category !== "unsafe" || ["failed", "cancelled"].includes(knowledgeBase.status));
-  const knowledgeBaseAutoRetryAvailable = knowledgeBaseRetryAvailable && knowledgeBaseValidationFailure?.category !== "unsafe" && !value.knowledgeBaseAutomaticRetryUsed && !value.knowledgeBaseRecovery?.automaticAttemptedAt;
-  const knowledgeBaseRecoveryState = knowledgeBaseManifest && value.knowledgeBaseRecovery?.automaticAttemptedAt ? "recovered" : value.knowledgeBaseRecovery?.automaticResult === "submitted" && !knowledgeBaseRetryAvailable && !knowledgeBaseManifest ? "automatic_in_progress" : value.knowledgeBaseRecovery?.automaticAttemptedAt && knowledgeBaseRetryAvailable ? "manual_required" : "none";
   const knowledgeBaseValidationPublicError = knowledgeBaseValidationFailure ? KNOWLEDGE_BASE_VALIDATION_PUBLIC_ERRORS[knowledgeBaseValidationFailure.category] : KNOWLEDGE_BASE_VALIDATION_PUBLIC_ERRORS.structure;
   const archiveUrl = archiveDescriptor && knowledgeBaseManifest ? `/api/geo/projects/${encodeURIComponent(projectToken)}/archive` : void 0;
   const publicKnowledgeBaseTask = knowledgeBaseFinalizationFailure ? {
@@ -15362,17 +15015,13 @@ async function buildProjectView(broker, value, projectToken, knowledgeBaseTask, 
     questions,
     selectedQuestionId: value.monitorQuestionId,
     selectedPlatformIds: value.monitorPlatformIds || [],
-    knowledgeBaseRetryAvailable,
-    knowledgeBaseAutoRetryAvailable,
-    knowledgeBaseRecoveryState,
     knowledgeBaseValidationCategory: knowledgeBaseValidationFailure?.category,
-    knowledgeBaseSupportRequired: !knowledgeBaseFinalizationFailure && (knowledgeBaseValidationFailure?.category === "unsafe" || statusSyncPending(knowledgeBase.status) && hasElapsed(value.knowledgeBaseSubmittedAt, 15 * 60 * 1e3)),
+    knowledgeBaseSupportRequired: Boolean(knowledgeBaseFinalizationFailure) || Boolean(knowledgeBaseValidationFailure) || ["failed", "cancelled"].includes(knowledgeBase.status) || !knowledgeBaseFinalizationFailure && statusSyncPending(knowledgeBase.status) && hasElapsed(value.knowledgeBaseSubmittedAt, 15 * 60 * 1e3),
     knowledgeBaseFinalization: {
       finalizationState: value.knowledgeBaseFinalization?.state ?? (knowledgeBaseManifest ? "completed" : "pending"),
       finalizerVersion: value.knowledgeBaseFinalization?.finalizerVersion ?? value.knowledgeBaseArtifact?.finalizerVersion ?? WEBSITE_KB_FINALIZER_VERSION,
       candidateSha256: value.knowledgeBaseFinalization?.candidateSha256 ?? value.knowledgeBaseArtifact?.candidate.sha256,
-      errorCode: value.knowledgeBaseFinalization?.errorCode,
-      retryAvailable: value.knowledgeBaseFinalization?.state === "failed_internal" && value.knowledgeBaseFinalization.retryAvailable === true
+      errorCode: value.knowledgeBaseFinalization?.errorCode
     },
     questionRetryAvailable,
     assessmentRetryAvailable,
@@ -16171,22 +15820,6 @@ function validateProjectAttachments(input, codec, sessionId) {
     return value;
   });
 }
-function validateRetryProjectAttachments(input, value) {
-  const uploadFileIds = new Set(value.uploadFileIds || []);
-  return input.attachments.map((attachment) => {
-    if (!uploadFileIds.has(attachment.fileId)) {
-      throw new GeoHttpError(
-        "\u91CD\u8BD5\u9644\u4EF6\u4E0D\u5C5E\u4E8E\u5F53\u524D\u9879\u76EE",
-        400,
-        "RETRY_ATTACHMENT_NOT_OWNED"
-      );
-    }
-    return {
-      fileId: attachment.fileId,
-      filename: sanitizeFilename(attachment.filename, "company-material")
-    };
-  });
-}
 async function resolveCanonicalCompanyIdentity(broker, value, knowledgeBaseTask, options = {}) {
   if (normalizeTaskStatus(knowledgeBaseTask.status) !== "completed")
     return value;
@@ -16475,7 +16108,7 @@ function normalizeError(error) {
 
 // server/geo/health.ts
 function geoPublicBuildSha(env = process.env) {
-  const embedded = true ? "411c340fe3cae3408592d29f34c50e38761983d5".trim() : "";
+  const embedded = true ? "4d2f4ffca89d2151923abc430d9eb669227ef5c9".trim() : "";
   if (/^[a-f0-9]{7,64}$/i.test(embedded)) return embedded.toLowerCase();
   const candidate = (env.FRONTMIND_BUILD_SHA || env.GITHUB_SHA || env.RAILWAY_GIT_COMMIT_SHA || "").trim();
   return /^[a-f0-9]{7,64}$/i.test(candidate) ? candidate.toLowerCase() : null;

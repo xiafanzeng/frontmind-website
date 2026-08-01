@@ -8,9 +8,9 @@ description: "Build a source-grounded Simplified Chinese enterprise knowledge-ba
 Produce one evidence-grounded candidate ZIP. The service, not this skill,
 creates the final schema-v3 archive and all frontend manifests.
 
-Run this Skill only with the `frontmind-pro` model profile. Do not downgrade
-Website enterprise knowledge-base generation or regeneration to
-`frontmind-base`.
+Run this Skill only with the `frontmind-pro` model profile. The Website creates
+exactly one enterprise knowledge-base generation task. Do not request,
+recommend, or perform automatic recovery, regeneration, or a second attempt.
 
 ## Non-negotiable boundary
 
