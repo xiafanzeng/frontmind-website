@@ -1023,6 +1023,7 @@ describe("GEO API", () => {
     expect(broker.prompts[0]).toContain("不要询问、等待确认");
     expect(broker.prompts[0]).toContain("catalog.pdf");
     expect(broker.prompts[0]).not.toContain("# FILE: SKILL.md");
+    expect(broker.taskAgentProfiles).toEqual([FRONTMIND_PRO_PROFILE]);
     expect(broker.taskAttachments[0]).toEqual([
       {
         file_id: "skill-file-1",
@@ -1982,6 +1983,10 @@ describe("GEO API", () => {
       },
     });
     expect(broker.prompts).toHaveLength(2);
+    expect(broker.taskAgentProfiles).toEqual([
+      FRONTMIND_PRO_PROFILE,
+      FRONTMIND_PRO_PROFILE,
+    ]);
     const automaticPayload = automatic.body as Record<string, any>;
     const automaticTokenValue = new GeoTokenCodec(
       "test-session-secret-at-least-16-characters",
@@ -2704,6 +2709,10 @@ describe("GEO API", () => {
         file_id: "skill-file-2",
         filename: "website-one-shot-kb-builder.skill.zip",
       },
+    ]);
+    expect(broker.taskAgentProfiles).toEqual([
+      FRONTMIND_PRO_PROFILE,
+      FRONTMIND_PRO_PROFILE,
     ]);
   });
 
@@ -5174,7 +5183,7 @@ describe("GEO API", () => {
     });
     expect(broker.questionTaskCount).toBe(1);
     expect(broker.taskAgentProfiles).toEqual([
-      undefined,
+      FRONTMIND_PRO_PROFILE,
       FRONTMIND_PRO_PROFILE,
     ]);
   });

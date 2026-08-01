@@ -6476,12 +6476,19 @@ async function createWebsiteKnowledgeBaseTaskWithSkill(
     idempotencyKey: string;
   },
 ) {
-  const result = await createGeoTaskWithSkillPackages(broker, input, [
+  const result = await createGeoTaskWithSkillPackages(
+    broker,
     {
-      filename: WEBSITE_KB_SKILL_ARCHIVE_FILENAME,
-      body: await buildWebsiteKnowledgeBaseSkillArchive(),
+      ...input,
+      agentProfile: FRONTMIND_PRO_PROFILE,
     },
-  ]);
+    [
+      {
+        filename: WEBSITE_KB_SKILL_ARCHIVE_FILENAME,
+        body: await buildWebsiteKnowledgeBaseSkillArchive(),
+      },
+    ],
+  );
   return {
     task: result.task,
     skillAttachment: result.skillAttachments[0],

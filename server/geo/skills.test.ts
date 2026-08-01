@@ -63,7 +63,7 @@ describe("website one-shot knowledge-base skill", () => {
     );
   });
 
-  it("keeps the Base skill focused on research and candidate output", async () => {
+  it("keeps the Pro skill focused on research and candidate output", async () => {
     const skill = await loadWebsiteKnowledgeBaseSkill();
     expect(Buffer.byteLength(skill, "utf8")).toBeGreaterThanOrEqual(9_000);
     expect(Buffer.byteLength(skill, "utf8")).toBeLessThanOrEqual(40_000);
@@ -80,6 +80,8 @@ describe("website one-shot knowledge-base skill", () => {
       "6300 visible characters",
       "contentFloorExceptions",
       "scripts/build_candidate.py",
+      "`frontmind-pro` model profile",
+      "`frontmind-base`",
     ]) {
       expect(skill).toContain(invariant);
     }
