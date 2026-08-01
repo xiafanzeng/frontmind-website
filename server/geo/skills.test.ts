@@ -79,6 +79,7 @@ describe("website one-shot knowledge-base skill", () => {
       "logoAcquisition.status",
       "6300 visible characters",
       "contentFloorExceptions",
+      "cross-file evidence-reference subset",
       "scripts/build_candidate.py",
       "`frontmind-pro` model profile",
       "exactly one enterprise knowledge-base generation task",
@@ -162,10 +163,16 @@ describe("website one-shot knowledge-base skill", () => {
       path.join(os.tmpdir(), "website-kb-skill-"),
     );
     try {
-      const facts = Array.from(
-        { length: 13 },
-        (_, index) =>
-          `## D${String(index + 1).padStart(2, "0")} ${
+      const facts = Array.from({ length: 13 }, (_, index) => {
+        const evidence =
+          index < 7
+            ? `可核验事实说明。[来源](${
+                index === 0
+                  ? "https://example.com:443/section-1#facts"
+                  : `https://example.com/section-${index + 1}`
+              })`
+            : "公开资料暂未提供可核验信息。[待核验]";
+        return `## D${String(index + 1).padStart(2, "0")} ${
             [
               "企业基础",
               "团队",
@@ -181,8 +188,8 @@ describe("website one-shot knowledge-base skill", () => {
               "公开意图",
               "公共情报",
             ][index]
-          }\n\n公开资料暂未提供可核验信息。[待核验]`,
-      ).join("\n\n");
+          }\n\n${evidence}`;
+      }).join("\n\n");
       const contentFloors = new Map([
         ["企业与品牌", 500],
         ["团队与组织", 500],
@@ -281,6 +288,74 @@ describe("website one-shot knowledge-base skill", () => {
       const parsed = await parseKnowledgeBaseCandidate(fs.readFileSync(first));
       expect(parsed.factSections.size).toBe(13);
       expect(parsed.customerSections.size).toBe(7);
+    } finally {
+      fs.rmSync(temporaryRoot, { recursive: true, force: true });
+    }
+  });
+
+  it("rejects customer evidence references absent from the brand facts", async () => {
+    const temporaryRoot = fs.mkdtempSync(
+      path.join(os.tmpdir(), "website-kb-skill-evidence-closure-"),
+    );
+    try {
+      const facts = Array.from(
+        { length: 13 },
+        (_, index) =>
+          `## D${String(index + 1).padStart(2, "0")} ${
+            [
+              "企业基础",
+              "团队",
+              "产品服务",
+              "技术能力",
+              "客户案例",
+              "资质认证",
+              "财务融资",
+              "竞争信息",
+              "市场信息",
+              "品牌资产",
+              "渠道",
+              "公开意图",
+              "公共情报",
+            ][index]
+          }\n\n公开资料暂未提供可核验信息。[待核验]`,
+      ).join("\n\n");
+      const customer = [
+        "企业与品牌",
+        "团队与组织",
+        "产品与服务",
+        "技术与交付",
+        "客户与行业",
+        "服务与合作",
+        "可信优势",
+      ]
+        .map((title, index) =>
+          index === 2
+            ? `## ${title}\n\n模型与价格事实。[来源](https://example.com/pricing)`
+            : `## ${title}\n\n公开资料暂未提供可核验信息。[待核验]`,
+        )
+        .join("\n\n");
+      fs.writeFileSync(path.join(temporaryRoot, "00_brand_facts.md"), facts);
+      fs.writeFileSync(
+        path.join(temporaryRoot, "01_customer_draft.md"),
+        customer,
+      );
+      const script = path.resolve(
+        process.cwd(),
+        "server/skills/website-one-shot-kb-builder/scripts/build_candidate.py",
+      );
+      await expect(
+        execFileAsync("python3", [
+          script,
+          "--input-dir",
+          temporaryRoot,
+          "--output",
+          path.join(temporaryRoot, "website-lead-candidate-v1.zip"),
+        ]),
+      ).rejects.toMatchObject({
+        stderr: expect.stringContaining(
+          "01_customer_draft.md evidence references are absent from 00_brand_facts.md: https://example.com/pricing",
+        ),
+      });
     } finally {
       fs.rmSync(temporaryRoot, { recursive: true, force: true });
     }
@@ -432,6 +507,9 @@ describe("website one-shot knowledge-base skill", () => {
     expect(candidateFormat).toMatch(/\| 企业与品牌\s+\|\s+210 \|\s+500 \|/);
     expect(candidateFormat).toMatch(/\| 合计\s+\|\s+2954 \|\s+6300 \|/);
     expect(candidateFormat).toContain("logoAcquisition");
+    expect(candidateFormat).toContain(
+      "evidence_refs(01_customer_draft.md) ⊆ evidence_refs(00_brand_facts.md)",
+    );
     expect(candidateFormat).toContain("00_brand_facts.md");
     expect(candidateFormat).toContain("01_customer_draft.md");
     expect(candidateFormat).not.toContain("00_package_manifest.json");

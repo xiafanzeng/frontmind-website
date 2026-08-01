@@ -102,6 +102,10 @@ End each factual paragraph with at least one marker:
 - `[上传文件：exact-filename]` for uploaded evidence.
 - `[待核验]` when the available evidence does not establish the fact.
 
+Keep the evidence graph closed. Every normalized URL or `[上传文件：...]` in
+`01_customer_draft.md` must occur in a factual `00_brand_facts.md` paragraph;
+never add customer-only sources.
+
 Write neutral finished knowledge content, not research notes. Do not expose
 collection process, source scoring, verification advice, procurement advice,
 or model reasoning in `01_customer_draft.md`.
@@ -141,11 +145,11 @@ python3 scripts/build_candidate.py \
   --output ./website-lead-candidate-v1.zip
 ```
 
-The script validates all 13 fact headings, all seven customer headings, exact
-content floors or documented exceptions, evidence markers, required metadata,
-the Logo acquisition result, deterministic ZIP metadata, and the written ZIP
-by reopening it. Fix any reported error and rerun it. Never hand-compress the
-working directory.
+The script validates all 13 fact headings, all seven customer headings, the
+cross-file evidence-reference subset, exact content floors or documented
+exceptions, evidence markers, required metadata, the Logo acquisition result,
+deterministic ZIP metadata, and the written ZIP by reopening it. Fix any
+reported error and rerun it. Never hand-compress the working directory.
 
 Return exactly one file named `website-lead-candidate-v1.zip`. Do not attach a
 Skill ZIP, working directory, cache, source-page export, log, or second archive.
