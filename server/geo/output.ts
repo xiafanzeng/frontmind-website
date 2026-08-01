@@ -27,7 +27,14 @@ export function normalizeTaskStatus(value: unknown): NormalizedTaskStatus {
     return "running";
   if (["paused", "waiting", "pending_sync"].includes(status)) return "waiting";
   if (
-    ["completed", "complete", "succeeded", "success", "done"].includes(status)
+    [
+      "completed",
+      "complete",
+      "succeeded",
+      "success",
+      "done",
+      "finished",
+    ].includes(status)
   )
     return "completed";
   if (["failed", "error", "errored"].includes(status)) return "failed";

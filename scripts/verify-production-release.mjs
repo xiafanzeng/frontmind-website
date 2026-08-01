@@ -1,7 +1,8 @@
-import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { readFile } from "node:fs/promises";
 import { basename, resolve } from "node:path";
+import { verifyBuildArtifactManifest } from "./build-artifact-identity.mjs";
+import { resolveProductionReleaseIdentity } from "./production-release-identity.mjs";
 
 const projectRoot = resolve(import.meta.dirname, "..");
 const args = new Map();
@@ -14,7 +15,7 @@ for (let index = 2; index < process.argv.length; ) {
   const value = process.argv[index + 1];
   if (!key?.startsWith("--") || !value) {
     throw new Error(
-      "Usage: pnpm verify:production -- --url https://www.frontmind.net [--sha <git-sha>]",
+      "Usage: pnpm verify:production -- --url https://www.frontmind.net --approval-sha <full-git-sha> --build-source-sha <full-git-sha> --artifact-root <sha256> [--store-id <persistence-identity-sha256>]",
     );
   }
   args.set(key.slice(2), value);
@@ -25,23 +26,43 @@ const productionUrl = new URL(args.get("url") || "");
 if (productionUrl.protocol !== "https:") {
   throw new Error("--url must be a production HTTPS origin");
 }
-const expectedSha = (
-  args.get("sha") ||
-  execFileSync("git", ["rev-parse", "HEAD"], {
-    cwd: projectRoot,
-    encoding: "utf8",
-  })
+const { approvalSha, buildSourceSha } = await resolveProductionReleaseIdentity({
+  projectRoot,
+  env: process.env,
+  approvalSha: args.get("approval-sha"),
+  buildSourceSha: args.get("build-source-sha"),
+  legacyBuildSourceSha: args.get("sha"),
+});
+const localArtifact = await verifyBuildArtifactManifest(
+  resolve(projectRoot, "dist"),
+  { expectedBuildSourceSha: buildSourceSha },
+);
+const expectedArtifactRoot = String(
+  args.get("artifact-root") ||
+    process.env.FRONTMIND_EXPECTED_ARTIFACT_ROOT_SHA256 ||
+    "",
 )
   .trim()
   .toLowerCase();
-if (!/^[a-f0-9]{7,64}$/.test(expectedSha)) {
-  throw new Error("--sha must be a 7-64 character hexadecimal Git SHA");
+if (!/^[a-f0-9]{64}$/u.test(expectedArtifactRoot)) {
+  throw new Error(
+    "--artifact-root or FRONTMIND_EXPECTED_ARTIFACT_ROOT_SHA256 must be a 64-character SHA-256 value",
+  );
+}
+if (localArtifact.rootSha256 !== expectedArtifactRoot) {
+  throw new Error(
+    "The externally approved artifact root differs from the local dist bytes",
+  );
+}
+const expectedStoreIdentity = args.get("store-id")?.trim().toLowerCase();
+if (expectedStoreIdentity && !/^[a-f0-9]{64}$/.test(expectedStoreIdentity)) {
+  throw new Error("--store-id must be a 64-character SHA-256 value");
 }
 
 const runtimeSkillDefinitions = [
   {
     name: "website-one-shot-kb-builder",
-    version: 5,
+    version: 6,
     files: [
       "SKILL.md",
       "agents/openai.yaml",
@@ -134,9 +155,27 @@ async function fetchOk(url) {
 const healthUrl = new URL("/healthz", productionUrl);
 const health = await (await fetchOk(healthUrl)).json();
 if (health?.status !== "ok") throw new Error("/healthz is not ready");
-if (String(health?.buildSha || "").toLowerCase() !== expectedSha) {
+if (String(health?.buildSha || "").toLowerCase() !== buildSourceSha) {
   throw new Error(
-    `buildSha mismatch: expected ${expectedSha}, received ${health?.buildSha ?? "null"}`,
+    `buildSha mismatch: expected ${buildSourceSha}, received ${health?.buildSha ?? "null"}`,
+  );
+}
+if (
+  health?.artifact?.verified !== true ||
+  health?.artifact?.schemaVersion !== localArtifact.schemaVersion ||
+  String(health?.artifact?.approvalSha || "").toLowerCase() !== approvalSha ||
+  String(health?.artifact?.buildSourceSha || "").toLowerCase() !==
+    buildSourceSha ||
+  String(health?.artifact?.expectedRootSha256 || "").toLowerCase() !==
+    expectedArtifactRoot ||
+  String(health?.artifact?.actualRootSha256 || "").toLowerCase() !==
+    expectedArtifactRoot ||
+  String(health?.artifact?.rootSha256 || "").toLowerCase() !==
+    expectedArtifactRoot ||
+  health?.artifact?.fileCount !== localArtifact.files.length
+) {
+  throw new Error(
+    "Production artifact root differs from the byte-verified local dist",
   );
 }
 
@@ -175,9 +214,27 @@ if (
   health?.dependencies?.agent?.monitorCredentialConfigured !== true ||
   health?.dependencies?.agent?.publicUrlConfigured !== true ||
   health?.dependencies?.projectOrderRegistry?.ready !== true ||
-  health?.dependencies?.paymentReceiptLedger?.ready !== true
+  health?.dependencies?.paymentReceiptLedger?.ready !== true ||
+  health?.dependencies?.customQuestionValidationStore?.ready !== true
 ) {
   throw new Error("One or more GEO production dependencies are not ready");
+}
+const persistenceIdentitySha256 = String(
+  health?.dependencies?.customQuestionValidationStore
+    ?.persistenceIdentitySha256 || "",
+).toLowerCase();
+if (!/^[a-f0-9]{64}$/.test(persistenceIdentitySha256)) {
+  throw new Error(
+    "customQuestionValidationStore.persistenceIdentitySha256 is missing or invalid",
+  );
+}
+if (
+  expectedStoreIdentity &&
+  persistenceIdentitySha256 !== expectedStoreIdentity
+) {
+  throw new Error(
+    "Custom-question persistence identity changed across deployment recreation",
+  );
 }
 
 function frontendEntry(html) {
@@ -226,10 +283,14 @@ console.log(
     {
       status: "verified",
       url: productionUrl.origin,
-      buildSha: expectedSha,
+      approvalSha,
+      buildSourceSha,
+      customQuestionPersistenceIdentitySha256: persistenceIdentitySha256,
       websiteSkillVersion: websiteSkill.version,
       websiteSkillHash: expectedWebsiteSkill.contentHash,
       runtimeSkills: expectedRuntimeSkills,
+      artifactRootSha256: expectedArtifactRoot,
+      artifactFileCount: localArtifact.files.length,
       frontendEntry: localEntry,
       frontendEntrySha256: localEntryHash,
     },

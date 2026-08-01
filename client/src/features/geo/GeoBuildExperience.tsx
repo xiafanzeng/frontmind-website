@@ -71,6 +71,7 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import {
+  authoritativeGeoCustomQuestionValidationTerminal,
   createGeoServiceAccount,
   createGeoCustomQuestion,
   createGeoPaymentCheckout,
@@ -78,12 +79,18 @@ import {
   createGeoServicePaymentCheckout,
   deleteGeoProject as deleteRemoteGeoProject,
   downloadGeoArchive,
+  expiredGeoCustomQuestionValidation,
   getGeoProject,
   getGeoPaymentStatus,
   getGeoServiceContractStatus,
   getGeoServicePaymentStatus,
   getGeoServiceProvisioningStatus,
   GeoApiError,
+  persistGeoCustomQuestionResultAndAcknowledge,
+  readPendingGeoCustomQuestionValidation,
+  retryableGeoCustomQuestionValidation,
+  retryGeoCustomQuestionValidation,
+  resumeGeoCustomQuestionValidation,
   type GeoPaymentCheckout,
   type GeoPaymentMethod,
   type GeoServicePaymentCheckout,
@@ -115,6 +122,7 @@ import {
   shouldAutoRefreshGeoProject,
 } from "./refresh";
 import {
+  canCommitGeoProjectObservation,
   getGeoArchive,
   listGeoProjects,
   removeGeoProject,
@@ -122,6 +130,7 @@ import {
   retryGeoArchivePersistence,
   saveGeoArchive,
   saveGeoProject,
+  saveGeoProjectObservationIfCurrent,
 } from "./storage";
 import {
   geoLocalArchiveAssetRefreshKey,
@@ -1494,21 +1503,46 @@ function GeoBuildExperienceZh() {
     [],
   );
 
-  const commitProject = useCallback((project: GeoProject) => {
-    setProjects((current) => {
-      const exists = current.some((item) => item.id === project.id);
-      const next = exists
-        ? current.map((item) => (item.id === project.id ? project : item))
-        : [project, ...current];
-      return next.sort((left, right) =>
-        right.updatedAt.localeCompare(left.updatedAt),
+  const commitProject = useCallback(
+    (
+      project: GeoProject,
+      options: {
+        expectedRemoteToken?: string;
+        skipPersistence?: boolean;
+      } = {},
+    ) => {
+      setProjects((current) => {
+        const existing = current.find((item) => item.id === project.id);
+        if (
+          options.expectedRemoteToken &&
+          !canCommitGeoProjectObservation(
+            existing,
+            project,
+            options.expectedRemoteToken,
+          )
+        ) {
+          return current;
+        }
+        const exists = Boolean(existing);
+        const next = exists
+          ? current.map((item) => (item.id === project.id ? project : item))
+          : [project, ...current];
+        return next.sort((left, right) =>
+          right.updatedAt.localeCompare(left.updatedAt),
+        );
+      });
+      if (
+        options.skipPersistence ||
+        isGeoDraftProject(project) ||
+        isGeoStylePreviewProject(project)
+      )
+        return;
+      void saveGeoProject(project).catch(() =>
+        setStorageNotice("当前浏览器无法持久保存项目，请及时下载知识库备份。"),
       );
-    });
-    if (isGeoDraftProject(project) || isGeoStylePreviewProject(project)) return;
-    void saveGeoProject(project).catch(() =>
-      setStorageNotice("当前浏览器无法持久保存项目，请及时下载知识库备份。"),
-    );
-  }, []);
+    },
+    [],
+  );
 
   const refreshProject = useCallback(
     (project: GeoProject) =>
@@ -2189,8 +2223,12 @@ function GeoBuildExperienceZh() {
     setPendingQuestion(question);
   };
 
-  const createCustomQuestion = async (questionText: string) => {
+  const createCustomQuestion = async (
+    questionText: string,
+    signal?: AbortSignal,
+  ) => {
     if (!activeProject) throw new Error("当前项目不可用，请刷新后重试。");
+    const operationProject = activeProject;
     if (activeQuestionSelectionLocked) {
       throw new Error(
         activeProject.monitoring?.runId
@@ -2230,13 +2268,130 @@ function GeoBuildExperienceZh() {
         ],
         updatedAt: new Date().toISOString(),
       });
-      setPendingQuestion(question);
-      return;
+      return question;
     }
 
-    const result = await createGeoCustomQuestion(activeProject, questionText);
-    commitProject(result.project);
-    setPendingQuestion(result.question);
+    const result = await createGeoCustomQuestion(
+      operationProject,
+      questionText,
+      {
+        signal,
+      },
+    );
+    try {
+      await persistGeoCustomQuestionResultAndAcknowledge(
+        result,
+        async (nextProject) => {
+          if (signal?.aborted) {
+            throw (
+              signal.reason ?? new DOMException("请求已取消。", "AbortError")
+            );
+          }
+          const saved = await saveGeoProjectObservationIfCurrent(
+            nextProject,
+            operationProject.remoteToken,
+          );
+          if (!saved) {
+            throw new Error(
+              "项目已被删除或已由更新的操作推进，已忽略本次迟到结果。",
+            );
+          }
+        },
+        { signal },
+      );
+    } catch (error) {
+      setStorageNotice(
+        "问题已验证，但项目令牌尚未持久保存；系统会保留同一请求并在刷新后继续恢复。",
+      );
+      throw error;
+    }
+    commitProject(result.project, {
+      expectedRemoteToken: operationProject.remoteToken,
+      skipPersistence: true,
+    });
+    return result.question;
+  };
+
+  const resumeCustomQuestion = async (signal?: AbortSignal) => {
+    if (
+      !activeProject ||
+      activeQuestionSelectionLocked ||
+      isGeoStylePreviewProject(activeProject)
+    )
+      return undefined;
+    const operationProject = activeProject;
+    const result = await resumeGeoCustomQuestionValidation(operationProject, {
+      signal,
+    });
+    if (!result) return undefined;
+    await persistGeoCustomQuestionResultAndAcknowledge(
+      result,
+      async (nextProject) => {
+        if (signal?.aborted) {
+          throw signal.reason ?? new DOMException("请求已取消。", "AbortError");
+        }
+        const saved = await saveGeoProjectObservationIfCurrent(
+          nextProject,
+          operationProject.remoteToken,
+        );
+        if (!saved) {
+          throw new Error(
+            "项目已被删除或已由更新的操作推进，已忽略本次迟到结果。",
+          );
+        }
+      },
+      { signal },
+    );
+    commitProject(result.project, {
+      expectedRemoteToken: operationProject.remoteToken,
+      skipPersistence: true,
+    });
+    return result.question;
+  };
+
+  const retryCustomQuestion = async (
+    terminalError: unknown,
+    signal?: AbortSignal,
+  ) => {
+    if (!activeProject) throw new Error("当前项目不可用，请刷新后重试。");
+    const operationProject = activeProject;
+    const result = await retryGeoCustomQuestionValidation(
+      operationProject,
+      terminalError,
+      { signal },
+    );
+    try {
+      await persistGeoCustomQuestionResultAndAcknowledge(
+        result,
+        async (nextProject) => {
+          if (signal?.aborted) {
+            throw (
+              signal.reason ?? new DOMException("请求已取消。", "AbortError")
+            );
+          }
+          const saved = await saveGeoProjectObservationIfCurrent(
+            nextProject,
+            operationProject.remoteToken,
+          );
+          if (!saved) {
+            throw new Error(
+              "项目已被删除或已由更新的操作推进，已忽略本次迟到结果。",
+            );
+          }
+        },
+        { signal },
+      );
+    } catch (error) {
+      setStorageNotice(
+        "问题已验证，但项目令牌尚未持久保存；系统会保留同一请求并在刷新后继续恢复。",
+      );
+      throw error;
+    }
+    commitProject(result.project, {
+      expectedRemoteToken: operationProject.remoteToken,
+      skipPersistence: true,
+    });
+    return result.question;
   };
 
   const confirmQuestionSelection = () => {
@@ -2821,10 +2976,17 @@ function GeoBuildExperienceZh() {
       pendingPayment?.projectId,
     );
     const fulfillmentProtected = isGeoProjectFulfillmentProtected(project);
-    if (paymentProtected || fulfillmentProtected) {
+    const pendingCustomQuestion = readPendingGeoCustomQuestionValidation(
+      project.id,
+    );
+    if (paymentProtected || fulfillmentProtected || pendingCustomQuestion) {
       setProjectMenuOpen(false);
       setDeleteTarget(undefined);
-      if (paymentProtected) {
+      if (pendingCustomQuestion) {
+        setStorageNotice(
+          `自定义问题「${pendingCustomQuestion.question}」仍在验证或等待持久化；请先完成恢复或确认后再删除项目。`,
+        );
+      } else if (paymentProtected) {
         setPaymentPurpose(pendingPayment?.kind ?? "monitoring");
         setPaymentDialogOpen(true);
         setStorageNotice(
@@ -3757,6 +3919,8 @@ function GeoBuildExperienceZh() {
                     selectionLocked={activeQuestionSelectionLocked}
                     onSelect={selectQuestion}
                     onCreateCustom={createCustomQuestion}
+                    onResumeCustom={resumeCustomQuestion}
+                    onRetryCustom={retryCustomQuestion}
                     onContact={() => setContactOpen(true)}
                   />
                 )}
@@ -4779,17 +4943,38 @@ export function QuestionRecommendation({
   selectionLocked,
   onSelect,
   onCreateCustom,
+  onResumeCustom,
+  onRetryCustom,
   onContact,
 }: {
   project: GeoProject;
   selectionLocked: boolean;
   onSelect: (question: GeoQuestion) => void;
-  onCreateCustom: (question: string) => Promise<void>;
+  onCreateCustom: (
+    question: string,
+    signal?: AbortSignal,
+  ) => Promise<GeoQuestion>;
+  onResumeCustom?: (signal?: AbortSignal) => Promise<GeoQuestion | undefined>;
+  onRetryCustom?: (
+    terminalError: unknown,
+    signal?: AbortSignal,
+  ) => Promise<GeoQuestion>;
   onContact: () => void;
 }) {
   const [customQuestion, setCustomQuestion] = useState("");
   const [customSubmitting, setCustomSubmitting] = useState(false);
   const [customError, setCustomError] = useState("");
+  const [customRetryable, setCustomRetryable] = useState(false);
+  const [customRetryTerminalError, setCustomRetryTerminalError] =
+    useState<unknown>();
+  const [customRestartAfterExpiration, setCustomRestartAfterExpiration] =
+    useState(false);
+  const [validatedCustomQuestion, setValidatedCustomQuestion] =
+    useState<GeoQuestion>();
+  const [customStartedAt, setCustomStartedAt] = useState<number>();
+  const [customClock, setCustomClock] = useState(() => Date.now());
+  const customRequestInFlight = useRef(false);
+  const customAbortController = useRef<AbortController | undefined>(undefined);
   const [permissionVideoOpen, setPermissionVideoOpen] = useState(false);
   const recommendedQuestions = project.questions.filter(
     (question) => !question.id.startsWith("custom-"),
@@ -4800,6 +4985,88 @@ export function QuestionRecommendation({
         (question) => question.category === category.id,
       ).length === 5,
   );
+
+  useEffect(() => {
+    const pending = readPendingGeoCustomQuestionValidation(project.id);
+    const controller = new AbortController();
+    let cancelled = false;
+    customAbortController.current?.abort();
+    customAbortController.current = controller;
+    const shouldProbe = Boolean(onResumeCustom);
+    customRequestInFlight.current = shouldProbe;
+    setCustomQuestion(pending?.question ?? "");
+    setCustomSubmitting(Boolean(pending) || shouldProbe);
+    setCustomError("");
+    setCustomRetryable(false);
+    setCustomRetryTerminalError(undefined);
+    setCustomRestartAfterExpiration(false);
+    setValidatedCustomQuestion(undefined);
+    setCustomStartedAt(pending || shouldProbe ? Date.now() : undefined);
+    void (onResumeCustom?.(controller.signal) ?? Promise.resolve(undefined))
+      .then((question) => {
+        if (cancelled || !question) return;
+        setCustomQuestion(question.question);
+        setValidatedCustomQuestion(question);
+        setCustomRetryable(false);
+        setCustomRestartAfterExpiration(false);
+      })
+      .catch((error) => {
+        if (cancelled) return;
+        const expired = expiredGeoCustomQuestionValidation(error);
+        setCustomError(
+          expired
+            ? "原问题验证已过期，本地请求锁定已解除。"
+            : errorMessage(error),
+        );
+        const authoritativeTerminal =
+          authoritativeGeoCustomQuestionValidationTerminal(error);
+        const retryableTerminal = retryableGeoCustomQuestionValidation(error);
+        setCustomRetryTerminalError(retryableTerminal ? error : undefined);
+        setCustomRestartAfterExpiration(expired);
+        setCustomRetryable(
+          Boolean(
+            expired ||
+              retryableTerminal ||
+              (!authoritativeTerminal &&
+                readPendingGeoCustomQuestionValidation(project.id)),
+          ),
+        );
+      })
+      .finally(() => {
+        if (cancelled) return;
+        if (customAbortController.current === controller)
+          customAbortController.current = undefined;
+        customRequestInFlight.current = false;
+        setCustomSubmitting(false);
+        setCustomStartedAt(undefined);
+      });
+    return () => {
+      cancelled = true;
+      controller.abort();
+      customAbortController.current?.abort();
+      customAbortController.current = undefined;
+      customRequestInFlight.current = false;
+    };
+    // Recovery is keyed by the durable project id. The callback intentionally
+    // does not restart polling when parent state adopts a rotated token.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [project.id]);
+
+  useEffect(() => {
+    if (!customSubmitting || customStartedAt === undefined) return;
+    setCustomClock(Date.now());
+    const timer = window.setInterval(() => setCustomClock(Date.now()), 1_000);
+    return () => window.clearInterval(timer);
+  }, [customStartedAt, customSubmitting]);
+
+  const customElapsed =
+    customStartedAt === undefined
+      ? "00:00:00"
+      : formatExecutionElapsed(
+          new Date(customStartedAt).toISOString(),
+          undefined,
+          customClock,
+        );
 
   return (
     <div className="geo-question-view">
@@ -5153,10 +5420,16 @@ export function QuestionRecommendation({
           </div>
         </div>
         <form
+          aria-busy={customSubmitting}
           onSubmit={(event) => {
             event.preventDefault();
+            if (customRequestInFlight.current) return;
             if (selectionLocked) {
               setCustomError("本次问题范围已经锁定，不能再创建或更换问题。");
+              return;
+            }
+            if (validatedCustomQuestion) {
+              onSelect(validatedCustomQuestion);
               return;
             }
             const question = customQuestion.trim();
@@ -5164,12 +5437,80 @@ export function QuestionRecommendation({
               setCustomError("请输入一个完整的问题。");
               return;
             }
+            customRequestInFlight.current = true;
+            const controller = new AbortController();
+            customAbortController.current?.abort();
+            customAbortController.current = controller;
+            const startedAt = Date.now();
             setCustomSubmitting(true);
+            setCustomStartedAt(startedAt);
+            setCustomClock(startedAt);
             setCustomError("");
-            void onCreateCustom(question)
-              .then(() => setCustomQuestion(""))
-              .catch((error) => setCustomError(errorMessage(error)))
-              .finally(() => setCustomSubmitting(false));
+            setCustomRetryable(false);
+            setCustomRestartAfterExpiration(false);
+            const retryTerminalError = customRetryTerminalError;
+            setCustomRetryTerminalError(undefined);
+            const operation =
+              retryTerminalError && onRetryCustom
+                ? onRetryCustom(retryTerminalError, controller.signal)
+                : onCreateCustom(question, controller.signal);
+            void operation
+              .then((validatedQuestion) => {
+                if (
+                  controller.signal.aborted ||
+                  customAbortController.current !== controller
+                )
+                  return;
+                setValidatedCustomQuestion(validatedQuestion);
+                setCustomRetryable(false);
+                setCustomRetryTerminalError(undefined);
+              })
+              .catch((error) => {
+                if (
+                  controller.signal.aborted ||
+                  customAbortController.current !== controller
+                )
+                  return;
+                const expired = expiredGeoCustomQuestionValidation(error);
+                setCustomError(
+                  expired
+                    ? "原问题验证已过期，本地请求锁定已解除。"
+                    : errorMessage(error),
+                );
+                const directTerminal =
+                  retryableGeoCustomQuestionValidation(error);
+                const authoritativeTerminal =
+                  authoritativeGeoCustomQuestionValidationTerminal(error);
+                const priorTerminal = retryTerminalError
+                  ? retryableGeoCustomQuestionValidation(retryTerminalError)
+                  : undefined;
+                const pending = readPendingGeoCustomQuestionValidation(
+                  project.id,
+                );
+                const retainedTerminalError = directTerminal
+                  ? error
+                  : priorTerminal &&
+                      pending?.clientRequestId === priorTerminal.clientRequestId
+                    ? retryTerminalError
+                    : undefined;
+                setCustomRetryTerminalError(retainedTerminalError);
+                setCustomRestartAfterExpiration(expired);
+                setCustomRetryable(
+                  Boolean(
+                    expired ||
+                      retainedTerminalError ||
+                      (!authoritativeTerminal &&
+                        pending?.question === question),
+                  ),
+                );
+              })
+              .finally(() => {
+                if (customAbortController.current !== controller) return;
+                customAbortController.current = undefined;
+                customRequestInFlight.current = false;
+                setCustomSubmitting(false);
+                setCustomStartedAt(undefined);
+              });
           }}
         >
           <label htmlFor="geo-custom-question">自定义优化问题</label>
@@ -5182,21 +5523,48 @@ export function QuestionRecommendation({
               onChange={(event) => {
                 setCustomQuestion(event.target.value);
                 setCustomError("");
+                setCustomRetryable(false);
+                setCustomRetryTerminalError(undefined);
+                setCustomRestartAfterExpiration(false);
+                setValidatedCustomQuestion(undefined);
               }}
               placeholder={`例如：${project.knowledgeBase?.companyName || project.title}有哪些值得重点了解的优势？`}
             />
             <button
               type="submit"
+              className={validatedCustomQuestion ? "is-validated" : undefined}
               disabled={
                 selectionLocked ||
                 customSubmitting ||
+                (Boolean(customError) && !customRetryable) ||
                 customQuestion.trim().length < 4
               }
             >
               {customSubmitting ? (
                 <>
-                  <LoaderCircle size={15} /> 正在验证
+                  <LoaderCircle size={15} className="is-spinning" />
+                  {customElapsed} · 等待返回
                 </>
+              ) : validatedCustomQuestion ? (
+                <>
+                  <Check size={15} /> 验证通过，进入下一步
+                  <ArrowRight size={15} />
+                </>
+              ) : customError ? (
+                customRetryable ? (
+                  <>
+                    <RotateCw size={15} />{" "}
+                    {customRestartAfterExpiration
+                      ? "重新提交验证"
+                      : customRetryTerminalError
+                        ? "重新发起验证"
+                        : "恢复同一验证"}
+                  </>
+                ) : (
+                  <>
+                    <LockKeyhole size={15} /> 请修改问题
+                  </>
+                )
               ) : (
                 <>
                   验证并继续 <ArrowRight size={15} />
@@ -5207,9 +5575,22 @@ export function QuestionRecommendation({
           <small>
             问题需明确包含当前企业、品牌或知识库中的具体产品/服务；行业排名、榜单、开放式品牌推荐及企业无关问题不会通过。
           </small>
+          {customSubmitting && (
+            <p className="geo-custom-question-pending" role="status">
+              <Clock3 size={14} />
+              验证请求已锁定，上游返回前将持续等待并自动更新结果，请勿重复提交。
+            </p>
+          )}
           {customError && (
             <p className="geo-custom-question-error" role="alert">
-              <CircleAlert size={14} /> {customError}
+              <CircleAlert size={14} /> {customError}{" "}
+              {customRetryable
+                ? customRestartAfterExpiration
+                  ? "可点击上方按钮，使用新的请求重新提交同一问题。"
+                  : customRetryTerminalError
+                    ? "可点击上方按钮确认旧终态后，以新的请求重新发起一次验证。"
+                    : "可点击上方按钮恢复同一验证任务。"
+                : "请修改问题后重新提交。"}
             </p>
           )}
         </form>

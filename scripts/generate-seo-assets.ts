@@ -27,6 +27,7 @@ type RouteMeta = {
 const PROJECT_ROOT = fileURLToPath(new URL("..", import.meta.url));
 const DIST_PUBLIC = path.join(PROJECT_ROOT, "dist/public");
 const CLIENT_PUBLIC = path.join(PROJECT_ROOT, "client/public");
+const DIST_ONLY = process.argv.includes("--dist-only");
 const DEFAULT_SITE_URL = "https://www.frontmind.net";
 const SITE_URL = normalizeSiteUrl(process.env.VITE_SITE_URL || process.env.SITE_URL || DEFAULT_SITE_URL);
 const BUILD_DATE = process.env.BUILD_DATE || "2026-06-23";
@@ -745,7 +746,7 @@ ${generateRobots().trim()}
 }
 
 function writeSharedFile(relativePath: string, content: string) {
-  [DIST_PUBLIC, CLIENT_PUBLIC].forEach((root) => {
+  (DIST_ONLY ? [DIST_PUBLIC] : [DIST_PUBLIC, CLIENT_PUBLIC]).forEach((root) => {
     const outputPath = path.join(root, relativePath);
     fs.mkdirSync(path.dirname(outputPath), { recursive: true });
     fs.writeFileSync(outputPath, content, "utf-8");

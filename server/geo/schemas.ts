@@ -457,6 +457,9 @@ function normalizeCustomQuestionText(value: string) {
 
 export const CreateCustomQuestionRequestSchema = z
   .object({
+    // Optional only for the bounded legacy bridge. Current clients always send
+    // a UUID; old cached clients are mapped to a deterministic server UUID.
+    clientRequestId: z.string().uuid().optional(),
     question: z
       .string()
       .max(240)

@@ -1,18 +1,13 @@
-import { execFileSync } from "node:child_process";
 import { resolve } from "node:path";
 import { build } from "esbuild";
+import { assertCleanProductionBuildSource } from "./assert-clean-build-source.mjs";
+import { writeBuildArtifactIdentity } from "./build-artifact-identity.mjs";
 
 const projectRoot = resolve(import.meta.dirname, "..");
-const buildSha = execFileSync("git", ["rev-parse", "HEAD"], {
-  cwd: projectRoot,
-  encoding: "utf8",
-})
-  .trim()
-  .toLowerCase();
-
-if (!/^[a-f0-9]{40}$/.test(buildSha)) {
-  throw new Error("Could not resolve a full Git SHA for the server build");
-}
+const buildSha = assertCleanProductionBuildSource({
+  repositoryRoot: projectRoot,
+  env: process.env,
+});
 
 await build({
   entryPoints: {
@@ -32,5 +27,6 @@ await build({
     __FRONTMIND_BUILD_SHA__: JSON.stringify(buildSha),
   },
 });
+await writeBuildArtifactIdentity(resolve(projectRoot, "dist"), buildSha);
 
 console.log(`Server and payment-verification bundles built from ${buildSha}.`);

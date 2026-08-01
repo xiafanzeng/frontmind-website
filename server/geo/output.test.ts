@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   findArchiveDescriptor,
   normalizeTask,
+  normalizeTaskStatus,
   parseQuestionSetFromTask,
 } from "./output";
 import { buildValidQuestionSet } from "./question-set.test-fixture";
@@ -11,6 +12,17 @@ function questionSet() {
 }
 
 describe("GEO task output normalization", () => {
+  it.each(["completed", "complete", "succeeded", "done", "finished"])(
+    "normalizes the upstream terminal status %s",
+    (status) => {
+      expect(normalizeTaskStatus(status)).toBe("completed");
+    },
+  );
+
+  it("keeps an unrecognized status explicit", () => {
+    expect(normalizeTaskStatus("provider-new-terminal-state")).toBe("unknown");
+  });
+
   it("normalizes fractional task progress before percentage values", () => {
     expect(
       normalizeTask({ status: "running", progress: 0.5 }, "knowledge-base")
@@ -167,10 +179,7 @@ describe("GEO task output normalization", () => {
       (question) => question.category === "competitor_comparison",
     );
     if (!comparison) throw new Error("missing comparison fixture");
-    comparison.question = comparison.question.replace(
-      "有什么区别",
-      "有何不同",
-    );
+    comparison.question = comparison.question.replace("有什么区别", "有何不同");
 
     expect(
       parseQuestionSetFromTask({

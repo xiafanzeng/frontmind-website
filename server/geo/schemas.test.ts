@@ -175,11 +175,25 @@ describe("custom GEO question policy", () => {
   it("normalizes customer input into a monitor-ready Chinese question", () => {
     expect(
       CreateCustomQuestionRequestSchema.parse({
+        clientRequestId: "55555555-5555-4555-8555-555555555555",
         question: "  FrontMind 适合科研企业使用吗?  ",
       }),
-    ).toEqual({ question: "FrontMind 适合科研企业使用吗？" });
+    ).toEqual({
+      clientRequestId: "55555555-5555-4555-8555-555555555555",
+      question: "FrontMind 适合科研企业使用吗？",
+    });
+    expect(
+      CreateCustomQuestionRequestSchema.parse({
+        question: "  FrontMind 适合科研企业使用吗?  ",
+      }),
+    ).toEqual({
+      question: "FrontMind 适合科研企业使用吗？",
+    });
     expect(() =>
-      CreateCustomQuestionRequestSchema.parse({ question: "好" }),
+      CreateCustomQuestionRequestSchema.parse({
+        clientRequestId: "55555555-5555-4555-8555-555555555555",
+        question: "好",
+      }),
     ).toThrow();
   });
 

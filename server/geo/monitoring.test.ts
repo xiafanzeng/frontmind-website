@@ -78,6 +78,34 @@ describe("monitor result adapter", () => {
     );
   });
 
+  it("accepts a terminal status summary without records only in summary mode", () => {
+    const { records: _records, ...summary } = completedRun();
+
+    expect(() => normalizeMonitorRun(summary)).toThrow("监控完成快照不完整");
+    expect(
+      normalizeMonitorRun(
+        summary,
+        { runId: "monitor-run-001" },
+        { allowTerminalSummaryWithoutRecords: true },
+      ),
+    ).toMatchObject({
+      status: "completed",
+      completedItems: 5,
+      records: undefined,
+    });
+  });
+
+  it("still rejects explicit partial records in terminal summary mode", () => {
+    const payload = completedRun();
+    payload.records.pop();
+
+    expect(() =>
+      normalizeMonitorRun(payload, undefined, {
+        allowTerminalSummaryWithoutRecords: true,
+      }),
+    ).toThrow("监控记录状态与汇总数量不一致");
+  });
+
   it("fails closed on duplicate platform/run slots", () => {
     const payload = completedRun();
     payload.records[4].runIndex = 1;

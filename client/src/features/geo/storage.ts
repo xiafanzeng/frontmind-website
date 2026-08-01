@@ -159,6 +159,66 @@ export function saveGeoProject(project: GeoProject): Promise<IDBValidKey> {
   return runRequest(PROJECT_STORE, "readwrite", (store) => store.put(project));
 }
 
+export function canCommitGeoProjectObservation(
+  current: GeoProject | undefined,
+  next: GeoProject,
+  expectedRemoteToken: string,
+) {
+  return Boolean(
+    current &&
+      current.id === next.id &&
+      (current.remoteToken === expectedRemoteToken ||
+        current.remoteToken === next.remoteToken),
+  );
+}
+
+/**
+ * Atomically persists a response only while the project is still at the
+ * operation's input token (or already contains this exact response token).
+ * A missing project is treated as deleted, never as permission to recreate it.
+ */
+export async function saveGeoProjectObservationIfCurrent(
+  project: GeoProject,
+  expectedRemoteToken: string,
+): Promise<boolean> {
+  const database = await openDatabase();
+  return new Promise<boolean>((resolve, reject) => {
+    const transaction = database.transaction(PROJECT_STORE, "readwrite");
+    const store = transaction.objectStore(PROJECT_STORE);
+    const read = store.get(project.id);
+    let saved = false;
+    let settled = false;
+
+    read.onsuccess = () => {
+      const current = read.result as GeoProject | undefined;
+      if (
+        !canCommitGeoProjectObservation(current, project, expectedRemoteToken)
+      ) {
+        return;
+      }
+      saved = true;
+      store.put(project);
+    };
+    const fail = () => {
+      if (settled) return;
+      settled = true;
+      database.close();
+      reject(
+        transaction.error ?? read.error ?? new Error("本地项目状态校验失败。"),
+      );
+    };
+    read.onerror = fail;
+    transaction.onerror = fail;
+    transaction.onabort = fail;
+    transaction.oncomplete = () => {
+      if (settled) return;
+      settled = true;
+      database.close();
+      resolve(saved);
+    };
+  });
+}
+
 export async function removeGeoProject(projectId: string): Promise<void> {
   const database = await openDatabase();
 

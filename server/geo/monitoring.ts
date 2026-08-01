@@ -102,6 +102,9 @@ export function normalizeMonitorRun(
     platforms?: GeoMonitorPlatformId[];
     runId?: string;
   },
+  options: {
+    allowTerminalSummaryWithoutRecords?: boolean;
+  } = {},
 ): BrokerMonitorRun {
   const root = asRecord(payload);
   const candidate = root.run ?? root.data ?? payload;
@@ -184,6 +187,10 @@ export function normalizeMonitorRun(
   }
   if (
     ["completed", "partial_review_required"].includes(run.status) &&
+    !(
+      options.allowTerminalSummaryWithoutRecords === true &&
+      records === undefined
+    ) &&
     (records?.length !== run.expectedItems ||
       records.some(
         (record) =>

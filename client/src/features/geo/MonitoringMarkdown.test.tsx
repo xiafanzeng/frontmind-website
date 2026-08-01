@@ -119,4 +119,40 @@ describe("MonitoringMarkdown", () => {
     expect(html).toContain("<pre>");
     expect(html).toContain("&quot;ready&quot;:true");
   });
+
+  it("renders the complete structure used by real monitoring answers", () => {
+    const html = renderToStaticMarkup(
+      <MonitoringMarkdown
+        markdown={`# 服务商靠谱性综合评估
+
+## 一、优势（靠谱的地方）
+
+### 1. 技术与性价比突出
+
+1. **接口兼容性**：兼容 OpenAI 格式；
+2. **部署形态**：支持公有云与私有化部署。
+
+> ⚠️ 区分：共享 API ≠ 独享算力实例${"  "}
+> ✅ 测试、低并发业务：按量实例可用
+
+调用路径为 \`/v1/chat/completions\`。
+
+### ❌ 不适合
+
+- 要求严格 SLA 的核心业务。`}
+      />,
+    );
+
+    expect(html).toContain("<h1>服务商靠谱性综合评估</h1>");
+    expect(html).toContain("<h2>一、优势（靠谱的地方）</h2>");
+    expect(html).toContain("<h3>1. 技术与性价比突出</h3>");
+    expect(html).toContain("<ol>");
+    expect(html).toContain("<blockquote>");
+    expect(html).toContain("⚠️");
+    expect(html).toContain("✅");
+    expect(html).toContain("<code>/v1/chat/completions</code>");
+    expect(html).toContain("<ul>");
+    expect(html).not.toContain("# 服务商");
+    expect(html).not.toContain("**接口兼容性**");
+  });
 });

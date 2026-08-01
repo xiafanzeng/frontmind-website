@@ -16,6 +16,7 @@ pnpm-debug.log*
 !.env.example
 .frontmind-visitor-stats.json
 .frontmind-visitor-stats.json.tmp
+/.frontmind-state/
 /coverage/
 /test-results/
 /playwright-report/

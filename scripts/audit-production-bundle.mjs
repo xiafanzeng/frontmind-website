@@ -1,8 +1,45 @@
+import { execFileSync } from "node:child_process";
 import { readdir, readFile, stat } from "node:fs/promises";
 import { extname, join, relative, resolve } from "node:path";
+import {
+  readBuildArtifactIdentity,
+  verifyBuildArtifactManifest,
+} from "./build-artifact-identity.mjs";
+import { assertCleanProductionBuildSource } from "./assert-clean-build-source.mjs";
+import { resolveProductionReleaseIdentity } from "./production-release-identity.mjs";
 
 const projectRoot = resolve(import.meta.dirname, "..");
 const buildRoot = resolve(projectRoot, process.argv[2] || "dist");
+const buildIdentity = await readBuildArtifactIdentity(buildRoot);
+const repositorySha = execFileSync("git", ["rev-parse", "HEAD"], {
+  cwd: projectRoot,
+  encoding: "utf8",
+  stdio: ["ignore", "pipe", "pipe"],
+})
+  .trim()
+  .toLowerCase();
+let approvalSha = repositorySha;
+const buildSourceSha = buildIdentity.buildSourceSha;
+const auditStage =
+  repositorySha === buildSourceSha ? "pre-approval" : "approval";
+if (repositorySha === buildSourceSha) {
+  assertCleanProductionBuildSource({
+    repositoryRoot: projectRoot,
+    env: process.env,
+    expectedBuildSha: buildSourceSha,
+  });
+} else {
+  ({ approvalSha } = await resolveProductionReleaseIdentity({
+    projectRoot,
+    buildRoot,
+    env: process.env,
+    approvalSha: repositorySha,
+    buildSourceSha,
+  }));
+}
+const initiallyVerifiedArtifact = await verifyBuildArtifactManifest(buildRoot, {
+  expectedBuildSourceSha: buildSourceSha,
+});
 const textExtensions = new Set([
   ".css",
   ".html",
@@ -329,4 +366,12 @@ if (violations.length > 0) {
   process.exit(1);
 }
 
-console.log("Production user-content audit passed.");
+const artifactManifest = await verifyBuildArtifactManifest(buildRoot, {
+  expectedBuildSourceSha: buildSourceSha,
+});
+if (artifactManifest.rootSha256 !== initiallyVerifiedArtifact.rootSha256) {
+  throw new Error("BUILD_ARTIFACT_CHANGED_DURING_AUDIT");
+}
+console.log(
+  `Production user-content and read-only artifact audit passed: stage=${auditStage} approval=${approvalSha} source=${buildSourceSha} files=${artifactManifest.files.length} root=${artifactManifest.rootSha256}`,
+);

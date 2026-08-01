@@ -1,5 +1,52 @@
 import { describe, expect, it, vi } from "vitest";
-import { retryGeoArchivePersistence } from "./storage";
+import {
+  canCommitGeoProjectObservation,
+  retryGeoArchivePersistence,
+} from "./storage";
+import type { GeoProject } from "./types";
+
+function project(remoteToken: string): GeoProject {
+  return {
+    id: "project-cas",
+    remoteToken,
+    title: "Acme",
+    input: "Acme",
+    createdAt: "2026-08-01T00:00:00.000Z",
+    updatedAt: "2026-08-01T00:00:00.000Z",
+    stage: "question_recommendation",
+    status: "ready",
+    progress: 100,
+    files: [],
+    questions: [],
+    selectedPlatformIds: [],
+  };
+}
+
+describe("custom-question project observation fencing", () => {
+  it("accepts only the operation input token or an idempotent result token", () => {
+    const next = project("token-result-a");
+    expect(
+      canCommitGeoProjectObservation(
+        project("token-before-a"),
+        next,
+        "token-before-a",
+      ),
+    ).toBe(true);
+    expect(canCommitGeoProjectObservation(next, next, "token-before-a")).toBe(
+      true,
+    );
+    expect(
+      canCommitGeoProjectObservation(
+        project("token-newer-b"),
+        next,
+        "token-before-a",
+      ),
+    ).toBe(false);
+    expect(
+      canCommitGeoProjectObservation(undefined, next, "token-before-a"),
+    ).toBe(false);
+  });
+});
 
 describe("retryGeoArchivePersistence", () => {
   it("retries network or IndexedDB failures with bounded backoff and completes on success", async () => {

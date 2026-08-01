@@ -104,9 +104,11 @@ git -C /Users/fanzengxia/Documents/GitHub/frontmind-website ls-files --others --
 ```
 
 确认大量删除、新迁移、新 Skill、测试与构建文件全部符合本次发布后，才允许暂存。
-此时先不要 commit：继续完成下方“0. 发布前安全门”和本地检查、测试。Website 的
-服务器 bundle 会内嵌当前 `git rev-parse HEAD`，所以预提交工作区产生的 `dist/` 只用于
-本地验证，禁止作为最终发布产物提交；最终产物必须在 push 后从远端提交的干净克隆构建。
+此时先不要 commit：继续完成下方“0. 发布前安全门”和提交前的 `check`、`test`。
+两个仓库的生产 `build` 都有源码完整性门，除 `dist/` 外存在任何未提交改动就会失败；
+因此不要在预提交工作区伪造生产产物。最终产物必须在源 commit、push 后从该提交的干净
+克隆构建，并让构建环境 SHA 与构建时 `git rev-parse HEAD` 完全一致；构建完成后再单独
+创建一个只包含 `dist/` 的产物批准提交。
 
 最终 `git add -A` 依赖已经验证的 `.gitignore`，不再手动排除临时目录：
 
@@ -182,10 +184,10 @@ private-workflows/brand-question-portfolio.skill/
 private-workflows/response-logic-builder.skill/
 ```
 
-Website 提交清单必须包含 `server/skills/` 下五个运行时 Skill和
+Website 提交清单必须包含 `server/skills/` 下六个运行时 Skill 和
 `scripts/copy-server-skills.mjs`。任何一个漏提交都会让干净服务器构建失败。
 
-## 1. 本地双仓发布门
+## 1. 提交前双仓检查门
 
 Dashboard（首次 push 前本地目录仍使用旧文件夹名）：
 
@@ -194,12 +196,6 @@ cd /Users/fanzengxia/Documents/GitHub/frontmind-agent
 pnpm install --prod=false --frozen-lockfile
 pnpm check
 pnpm test
-pnpm build # 构建标识自动生成；无需在 1Panel 配置 FRONTMIND_BUILD_VERSION
-
-test -f dist/private-workflows/socratic-kb-builder.skill
-test -f dist/private-workflows/brand-question-portfolio.skill/SKILL.md
-test -f dist/private-workflows/response-logic-builder.skill/SKILL.md
-node scripts/audit-production-bundle.mjs
 ```
 
 Website：
@@ -209,20 +205,11 @@ cd /Users/fanzengxia/Documents/GitHub/frontmind-website
 pnpm install --prod=false --frozen-lockfile
 pnpm check
 pnpm test
-VITE_CLIENT_PORTAL_URL=https://dashboard.frontmind.net/login \
-VITE_SITE_URL=https://www.frontmind.net \
-SITE_URL=https://www.frontmind.net \
-BUILD_DATE=2026-07-28 \
-pnpm build
-
-test "$(find dist/skills -type f | wc -l | tr -d ' ')" = "21"
-node scripts/audit-production-bundle.mjs
 ```
 
-Website 的上述本地构建只验证源码可构建，不作为最终 release 产物。发布必须使用
-push 后干净克隆里生成的 `dist/`，这样内嵌 `buildSha` 才等于发布提交。不要在构建完成后
-再提交 `dist/`，否则新提交会再次让内嵌 SHA 落后一个版本。服务器只允许部署记录的
-远端提交；不要在服务器上临时修改源码或 Skill。
+提交前不执行生产 `build`。发布必须使用 push 后干净克隆里生成的 `dist/`，其内嵌
+`buildSha` 等于“构建源提交”，随后以 dist-only 提交形成“产物批准提交”。服务器部署
+批准提交且不得重新构建，也不要在服务器上临时修改源码或 Skill。
 
 ### 1.1 推送后必须做干净克隆复验
 
@@ -240,19 +227,74 @@ git clone \
   frontmind-website
 ```
 
-确认两个克隆的 `HEAD` 分别等于记录的 release SHA，然后在这两个干净目录完整重跑
-“1. 本地双仓发布门”。任何缺文件、测试失败或构建差异都要回原仓修复、重新提交、
+确认两个克隆的 `HEAD` 分别等于记录的 release SHA，然后在两个干净目录完整重跑
+安装、`check`、`test` 和下方构建门。任何缺文件、测试失败或构建差异都要回原仓修复、重新提交、
 重新 push，再删除该临时验证目录并从头克隆；不能把临时目录中的修补直接带上服务器。
 Website 最终交给 1Panel 的必须是这个干净克隆或由同一提交构建的镜像，不得使用原开发
 工作区中预提交生成的 `dist/`。
 
-Website 干净克隆中的最终构建必须改用：
+Dashboard 干净克隆中的最终构建：
 
 ```bash
-pnpm build:release
+cd /private/tmp/frontmind-release-dashboard-20260728-r1/frontmind-dashboard
+export FRONTMIND_BUILD_SHA="$(git rev-parse HEAD)"
+pnpm build
+test -f dist/private-workflows/socratic-kb-builder.skill
+test -f dist/private-workflows/brand-question-portfolio.skill/SKILL.md
+test -f dist/private-workflows/response-logic-builder.skill/SKILL.md
+node scripts/audit-production-bundle.mjs
 ```
 
-该命令会先确认 Git 工作区完全干净，再生成内嵌当前提交 SHA 的生产产物。
+Website 干净克隆中的最终构建：
+
+```bash
+cd /private/tmp/frontmind-release-dashboard-20260728-r1/frontmind-website
+export WEBSITE_BUILD_SOURCE_SHA="$(git rev-parse HEAD)"
+export FRONTMIND_BUILD_SHA="$WEBSITE_BUILD_SOURCE_SHA"
+VITE_CLIENT_PORTAL_URL=https://dashboard.frontmind.net/login \
+VITE_SITE_URL=https://www.frontmind.net \
+SITE_URL=https://www.frontmind.net \
+BUILD_DATE=2026-07-28 \
+pnpm build:release
+test "$(find dist/skills -type f | wc -l | tr -d ' ')" = "$(find server/skills -type f | wc -l | tr -d ' ')"
+node scripts/audit-production-bundle.mjs
+pnpm test:release:repository
+```
+
+`pnpm build:release` 是唯一生产构建入口。它首先要求整个 Git 工作区（包括 `dist/` 的
+tracked、staged 和 untracked 文件）完全干净，然后只删除经精确路径校验且不是符号链接的
+仓库内 `dist/`，从空目录重建，最后只生成一次不可覆盖的 manifest。`pnpm build` 只是内部
+未封存构建；它会主动移除旧 manifest，不能交付生产。普通 bundle audit 永远只读复核，
+不会创建或覆盖 manifest。任何 `BUILD_RELEASE_WORKTREE_NOT_CLEAN`、
+`BUILD_SOURCE_NOT_COMMITTED`、`BUILD_SOURCE_ENV_SHA_INVALID`、
+`BUILD_SOURCE_COMMIT_MISMATCH` 或 `BUILD_ARTIFACT_MANIFEST_ALREADY_EXISTS` 都是上线阻断。
+`pnpm test:release:repository` 会复制当前真实源码到临时 Git 仓库，自动验证旧 tracked dist、
+pre-F modified/staged/untracked 文件、从空目录重建、S→F、fresh clone 和篡改拒绝。
+
+Website 构建成功后，只批准本次 `dist/`；不得夹带任意源码、测试、Skill 或配置改动：
+
+```bash
+git add -A -- dist
+test -z "$(git diff --cached --name-only | grep -v '^dist/' || true)"
+git diff --cached --check
+git commit -m "build: approve Website production artifact"
+export WEBSITE_APPROVAL_SHA="$(git rev-parse HEAD)"
+test "$WEBSITE_APPROVAL_SHA" != "$WEBSITE_BUILD_SOURCE_SHA"
+git merge-base --is-ancestor "$WEBSITE_BUILD_SOURCE_SHA" "$WEBSITE_APPROVAL_SHA"
+test -n "$(git diff --name-only "$WEBSITE_BUILD_SOURCE_SHA" "$WEBSITE_APPROVAL_SHA")"
+test -z "$(git diff --name-only "$WEBSITE_BUILD_SOURCE_SHA" "$WEBSITE_APPROVAL_SHA" | grep -v '^dist/' || true)"
+export WEBSITE_ARTIFACT_ROOT_SHA256="$(node -p 'JSON.parse(require("fs").readFileSync("dist/artifact-manifest.json", "utf8")).rootSha256')"
+test "${#WEBSITE_ARTIFACT_ROOT_SHA256}" = 64
+GITHUB_SHA="$WEBSITE_APPROVAL_SHA" \
+COMMIT_SHA="$WEBSITE_APPROVAL_SHA" \
+FRONTMIND_APPROVED_RELEASE_SHA="$WEBSITE_APPROVAL_SHA" \
+FRONTMIND_BUILD_SHA="$WEBSITE_BUILD_SOURCE_SHA" \
+node scripts/audit-production-bundle.mjs
+git push origin main
+```
+
+1Panel 必须 checkout `WEBSITE_APPROVAL_SHA` 并直接运行其 `dist/`。不得在批准提交上再次
+执行 `pnpm build`；否则会把产物身份改成批准 SHA，形成新的未批准产物。
 
 ## 2. 先发布 Dashboard
 
@@ -382,6 +424,29 @@ curl -fsS \
 如果两个应用位于不同容器，`127.0.0.1` 指向各自容器，不能用于容器间调用。优先使用
 同一 Docker 网络中的精确服务 DNS 名：
 
+先在宿主机创建 Website 私有持久目录。以下 `1000:1000` 仅为示例，必须替换成镜像中
+实际 Node 运行用户的 UID:GID；不得用 `chmod 777`：
+
+```bash
+sudo install -d -m 0700 /opt/frontmind-data/website/custom-question-validations
+sudo chown 1000:1000 /opt/frontmind-data/website/custom-question-validations
+```
+
+在 1Panel Website 容器的“挂载”中增加唯一读写 bind mount：
+
+```text
+宿主机：/opt/frontmind-data/website/custom-question-validations
+容器内：/var/lib/frontmind-website/custom-question-validations
+模式：read-write
+```
+
+不得改成匿名 volume、镜像层目录或 `/tmp`。保存后用 1Panel 显示的精确容器名检查，输出
+必须包含上述宿主机路径、容器路径和 `RW: true`：
+
+```bash
+docker inspect <website-container> --format '{{json .Mounts}}'
+```
+
 ```env
 NODE_ENV=production
 FRONTMIND_GEO_INVITE_CODE=...
@@ -395,16 +460,37 @@ FRONTMIND_PUBLIC_BASE_URL=https://www.frontmind.net
 FRONTMIND_TRUST_PROXY=loopback
 FRONTMIND_GEO_SKILLS_DIR=/app/dist/skills
 FRONTMIND_VISITOR_STATS_FILE=/var/lib/frontmind-website/visitor-stats.json
+FRONTMIND_GEO_CUSTOM_QUESTION_STORE_DIR=/var/lib/frontmind-website/custom-question-validations
+FRONTMIND_APPROVED_RELEASE_SHA=<WEBSITE_APPROVAL_SHA，即 F>
+FRONTMIND_EXPECTED_ARTIFACT_ROOT_SHA256=<WEBSITE_ARTIFACT_ROOT_SHA256>
 FRONTMIND_ZPAY_PID=...
 FRONTMIND_ZPAY_KEY=...
 VITE_CLIENT_PORTAL_URL=https://dashboard.frontmind.net/login
 ```
+
+`FRONTMIND_APPROVED_RELEASE_SHA` 与
+`FRONTMIND_EXPECTED_ARTIFACT_ROOT_SHA256` 必须由 1Panel/Compose 从 `dist/` 外部注入；禁止
+在容器启动时从同目录 manifest 自动回填。Compose 必须 checkout 精确批准提交 F，并将
+批准后的 `dist/` 以只读方式提供给运行用户，例如 bind mount 使用
+`/opt/.../frontmind-website/dist:/app/dist:ro`；若产物复制进镜像，则镜像 root filesystem
+必须只读且 `/app/dist` 不得位于任何可写 volume。持久化验证目录是唯一与本流程相关的
+读写 mount。启动前后都要用 `docker inspect` 确认 `dist` 为 `RW: false`、验证目录为
+`RW: true`，并确认容器环境中的 F 与 root 分别等于发布批准记录。
 
 `FRONTMIND_VISITOR_STATS_FILE` 本次必须指向新建的空持久文件，不能沿用旧统计文件：
 旧实现会把没有可信地区头的请求归入中国。新版只从实际持久化访问计算总数，缺少地区时
 明确记为 `Unknown`，API 不可用时前端明确显示“暂不可用”，不会用预置数字冒充实时数据。
 只有 CDN 或反向代理已验证并覆盖写入地区头时，才转发
 `CF-IPCountry`、`X-Country-Code` 等地区头；不要信任公网客户端自行传入的同名请求头。
+
+`FRONTMIND_GEO_CUSTOM_QUESTION_STORE_DIR` 必须绑定到 Website 容器外的私有持久卷，
+不可放在 `/tmp` 或镜像临时层。健康检查会实际验证该目录可读写；缺失、相对路径或不可写
+都会让生产启动与 `/healthz` 失败关闭。目录权限不得包含 group/world write（mode `0022`）；
+推荐 `0700`，确需同组只读/进入时可使用 `0750`，但不得使用 `0770`、`0777`。sentinel、
+record、project slot、tombstone 和 cleanup marker 必须全部保持为普通文件且权限为 `0600`，
+任一存量文件权限放宽都会令健康检查失败。第一次健康检查还会原子创建稳定持久卷 sentinel；
+API 只暴露其 SHA-256，不暴露原始标识。该目录保存恢复所需的请求、冻结附件 ID、上游
+task ID 及最终分类结果，不保存 API Key；终态超过保留期后必须由 GC 删除明文记录。
 
 如果使用内部 HTTPS 域名，则无需 HTTP hostname allowlist。不要给 allowlist 填协议、
 端口、路径、通配符或 IP。
@@ -429,27 +515,56 @@ curl -fsS http://127.0.0.1:8888/healthz
 curl -fsS https://www.frontmind.net/healthz
 ```
 
-响应必须列出五个 `status: "ok"` 的 Base Skill：
+响应必须列出六个 `status: "ok"` 的运行时 Skill：
 
 ```text
 website-one-shot-kb-builder
 geo-question-recommender
+geo-custom-question-classifier
 geo-knowledge-answer-verifier
 geo-current-state-evaluator
 geo-optimization-outcome-forecaster
 ```
 
-其中 `website-one-shot-kb-builder.version` 必须为 `5`，`buildSha` 必须
-等于本次部署提交。完成公网切流后执行自动发布验证门：
+其中 `website-one-shot-kb-builder.version` 必须为 `6`，`buildSha` 必须等于写入
+`dist/build-source.json` 的构建源提交 S；1Panel checkout 的则是只增加 `dist/` 的产物批准
+提交 F，不能把两者混为同一个 SHA。首次启动后，从 `/healthz` 记录
+`dependencies.customQuestionValidationStore.persistenceIdentitySha256` 为
+`STORE_ID_BEFORE_RECREATE`。它必须是 64 位小写十六进制；空值或格式错误即失败。
+
+随后必须在 1Panel 执行一次“重新创建容器”（不是只重启进程），保持同一 bind mount，
+且不删除宿主机目录。重建后再次检查 `docker inspect ... .Mounts` 和 `/healthz`。最后从与
+生产相同提交、相同 `dist/` 的干净 release checkout 执行自动发布验证门：
 
 ```bash
+export WEBSITE_APPROVAL_SHA="$(git rev-parse HEAD)"
+export WEBSITE_BUILD_SOURCE_SHA="$(node -p 'JSON.parse(require("fs").readFileSync("dist/build-source.json", "utf8")).buildSourceSha')"
+export WEBSITE_ARTIFACT_ROOT_SHA256="$(node -p 'JSON.parse(require("fs").readFileSync("dist/artifact-manifest.json", "utf8")).rootSha256')"
+export FRONTMIND_BUILD_SHA="$WEBSITE_BUILD_SOURCE_SHA"
+export FRONTMIND_APPROVED_RELEASE_SHA="$WEBSITE_APPROVAL_SHA"
+export FRONTMIND_EXPECTED_ARTIFACT_ROOT_SHA256="$WEBSITE_ARTIFACT_ROOT_SHA256"
 pnpm verify:production -- \
   --url https://www.frontmind.net \
-  --sha "$(git rev-parse HEAD)"
+  --approval-sha "$WEBSITE_APPROVAL_SHA" \
+  --build-source-sha "$WEBSITE_BUILD_SOURCE_SHA" \
+  --artifact-root "$WEBSITE_ARTIFACT_ROOT_SHA256" \
+  --store-id "$STORE_ID_BEFORE_RECREATE"
 ```
 
-该命令同时核对公网构建 SHA、五个 Skill、website Skill 源码哈希、依赖
-就绪状态以及首页入口 JS 的文件名和内容哈希；任一不一致都视为未部署成功。
+该命令同时核对公网构建 SHA、六个 Skill、website Skill 源码哈希、依赖
+就绪状态、首页入口 JS 的文件名和内容哈希，以及容器重建前后的持久卷标识；任一不一致
+都视为未部署成功。`dist/artifact-manifest.json` 以确定性根哈希覆盖服务器 bundle、支付
+验证 bundle、全部 CSS、前端入口与动态 chunks、静态资源、SEO 页面和运行时 Skills；只有
+manifest 自身因自引用问题被明确排除。生产进程启动时会按 manifest 逐文件重算字节哈希，
+`/healthz.artifact` 只报告已通过本容器字节复核的根哈希与文件数，发布验证再与批准提交中的
+本地产物逐字比对。生产进程不会只信同目录 manifest：启动时必须同时匹配外部注入的批准
+root。启动时强制完整重验；随后 `/healthz` 共享同一个单飞校验，并且完整证明最多缓存 5 秒，
+到期后的第一个请求重新读取和哈希完整 `dist/`，同一时刻的其他请求复用该校验，避免公网
+高频请求放大磁盘 I/O。失败证明也只缓存 5 秒，启动后的任何增加、删除或字节篡改最迟在
+5 秒加一次健康检查后使响应返回 503。宿主机仍须按上面的 `verify:production` 在部署后及容器重建后
+复核一次，不能以进程启动成功代替产物验证。验证脚本还会确认构建源 SHA 与本地
+`dist/build-source.json`、公网
+`healthz.buildSha` 完全一致，构建源是批准提交的祖先，且两者之间只修改了 `dist/`。
 
 同时必须包含以下依赖就绪结果；任一项缺失或不为 `true` 都不得继续切流：
 
@@ -459,6 +574,8 @@ dependencies.agent.monitorCredentialConfigured
 dependencies.agent.publicUrlConfigured
 dependencies.projectOrderRegistry.ready
 dependencies.paymentReceiptLedger.ready
+dependencies.customQuestionValidationStore.ready
+dependencies.customQuestionValidationStore.persistenceIdentitySha256
 ```
 
 未登录会话必须失败为 JSON，而不是反向代理回退的 HTML：

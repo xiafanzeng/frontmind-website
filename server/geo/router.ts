@@ -6,7 +6,7 @@ import express, {
   type Response,
   type Router,
 } from "express";
-import { ZodError } from "zod";
+import { z, ZodError } from "zod";
 import {
   extractKnowledgeBaseAssetPreviews,
   KnowledgeBaseArchiveValidationError as ArchiveContractValidationError,
@@ -92,6 +92,18 @@ import {
   parseCustomQuestionClassificationTaskOutput,
   validateAcceptedCustomQuestionGrounding,
 } from "./custom-question-classifier";
+import {
+  createGeoCustomQuestionValidationStore,
+  geoCustomQuestionHash,
+  geoCustomQuestionOperationKey,
+  geoCustomQuestionOwnerSessionHash,
+  geoCustomQuestionRequestHash,
+  legacyGeoCustomQuestionClientRequestId,
+  GeoCustomQuestionValidationStoreError,
+  type GeoCustomQuestionValidationLease,
+  type GeoCustomQuestionValidationRecord,
+  type GeoCustomQuestionValidationStore,
+} from "./custom-question-validation-store";
 import { trustedAssistantOutputTexts } from "./trusted-task-output";
 import {
   buildGeoCustomQuestionClassifierPrompt,
@@ -166,6 +178,8 @@ import {
 } from "./streams";
 
 const SESSION_COOKIE = "frontmind_geo_session";
+export const GEO_LEGACY_CUSTOM_QUESTION_COMPATIBILITY_WAIT_MS = 15_000;
+const GEO_LEGACY_CUSTOM_QUESTION_COMPATIBILITY_POLL_MS = 500;
 const SESSION_TTL_MS = 365 * 24 * 60 * 60 * 1000;
 const PROJECT_TTL_MS = 365 * 24 * 60 * 60 * 1000;
 const PAYMENT_INTENT_TTL_MS = 24 * 60 * 60 * 1000;
@@ -175,8 +189,16 @@ const MAX_ARCHIVE_COPY_BYTES = 150 * 1024 * 1024;
 const MAX_VALIDATED_ARCHIVE_BYTES = MAX_KNOWLEDGE_ARCHIVE_CANDIDATE_BYTES;
 const MAX_ASSESSMENT_INPUT_BYTES = 12 * 1024 * 1024;
 const MAX_FORECAST_INPUT_BYTES = 12 * 1024 * 1024;
-const CUSTOM_QUESTION_CLASSIFIER_TIMEOUT_MS = 15_000;
-const CUSTOM_QUESTION_CLASSIFIER_POLL_MS = 400;
+// Keep two tabs below the shared 120/minute session status limit.
+const CUSTOM_QUESTION_CLASSIFIER_CLIENT_POLL_MS = 1_500;
+const CUSTOM_QUESTION_CLASSIFIER_UNKNOWN_MAX_OBSERVATIONS = 3;
+const CUSTOM_QUESTION_CLASSIFIER_TRANSIENT_MAX_OBSERVATIONS = 3;
+const CUSTOM_QUESTION_CLASSIFIER_TRANSIENT_MAX_MS = 30_000;
+const CUSTOM_QUESTION_CLASSIFIER_ATTACHMENT_REBUILD_MAX = 2;
+const CUSTOM_QUESTION_CLASSIFIER_LEASE_MS = 30_000;
+const CUSTOM_QUESTION_CLASSIFIER_LEASE_RENEW_MS = 10_000;
+const CUSTOM_QUESTION_VALIDATION_TTL_MS = 24 * 60 * 60 * 1000;
+const CUSTOM_QUESTION_TERMINAL_RETENTION_MS = 24 * 60 * 60 * 1000;
 const SESSION_RATE_LIMIT_WINDOW_MS = 60 * 60 * 1000;
 const GEO_MANUAL_CONTRACT_TEMPLATE_VERSION = "basic-2026.07-v2";
 const KNOWLEDGE_BASE_VALIDATION_PUBLIC_ERRORS: Record<
@@ -354,7 +376,11 @@ type GeoRouterOptions = {
   adminNotifier?: GeoAdminNotifier;
   knowledgeImporter?: GeoKnowledgeImporter;
   projectOrderRegistry?: GeoProjectOrderRegistry;
+  customQuestionValidationStore?: GeoCustomQuestionValidationStore;
   knowledgeBaseFinalizer?: typeof finalizeKnowledgeBaseCandidate;
+  legacyCustomQuestionCompatibilityWaitMs?: number;
+  legacyCustomQuestionCompatibilityPollMs?: number;
+  customQuestionValidationNow?: () => number;
   env?: NodeJS.ProcessEnv;
 };
 
@@ -502,8 +528,27 @@ export function createGeoRouter(options: GeoRouterOptions = {}): Router {
     options.knowledgeImporter ?? createGeoKnowledgeImporter({ env });
   const projectOrderRegistry =
     options.projectOrderRegistry ?? createGeoProjectOrderRegistry({ env });
+  const customQuestionValidationStore =
+    options.customQuestionValidationStore ??
+    createGeoCustomQuestionValidationStore({ env });
   const knowledgeBaseFinalizer =
     options.knowledgeBaseFinalizer ?? finalizeKnowledgeBaseCandidate;
+  const legacyCustomQuestionCompatibilityWaitMs =
+    options.legacyCustomQuestionCompatibilityWaitMs ??
+    GEO_LEGACY_CUSTOM_QUESTION_COMPATIBILITY_WAIT_MS;
+  const legacyCustomQuestionCompatibilityPollMs =
+    options.legacyCustomQuestionCompatibilityPollMs ??
+    GEO_LEGACY_CUSTOM_QUESTION_COMPATIBILITY_POLL_MS;
+  const customQuestionValidationNow =
+    options.customQuestionValidationNow ?? Date.now;
+  if (
+    !Number.isInteger(legacyCustomQuestionCompatibilityWaitMs) ||
+    legacyCustomQuestionCompatibilityWaitMs <= 0 ||
+    !Number.isInteger(legacyCustomQuestionCompatibilityPollMs) ||
+    legacyCustomQuestionCompatibilityPollMs <= 0
+  ) {
+    throw new Error("custom-question legacy compatibility timing is invalid");
+  }
   const failedInvites = new Map<string, FailedInviteWindow>();
   const sessionRates = new Map<string, RateWindow>();
   const identityRates = new Map<string, RateWindow>();
@@ -2399,6 +2444,118 @@ export function createGeoRouter(options: GeoRouterOptions = {}): Router {
     }),
   );
 
+  const sendCustomQuestionValidationObservation = async (input: {
+    res: Response;
+    projectToken: string;
+    value: ProjectTokenValue;
+    knowledgeBaseTask: BrokerTask;
+    questionTask: BrokerTask;
+    record: GeoCustomQuestionValidationRecord;
+    completedStatus?: number;
+  }) => {
+    const isExistingRecommendedQuestion =
+      input.record.state === "completed" &&
+      input.record.completionMode === "existing_recommended_question";
+    const validation = {
+      schemaVersion: 1,
+      clientRequestId: input.record.clientRequestId,
+      question: input.record.question,
+      state: input.record.state,
+      acknowledgement: isExistingRecommendedQuestion
+        ? ("not_required" as const)
+        : ("required" as const),
+      completionMode: isExistingRecommendedQuestion
+        ? ("existing_recommended_question" as const)
+        : ("reservation" as const),
+      nextPollMs: CUSTOM_QUESTION_CLASSIFIER_CLIENT_POLL_MS,
+      ...(input.record.lastTransientError
+        ? { notice: "问题验证仍在恢复中，系统将继续查询同一任务。" }
+        : {}),
+      ...(input.record.error ? { error: input.record.error } : {}),
+    };
+    if (input.record.state === "completed" && input.record.result) {
+      const nextValue: ProjectTokenValue = isExistingRecommendedQuestion
+        ? input.value
+        : {
+            ...input.value,
+            customQuestion: input.record.result,
+          };
+      const projectToken = isExistingRecommendedQuestion
+        ? input.projectToken
+        : codec.seal("project", nextValue, PROJECT_TTL_MS);
+      const project = await buildProjectView(
+        broker,
+        nextValue,
+        projectToken,
+        input.knowledgeBaseTask,
+        input.questionTask,
+      );
+      input.res.status(input.completedStatus ?? 200).json({
+        validation,
+        projectToken,
+        question: input.record.result,
+        project,
+      });
+      return;
+    }
+    if (
+      input.record.error &&
+      isTerminalCustomQuestionValidation(input.record)
+    ) {
+      input.res.status(input.record.error.status).json({
+        ok: false,
+        validation,
+        error: {
+          code: input.record.error.code,
+          message: input.record.error.message,
+        },
+      });
+      return;
+    }
+    input.res.status(202).json({ validation });
+  };
+
+  const loadCustomQuestionContext = async (value: ProjectTokenValue) => {
+    if (value.monitorRunId) {
+      throw new GeoHttpError(
+        "该项目的监控任务已经创建，不能再更换问题",
+        409,
+        "MONITOR_ALREADY_CREATED",
+      );
+    }
+    if (!value.questionTaskId) {
+      throw new GeoHttpError(
+        "推荐问题生成后才能添加自定义问题",
+        409,
+        "QUESTIONS_NOT_READY",
+      );
+    }
+    const [knowledgeBaseTask, questionTask] = await Promise.all([
+      getResolvedTask(broker, value.knowledgeBaseTaskId),
+      getResolvedTask(broker, value.questionTaskId),
+    ]);
+    const trackedValue = await resolveCanonicalCompanyIdentity(
+      broker,
+      value,
+      knowledgeBaseTask,
+    );
+    const generatedQuestions =
+      parseQuestionSetFromTask(questionTask)?.questions;
+    if (!generatedQuestions) {
+      throw new GeoHttpError(
+        "推荐问题尚未准备完成",
+        409,
+        "QUESTIONS_NOT_READY",
+      );
+    }
+    return {
+      knowledgeBaseTask,
+      questionTask,
+      trackedValue,
+      generatedQuestions,
+    };
+  };
+
   router.post(
     "/projects/:projectToken/questions/custom",
     requireConfiguration,
@@ -2407,39 +2564,12 @@ export function createGeoRouter(options: GeoRouterOptions = {}): Router {
     asyncHandler(async (req, res) => {
       const value = openOwnedProject(req, res);
       const input = CreateCustomQuestionRequestSchema.parse(req.body);
-      if (value.monitorRunId) {
-        throw new GeoHttpError(
-          "该项目的监控任务已经创建，不能再更换问题",
-          409,
-          "MONITOR_ALREADY_CREATED",
-        );
-      }
-      if (!value.questionTaskId) {
-        throw new GeoHttpError(
-          "推荐问题生成后才能添加自定义问题",
-          409,
-          "QUESTIONS_NOT_READY",
-        );
-      }
-
-      const [knowledgeBaseTask, questionTask] = await Promise.all([
-        getResolvedTask(broker, value.knowledgeBaseTaskId),
-        getResolvedTask(broker, value.questionTaskId),
-      ]);
-      const trackedValue = await resolveCanonicalCompanyIdentity(
-        broker,
-        value,
+      const {
         knowledgeBaseTask,
-      );
-      const generatedQuestions =
-        parseQuestionSetFromTask(questionTask)?.questions;
-      if (!generatedQuestions) {
-        throw new GeoHttpError(
-          "推荐问题尚未准备完成",
-          409,
-          "QUESTIONS_NOT_READY",
-        );
-      }
+        questionTask,
+        trackedValue,
+        generatedQuestions,
+      } = await loadCustomQuestionContext(value);
       if (isIndustryRankingQuestion(input.question)) {
         throw new GeoHttpError(
           "该问题属于行业排名或品牌推荐类问题，需要全域营销权限",
@@ -2453,7 +2583,19 @@ export function createGeoRouter(options: GeoRouterOptions = {}): Router {
           normalizeQuestionIdentity(candidate.question) ===
           normalizeQuestionIdentity(input.question),
       );
-      if (duplicate) {
+      const ownerSessionHash = geoCustomQuestionOwnerSessionHash(
+        String(res.locals.geoSessionId || ""),
+      );
+      const questionHash = geoCustomQuestionHash(input.question);
+      const legacyClient = !input.clientRequestId;
+      const clientRequestId =
+        input.clientRequestId ??
+        legacyGeoCustomQuestionClientRequestId({
+          projectId: trackedValue.projectId,
+          ownerSessionHash,
+          questionHash,
+        });
+      if (duplicate && legacyClient) {
         const project = await buildProjectView(
           broker,
           trackedValue,
@@ -2462,6 +2604,14 @@ export function createGeoRouter(options: GeoRouterOptions = {}): Router {
           questionTask,
         );
         res.json({
+          validation: {
+            schemaVersion: 1,
+            clientRequestId: input.clientRequestId,
+            question: input.question,
+            state: "completed",
+            acknowledgement: "not_required",
+            completionMode: "existing_recommended_question",
+          },
           projectToken: req.params.projectToken,
           question: duplicate,
           project,
@@ -2469,62 +2619,292 @@ export function createGeoRouter(options: GeoRouterOptions = {}): Router {
         return;
       }
 
-      const classification = await classifyCustomQuestion({
-        broker,
-        value: trackedValue,
+      const archive = resolveKnowledgeBaseArtifact(
+        trackedValue,
         knowledgeBaseTask,
-        question: input.question,
-      });
-      if (classification.decision === "reject") {
-        if (classification.category === "industry_ranking") {
-          throw new GeoHttpError(
-            "该问题属于行业排名或品牌推荐类问题，需要全域营销权限",
-            422,
-            "INDUSTRY_RANKING_QUESTION",
-          );
-        }
-        if (classification.category === "ambiguous") {
-          throw new GeoHttpError(
-            `无法确认该问题与「${trackedValue.companyName}」的关系，请明确写出企业、品牌或知识库中的具体产品名称`,
-            422,
-            "CUSTOM_QUESTION_AMBIGUOUS",
-          );
-        }
+      );
+      if (!archive?.fileId) {
         throw new GeoHttpError(
-          `该问题与「${trackedValue.companyName}」的企业、产品或服务没有明确关系，请修改后重试`,
-          422,
-          "CUSTOM_QUESTION_ENTERPRISE_UNRELATED",
+          "企业知识库准备完成后才能验证自定义问题",
+          409,
+          "ARCHIVE_NOT_READY",
         );
       }
-
-      const id = customQuestionId(input.question);
-      const question = GeoQuestionSchema.parse({
-        id,
-        category: classification.category,
+      const archiveFileId = archive.fileId;
+      const reservationInput = (expiresAt: string) => ({
+        projectId: trackedValue.projectId,
+        ownerSessionHash,
+        clientRequestId,
+        requestHash: geoCustomQuestionRequestHash({
+          projectId: trackedValue.projectId,
+          knowledgeBaseTaskId: trackedValue.knowledgeBaseTaskId,
+          question: input.question,
+        }),
         question: input.question,
-        rationale: classification.reason,
-        ...(classification.enterpriseAnchor
-          ? { enterpriseAnchor: classification.enterpriseAnchor }
-          : {}),
-        ...(classification.offeringAnchor
-          ? { offeringAnchor: classification.offeringAnchor }
-          : {}),
-        evidenceRefs: classification.evidenceRefs,
-        selectable: true,
+        questionHash,
+        companyName: trackedValue.companyName,
+        knowledgeBaseTaskId: trackedValue.knowledgeBaseTaskId,
+        knowledgeBaseValidationProfile:
+          trackedValue.knowledgeBaseValidationProfile,
+        knowledgeBaseArtifact: {
+          fileId: archiveFileId,
+          filename: archive.filename,
+          sha256: archive.sha256,
+          packageManifestSha256: archive.packageManifestSha256,
+        },
+        expiresAt,
       });
-      const nextValue: ProjectTokenValue = {
-        ...trackedValue,
-        customQuestion: question,
-      };
-      const projectToken = codec.seal("project", nextValue, PROJECT_TTL_MS);
-      const project = await buildProjectView(
+      if (duplicate) {
+        const receipt =
+          await customQuestionValidationStore.reserveCompletedReceipt(
+            reservationInput(
+              new Date(
+                Date.now() + CUSTOM_QUESTION_TERMINAL_RETENTION_MS,
+              ).toISOString(),
+            ),
+            duplicate,
+          );
+        await sendCustomQuestionValidationObservation({
+          res,
+          projectToken: req.params.projectToken,
+          value: trackedValue,
+          knowledgeBaseTask,
+          questionTask,
+          record: receipt.record,
+        });
+        return;
+      }
+      const reservation = await customQuestionValidationStore.reserve(
+        reservationInput(
+          new Date(
+            Date.now() + CUSTOM_QUESTION_VALIDATION_TTL_MS,
+          ).toISOString(),
+        ),
+      );
+      let record = await advanceCustomQuestionValidation({
         broker,
-        nextValue,
-        projectToken,
+        store: customQuestionValidationStore,
+        record: reservation.record,
+        knowledgeBaseTask,
+        now: customQuestionValidationNow,
+      });
+      if (legacyClient && !isTerminalCustomQuestionValidation(record)) {
+        const deadline = Date.now() + legacyCustomQuestionCompatibilityWaitMs;
+        while (
+          !isTerminalCustomQuestionValidation(record) &&
+          Date.now() < deadline
+        ) {
+          await waitForCustomQuestionRecovery(
+            legacyCustomQuestionCompatibilityPollMs,
+          );
+          const current = await customQuestionValidationStore.get(
+            trackedValue.projectId,
+            clientRequestId,
+          );
+          if (!current) break;
+          record = await advanceCustomQuestionValidation({
+            broker,
+            store: customQuestionValidationStore,
+            record: current,
+            knowledgeBaseTask,
+            now: customQuestionValidationNow,
+          });
+        }
+        if (!isTerminalCustomQuestionValidation(record)) {
+          throw new GeoHttpError(
+            "问题验证仍在后台继续；请刷新页面，系统会恢复同一请求",
+            504,
+            "CUSTOM_QUESTION_LEGACY_CLIENT_REFRESH_REQUIRED",
+          );
+        }
+      }
+      await sendCustomQuestionValidationObservation({
+        res,
+        projectToken: req.params.projectToken,
+        value: trackedValue,
         knowledgeBaseTask,
         questionTask,
+        record,
+        completedStatus: 201,
+      });
+    }),
+  );
+
+  router.get(
+    "/projects/:projectToken/questions/custom/:clientRequestId([0-9a-fA-F-]{36})",
+    requireConfiguration,
+    requireSession,
+    requireSessionRate("custom-question-status", 120, 60 * 1000),
+    asyncHandler(async (req, res) => {
+      const value = openOwnedProject(req, res);
+      const clientRequestId = z
+        .string()
+        .uuid()
+        .parse(req.params.clientRequestId);
+      const stored = await customQuestionValidationStore.get(
+        value.projectId,
+        clientRequestId,
       );
-      res.status(201).json({ projectToken, question, project });
+      if (!stored) {
+        throw new GeoHttpError(
+          "自定义问题验证请求不存在",
+          404,
+          "CUSTOM_QUESTION_VALIDATION_NOT_FOUND",
+        );
+      }
+      const ownerSessionHash = geoCustomQuestionOwnerSessionHash(
+        String(res.locals.geoSessionId || ""),
+      );
+      if (
+        stored.projectId !== value.projectId ||
+        stored.ownerSessionHash !== ownerSessionHash
+      ) {
+        throw new GeoHttpError(
+          "自定义问题验证请求不属于当前项目",
+          403,
+          "CUSTOM_QUESTION_VALIDATION_FORBIDDEN",
+        );
+      }
+      const { knowledgeBaseTask, questionTask, trackedValue } =
+        await loadCustomQuestionContext(value);
+      const expectedRequestHash = geoCustomQuestionRequestHash({
+        projectId: trackedValue.projectId,
+        knowledgeBaseTaskId: trackedValue.knowledgeBaseTaskId,
+        question: stored.question,
+      });
+      if (stored.requestHash !== expectedRequestHash) {
+        throw new GeoHttpError(
+          "项目状态已变化，不能继续旧的问题验证请求",
+          409,
+          "CUSTOM_QUESTION_VALIDATION_PROJECT_CHANGED",
+        );
+      }
+      const authoritative = await customQuestionValidationStore.ensureActive(
+        value.projectId,
+        clientRequestId,
+      );
+      const record = await advanceCustomQuestionValidation({
+        broker,
+        store: customQuestionValidationStore,
+        record: authoritative,
+        knowledgeBaseTask,
+        now: customQuestionValidationNow,
+      });
+      await sendCustomQuestionValidationObservation({
+        res,
+        projectToken: req.params.projectToken,
+        value: trackedValue,
+        knowledgeBaseTask,
+        questionTask,
+        record,
+      });
+    }),
+  );
+
+  router.post(
+    "/projects/:projectToken/questions/custom/:clientRequestId([0-9a-fA-F-]{36})/ack",
+    requireConfiguration,
+    requireSession,
+    requireSessionRate("custom-question-ack", 120, 60 * 1000),
+    asyncHandler(async (req, res) => {
+      const value = openOwnedProject(req, res);
+      const clientRequestId = z
+        .string()
+        .uuid()
+        .parse(req.params.clientRequestId);
+      const ownerSessionHash = geoCustomQuestionOwnerSessionHash(
+        String(res.locals.geoSessionId || ""),
+      );
+      const stored = await customQuestionValidationStore.get(
+        value.projectId,
+        clientRequestId,
+      );
+      if (!stored) {
+        throw new GeoHttpError(
+          "自定义问题验证请求不存在",
+          404,
+          "CUSTOM_QUESTION_VALIDATION_NOT_FOUND",
+        );
+      }
+      if (
+        stored.projectId !== value.projectId ||
+        stored.ownerSessionHash !== ownerSessionHash
+      ) {
+        throw new GeoHttpError(
+          "自定义问题验证请求不属于当前项目",
+          403,
+          "CUSTOM_QUESTION_VALIDATION_FORBIDDEN",
+        );
+      }
+      if (!isTerminalCustomQuestionValidation(stored)) {
+        throw new GeoHttpError(
+          "问题验证尚未完成，不能确认持久化",
+          409,
+          "CUSTOM_QUESTION_VALIDATION_NOT_TERMINAL",
+        );
+      }
+      const acknowledged =
+        await customQuestionValidationStore.acknowledgeTerminal(
+          value.projectId,
+          clientRequestId,
+          ownerSessionHash,
+        );
+      res.json({
+        ok: true,
+        validation: {
+          schemaVersion: 1,
+          clientRequestId,
+          state: acknowledged.state,
+          acknowledged: true,
+        },
+      });
+    }),
+  );
+
+  router.get(
+    "/projects/:projectToken/questions/custom/active",
+    requireConfiguration,
+    requireSession,
+    requireSessionRate("custom-question-active", 120, 60 * 1000),
+    asyncHandler(async (req, res) => {
+      const value = openOwnedProject(req, res);
+      const stored = await customQuestionValidationStore.getActive(
+        value.projectId,
+      );
+      if (!stored) {
+        throw new GeoHttpError(
+          "当前项目没有待恢复的问题验证",
+          404,
+          "CUSTOM_QUESTION_VALIDATION_NOT_FOUND",
+        );
+      }
+      const ownerSessionHash = geoCustomQuestionOwnerSessionHash(
+        String(res.locals.geoSessionId || ""),
+      );
+      if (stored.ownerSessionHash !== ownerSessionHash) {
+        throw new GeoHttpError(
+          "自定义问题验证请求不属于当前项目",
+          403,
+          "CUSTOM_QUESTION_VALIDATION_FORBIDDEN",
+        );
+      }
+      const { knowledgeBaseTask, questionTask, trackedValue } =
+        await loadCustomQuestionContext(value);
+      const record = await advanceCustomQuestionValidation({
+        broker,
+        store: customQuestionValidationStore,
+        record: stored,
+        knowledgeBaseTask,
+        now: customQuestionValidationNow,
+      });
+      await sendCustomQuestionValidationObservation({
+        res,
+        projectToken: req.params.projectToken,
+        value: trackedValue,
+        knowledgeBaseTask,
+        questionTask,
+        record,
+      });
     }),
   );
 
@@ -4376,6 +4756,10 @@ export function createGeoRouter(options: GeoRouterOptions = {}): Router {
         );
       }
       await assertProjectOrderAllowsDeletion(value);
+      // This is the final local authorization gate before destructive remote
+      // cleanup. The persistent fence makes retries idempotent and prevents a
+      // new reservation or an old recovery worker from racing the cleanup.
+      await customQuestionValidationStore.fenceProjectDeletion(value.projectId);
       const protectedMonitorRunId = projectOrderProtections.get(value.projectId)
         ?.monitoring?.runId;
       const taskIds = [
@@ -4442,6 +4826,10 @@ export function createGeoRouter(options: GeoRouterOptions = {}): Router {
       res.status(normalized.status).json({
         ok: false,
         error: { code: normalized.code, message: normalized.message },
+        ...(error instanceof GeoCustomQuestionValidationStoreError &&
+        error.activeOperation
+          ? { activeOperation: error.activeOperation }
+          : {}),
       });
     },
   );
@@ -5681,10 +6069,14 @@ async function getResolvedMonitorRun(
     platforms?: GeoMonitorPlatformId[];
   },
 ) {
-  const status = normalizeMonitorRun(await broker.getMonitorRun(runId), {
-    ...expected,
-    runId,
-  });
+  const status = normalizeMonitorRun(
+    await broker.getMonitorRun(runId),
+    {
+      ...expected,
+      runId,
+    },
+    { allowTerminalSummaryWithoutRecords: true },
+  );
   const terminal = [
     "completed",
     "partial_review_required",
@@ -5726,21 +6118,33 @@ async function materializeArchiveAttachment(
   broker: GeoPresalesBroker,
   taskId: string,
   archive: { fileId?: string; url?: string; filename: string },
+  options: {
+    forceCopy?: boolean;
+    idempotencyKey?: string;
+    stagingAttachment?: {
+      fileId: string;
+      filename: string;
+      temporary: true;
+    };
+    onTemporaryFileCreated?: (attachment: {
+      fileId: string;
+      filename: string;
+      temporary: true;
+    }) => Promise<void>;
+  } = {},
 ) {
-  if (archive.fileId)
+  if (archive.fileId && !options.forceCopy && !options.stagingAttachment)
     return {
       file_id: archive.fileId,
       filename: archive.filename,
       temporary: false,
     };
-  if (!archive.url)
+  if (!archive.fileId && !archive.url)
     throw new GeoHttpError("知识库 ZIP 缺少下载地址", 409, "ARCHIVE_NOT_READY");
 
-  const response = await broker.downloadTaskOutput(
-    taskId,
-    archive.url,
-    archive.filename,
-  );
+  const response = archive.fileId
+    ? await broker.downloadFile(archive.fileId)
+    : await broker.downloadTaskOutput(taskId, archive.url!, archive.filename);
   const length = Number(response.headers.get("content-length") || 0);
   if (length > MAX_ARCHIVE_COPY_BYTES) {
     throw new GeoHttpError(
@@ -5765,11 +6169,35 @@ async function materializeArchiveAttachment(
   if (!body.length || body.length > MAX_ARCHIVE_COPY_BYTES) {
     throw new GeoHttpError("知识库 ZIP 无效或过大", 413, "ARCHIVE_TOO_LARGE");
   }
-  const file = await broker.createFile({
-    filename: archive.filename,
-    mimeType: "application/zip",
-    sizeBytes: body.length,
-  });
+  const file = options.stagingAttachment
+    ? {
+        id: options.stagingAttachment.fileId,
+        filename: options.stagingAttachment.filename,
+        proxy_upload_ticket: undefined,
+      }
+    : await broker.createFile({
+        filename: archive.filename,
+        mimeType: "application/zip",
+        sizeBytes: body.length,
+        ...(options.idempotencyKey
+          ? { idempotencyKey: options.idempotencyKey }
+          : {}),
+      });
+  if (!options.stagingAttachment) {
+    try {
+      await options.onTemporaryFileCreated?.({
+        fileId: file.id,
+        filename: file.filename || archive.filename,
+        temporary: true,
+      });
+    } catch (error) {
+      // The store writes an independent fsynced orphan marker before its
+      // record CAS. Delete immediately when possible; if deletion also fails,
+      // the marker survives the crash window and the recovery GC retries it.
+      await broker.deleteFile(file.id).catch(() => undefined);
+      throw error;
+    }
+  }
   await broker.uploadFile(
     file.id,
     body,
@@ -5783,177 +6211,808 @@ async function materializeArchiveAttachment(
   };
 }
 
-async function classifyCustomQuestion(input: {
+async function advanceCustomQuestionValidation(input: {
   broker: GeoPresalesBroker;
-  value: ProjectTokenValue;
+  store: GeoCustomQuestionValidationStore;
+  record: GeoCustomQuestionValidationRecord;
   knowledgeBaseTask: BrokerTask;
-  question: string;
+  now?: () => number;
 }) {
-  const archive = resolveKnowledgeBaseArtifact(
-    input.value,
-    input.knowledgeBaseTask,
+  const validationNow = input.now ?? Date.now;
+  const lease = await input.store.tryAcquireLease(
+    input.record.projectId,
+    input.record.clientRequestId,
+    CUSTOM_QUESTION_CLASSIFIER_LEASE_MS,
   );
-  if (!archive) {
-    throw new GeoHttpError(
-      "企业知识库准备完成后才能验证自定义问题",
-      409,
-      "ARCHIVE_NOT_READY",
+  if (!lease) {
+    return (
+      (await input.store.get(
+        input.record.projectId,
+        input.record.clientRequestId,
+      )) ?? input.record
     );
   }
-  const manifest = await loadKnowledgeBaseManifest(
-    input.broker,
-    input.value.knowledgeBaseTaskId,
-    input.knowledgeBaseTask,
-    input.value.companyName,
-    archive,
-    input.value.knowledgeBaseValidationProfile,
+
+  let activeLease = lease;
+  let leaseFailure: unknown;
+  let leaseOperations: Promise<void> = Promise.resolve();
+  const enqueueLeaseOperation = <T>(operation: () => Promise<T>) => {
+    const current = leaseOperations.then(async () => {
+      if (leaseFailure) throw leaseFailure;
+      return operation();
+    });
+    // Attach a rejection handler immediately. Node 24 must never observe a
+    // rejected interval promise before the request reaches its finally block.
+    leaseOperations = current.then(
+      () => undefined,
+      (error) => {
+        leaseFailure ??= error;
+      },
+    );
+    return current;
+  };
+  const renewLease = () => {
+    void enqueueLeaseOperation(async () => {
+      activeLease = await input.store.renewLease(
+        activeLease,
+        CUSTOM_QUESTION_CLASSIFIER_LEASE_MS,
+      );
+    }).catch((error) => {
+      leaseFailure ??= error;
+    });
+  };
+  const leaseTimer = setInterval(
+    renewLease,
+    CUSTOM_QUESTION_CLASSIFIER_LEASE_RENEW_MS,
   );
-  const archiveAttachment = await materializeArchiveAttachment(
-    input.broker,
-    input.value.knowledgeBaseTaskId,
-    archive,
-  );
-  let taskId: string | undefined;
-  let skillFileIds: string[] = [];
+  leaseTimer.unref?.();
 
   try {
-    const created = await createGeoTaskWithSkillPackages(
-      input.broker,
-      {
-        projectId: input.value.projectId,
-        prompt: buildGeoCustomQuestionClassifierPrompt({
-          companyName: input.value.companyName,
-          question: input.question,
-          archiveFilename: archiveAttachment.filename,
-        }),
-        attachments: [archiveAttachment],
-        idempotencyKey: [
-          "geo",
-          input.value.projectId,
-          "custom-question-classifier",
-          crypto
-            .createHash("sha256")
-            .update(normalizeQuestionIdentity(input.question))
-            .digest("hex")
-            .slice(0, 24),
-          crypto.randomUUID(),
-        ].join(":"),
-      },
-      [
-        {
-          filename: CUSTOM_QUESTION_CLASSIFIER_SKILL_ARCHIVE_FILENAME,
-          body: await buildGeoCustomQuestionClassifierSkillArchive(),
-        },
-      ],
-    );
-    skillFileIds = created.skillAttachments.map(
-      (attachment) => attachment.file_id,
-    );
-    taskId = taskIdFrom(created.task);
-    if (!taskId) {
-      throw new GeoHttpError(
-        "创建问题验证任务失败：缺少任务 ID",
-        502,
-        "CUSTOM_QUESTION_CLASSIFIER_TASK_ID_MISSING",
+    let record =
+      (await input.store.get(
+        input.record.projectId,
+        input.record.clientRequestId,
+      )) ?? input.record;
+    const persist = async (
+      next: GeoCustomQuestionValidationRecord,
+    ): Promise<GeoCustomQuestionValidationRecord> => {
+      record = await enqueueLeaseOperation(() =>
+        input.store.update(next, activeLease),
       );
+      return record;
+    };
+    const cleanup = (current: GeoCustomQuestionValidationRecord) =>
+      cleanupCustomQuestionValidation(input.broker, current, persist);
+    const persistTransientFailure = async (
+      error: unknown,
+      code: string,
+      message: string,
+    ) => {
+      const now = validationNow();
+      const diagnostic = safeCustomQuestionDiagnostic(error);
+      const sameObservation = record.lastTransientError === diagnostic;
+      const firstTransientErrorAt =
+        sameObservation && record.firstTransientErrorAt
+          ? record.firstTransientErrorAt
+          : new Date(now).toISOString();
+      // The persisted schema deliberately caps this counter at 100. A burst
+      // of concurrent status requests can observe the same failure more than
+      // 100 times before the 30-second time gate expires; saturating keeps the
+      // next post-gate observation valid instead of making the reservation
+      // permanently unparsable at 101.
+      const transientErrorCount = nextCustomQuestionTransientErrorCount(
+        record.transientErrorCount,
+        sameObservation,
+      );
+      const exhausted =
+        transientErrorCount >=
+          CUSTOM_QUESTION_CLASSIFIER_TRANSIENT_MAX_OBSERVATIONS &&
+        now - Date.parse(firstTransientErrorAt) >=
+          CUSTOM_QUESTION_CLASSIFIER_TRANSIENT_MAX_MS;
+      record = await persist({
+        ...record,
+        ...(exhausted
+          ? {
+              state: "failed" as const,
+              expiresAt: new Date(
+                now + CUSTOM_QUESTION_TERMINAL_RETENTION_MS,
+              ).toISOString(),
+              error: {
+                code,
+                message,
+                status: 502,
+                retryable: true,
+              },
+            }
+          : {}),
+        transientErrorCount,
+        firstTransientErrorAt,
+        lastTransientError: diagnostic,
+      });
+      return exhausted ? cleanup(record) : record;
+    };
+
+    if (isTerminalCustomQuestionValidation(record)) {
+      return await cleanup(record);
     }
 
-    const resolvedTask = await waitForCustomQuestionClassification(
-      input.broker,
-      taskId,
-      created.task,
-    );
+    const archive = record.knowledgeBaseArtifact;
+    const attachmentOperationKey = (kind: "archive" | "skill") =>
+      `geo-custom-question-file:${record.key}:${kind}:${record.attachmentRebuildCount}:v1`;
+
+    if (!record.archiveAttachment) {
+      try {
+        const attachment = await materializeArchiveAttachment(
+          input.broker,
+          record.knowledgeBaseTaskId,
+          archive,
+          {
+            // The durable knowledge-base artifact can belong to a credential
+            // retired after API-key rotation. Always copy it into the current
+            // credential generation before combining it with the current
+            // classifier Skill. If rotation lands between the two creates,
+            // the Dashboard rejects the mixed task and the next generation
+            // rebuilds both attachments under the then-current credential.
+            forceCopy: true,
+            idempotencyKey: attachmentOperationKey("archive"),
+            stagingAttachment: record.archiveStagingAttachment
+              ? {
+                  ...record.archiveStagingAttachment,
+                  temporary: true,
+                }
+              : undefined,
+            onTemporaryFileCreated: async (stagingAttachment) => {
+              record = await enqueueLeaseOperation(() =>
+                input.store.retainTemporaryFileForCleanup(
+                  record.projectId,
+                  record.clientRequestId,
+                  stagingAttachment.fileId,
+                ),
+              );
+              await persist({
+                ...record,
+                state: "prepared",
+                archiveStagingAttachment: stagingAttachment,
+              });
+            },
+          },
+        );
+        await persist({
+          ...record,
+          state: "prepared",
+          archiveAttachment: {
+            fileId: attachment.file_id,
+            filename: attachment.filename,
+            temporary: attachment.temporary,
+          },
+          archiveStagingAttachment: undefined,
+          transientErrorCount: 0,
+          firstTransientErrorAt: undefined,
+          lastTransientError: undefined,
+        });
+      } catch (error) {
+        return await persistTransientFailure(
+          error,
+          "CUSTOM_QUESTION_ARCHIVE_PREPARATION_UNAVAILABLE",
+          "企业知识库附件持续无法准备，请重试当前问题",
+        );
+      }
+    }
+
+    if (!record.skillAttachment) {
+      try {
+        const body = await buildGeoCustomQuestionClassifierSkillArchive();
+        let stagingAttachment = record.skillStagingAttachment;
+        let uploadTicket: string | undefined;
+        if (!stagingAttachment) {
+          const file = await input.broker.createFile({
+            filename: CUSTOM_QUESTION_CLASSIFIER_SKILL_ARCHIVE_FILENAME,
+            mimeType: "application/zip",
+            sizeBytes: body.length,
+            idempotencyKey: attachmentOperationKey("skill"),
+          });
+          uploadTicket = file.proxy_upload_ticket;
+          stagingAttachment = {
+            fileId: file.id,
+            filename:
+              file.filename ||
+              CUSTOM_QUESTION_CLASSIFIER_SKILL_ARCHIVE_FILENAME,
+            temporary: true,
+          };
+          try {
+            record = await enqueueLeaseOperation(() =>
+              input.store.retainTemporaryFileForCleanup(
+                record.projectId,
+                record.clientRequestId,
+                stagingAttachment!.fileId,
+              ),
+            );
+            await persist({
+              ...record,
+              state: "prepared",
+              skillStagingAttachment: stagingAttachment,
+            });
+          } catch (error) {
+            await input.broker.deleteFile(file.id).catch(() => undefined);
+            throw error;
+          }
+        }
+        await input.broker.uploadFile(
+          stagingAttachment.fileId,
+          body,
+          "application/zip",
+          uploadTicket,
+        );
+        await persist({
+          ...record,
+          state: "prepared",
+          skillAttachment: stagingAttachment,
+          skillStagingAttachment: undefined,
+          transientErrorCount: 0,
+          firstTransientErrorAt: undefined,
+          lastTransientError: undefined,
+        });
+      } catch (error) {
+        return await persistTransientFailure(
+          error,
+          "CUSTOM_QUESTION_SKILL_PREPARATION_UNAVAILABLE",
+          "问题验证协议附件持续无法准备，请重试当前问题",
+        );
+      }
+    }
+
+    let observedTask: BrokerTask | undefined;
+    if (!record.taskId) {
+      try {
+        observedTask = await input.broker.createTask({
+          projectId: record.projectId,
+          prompt: buildGeoCustomQuestionClassifierPrompt({
+            companyName: record.companyName,
+            question: record.question,
+            archiveFilename: record.archiveAttachment!.filename,
+          }),
+          attachments: [
+            {
+              file_id: record.skillAttachment!.fileId,
+              filename: record.skillAttachment!.filename,
+            },
+            {
+              file_id: record.archiveAttachment!.fileId,
+              filename: record.archiveAttachment!.filename,
+            },
+          ],
+          idempotencyKey: geoCustomQuestionOperationKey(record),
+          agentProfile: FRONTMIND_BASE_PROFILE,
+        });
+      } catch (error) {
+        if (isInvalidCustomQuestionAttachmentError(error)) {
+          if (
+            record.attachmentRebuildCount >=
+            CUSTOM_QUESTION_CLASSIFIER_ATTACHMENT_REBUILD_MAX
+          ) {
+            return await persistTransientFailure(
+              error,
+              "CUSTOM_QUESTION_CLASSIFIER_ATTACHMENTS_INVALID",
+              "问题验证附件持续失效，请重新提交问题",
+            );
+          }
+          const orphanedTemporaryFileIds = Array.from(
+            new Set([
+              ...record.orphanedTemporaryFileIds,
+              ...(record.skillAttachment?.temporary
+                ? [record.skillAttachment.fileId]
+                : []),
+              ...(record.archiveAttachment?.temporary
+                ? [record.archiveAttachment.fileId]
+                : []),
+              ...(record.skillStagingAttachment?.temporary
+                ? [record.skillStagingAttachment.fileId]
+                : []),
+              ...(record.archiveStagingAttachment?.temporary
+                ? [record.archiveStagingAttachment.fileId]
+                : []),
+            ]),
+          ).slice(-20);
+          return await persist({
+            ...record,
+            state: "reserved",
+            archiveAttachment: undefined,
+            skillAttachment: undefined,
+            archiveStagingAttachment: undefined,
+            skillStagingAttachment: undefined,
+            orphanedTemporaryFileIds,
+            attachmentRebuildCount: record.attachmentRebuildCount + 1,
+            transientErrorCount: 0,
+            firstTransientErrorAt: undefined,
+            lastTransientError: "问题验证附件已失效，正在安全重建同一请求。",
+          });
+        }
+        if (isRecoverableCustomQuestionSubmissionError(error)) {
+          return await persistTransientFailure(
+            error,
+            "CUSTOM_QUESTION_CLASSIFIER_SUBMISSION_UNAVAILABLE",
+            "问题验证任务暂时无法提交，请重试当前问题",
+          );
+        }
+        return await persistTransientFailure(
+          error,
+          "CUSTOM_QUESTION_CLASSIFIER_SUBMISSION_FAILED",
+          "问题验证任务提交失败，请重试当前问题",
+        );
+      }
+      const taskId = taskIdFrom(observedTask);
+      if (!taskId) {
+        return await persist({
+          ...record,
+          state: "failed",
+          expiresAt: new Date(
+            validationNow() + CUSTOM_QUESTION_TERMINAL_RETENTION_MS,
+          ).toISOString(),
+          error: {
+            code: "CUSTOM_QUESTION_CLASSIFIER_TASK_ID_MISSING",
+            message: "创建问题验证任务失败，请稍后重试",
+            status: 502,
+            retryable: true,
+          },
+        });
+      }
+      await persist({
+        ...record,
+        state: "submitted",
+        taskId,
+        transientErrorCount: 0,
+        firstTransientErrorAt: undefined,
+        lastTransientError: undefined,
+      });
+    }
+
+    if (!observedTask) {
+      try {
+        observedTask = await input.broker.getTask(record.taskId!);
+      } catch (error) {
+        return await persistTransientFailure(
+          error,
+          "CUSTOM_QUESTION_CLASSIFIER_TASK_UNAVAILABLE",
+          "问题验证任务持续无法读取，请重试当前问题",
+        );
+      }
+    }
+
+    const normalizedStatus = normalizeTaskStatus(observedTask.status);
+    const rawStatus = String(observedTask.status ?? "unknown").slice(0, 100);
+    if (["queued", "running", "waiting"].includes(normalizedStatus)) {
+      return await persist({
+        ...record,
+        state: "submitted",
+        unknownStatusCount: 0,
+        firstUnknownStatusAt: undefined,
+        transientErrorCount: 0,
+        firstTransientErrorAt: undefined,
+        lastObservedStatus: rawStatus,
+        lastTransientError: undefined,
+      });
+    }
+    if (normalizedStatus === "failed" || normalizedStatus === "cancelled") {
+      record = await persist({
+        ...record,
+        state: "failed",
+        expiresAt: new Date(
+          validationNow() + CUSTOM_QUESTION_TERMINAL_RETENTION_MS,
+        ).toISOString(),
+        lastObservedStatus: rawStatus,
+        error: {
+          code: "CUSTOM_QUESTION_CLASSIFIER_FAILED",
+          message: "该问题未能通过验证，请修改问题后重新提交",
+          status: 422,
+          retryable: false,
+        },
+      });
+      return await cleanup(record);
+    }
+    if (normalizedStatus === "unknown") {
+      const unknownStatusCount = record.unknownStatusCount + 1;
+      if (
+        unknownStatusCount >=
+        CUSTOM_QUESTION_CLASSIFIER_UNKNOWN_MAX_OBSERVATIONS
+      ) {
+        record = await persist({
+          ...record,
+          state: "failed",
+          expiresAt: new Date(
+            validationNow() + CUSTOM_QUESTION_TERMINAL_RETENTION_MS,
+          ).toISOString(),
+          unknownStatusCount,
+          firstUnknownStatusAt:
+            record.firstUnknownStatusAt ??
+            new Date(validationNow()).toISOString(),
+          lastObservedStatus: rawStatus,
+          error: {
+            code: "CUSTOM_QUESTION_CLASSIFIER_UNKNOWN_STATUS",
+            message: "问题验证任务返回了无法识别的状态，请重新提交问题",
+            status: 502,
+            retryable: false,
+          },
+        });
+        return await cleanup(record);
+      }
+      return await persist({
+        ...record,
+        state: "submitted",
+        unknownStatusCount,
+        firstUnknownStatusAt:
+          record.firstUnknownStatusAt ??
+          new Date(validationNow()).toISOString(),
+        lastObservedStatus: rawStatus,
+      });
+    }
+
+    let resolvedTask: BrokerTask;
+    try {
+      resolvedTask = await getResolvedTask(input.broker, record.taskId!);
+    } catch (error) {
+      return await persistTransientFailure(
+        error,
+        "CUSTOM_QUESTION_CLASSIFIER_RESULT_UNAVAILABLE",
+        "问题验证结果持续无法读取，请重试当前问题",
+      );
+    }
     const classification =
       parseCustomQuestionClassificationTaskOutput(resolvedTask);
     if (!classification) {
       console.warn("[GEO custom question]", {
         event: "classifier_output_rejected",
-        projectId: input.value.projectId,
-        taskId,
+        projectId: record.projectId,
+        taskId: record.taskId,
         diagnosticCode: "CUSTOM_QUESTION_CLASSIFIER_INVALID_RESPONSE",
       });
-      throw new GeoHttpError(
-        "问题验证结果暂时无法读取，请稍后重试",
-        502,
-        "CUSTOM_QUESTION_CLASSIFIER_INVALID_RESPONSE",
-      );
+      record = await persist({
+        ...record,
+        state: "failed",
+        expiresAt: new Date(
+          validationNow() + CUSTOM_QUESTION_TERMINAL_RETENTION_MS,
+        ).toISOString(),
+        error: {
+          code: "CUSTOM_QUESTION_CLASSIFIER_INVALID_RESPONSE",
+          message: "问题验证结果无法读取，请修改问题后重新提交",
+          status: 502,
+          retryable: false,
+        },
+      });
+      return await cleanup(record);
     }
 
-    if (classification.decision === "accept") {
-      const grounding = validateAcceptedCustomQuestionGrounding(
-        classification,
-        {
-          question: input.question,
-          companyName: input.value.companyName,
-          manifest,
-        },
-      );
-      if (!grounding.ok) {
-        console.warn("[GEO custom question]", {
-          event: "classifier_acceptance_blocked",
-          projectId: input.value.projectId,
-          taskId,
-          diagnosticCode:
-            grounding.kind === "invalid_evidence"
-              ? "CUSTOM_QUESTION_CLASSIFIER_INVALID_EVIDENCE"
-              : "CUSTOM_QUESTION_ENTERPRISE_ANCHOR_MISSING",
-          reason: grounding.reason,
-        });
-        if (grounding.kind === "invalid_evidence") {
-          throw new GeoHttpError(
-            "问题验证结果未通过知识库证据校验，请稍后重试",
-            502,
-            "CUSTOM_QUESTION_CLASSIFIER_INVALID_RESPONSE",
-          );
-        }
-        throw new GeoHttpError(
-          `无法确认该问题与「${input.value.companyName}」的关系，请明确写出企业、品牌或知识库中的具体产品名称`,
-          422,
-          "CUSTOM_QUESTION_ENTERPRISE_UNRELATED",
-        );
-      }
+    if (classification.decision === "reject") {
+      record = await persist({
+        ...record,
+        state: "rejected",
+        error: rejectedCustomQuestionError(
+          classification.category,
+          record.companyName,
+        ),
+        expiresAt: new Date(
+          validationNow() + CUSTOM_QUESTION_TERMINAL_RETENTION_MS,
+        ).toISOString(),
+      });
+      return await cleanup(record);
     }
-    return classification;
+
+    let manifest: KnowledgeBaseManifest;
+    try {
+      manifest = await loadKnowledgeBaseManifest(
+        input.broker,
+        record.knowledgeBaseTaskId,
+        input.knowledgeBaseTask,
+        record.companyName,
+        archive,
+        record.knowledgeBaseValidationProfile,
+      );
+    } catch (error) {
+      return await persistTransientFailure(
+        error,
+        "CUSTOM_QUESTION_KNOWLEDGE_BASE_UNAVAILABLE",
+        "企业知识库持续无法读取，请重试当前问题",
+      );
+    }
+    const grounding = validateAcceptedCustomQuestionGrounding(classification, {
+      question: record.question,
+      companyName: record.companyName,
+      manifest,
+    });
+    if (!grounding.ok) {
+      console.warn("[GEO custom question]", {
+        event: "classifier_acceptance_blocked",
+        projectId: record.projectId,
+        taskId: record.taskId,
+        diagnosticCode:
+          grounding.kind === "invalid_evidence"
+            ? "CUSTOM_QUESTION_CLASSIFIER_INVALID_EVIDENCE"
+            : "CUSTOM_QUESTION_ENTERPRISE_ANCHOR_MISSING",
+        reason: grounding.reason,
+      });
+      record = await persist({
+        ...record,
+        state: grounding.kind === "invalid_evidence" ? "failed" : "rejected",
+        expiresAt: new Date(
+          validationNow() + CUSTOM_QUESTION_TERMINAL_RETENTION_MS,
+        ).toISOString(),
+        error:
+          grounding.kind === "invalid_evidence"
+            ? {
+                code: "CUSTOM_QUESTION_CLASSIFIER_INVALID_RESPONSE",
+                message: "问题验证结果未通过知识库证据校验，请重新提交问题",
+                status: 502,
+                retryable: false,
+              }
+            : {
+                code: "CUSTOM_QUESTION_ENTERPRISE_UNRELATED",
+                message: `无法确认该问题与「${record.companyName}」的关系，请明确写出企业、品牌或知识库中的具体产品名称`,
+                status: 422,
+                retryable: false,
+              },
+      });
+      return await cleanup(record);
+    }
+
+    const question = GeoQuestionSchema.parse({
+      id: customQuestionId(record.question),
+      category: classification.category,
+      question: record.question,
+      rationale: classification.reason,
+      ...(classification.enterpriseAnchor
+        ? { enterpriseAnchor: classification.enterpriseAnchor }
+        : {}),
+      ...(classification.offeringAnchor
+        ? { offeringAnchor: classification.offeringAnchor }
+        : {}),
+      evidenceRefs: classification.evidenceRefs,
+      selectable: true,
+    });
+    record = await persist({
+      ...record,
+      state: "completed",
+      expiresAt: new Date(
+        validationNow() + CUSTOM_QUESTION_TERMINAL_RETENTION_MS,
+      ).toISOString(),
+      result: question,
+      error: undefined,
+      transientErrorCount: 0,
+      firstTransientErrorAt: undefined,
+      lastTransientError: undefined,
+    });
+    return await cleanup(record);
   } finally {
-    await Promise.allSettled([
-      ...(taskId ? [input.broker.deleteTask(taskId)] : []),
-      ...skillFileIds.map((fileId) => input.broker.deleteFile(fileId)),
-      ...(archiveAttachment.temporary
-        ? [input.broker.deleteFile(archiveAttachment.file_id)]
-        : []),
-    ]);
+    clearInterval(leaseTimer);
+    await leaseOperations;
+    await input.store.releaseLease(activeLease).catch(() => undefined);
   }
 }
 
-async function waitForCustomQuestionClassification(
-  broker: GeoPresalesBroker,
-  taskId: string,
-  initialTask: BrokerTask,
+function isTerminalCustomQuestionValidation(
+  record: GeoCustomQuestionValidationRecord,
 ) {
-  const deadline = Date.now() + CUSTOM_QUESTION_CLASSIFIER_TIMEOUT_MS;
-  let task = initialTask;
-  while (true) {
-    const status = normalizeTaskStatus(task.status);
-    if (status === "completed") return getResolvedTask(broker, taskId);
-    if (status === "failed" || status === "cancelled") {
-      throw new GeoHttpError(
-        "问题验证暂时未完成，请稍后重试",
-        502,
-        "CUSTOM_QUESTION_CLASSIFIER_FAILED",
-      );
-    }
-    if (Date.now() >= deadline) {
-      throw new GeoHttpError(
-        "问题验证超时，请稍后重试",
-        504,
-        "CUSTOM_QUESTION_CLASSIFIER_TIMEOUT",
-      );
-    }
-    await new Promise((resolve) =>
-      setTimeout(resolve, CUSTOM_QUESTION_CLASSIFIER_POLL_MS),
-    );
-    task = await broker.getTask(taskId);
+  return ["completed", "rejected", "failed"].includes(record.state);
+}
+
+async function cleanupCustomQuestionValidation(
+  broker: GeoPresalesBroker,
+  record: GeoCustomQuestionValidationRecord,
+  persist: (
+    next: GeoCustomQuestionValidationRecord,
+  ) => Promise<GeoCustomQuestionValidationRecord>,
+) {
+  if (record.cleanupCompleted) return record;
+  const temporaryFileIds = Array.from(
+    new Set([
+      ...record.orphanedTemporaryFileIds,
+      ...(record.skillAttachment?.temporary
+        ? [record.skillAttachment.fileId]
+        : []),
+      ...(record.archiveAttachment?.temporary
+        ? [record.archiveAttachment.fileId]
+        : []),
+      ...(record.skillStagingAttachment?.temporary
+        ? [record.skillStagingAttachment.fileId]
+        : []),
+      ...(record.archiveStagingAttachment?.temporary
+        ? [record.archiveStagingAttachment.fileId]
+        : []),
+    ]),
+  );
+  const results = await Promise.allSettled([
+    ...(record.taskId ? [broker.deleteTask(record.taskId)] : []),
+    ...temporaryFileIds.map((fileId) => broker.deleteFile(fileId)),
+  ]);
+  const failed = results.filter(
+    (result) =>
+      result.status === "rejected" &&
+      !isAlreadyDeletedCustomQuestionResource(result.reason),
+  );
+  if (failed.length > 0) {
+    return persist({
+      ...record,
+      cleanupCompleted: false,
+      lastTransientError: `问题验证资源仍在清理中（${failed.length}/${results.length}）`,
+    });
   }
+  return persist({ ...record, cleanupCompleted: true });
+}
+
+function isAlreadyDeletedCustomQuestionResource(error: unknown) {
+  return error instanceof GeoBrokerError && error.status === 404;
+}
+
+export function createGeoCustomQuestionRecoveryWorker(input: {
+  broker: GeoPresalesBroker;
+  store: GeoCustomQuestionValidationStore;
+  intervalMs?: number;
+  batchSize?: number;
+  now?: () => number;
+}) {
+  const intervalMs = Math.max(1_000, input.intervalMs ?? 5_000);
+  const batchSize = Math.max(1, Math.min(100, input.batchSize ?? 20));
+  let timer: NodeJS.Timeout | undefined;
+  let inFlight: Promise<void> | undefined;
+
+  const runOnce = () => {
+    if (inFlight) return inFlight;
+    inFlight = (async () => {
+      // listActive is intentionally unbounded here: batchSize limits concurrent
+      // upstream work, not candidate discovery. Taking a fixed sorted prefix on
+      // every cycle permanently starves later reservations whenever the prefix
+      // remains active. Store leases and upstream idempotency keys make the full
+      // scan safe across overlapping Website processes.
+      const records = await input.store.listActive(Number.MAX_SAFE_INTEGER);
+      let nextRecordIndex = 0;
+      const recoverNext = async () => {
+        while (nextRecordIndex < records.length) {
+          const record = records[nextRecordIndex++];
+          if (!record) continue;
+          try {
+            await advanceCustomQuestionValidation({
+              broker: input.broker,
+              store: input.store,
+              record,
+              // The persisted immutable artifact is authoritative. The manifest
+              // loader only needs this task object for URL-only legacy archives;
+              // v1 reservations always freeze a Dashboard fileId.
+              knowledgeBaseTask: {
+                id: record.knowledgeBaseTaskId,
+                status: "completed",
+              },
+              now: input.now,
+            });
+          } catch (error) {
+            console.warn("[GEO custom question recovery]", {
+              event: "reservation_recovery_deferred",
+              projectId: record.projectId,
+              clientRequestId: record.clientRequestId,
+              diagnosticCode:
+                error instanceof GeoCustomQuestionValidationStoreError
+                  ? error.code
+                  : error instanceof GeoBrokerError
+                    ? error.code
+                    : "RECOVERY_DEFERRED",
+            });
+          }
+        }
+      };
+      await Promise.all(
+        Array.from(
+          { length: Math.min(batchSize, records.length) },
+          recoverNext,
+        ),
+      );
+
+      await input.store.collectGarbage({
+        cleanup: async (target) => {
+          const results = await Promise.allSettled([
+            ...(target.taskId ? [input.broker.deleteTask(target.taskId)] : []),
+            ...target.temporaryFileIds.map((fileId) =>
+              input.broker.deleteFile(fileId),
+            ),
+          ]);
+          const failed = results.filter(
+            (result) =>
+              result.status === "rejected" &&
+              !isAlreadyDeletedCustomQuestionResource(result.reason),
+          );
+          if (failed.length > 0) {
+            throw new Error(
+              `custom-question cleanup incomplete (${failed.length}/${results.length})`,
+            );
+          }
+        },
+      });
+    })().finally(() => {
+      inFlight = undefined;
+    });
+    // Attach the handler in the same turn so an interval-triggered rejection
+    // can never become an unhandled rejection.
+    void inFlight.catch((error) => {
+      console.warn("[GEO custom question recovery]", {
+        event: "worker_cycle_deferred",
+        diagnosticCode:
+          error instanceof GeoCustomQuestionValidationStoreError
+            ? error.code
+            : "RECOVERY_CYCLE_DEFERRED",
+      });
+    });
+    return inFlight;
+  };
+
+  return {
+    runOnce,
+    start() {
+      if (timer) return;
+      void runOnce();
+      timer = setInterval(() => void runOnce(), intervalMs);
+      timer.unref?.();
+    },
+    stop() {
+      if (timer) clearInterval(timer);
+      timer = undefined;
+    },
+  };
+}
+
+function rejectedCustomQuestionError(category: string, companyName: string) {
+  if (category === "industry_ranking") {
+    return {
+      code: "INDUSTRY_RANKING_QUESTION",
+      message: "该问题属于行业排名或品牌推荐类问题，需要全域营销权限",
+      status: 422,
+      retryable: false,
+    } as const;
+  }
+  if (category === "ambiguous") {
+    return {
+      code: "CUSTOM_QUESTION_AMBIGUOUS",
+      message: `无法确认该问题与「${companyName}」的关系，请明确写出企业、品牌或知识库中的具体产品名称`,
+      status: 422,
+      retryable: false,
+    } as const;
+  }
+  return {
+    code: "CUSTOM_QUESTION_ENTERPRISE_UNRELATED",
+    message: `该问题与「${companyName}」的企业、产品或服务没有明确关系，请修改后重试`,
+    status: 422,
+    retryable: false,
+  } as const;
+}
+
+function isRecoverableCustomQuestionSubmissionError(error: unknown) {
+  return (
+    error instanceof GeoBrokerError &&
+    ([409, 425, 429].includes(error.status) || error.status >= 500)
+  );
+}
+
+function isInvalidCustomQuestionAttachmentError(error: unknown) {
+  return (
+    error instanceof GeoBrokerError &&
+    [400, 404, 409, 410, 422].includes(error.status)
+  );
+}
+
+function waitForCustomQuestionRecovery(delayMs: number) {
+  return new Promise<void>((resolve) => {
+    setTimeout(resolve, delayMs);
+  });
+}
+
+export function nextCustomQuestionTransientErrorCount(
+  currentCount: number,
+  sameObservation: boolean,
+) {
+  return sameObservation ? Math.min(100, currentCount + 1) : 1;
+}
+
+function safeCustomQuestionDiagnostic(error: unknown) {
+  return (error instanceof Error ? error.message : String(error))
+    .replace(/[\u0000-\u001f\u007f]+/g, " ")
+    .replace(/\s+/g, " ")
+    .trim()
+    .slice(0, 500);
 }
 
 type GeoTaskSkillPackage = {
@@ -6503,6 +7562,62 @@ function knowledgeBaseValidationReason(error: unknown) {
 }
 
 function normalizeError(error: unknown) {
+  if (error instanceof GeoCustomQuestionValidationStoreError) {
+    if (error.code === "IDEMPOTENCY_CONFLICT") {
+      return new GeoHttpError(
+        error.message,
+        409,
+        "CUSTOM_QUESTION_IDEMPOTENCY_CONFLICT",
+      );
+    }
+    if (error.code === "ACTIVE_RESERVATION_CONFLICT") {
+      return new GeoHttpError(
+        error.message,
+        409,
+        "CUSTOM_QUESTION_ACTIVE_RESERVATION_CONFLICT",
+      );
+    }
+    if (error.code === "RESERVATION_EXPIRED") {
+      return new GeoHttpError(
+        error.message,
+        410,
+        "CUSTOM_QUESTION_VALIDATION_EXPIRED",
+      );
+    }
+    if (error.code === "RESERVATION_OWNER_MISMATCH") {
+      return new GeoHttpError(
+        error.message,
+        403,
+        "CUSTOM_QUESTION_VALIDATION_FORBIDDEN",
+      );
+    }
+    if (error.code === "RESERVATION_NOT_TERMINAL") {
+      return new GeoHttpError(
+        error.message,
+        409,
+        "CUSTOM_QUESTION_VALIDATION_NOT_TERMINAL",
+      );
+    }
+    if (error.code === "PROJECT_DELETION_BLOCKED") {
+      return new GeoHttpError(
+        error.message,
+        409,
+        "CUSTOM_QUESTION_VALIDATION_DELETE_BLOCKED",
+      );
+    }
+    if (error.code === "PROJECT_DELETION_FENCED") {
+      return new GeoHttpError(
+        error.message,
+        409,
+        "CUSTOM_QUESTION_PROJECT_DELETION_FENCED",
+      );
+    }
+    return new GeoHttpError(
+      "问题验证状态暂时无法安全保存，请使用原请求重试",
+      503,
+      "CUSTOM_QUESTION_VALIDATION_STORE_UNAVAILABLE",
+    );
+  }
   if (error instanceof GeoHttpError || error instanceof GeoBrokerError)
     return error;
   if (error instanceof GeoPaymentVerificationError) return error;
@@ -6530,6 +7645,11 @@ function normalizeError(error: unknown) {
   ) {
     return new GeoHttpError("文件大小不能超过 50 MB", 413, "UPLOAD_TOO_LARGE");
   }
-  console.error("[GEO API]", error);
+  // Unknown errors can wrap upstream request bodies. Never emit their message,
+  // stack, task output, customer question, or credentials to production logs.
+  console.error("[GEO API]", {
+    event: "unhandled_error",
+    diagnosticCode: "INTERNAL_ERROR",
+  });
   return new GeoHttpError("服务暂时不可用，请稍后重试", 500, "INTERNAL_ERROR");
 }

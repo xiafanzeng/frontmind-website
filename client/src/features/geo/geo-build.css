@@ -2290,6 +2290,9 @@
   border-top: 1px solid #e8e4ea;
   padding-top: 24px;
 }
+.geo-knowledge-leaf-section:first-child {
+  border-top: 0;
+}
 .geo-knowledge-leaf-section > header {
   display: block;
   border: 0;
@@ -3441,6 +3444,10 @@
   background: #c7becb;
   cursor: not-allowed;
 }
+.geo-custom-question-card form button.is-validated {
+  border-left-color: #b7d6c7;
+  background: linear-gradient(135deg, #287356, #195641);
+}
 .geo-custom-question-card form > small {
   display: block;
   margin-top: 7px;
@@ -3448,14 +3455,20 @@
   font-size: var(--geo-caption-size);
   line-height: 1.45;
 }
+.geo-custom-question-pending,
 .geo-custom-question-error {
   display: flex;
   align-items: center;
   gap: 6px;
   margin: 7px 0 0;
-  color: #b3263c;
   font-size: var(--geo-caption-size);
   line-height: 1.45;
+}
+.geo-custom-question-pending {
+  color: #6b4a7a;
+}
+.geo-custom-question-error {
+  color: #b3263c;
 }
 .geo-question-categories {
   display: grid;

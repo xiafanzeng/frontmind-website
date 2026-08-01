@@ -7,6 +7,48 @@ import {
 } from "./broker";
 
 describe("HttpGeoPresalesBroker", () => {
+  it("forwards a stable file operation key only to the trusted Dashboard proxy", async () => {
+    const fetchMock = vi.fn(
+      async () =>
+        new Response(
+          JSON.stringify({
+            id: "file-1",
+            filename: "archive.zip",
+            status: "pending",
+          }),
+          {
+            status: 201,
+            headers: { "content-type": "application/json" },
+          },
+        ),
+    );
+    const broker = new HttpGeoPresalesBroker({
+      baseUrl: "https://agent.example/api/internal/presales",
+      serviceToken: "private-token",
+      fetchImpl: fetchMock as typeof fetch,
+    });
+
+    await broker.createFile({
+      filename: "archive.zip",
+      mimeType: "application/zip",
+      sizeBytes: 10,
+      idempotencyKey:
+        "geo-custom-question-file:stable-operation:archive:0:v1",
+    });
+
+    const [url, init] = fetchMock.mock.calls[0];
+    expect(String(url)).toBe(
+      "https://agent.example/api/internal/presales/files",
+    );
+    expect(JSON.parse(String(init?.body))).toEqual({
+      filename: "archive.zip",
+      mimeType: "application/zip",
+      sizeBytes: 10,
+      idempotencyKey:
+        "geo-custom-question-file:stable-operation:archive:0:v1",
+    });
+  });
+
   it("defaults to Base and sends the private service token", async () => {
     const fetchMock = vi.fn(
       async (_url: string | URL | Request, init?: RequestInit) => {

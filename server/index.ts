@@ -6,7 +6,10 @@ import path from "path";
 import { fileURLToPath } from "url";
 import { existsSync } from "fs";
 import { handleVisitorStatsRequest } from "./visitorStats";
-import { createGeoRouter } from "./geo/router";
+import {
+  createGeoCustomQuestionRecoveryWorker,
+  createGeoRouter,
+} from "./geo/router";
 import { createGeoPresalesBrokerFromEnv } from "./geo/broker";
 import {
   createGeoPaymentReceiptStore,
@@ -29,6 +32,11 @@ import {
 } from "./geo/assessment";
 import { loadGeoOptimizationOutcomeForecasterSkill } from "./geo/forecast";
 import { assertGeoPaymentConfigurationFromEnv } from "./geo/payment";
+import { createGeoCustomQuestionValidationStore } from "./geo/custom-question-validation-store";
+import {
+  createRuntimeReleaseArtifactVerifier,
+  runtimeReleaseArtifactHealth,
+} from "../scripts/runtime-artifact-integrity.mjs";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -61,9 +69,27 @@ async function getGeoRuntimeSkillReadiness() {
 }
 
 async function startServer() {
+  const buildSha = geoPublicBuildSha();
+  const releaseArtifactVerifier =
+    process.env.NODE_ENV === "production"
+      ? createRuntimeReleaseArtifactVerifier({
+          buildRoot: __dirname,
+          buildSourceSha: buildSha,
+          env: process.env,
+        })
+      : undefined;
+  const startupReleaseArtifact = releaseArtifactVerifier
+    ? await releaseArtifactVerifier.verify({ force: true })
+    : undefined;
   const geoBroker = createGeoPresalesBrokerFromEnv();
   const projectOrderRegistry = createGeoProjectOrderRegistry();
   const paymentReceiptStore = createGeoPaymentReceiptStore();
+  const customQuestionValidationStore =
+    createGeoCustomQuestionValidationStore();
+  const customQuestionRecoveryWorker = createGeoCustomQuestionRecoveryWorker({
+    broker: geoBroker,
+    store: customQuestionValidationStore,
+  });
   const getGeoDependencyReadiness = createGeoDependencyHealthChecker({
     broker: geoBroker,
     projectOrderRegistry,
@@ -74,6 +100,7 @@ async function startServer() {
     await Promise.all([
       getGeoRuntimeSkillReadiness(),
       getGeoDependencyReadiness(),
+      customQuestionValidationStore.assertReady(),
     ]);
   }
   const app = express();
@@ -97,15 +124,37 @@ async function startServer() {
 
   app.get("/healthz", async (_req, res) => {
     try {
-      const [skills, dependencies] = await Promise.all([
+      const [
+        skills,
+        dependencies,
+        persistenceIdentity,
+        currentReleaseArtifact,
+      ] = await Promise.all([
         getGeoRuntimeSkillReadiness(),
         getGeoDependencyReadiness(),
+        customQuestionValidationStore
+          .assertReady()
+          .then(() => customQuestionValidationStore.persistenceIdentity()),
+        startupReleaseArtifact
+          ? releaseArtifactVerifier!.verify()
+          : Promise.resolve(undefined),
       ]);
       res.json({
         status: "ok",
-        buildSha: geoPublicBuildSha(),
+        buildSha,
+        artifact: currentReleaseArtifact
+          ? runtimeReleaseArtifactHealth(currentReleaseArtifact)
+          : undefined,
         skills,
-        dependencies,
+        dependencies: {
+          ...dependencies,
+          customQuestionValidationStore: {
+            ready: true,
+            persistenceIdentitySha256: createHash("sha256")
+              .update(persistenceIdentity, "utf8")
+              .digest("hex"),
+          },
+        },
       });
     } catch (error) {
       console.error(
@@ -122,8 +171,15 @@ async function startServer() {
 
   app.use(
     "/api/geo",
-    createGeoRouter({ broker: geoBroker, projectOrderRegistry }),
+    createGeoRouter({
+      broker: geoBroker,
+      projectOrderRegistry,
+      customQuestionValidationStore,
+    }),
   );
+
+  customQuestionRecoveryWorker.start();
+  server.on("close", () => customQuestionRecoveryWorker.stop());
 
   app.get(
     [

@@ -105,6 +105,7 @@ export interface GeoPresalesBroker {
     filename: string;
     mimeType?: string;
     sizeBytes: number;
+    idempotencyKey?: string;
   }): Promise<BrokerFile>;
   uploadFile(
     fileId: string,
@@ -267,6 +268,7 @@ export class HttpGeoPresalesBroker implements GeoPresalesBroker {
     filename: string;
     mimeType?: string;
     sizeBytes: number;
+    idempotencyKey?: string;
   }) {
     return this.requestJson<BrokerFile>("/files", {
       method: "POST",
