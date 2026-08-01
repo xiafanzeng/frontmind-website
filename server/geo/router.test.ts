@@ -6,6 +6,7 @@ import express from "express";
 import JSZip from "jszip";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
+  FRONTMIND_BASE_PROFILE,
   FRONTMIND_PRO_PROFILE,
   GeoBrokerError,
   type BrokerFile,
@@ -1018,7 +1019,7 @@ describe("GEO API", () => {
     expect(broker.prompts[0]).toContain("不要询问、等待确认");
     expect(broker.prompts[0]).toContain("catalog.pdf");
     expect(broker.prompts[0]).not.toContain("# FILE: SKILL.md");
-    expect(broker.taskAgentProfiles).toEqual([FRONTMIND_PRO_PROFILE]);
+    expect(broker.taskAgentProfiles).toEqual([FRONTMIND_BASE_PROFILE]);
     expect(broker.taskAttachments[0]).toEqual([
       {
         file_id: "skill-file-1",
@@ -1909,7 +1910,7 @@ describe("GEO API", () => {
     expect(broker.questionTaskCount).toBe(0);
   });
 
-  it("creates exactly one Pro knowledge-base task and never regenerates it", async () => {
+  it("creates exactly one Base knowledge-base task and never regenerates it", async () => {
     const invalidArchive = new JSZip();
     invalidArchive.file(
       "02_run.json",
@@ -1959,7 +1960,7 @@ describe("GEO API", () => {
       "knowledgeBaseRetryAvailable",
     );
     expect(broker.prompts).toHaveLength(1);
-    expect(broker.taskAgentProfiles).toEqual([FRONTMIND_PRO_PROFILE]);
+    expect(broker.taskAgentProfiles).toEqual([FRONTMIND_BASE_PROFILE]);
 
     const stable = await jsonRequest(
       `/projects/${encodeURIComponent((first.body as any).projectToken)}`,
@@ -4591,7 +4592,7 @@ describe("GEO API", () => {
         status: "failed",
         questionRetryAvailable: false,
         questionValidationError:
-          "推荐结果未通过四类各五题的结构校验，请联系技术支持",
+          "推荐结果未通过题目格式或语义校验，请联系技术支持",
       },
     });
     expect(broker.questionTaskCount).toBe(1);
@@ -4649,7 +4650,7 @@ describe("GEO API", () => {
     });
     expect(broker.questionTaskCount).toBe(1);
     expect(broker.taskAgentProfiles).toEqual([
-      FRONTMIND_PRO_PROFILE,
+      FRONTMIND_BASE_PROFILE,
       FRONTMIND_PRO_PROFILE,
     ]);
   });

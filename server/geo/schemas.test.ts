@@ -28,7 +28,7 @@ describe("GeoQuestionSetSchema", () => {
     const questions = validQuestions();
     questions[19] = {
       ...questions[19],
-      question: "跨区域部署时应如何评估 FrontMind 与云岚科技的服务覆盖？",
+      question: "评估 FrontMind 与云岚科技的成本结构时应关注什么？",
     };
     expect(GeoQuestionSetSchema.parse({ questions }).questions).toHaveLength(
       20,
@@ -197,6 +197,8 @@ describe("custom GEO question policy", () => {
     "部署企业级 Kubernetes 平台时哪些云服务商更适合？",
     "建设大模型应用平台时应把哪些厂商纳入选型名单？",
     "本地部署场景应优先考察哪些专有云厂商？",
+    "流量波动明显的 AI 应用适合选择哪些 Serverless 模型服务商？",
+    "中国 AI 推理基础设施头部厂商有哪些？",
     "科研仪器行业排\u200b名有哪些？",
     "2026 年行业 TOP 10 是谁？",
   ])(

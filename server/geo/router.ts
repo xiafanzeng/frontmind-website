@@ -41,6 +41,7 @@ import {
 import { buildGeoExecutionLog } from "./execution";
 import {
   createGeoPresalesBrokerFromEnv,
+  FRONTMIND_BASE_PROFILE,
   FRONTMIND_PRO_PROFILE,
   type BrokerMonitorRun,
   GEO_MONITOR_PLATFORM_IDS,
@@ -5151,7 +5152,7 @@ async function buildProjectView(
               }
             : undefined,
     questionValidationError: invalidQuestionResult
-      ? "推荐结果未通过四类各五题的结构校验，请联系技术支持"
+      ? "推荐结果未通过题目格式或语义校验，请联系技术支持"
       : undefined,
     error: knowledgeBaseFinalizationFailure
       ? KNOWLEDGE_BASE_FINALIZATION_PUBLIC_ERROR
@@ -6025,7 +6026,7 @@ async function createWebsiteKnowledgeBaseTaskWithSkill(
     broker,
     {
       ...input,
-      agentProfile: FRONTMIND_PRO_PROFILE,
+      agentProfile: FRONTMIND_BASE_PROFILE,
     },
     [
       {

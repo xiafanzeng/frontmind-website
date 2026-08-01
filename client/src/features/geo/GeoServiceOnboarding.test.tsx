@@ -97,8 +97,10 @@ describe("GeoServiceOnboarding", () => {
     });
 
     expect(html).toContain("资料已提交，等待管理员发起合同");
-    expect(html).toContain('src="/geo-builder/contact-wechat.png"');
-    expect(html).toContain("打开微信二维码");
+    expect(html).toContain(
+      'src="/geo-builder/contact-wechat.png?v=wecom-20260801"',
+    );
+    expect(html).toContain("打开企业微信二维码");
     expect(html).toContain("邮件提醒管理员");
     expect(html).toContain('href="mailto:xiafanzeng@frontmind.com.cn');
     expect(html).toContain("FrontMind%20%E5%90%88%E5%90%8C%E5%8F%91%E8%B5%B7");

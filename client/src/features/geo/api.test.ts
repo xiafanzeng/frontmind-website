@@ -622,12 +622,12 @@ describe("normalizeGeoProject", () => {
         status: "completed",
         questionTask: { status: "completed", progress: 100 },
         questionValidationError:
-          "推荐结果未通过四类各五题的结构校验，请重试生成",
+          "推荐结果未通过题目格式或语义校验，请联系技术支持",
       },
     });
 
     expect(project.status).toBe("failed");
-    expect(project.error).toContain("结构校验");
+    expect(project.error).toContain("格式或语义校验");
   });
 
   it("normalizes real monitoring answers and scoped assessment output", () => {

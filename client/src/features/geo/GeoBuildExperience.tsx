@@ -27,7 +27,6 @@ import {
   ListTree,
   LoaderCircle,
   LockKeyhole,
-  Mail,
   Maximize2,
   MessageSquareText,
   Minimize2,
@@ -61,10 +60,7 @@ import {
 } from "react";
 import { createPortal } from "react-dom";
 import { useLang } from "@/contexts/LanguageContext";
-import {
-  FRONTMIND_CONTACT_EMAILS,
-  FRONTMIND_WECHAT_QR_PATH,
-} from "@/lib/frontmind-contact";
+import { FRONTMIND_WECHAT_QR_PATH } from "@/lib/frontmind-contact";
 import {
   Dialog,
   DialogClose,
@@ -334,27 +330,6 @@ function isGeoCheckoutExpired(
 ) {
   const expiresAt = Date.parse(checkout.expiresAt);
   return Number.isFinite(expiresAt) && expiresAt <= nowMs;
-}
-
-function buildPaymentSupportHref(pending: PendingGeoPayment) {
-  const orderId = pending.checkout.orderId
-    .replace(/[\r\n]+/g, " ")
-    .trim()
-    .slice(0, 100);
-  const subject = `FrontMind 支付结果人工核对｜${orderId || "订单号待确认"}`;
-  const body = [
-    "您好，FrontMind 团队：",
-    "",
-    pending.status === "activation_support_required"
-      ? "付款已经确认，但后续任务未能自动启动，请协助处理。"
-      : "支付状态未能继续自动核对，请协助确认本订单的最终结果。",
-    `订单号：${orderId || "待确认"}`,
-    `订单类型：${pending.kind === "service" ? "GEO 优化服务" : "问题监控"}`,
-    "在人工核对完成前，我不会重复支付或创建新订单。",
-    "",
-    "谢谢。",
-  ].join("\n");
-  return `mailto:${FRONTMIND_CONTACT_EMAILS[0]}?subject=${encodeURIComponent(subject)}&body=${encodeURIComponent(body)}`;
 }
 
 export function geoPaidStartNotice(
@@ -1353,6 +1328,8 @@ function GeoBuildExperienceZh() {
   const [inviteError, setInviteError] = useState("");
   const [creating, setCreating] = useState(false);
   const [startingAnalysisId, setStartingAnalysisId] = useState<string>();
+  const [startingQuestionProjectId, setStartingQuestionProjectId] =
+    useState<string>();
   const [projects, setProjects] = useState<GeoProject[]>([]);
   const [projectsHydrated, setProjectsHydrated] = useState(false);
   const [activeProjectId, setActiveProjectId] = useState<string | undefined>();
@@ -1402,7 +1379,6 @@ function GeoBuildExperienceZh() {
   );
   const dragOperation = useRef<DragOperation | undefined>(undefined);
   const questionStartInFlight = useRef(new Set<string>());
-  const questionStageAutoOpened = useRef(new Set<string>());
   const assessmentStartInFlight = useRef(new Set<string>());
   const forecastStartInFlight = useRef(new Set<string>());
   const paymentMonitorStartInFlight = useRef(new Set<string>());
@@ -1925,26 +1901,6 @@ function GeoBuildExperienceZh() {
 
   useEffect(() => {
     if (isGeoStylePreviewProject(activeProject)) return;
-    if (
-      !activeProject?.knowledgeBase ||
-      activeProject.questions.length > 0 ||
-      activeProject.status === "failed"
-    )
-      return;
-    if (questionStartInFlight.current.has(activeProject.id)) return;
-    questionStartInFlight.current.add(activeProject.id);
-    void startGeoQuestionRecommendation(activeProject)
-      .then(commitProject)
-      .catch((error) => {
-        setStorageNotice(
-          `知识库已完成，但问题推荐尚未启动：${errorMessage(error)}`,
-        );
-        questionStartInFlight.current.delete(activeProject.id);
-      });
-  }, [activeProject, commitProject]);
-
-  useEffect(() => {
-    if (isGeoStylePreviewProject(activeProject)) return;
     if (activeProject?.assessment?.status !== "ready") return;
     if (
       activeProject.optimizationForecast &&
@@ -1962,25 +1918,6 @@ function GeoBuildExperienceZh() {
       })
       .finally(() => forecastStartInFlight.current.delete(activeProject.id));
   }, [activeProject, commitProject]);
-
-  useEffect(() => {
-    if (!activeProject) return;
-    if (
-      activeProject.questions.length > 0 ||
-      activeProject.status === "failed"
-    ) {
-      questionStartInFlight.current.delete(activeProject.id);
-    }
-    if (
-      workbenchOpen &&
-      activeProject.questions.length > 0 &&
-      !activeProject.selectedQuestionId &&
-      !questionStageAutoOpened.current.has(activeProject.id)
-    ) {
-      questionStageAutoOpened.current.add(activeProject.id);
-      setActiveStage("question_recommendation");
-    }
-  }, [activeProject, workbenchOpen]);
 
   useEffect(() => {
     if (isGeoStylePreviewProject(activeProject)) return;
@@ -2193,6 +2130,46 @@ function GeoBuildExperienceZh() {
       50,
     );
   }, []);
+
+  const continueToGeoQuestions = async () => {
+    const project = activeProject;
+    if (!project?.knowledgeBase) return;
+
+    if (
+      project.questions.length > 0 ||
+      project.status === "recommending" ||
+      isGeoStylePreviewProject(project)
+    ) {
+      setActiveStage("question_recommendation");
+      return;
+    }
+    if (!project.remoteToken) {
+      setStorageNotice("当前项目尚未连接后台，暂不能生成 GEO 问题。");
+      return;
+    }
+    if (project.status === "failed") {
+      setStorageNotice(project.error || "问题推荐未能完成，请联系技术支持。");
+      return;
+    }
+    if (questionStartInFlight.current.has(project.id)) return;
+
+    const projectId = project.id;
+    questionStartInFlight.current.add(projectId);
+    setStartingQuestionProjectId(projectId);
+    setStorageNotice("");
+    try {
+      const updated = await startGeoQuestionRecommendation(project);
+      commitProject(updated);
+      setActiveStage("question_recommendation");
+    } catch (error) {
+      setStorageNotice(`GEO 问题生成未能启动：${errorMessage(error)}`);
+    } finally {
+      questionStartInFlight.current.delete(projectId);
+      setStartingQuestionProjectId((current) =>
+        current === projectId ? undefined : current,
+      );
+    }
+  };
 
   const selectQuestion = (question: GeoQuestion) => {
     if (activeQuestionSelectionLocked) {
@@ -3387,13 +3364,13 @@ function GeoBuildExperienceZh() {
               联系技术人员对接
             </DialogTitle>
             <DialogDescription className="geo-dialog-description">
-              扫描微信二维码，说明您的行业与目标关键词，我们将安排技术人员进行专项评估。
+              扫描企业微信二维码，说明您的行业与目标关键词，我们将安排技术人员进行专项评估。
             </DialogDescription>
           </DialogHeader>
           <div className="geo-qr-frame">
             <img
               src={FRONTMIND_WECHAT_QR_PATH}
-              alt="FrontMind 技术人员微信二维码"
+              alt="FrontMind 技术人员企业微信二维码"
             />
           </div>
         </DialogContent>
@@ -3460,6 +3437,10 @@ function GeoBuildExperienceZh() {
         onStart={startPaymentCheckout}
         onReopen={reopenPaymentCheckout}
         onCheck={recheckPaymentStatus}
+        onContact={() => {
+          setPaymentDialogOpen(false);
+          setContactOpen(true);
+        }}
       />
 
       {activeProject && (
@@ -3764,6 +3745,10 @@ function GeoBuildExperienceZh() {
                     onContact={() => setContactOpen(true)}
                     onStart={startDraftAnalysis}
                     starting={startingAnalysisId === activeProject.id}
+                    onContinueToQuestions={continueToGeoQuestions}
+                    startingQuestions={
+                      startingQuestionProjectId === activeProject.id
+                    }
                   />
                 )}
                 {activeStage === "question_recommendation" && (
@@ -4234,6 +4219,8 @@ export function EnterpriseAnalysis({
   onContact,
   onStart,
   starting,
+  onContinueToQuestions,
+  startingQuestions = false,
 }: {
   project: GeoProject;
   archivePersistenceVersion?: number;
@@ -4241,6 +4228,8 @@ export function EnterpriseAnalysis({
   onContact: () => void;
   onStart: () => void;
   starting: boolean;
+  onContinueToQuestions?: () => void;
+  startingQuestions?: boolean;
 }) {
   const [view, setView] = useState<KnowledgeView>("overview");
   const knowledgeBase = project.knowledgeBase;
@@ -4383,6 +4372,9 @@ export function EnterpriseAnalysis({
     ) ??
     sections[0];
   const activeLeaves = activeSection?.leaves ?? [];
+  const hasQuestions = project.questions.length > 0;
+  const questionGenerationInProgress =
+    startingQuestions || project.status === "recommending";
 
   return (
     <div className="geo-analysis-shell">
@@ -4430,6 +4422,31 @@ export function EnterpriseAnalysis({
             onClick={onDownload}
           >
             <ArrowDownToLine size={16} /> 下载知识库 ZIP
+          </button>
+          <button
+            type="button"
+            className="geo-question-generate-button"
+            onClick={onContinueToQuestions}
+            disabled={
+              !onContinueToQuestions ||
+              questionGenerationInProgress ||
+              (project.status === "failed" && !hasQuestions)
+            }
+          >
+            {questionGenerationInProgress ? (
+              <>
+                <LoaderCircle size={16} className="is-spinning" /> 正在生成 GEO
+                问题
+              </>
+            ) : hasQuestions ? (
+              <>
+                <Sparkles size={16} /> 查看 GEO 问题 <ArrowRight size={16} />
+              </>
+            ) : (
+              <>
+                <Sparkles size={16} /> 生成 GEO 问题 <ArrowRight size={16} />
+              </>
+            )}
           </button>
         </div>
       </section>
@@ -4757,7 +4774,7 @@ function EmptyKnowledgeState({
   );
 }
 
-function QuestionRecommendation({
+export function QuestionRecommendation({
   project,
   selectionLocked,
   onSelect,
@@ -5035,6 +5052,39 @@ function QuestionRecommendation({
                   tone="is-blue"
                 />
               </div>
+              <div className="geo-authority-sources" aria-label="权威信源">
+                <div className="geo-authority-sources-title">
+                  <BadgeCheck size={14} aria-hidden="true" />
+                  <span>权威信源</span>
+                </div>
+                <div className="geo-authority-source-channels">
+                  <PermissionChannel
+                    name="搜狐"
+                    logo="/geo-builder/channels/sohu.png"
+                    tone="is-red"
+                  />
+                  <PermissionChannel
+                    name="新浪"
+                    logo="/geo-builder/channels/sina.png"
+                    tone="is-red"
+                  />
+                  <PermissionChannel
+                    name="今日头条"
+                    logo="/geo-builder/channels/toutiao.png"
+                    tone="is-red"
+                  />
+                  <PermissionChannel
+                    name="网易"
+                    logo="/geo-builder/channels/netease.png"
+                    tone="is-red"
+                  />
+                  <PermissionChannel
+                    name="腾讯新闻"
+                    logo="/geo-builder/channels/tencent-news.png"
+                    tone="is-blue"
+                  />
+                </div>
+              </div>
             </div>
           </li>
         </ul>
@@ -5070,10 +5120,10 @@ function QuestionRecommendation({
               autoPlay
               playsInline
               preload="metadata"
-              poster="/videos/frontmind-industry-ranking-permission-explainer-poster.jpg"
+              poster="/videos/frontmind-industry-ranking-permission-explainer-poster.jpg?v=6"
             >
               <source
-                src="/videos/frontmind-industry-ranking-permission-explainer-66s.mp4"
+                src="/videos/frontmind-industry-ranking-permission-explainer-66s.mp4?v=6"
                 type="video/mp4"
               />
               <track
@@ -5225,6 +5275,7 @@ function PaymentDialog({
   onStart,
   onReopen,
   onCheck,
+  onContact,
 }: {
   open: boolean;
   project?: GeoProject;
@@ -5236,6 +5287,7 @@ function PaymentDialog({
   onStart: (method: GeoPaymentMethod) => void;
   onReopen: () => void;
   onCheck: () => void;
+  onContact: () => void;
 }) {
   const serviceOrder = purpose === "service";
   const platformIds =
@@ -5257,9 +5309,6 @@ function PaymentDialog({
   const supportRequired =
     pending?.status === "reconciliation_required" ||
     pending?.status === "activation_support_required";
-  const paymentSupportHref = pending
-    ? buildPaymentSupportHref(pending)
-    : undefined;
   const category =
     pending?.kind === "service"
       ? pending.category
@@ -5467,14 +5516,18 @@ function PaymentDialog({
                 {checkoutExpired ? "核对最终支付结果" : "我已完成支付"}{" "}
                 <RotateCw size={14} />
               </button>
-              {checkoutExpired && paymentSupportHref && (
-                <a className="geo-secondary-button" href={paymentSupportHref}>
-                  联系技术支持 <Mail size={14} />
-                </a>
+              {checkoutExpired && (
+                <button
+                  type="button"
+                  className="geo-secondary-button"
+                  onClick={onContact}
+                >
+                  联系技术支持 <MessageSquareText size={14} />
+                </button>
               )}
             </>
           )}
-          {supportRequired && paymentSupportHref && (
+          {supportRequired && (
             <>
               <button
                 type="button"
@@ -5483,9 +5536,13 @@ function PaymentDialog({
               >
                 再次核对 <RotateCw size={14} />
               </button>
-              <a className="geo-primary-button" href={paymentSupportHref}>
-                联系技术支持 <Mail size={14} />
-              </a>
+              <button
+                type="button"
+                className="geo-primary-button"
+                onClick={onContact}
+              >
+                联系技术支持 <MessageSquareText size={14} />
+              </button>
             </>
           )}
         </DialogFooter>

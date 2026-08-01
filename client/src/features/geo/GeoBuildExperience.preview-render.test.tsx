@@ -17,6 +17,7 @@ import {
   GeoWorkspaceHandoff,
   MonitoringResults,
   OptimizationForecastView,
+  QuestionRecommendation,
   resolvePaymentCheckoutAction,
   ServiceActivation,
   shouldRenderExecutionProgress,
@@ -173,6 +174,53 @@ describe("GEO style preview rendering", () => {
     expect(html).not.toContain("首要优先级");
     expect(html).not.toContain("P0");
     expect(html).not.toContain("急需修复");
+  });
+
+  it("shows GEO question generation as an explicit action below the archive actions", () => {
+    const project = {
+      ...createGeoStylePreviewProject(),
+      status: "ready" as const,
+      questions: [],
+      selectedQuestionId: undefined,
+    };
+    const html = renderToStaticMarkup(
+      <EnterpriseAnalysis
+        project={project}
+        onDownload={vi.fn()}
+        onContact={vi.fn()}
+        onStart={vi.fn()}
+        starting={false}
+        onContinueToQuestions={vi.fn()}
+      />,
+    );
+
+    expect(html).toContain("geo-question-generate-button");
+    expect(html).toContain("生成 GEO 问题");
+    expect(html.indexOf("下载知识库 ZIP")).toBeLessThan(
+      html.indexOf("生成 GEO 问题"),
+    );
+  });
+
+  it("groups the five media platforms in a separate authority-source box", () => {
+    const html = renderToStaticMarkup(
+      <QuestionRecommendation
+        project={createGeoStylePreviewProject()}
+        selectionLocked={false}
+        onSelect={vi.fn()}
+        onCreateCustom={vi.fn()}
+        onContact={vi.fn()}
+      />,
+    );
+
+    expect(html).toContain('class="geo-authority-sources"');
+    expect(html).toContain("权威信源");
+    expect(html).toContain("搜狐");
+    expect(html).toContain("新浪");
+    expect(html).toContain("今日头条");
+    expect(html).toContain("网易");
+    expect(html).toContain("腾讯新闻");
+    expect(html).toContain("/geo-builder/channels/sohu.png");
+    expect(html).toContain("/geo-builder/channels/tencent-news.png");
   });
 
   it("does not invent crawl scope or evidence claims when the archive omits them", () => {

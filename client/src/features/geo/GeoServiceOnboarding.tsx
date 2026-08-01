@@ -928,16 +928,16 @@ export function GeoServiceOnboarding({
                   href={FRONTMIND_WECHAT_QR_PATH}
                   target="_blank"
                   rel="noreferrer"
-                  aria-label="打开 FrontMind 管理员微信二维码"
+                  aria-label="打开 FrontMind 管理员企业微信二维码"
                 >
                   <img
                     src={FRONTMIND_WECHAT_QR_PATH}
-                    alt="FrontMind 管理员微信二维码"
+                    alt="FrontMind 管理员企业微信二维码"
                   />
                 </a>
                 <div>
                   <small>提醒管理员</small>
-                  <h5>微信扫码或邮件提醒发起合同</h5>
+                  <h5>企业微信扫码或邮件提醒发起合同</h5>
                   <p>
                     提醒时请附上企业名称和签约申请编号，管理员可据此快速定位本次资料。
                   </p>
@@ -947,7 +947,7 @@ export function GeoServiceOnboarding({
                       target="_blank"
                       rel="noreferrer"
                     >
-                      打开微信二维码 <ExternalLink size={14} />
+                      打开企业微信二维码 <ExternalLink size={14} />
                     </a>
                     <a href={adminReminderHref}>
                       邮件提醒管理员 <Mail size={14} />

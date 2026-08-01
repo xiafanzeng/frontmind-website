@@ -63,7 +63,7 @@ describe("website one-shot knowledge-base skill", () => {
     );
   });
 
-  it("keeps the Pro skill focused on research and candidate output", async () => {
+  it("keeps the Base skill focused on research and candidate output", async () => {
     const skill = await loadWebsiteKnowledgeBaseSkill();
     expect(Buffer.byteLength(skill, "utf8")).toBeGreaterThanOrEqual(9_000);
     expect(Buffer.byteLength(skill, "utf8")).toBeLessThanOrEqual(40_000);
@@ -81,7 +81,7 @@ describe("website one-shot knowledge-base skill", () => {
       "contentFloorExceptions",
       "cross-file evidence-reference subset",
       "scripts/build_candidate.py",
-      "`frontmind-pro` model profile",
+      "`frontmind-base` model profile",
       "exactly one enterprise knowledge-base generation task",
       "automatic recovery, regeneration, or a second attempt",
     ]) {
@@ -173,22 +173,22 @@ describe("website one-shot knowledge-base skill", () => {
               })`
             : "公开资料暂未提供可核验信息。[待核验]";
         return `## D${String(index + 1).padStart(2, "0")} ${
-            [
-              "企业基础",
-              "团队",
-              "产品服务",
-              "技术能力",
-              "客户案例",
-              "资质认证",
-              "财务融资",
-              "竞争信息",
-              "市场信息",
-              "品牌资产",
-              "渠道",
-              "公开意图",
-              "公共情报",
-            ][index]
-          }\n\n${evidence}`;
+          [
+            "企业基础",
+            "团队",
+            "产品服务",
+            "技术能力",
+            "客户案例",
+            "资质认证",
+            "财务融资",
+            "竞争信息",
+            "市场信息",
+            "品牌资产",
+            "渠道",
+            "公开意图",
+            "公共情报",
+          ][index]
+        }\n\n${evidence}`;
       }).join("\n\n");
       const contentFloors = new Map([
         ["企业与品牌", 500],
