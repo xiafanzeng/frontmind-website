@@ -4,6 +4,8 @@ import path from "node:path";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import {
   visitorCountryCatalog,
+  visitorHistoricalBaseline,
+  visitorHistoricalBaselineSummary,
   type VisitorCountry,
 } from "../client/src/data/visitorStats.ts";
 
@@ -26,6 +28,11 @@ const STORE_PATH =
   path.resolve(process.cwd(), ".frontmind-visitor-stats.json");
 const metadataByIso = new Map(
   visitorCountryCatalog.map((country) => [country.iso, country]),
+);
+const historicalCountryIsos = new Set(
+  visitorHistoricalBaseline
+    .map((country) => country.iso)
+    .filter((iso) => /^[a-z]{2}$/.test(iso)),
 );
 const regionNames =
   typeof Intl.DisplayNames !== "undefined"
@@ -129,18 +136,20 @@ function buildSummary() {
   return summarizeVisitorStore(readStore());
 }
 
-/**
- * Produces the public counter exclusively from persisted visits. No client or
- * server baseline is added, and each visit remains attributed to its stored
- * ISO region instead of being reassigned to a default country.
- */
+/** Combines the published historical snapshot with newer persisted visits. */
 export function summarizeVisitorStore(store: VisitorStore) {
-  const countryMap = new Map<string, VisitorCountry>();
+  const countryMap = new Map<string, VisitorCountry>(
+    visitorHistoricalBaseline.map((country) => [country.iso, { ...country }]),
+  );
+  const liveCountryIsos = new Set<string>();
+  let liveReads = 0;
 
   for (const visitor of Object.values(store.visitors)) {
     const visits = normalizeVisitCount(visitor.visits);
     if (visits === 0) continue;
+    liveReads += visits;
     const iso = normalizeStoredIso(visitor.iso);
+    if (/^[a-z]{2}$/.test(iso)) liveCountryIsos.add(iso);
     const metadata = metadataByIso.get(iso);
     const current = countryMap.get(iso);
     countryMap.set(iso, {
@@ -159,23 +168,24 @@ export function summarizeVisitorStore(store: VisitorStore) {
     (left, right) =>
       right.reads - left.reads || left.country.localeCompare(right.country),
   );
-  const totalReads = countries.reduce(
-    (total, country) => total + country.reads,
-    0,
-  );
-  const countryCount = countries.filter((country) =>
-    /^[a-z]{2}$/.test(country.iso),
+  const totalReads = visitorHistoricalBaselineSummary.totalReads + liveReads;
+  const newLiveCountryCount = Array.from(liveCountryIsos).filter(
+    (iso) => !historicalCountryIsos.has(iso),
   ).length;
+  const countryCount =
+    visitorHistoricalBaselineSummary.countryCount + newLiveCountryCount;
 
   return {
     ok: true,
     mode: "live",
     totalReads,
     countryCount,
-    pageviews: totalReads,
+    baselineReads: visitorHistoricalBaselineSummary.totalReads,
+    liveReads,
+    pageviews: liveReads,
     countries,
     updatedAt: store.updatedAt || null,
-    note: "Counts are persisted page views grouped by the trusted country header available at request time; missing geography is reported as Unknown.",
+    note: `Lifetime totals include the published snapshot captured on ${visitorHistoricalBaselineSummary.capturedAt}; newer persisted page views are grouped by trusted country headers, and missing geography remains Unknown.`,
   };
 }
 

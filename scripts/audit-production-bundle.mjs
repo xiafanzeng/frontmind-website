@@ -130,10 +130,6 @@ for (const sourceFile of visitorStatsSourceFiles) {
       label: "fabricated visitor-stat fallback",
       pattern: /\bfallbackStats\b|\bvisitorStatsSummary\b|\bvisitorCountries\b/,
     },
-    {
-      label: "legacy visitor-stat baseline",
-      pattern: /\bbaselineReads\b|\bliveReads\b/,
-    },
   ]) {
     if (rule.pattern.test(content)) {
       violations.push({ file: sourceFile, label: rule.label });

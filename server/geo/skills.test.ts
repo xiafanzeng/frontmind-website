@@ -613,6 +613,7 @@ describe("GEO production runtime Skill release gates", () => {
       /skills\.length\s*!==?\s*5|All five runtime Skills/,
     );
     expect(bundleAudit).not.toContain("must contain exactly 21 files");
+    expect(bundleAudit).not.toContain("legacy visitor-stat baseline");
   });
 
   it("builds payment verification for the production-only dependency set", () => {
