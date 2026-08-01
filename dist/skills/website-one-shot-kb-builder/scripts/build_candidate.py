@@ -8,9 +8,10 @@ import json
 import re
 import sys
 import tempfile
+import unicodedata
 import zipfile
 from pathlib import Path, PurePosixPath
-from urllib.parse import urlparse
+from urllib.parse import urlparse, urlsplit, urlunsplit
 
 FACT_HEADINGS = [
     "D01 企业基础",
@@ -49,6 +50,10 @@ EVIDENCE_MARKER = re.compile(
     r"\[(?:来源|企业主张|权威来源|第三方来源)\]\(https?://[^)\s]+\)"
     r"|\[上传文件：[^\]]+\]|\[待核验\]"
 )
+SOURCE_URL_MARKER = re.compile(
+    r"\[(?:来源|企业主张|权威来源|第三方来源)\]\((https?://[^)\s]+)\)"
+)
+UPLOAD_MARKER = re.compile(r"\[上传文件：([^\]]+)\]")
 LOGO_EXTENSIONS = {".avif", ".gif", ".jpeg", ".jpg", ".png", ".svg", ".webp"}
 ZIP_DATE = (1980, 1, 1, 0, 0, 0)
 MAX_TEXT_BYTES = 2 * 1024 * 1024
@@ -115,6 +120,47 @@ def meaningful_character_count(markdown: str) -> int:
 
 def normalized_url(value: str) -> str:
     return value.strip().rstrip("/")
+
+
+def normalized_evidence_url(value: str) -> str:
+    if not public_http_url(value):
+        raise CandidateError(f"evidence marker URL must be public HTTP(S): {value}")
+    parsed = urlsplit(value.strip())
+    scheme = parsed.scheme.lower()
+    hostname = (parsed.hostname or "").lower()
+    host = f"[{hostname}]" if ":" in hostname else hostname
+    try:
+        port = parsed.port
+    except ValueError as error:
+        raise CandidateError(f"evidence URL has an invalid port: {value}") from error
+    if port is not None and not (
+        (scheme == "http" and port == 80) or (scheme == "https" and port == 443)
+    ):
+        host = f"{host}:{port}"
+    return urlunsplit((scheme, host, parsed.path or "/", parsed.query, ""))
+
+
+def evidence_references(markdown: str) -> dict[str, str]:
+    references: dict[str, str] = {}
+    for match in SOURCE_URL_MARKER.finditer(markdown):
+        normalized = normalized_evidence_url(match.group(1))
+        references[f"url:{normalized}"] = normalized
+    for match in UPLOAD_MARKER.finditer(markdown):
+        filename = unicodedata.normalize("NFKC", match.group(1).strip())
+        references[f"upload:{filename.casefold()}"] = f"[上传文件：{filename}]"
+    return references
+
+
+def validate_evidence_closure(facts: bytes, customer: bytes) -> None:
+    fact_references = evidence_references(facts.decode("utf-8"))
+    customer_references = evidence_references(customer.decode("utf-8"))
+    missing = sorted(set(customer_references) - set(fact_references))
+    if missing:
+        labels = ", ".join(customer_references[key] for key in missing)
+        raise CandidateError(
+            "01_customer_draft.md evidence references are absent from "
+            f"00_brand_facts.md: {labels}"
+        )
 
 
 def validate_content_floors(customer: bytes, run_value: dict[str, object]) -> None:
@@ -442,6 +488,7 @@ def build(input_dir: Path, output: Path) -> None:
     customer = validate_markdown(
         input_dir / "01_customer_draft.md", CUSTOMER_HEADINGS
     )
+    validate_evidence_closure(facts, customer)
     run, logo, run_value = validate_run(input_dir / "02_run.json", input_dir)
     validate_content_floors(customer, run_value)
     entries: list[tuple[str, bytes]] = [

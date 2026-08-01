@@ -78,6 +78,17 @@ candidate/
 `[企业主张](URL)`、`[权威来源](URL)`、`[第三方来源](URL)` 或
 `[上传文件：filename]`。缺口使用 `[待核验]`。
 
+### 跨文件证据闭包
+
+URL 去除片段和默认端口；上传文件名按 NFKC 规范化后必须满足：
+
+```text
+evidence_refs(01_customer_draft.md) ⊆ evidence_refs(00_brand_facts.md)
+```
+
+客户稿来源必须先在事实稿 D01–D13 的事实段落引用；仅列入
+`02_run.json.sources` 无效。
+
 不得在正文中嵌入 HTTP(S) 图片。
 
 ### 实际呈现字数底线
