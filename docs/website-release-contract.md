@@ -92,3 +92,15 @@ current/previous。
   被部署控制器接纳。
 - 构建期 `artifact-manifest.json` 只用于镜像内容审计；运行时不执行全量文件哈希，也不接收
   approval SHA 或 artifact-root 环境变量。
+
+## 日常调用
+
+唯一权威教程仍是 Dashboard 仓库的 `docs/operations/RELEASE.md`。在任一 FrontMind 工作区
+完成修改后，可直接让 Codex 执行：
+
+```text
+使用 $frontmind-release 把当前 FrontMind 修改验证、提交并上线；expand 自动，删表/contract 先让我审核。
+```
+
+Skill 会等待 Website 精确 SHA 的 CI 和签名 digest 自动部署，并以 Website 与 Dashboard
+两个工作区都干净且同步、Website 本机/公网 readiness 精确匹配作为完成条件。
