@@ -25,6 +25,49 @@ import {
 } from "./GeoBuildExperience";
 import { KnowledgeCompletenessDetails } from "./KnowledgeCompletenessDialog";
 import { createGeoStylePreviewProject } from "./preview";
+import type { GeoAnswerSource } from "./types";
+
+function renderMonitoringAnswerSources({
+  citations,
+  references,
+}: {
+  citations: GeoAnswerSource[];
+  references: GeoAnswerSource[];
+}) {
+  const fixture = createGeoStylePreviewProject();
+  const answer = fixture.monitoring?.answers.find(
+    (item) => item.platformId === "doubao" && item.runIndex === 1,
+  );
+  if (!answer || !fixture.monitoring) {
+    throw new Error("Preview monitoring fixture is incomplete");
+  }
+
+  return renderToStaticMarkup(
+    <MonitoringResults
+      project={{
+        ...fixture,
+        selectedPlatformIds: ["doubao"],
+        monitoring: {
+          ...fixture.monitoring,
+          platforms: ["doubao"],
+          expectedRecords: 5,
+          completedRecords: 1,
+          failedRecords: 0,
+          answers: [
+            {
+              ...answer,
+              citations,
+              references,
+            },
+          ],
+        },
+      }}
+      onRefresh={vi.fn(async () => undefined)}
+      refreshing={false}
+      onContact={vi.fn()}
+    />,
+  );
+}
 
 describe("GEO style preview rendering", () => {
   it("expands a legacy 72-character structural overview from its complete leaf titles", () => {
@@ -1005,6 +1048,8 @@ describe("GEO style preview rendering", () => {
     );
 
     expect(assessmentHtml).toContain("正在重试");
+    expect(assessmentHtml).toContain("现状评估结果暂未通过校验");
+    expect(assessmentHtml).not.toContain("知识库对照评估未能完成");
     expect(assessmentHtml).toContain("disabled");
     expect(assessmentHtml).toContain('aria-busy="true"');
     expect(forecastHtml).toContain("正在重试");
@@ -1093,6 +1138,87 @@ describe("GEO style preview rendering", () => {
       expect(html).not.toContain("重新支付");
     },
   );
+
+  it("renders all 26 retrieval references in the single source box", () => {
+    const references = Array.from({ length: 26 }, (_, index) => ({
+      title: `检索候选来源 ${index + 1}`,
+      url: `https://references.example.invalid/${index + 1}`,
+    }));
+    const html = renderMonitoringAnswerSources({
+      citations: [
+        {
+          title: "不应展示的实际引用",
+          url: "https://citations.example.invalid/hidden",
+        },
+      ],
+      references,
+    });
+
+    expect(html).toContain("检索参考 26 条");
+    expect(html).toContain("检索参考来源");
+    expect(html).toContain("检索候选来源 1");
+    expect(html).toContain("检索候选来源 26");
+    expect(html).toContain('href="https://references.example.invalid/26"');
+    expect(html).toContain(
+      "检索参考来源是平台检索阶段返回的候选资料，不代表答案逐条采用。",
+    );
+    expect(html).not.toContain("答案实际引用");
+    expect(html).not.toContain("不应展示的实际引用");
+  });
+
+  it("does not expose citation-only source data in a monitoring answer", () => {
+    const html = renderMonitoringAnswerSources({
+      citations: [
+        {
+          title: "仅存在于 citations 的来源",
+          url: "https://citations.example.invalid/only",
+        },
+      ],
+      references: [],
+    });
+
+    expect(html).toContain("检索参考 0 条");
+    expect(html).not.toContain("答案实际引用");
+    expect(html).not.toContain("仅存在于 citations 的来源");
+    expect(html).not.toContain("https://citations.example.invalid/only");
+  });
+
+  it("keeps the retrieval-reference empty state when no sources return", () => {
+    const html = renderMonitoringAnswerSources({
+      citations: [],
+      references: [],
+    });
+
+    expect(html).toContain("检索参考来源");
+    expect(html).toContain("0 条");
+    expect(html).toContain("平台本轮未返回检索参考来源。");
+  });
+
+  it("uses retrieval-only copy while waiting for the first answer", () => {
+    const fixture = createGeoStylePreviewProject();
+    const html = renderToStaticMarkup(
+      <MonitoringResults
+        project={{
+          ...fixture,
+          monitoring: {
+            ...fixture.monitoring!,
+            status: "capturing",
+            completedRecords: 0,
+            failedRecords: 0,
+            answers: [],
+          },
+        }}
+        onRefresh={vi.fn(async () => undefined)}
+        refreshing={false}
+        onContact={vi.fn()}
+      />,
+    );
+
+    expect(html).toContain(
+      "回答返回后，将按平台和轮次展示正文、媒体和检索参考来源。",
+    );
+    expect(html).not.toContain("答案实际引用");
+  });
 
   it("uses a neutral synchronization label instead of the fixture date", () => {
     const project = createGeoStylePreviewProject();

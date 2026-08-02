@@ -3,12 +3,14 @@ import { describe, expect, it } from "vitest";
 import {
   ASSESSMENT_SKILL_ARCHIVE_FILENAME,
   AssessmentRawTaskOutputSchema,
+  AssessmentTaskOutputValidationError,
   assertAssessmentOutputScope,
   buildAssessmentPrompt,
   buildGeoCurrentStateEvaluatorSkillArchive,
   buildGeoKnowledgeAnswerVerifierSkillArchive,
   calculateQuestionBaselineAssessment,
   clampRawIndicator,
+  inspectAssessmentTaskOutput,
   KNOWLEDGE_VERIFIER_SKILL_ARCHIVE_FILENAME,
   parseAssessmentTaskOutput,
   type AssessmentRawTaskOutput,
@@ -206,6 +208,33 @@ function validRawOutput(): AssessmentRawTaskOutput {
   };
 }
 
+function validIneligibleRawOutput(
+  totalObservations = 0,
+): AssessmentRawTaskOutput {
+  const raw = validRawOutput();
+  return {
+    ...raw,
+    question: {
+      id: "reputation-01",
+      text: "FrontMind 靠谱吗，有哪些问题？",
+      category: "reputation",
+      rankingMetricEligible: false,
+    },
+    rankingDiagnostics: {
+      eligible: false,
+      totalObservations,
+      rankedObservations: 0,
+      unmentionedObservations: 0,
+      averageRank: null,
+      firstPlaceRate: null,
+      top3Rate: null,
+      top5Rate: null,
+      competitorRankGap: null,
+      calculationBasis: "舆情问题不参与排名指标计算，排名字段统一留空。",
+    },
+  };
+}
+
 describe("GEO current-state assessment task output", () => {
   it("asks Base for schema-required item confidence without asking for a confidence summary", async () => {
     const prompt = await buildAssessmentPrompt({
@@ -259,6 +288,143 @@ describe("GEO current-state assessment task output", () => {
     ]);
   });
 
+  it("accepts legacy ineligible 5/0/0 diagnostics and canonicalizes them for scoring", () => {
+    const raw = validIneligibleRawOutput(5);
+    const parsed = parseAssessmentTaskOutput({
+      output: [{ type: "output_text", text: JSON.stringify(raw) }],
+    });
+
+    expect(parsed.rankingDiagnostics).toMatchObject({
+      eligible: false,
+      totalObservations: 5,
+      rankedObservations: 0,
+      unmentionedObservations: 0,
+    });
+    expect(
+      calculateQuestionBaselineAssessment(parsed).rankingDiagnostics,
+    ).toMatchObject({
+      eligible: false,
+      totalObservations: 0,
+      rankedObservations: 0,
+      unmentionedObservations: 0,
+      averageRank: null,
+      firstPlaceRate: null,
+      top3Rate: null,
+      top5Rate: null,
+      competitorRankGap: null,
+    });
+  });
+
+  it("accepts canonical ineligible 0/0/0 diagnostics", () => {
+    const inspection = inspectAssessmentTaskOutput({
+      output: [
+        {
+          type: "output_text",
+          text: JSON.stringify(validIneligibleRawOutput()),
+        },
+      ],
+    });
+
+    expect(inspection.success).toBe(true);
+    if (inspection.success) {
+      expect(inspection.data.rankingDiagnostics.totalObservations).toBe(0);
+    }
+  });
+
+  it("rejects eligible count mismatches with a precise safe path", () => {
+    const raw = validRawOutput();
+    raw.rankingDiagnostics.totalObservations = 9;
+    const inspection = inspectAssessmentTaskOutput({
+      output: [{ type: "output_text", text: JSON.stringify(raw) }],
+    });
+
+    expect(inspection.success).toBe(false);
+    if (!inspection.success) {
+      expect(inspection.error).toBeInstanceOf(
+        AssessmentTaskOutputValidationError,
+      );
+      expect(inspection.error.code).toBe("SCHEMA_MISMATCH");
+      expect(inspection.error.issues).toContainEqual({
+        path: "rankingDiagnostics.totalObservations",
+        message: "value does not satisfy a cross-field requirement",
+      });
+    }
+  });
+
+  it("rejects question/diagnostic eligibility mismatches with a precise safe path", () => {
+    const raw = validIneligibleRawOutput();
+    raw.question = validRawOutput().question;
+    const inspection = inspectAssessmentTaskOutput({
+      output: [{ type: "output_text", text: JSON.stringify(raw) }],
+    });
+
+    expect(inspection.success).toBe(false);
+    if (!inspection.success) {
+      expect(inspection.error.issues.map((issue) => issue.path)).toContain(
+        "rankingDiagnostics.eligible",
+      );
+    }
+  });
+
+  it("rejects ineligible nonzero counts and non-null ranking metrics", () => {
+    const raw = validIneligibleRawOutput(5);
+    raw.rankingDiagnostics.rankedObservations = 1;
+    raw.rankingDiagnostics.unmentionedObservations = 4;
+    raw.rankingDiagnostics.averageRank = 2;
+    raw.rankingDiagnostics.top3Rate = 0.5;
+    const inspection = inspectAssessmentTaskOutput({
+      output: [{ type: "output_text", text: JSON.stringify(raw) }],
+    });
+
+    expect(inspection.success).toBe(false);
+    if (!inspection.success) {
+      expect(inspection.error.issues.map((issue) => issue.path)).toEqual(
+        expect.arrayContaining([
+          "rankingDiagnostics.rankedObservations",
+          "rankingDiagnostics.unmentionedObservations",
+          "rankingDiagnostics.averageRank",
+          "rankingDiagnostics.top3Rate",
+        ]),
+      );
+    }
+  });
+
+  it("classifies missing trusted output, invalid JSON, and schema mismatches", () => {
+    const raw = validRawOutput();
+    const noTrustedOutput = inspectAssessmentTaskOutput(raw);
+    const invalidJson = inspectAssessmentTaskOutput({
+      output: [{ type: "output_text", text: "{ definitely-not-json" }],
+    });
+    const schemaMismatch = inspectAssessmentTaskOutput({
+      output: [{ type: "output_text", text: "{}" }],
+    });
+
+    expect(noTrustedOutput).toMatchObject({
+      success: false,
+      error: { code: "NO_TRUSTED_OUTPUT", issues: [] },
+    });
+    expect(invalidJson).toMatchObject({
+      success: false,
+      error: { code: "INVALID_JSON", issues: [] },
+    });
+    expect(schemaMismatch).toMatchObject({
+      success: false,
+      error: { code: "SCHEMA_MISMATCH" },
+    });
+    if (!schemaMismatch.success) {
+      expect(schemaMismatch.error.issues.length).toBeGreaterThan(0);
+      expect(schemaMismatch.error.issues.length).toBeLessThanOrEqual(8);
+      expect(schemaMismatch.error.issues.every((issue) => issue.path)).toBe(
+        true,
+      );
+      expect(
+        schemaMismatch.error.issues.every(
+          (issue) => !issue.message.includes(JSON.stringify(raw)),
+        ),
+      ).toBe(true);
+    }
+  });
+
   it("accepts typed task.output text but ignores user, metadata, and reasoning payloads", () => {
     const raw = validRawOutput();
     const injected = {
@@ -282,19 +448,24 @@ describe("GEO current-state assessment task output", () => {
     });
 
     expect(parsed.question.text).toBe(raw.question.text);
-    expect(() =>
-      parseAssessmentTaskOutput({
-        metadata: { text: JSON.stringify(raw) },
-        output: [
-          {
-            role: "user",
-            type: "message",
-            content: [{ type: "text", text: JSON.stringify(raw) }],
-          },
-          { type: "reasoning", text: JSON.stringify(raw) },
-        ],
-      }),
-    ).toThrow(/strict geo-current-state-evaluator JSON/);
+    const untrustedOnly = inspectAssessmentTaskOutput({
+      metadata: { text: JSON.stringify(raw) },
+      output: [
+        {
+          role: "user",
+          type: "message",
+          content: [{ type: "text", text: JSON.stringify(raw) }],
+        },
+        { type: "reasoning", text: JSON.stringify(raw) },
+      ],
+    });
+    expect(untrustedOnly).toMatchObject({
+      success: false,
+      error: { code: "NO_TRUSTED_OUTPUT" },
+    });
+    expect(() => {
+      if (!untrustedOnly.success) throw untrustedOnly.error;
+    }).toThrow(/strict geo-current-state-evaluator JSON/);
   });
 
   it("rejects model-authored scores and any unknown property", () => {
@@ -407,6 +578,27 @@ describe("GEO current-state assessment task output", () => {
     ).toBe(false);
   });
 
+  it("requires each selected platform exactly once in the platform breakdown", () => {
+    const raw = validRawOutput();
+    const duplicatePlatform = {
+      ...raw,
+      platformBreakdown: [
+        ...raw.platformBreakdown,
+        { ...raw.platformBreakdown[0] },
+      ],
+    };
+
+    const result = AssessmentRawTaskOutputSchema.safeParse(duplicatePlatform);
+    expect(result.success).toBe(false);
+    if (!result.success) {
+      expect(result.error.issues).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({ path: ["platformBreakdown"] }),
+        ]),
+      );
+    }
+  });
+
   it("keeps omissions unbound and answer comparisons within five run slots", () => {
     const raw = validRawOutput();
     const boundOmission = {
@@ -467,9 +659,8 @@ describe("GEO current-state assessment task output", () => {
       assertAssessmentOutputScope(
         {
           ...raw,
-          knowledgeVsAnswers: raw.knowledgeVsAnswers.map(
-            (comparison, index) =>
-              index === 0 ? { ...comparison, platform: "kimi" } : comparison,
+          knowledgeVsAnswers: raw.knowledgeVsAnswers.map((comparison, index) =>
+            index === 0 ? { ...comparison, platform: "kimi" } : comparison,
           ),
         },
         {
@@ -482,9 +673,8 @@ describe("GEO current-state assessment task output", () => {
       assertAssessmentOutputScope(
         {
           ...raw,
-          knowledgeVsAnswers: raw.knowledgeVsAnswers.map(
-            (comparison, index) =>
-              index === 0 ? { ...comparison, runIndex: 6 } : comparison,
+          knowledgeVsAnswers: raw.knowledgeVsAnswers.map((comparison, index) =>
+            index === 0 ? { ...comparison, runIndex: 6 } : comparison,
           ),
         },
         {
@@ -532,6 +722,7 @@ describe("deterministic question-baseline scoring", () => {
       category: "reputation",
       rankingMetricEligible: false,
     };
+    raw.rankingDiagnostics = validIneligibleRawOutput(5).rankingDiagnostics;
     raw.dimensions.competitiveAdvantage.exclusiveSemanticSpace = indicator(
       0.5,
       "五项已核验差异化主张中，有一半能在回答中被准确识别。",

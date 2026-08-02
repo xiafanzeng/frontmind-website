@@ -21,6 +21,7 @@ import {
 } from "./admin-notifications";
 import {
   ASSESSMENT_SKILL_ARCHIVE_FILENAME,
+  AssessmentTaskOutputValidationError,
   assertAssessmentOutputScope,
   buildGeoCurrentStateEvaluatorSkillArchive,
   buildGeoKnowledgeAnswerVerifierSkillArchive,
@@ -1509,10 +1510,9 @@ export function createGeoRouter(options: GeoRouterOptions = {}): Router {
         knowledgeEvidencePaths,
       );
     } catch (error) {
+      logAssessmentOutputValidation(error);
       throw new GeoHttpError(
-        error instanceof Error
-          ? `现状评估或优化效果评估未通过结构校验：${error.message}`
-          : "现状评估或优化效果评估未通过结构校验",
+        "现状评估或优化效果评估结果暂未通过校验，系统未采用不完整结果",
         409,
         "SERVICE_ASSESSMENT_INVALID",
       );
@@ -3207,10 +3207,8 @@ export function createGeoRouter(options: GeoRouterOptions = {}): Router {
               ),
             );
           } catch (error) {
-            assessmentRetryReason =
-              error instanceof Error
-                ? error.message
-                : "上一次现状评估输出未通过结构校验";
+            logAssessmentOutputValidation(error);
+            assessmentRetryReason = assessmentOutputRetryReason(error);
           }
         }
         if (assessmentRetryReason && (value.assessmentAttempt || 1) < 2) {
@@ -3529,10 +3527,9 @@ export function createGeoRouter(options: GeoRouterOptions = {}): Router {
           ),
         );
       } catch (error) {
+        logAssessmentOutputValidation(error);
         throw new GeoHttpError(
-          error instanceof Error
-            ? `当前评估未通过结构校验：${error.message}`
-            : "当前评估未通过结构校验",
+          publicAssessmentValidationMessage(error),
           409,
           "ASSESSMENT_INVALID",
         );
@@ -4992,6 +4989,44 @@ function parseScopedAssessmentTaskOutput(
   return scoped;
 }
 
+function assessmentOutputRetryReason(error: unknown) {
+  if (error instanceof AssessmentTaskOutputValidationError) {
+    if (error.issues.length > 0) {
+      return `上一次返回已解析为 JSON，但未通过以下字段校验：${error.issues
+        .map((issue) => `${issue.path}: ${issue.message}`)
+        .join("；")}`;
+    }
+    if (error.code === "INVALID_JSON") {
+      return "上一次现状评估没有返回可解析的 JSON 对象";
+    }
+    return "上一次现状评估没有返回可信的 assistant 最终输出";
+  }
+  return error instanceof Error
+    ? error.message
+    : "上一次现状评估输出未通过结构校验";
+}
+
+function publicAssessmentValidationMessage(_error: unknown) {
+  return "现状评估结果暂未通过校验，系统未采用不完整结果";
+}
+
+function logAssessmentOutputValidation(error: unknown) {
+  if (process.env.NODE_ENV === "test") return;
+  const diagnosticCode =
+    error instanceof AssessmentTaskOutputValidationError
+      ? error.code
+      : "ASSESSMENT_VALIDATION_FAILED";
+  const issuePaths =
+    error instanceof AssessmentTaskOutputValidationError
+      ? error.issues.map((issue) => issue.path)
+      : [];
+  console.warn("[GEO assessment]", {
+    event: "assessment_output_validation_failed",
+    diagnosticCode,
+    issuePaths,
+  });
+}
+
 async function buildProjectView(
   broker: GeoPresalesBroker,
   value: ProjectTokenValue,
@@ -5670,14 +5705,12 @@ function toPublicAssessmentView(
       },
     };
   } catch (error) {
+    logAssessmentOutputValidation(error);
     return {
       status: "failed",
       dimensions: {},
       comparisons: [],
-      error:
-        error instanceof Error
-          ? `现状评估结果未通过结构校验：${error.message}`
-          : "现状评估结果未通过结构校验",
+      error: publicAssessmentValidationMessage(error),
     };
   }
 }
@@ -5785,15 +5818,13 @@ function toPublicOptimizationForecastView(
       generatedAt: new Date().toISOString(),
     };
   } catch (error) {
+    logAssessmentOutputValidation(error);
     return {
       status: "failed",
       dimensions: [],
       assumptions: [],
       roadmap: [],
-      error:
-        error instanceof Error
-          ? `优化效果评估未通过结构校验：${error.message}`
-          : "优化效果评估未通过结构校验",
+      error: "优化效果评估结果暂未通过校验，系统未采用不完整结果",
     };
   }
 }

@@ -250,8 +250,8 @@ export const AssessmentKnowledgeComparisonSchema = z
 export const AssessmentPlatformBreakdownSchema = z
   .object({
     platform: z.string().min(1).max(80),
-    responseCount: z.number().int().min(0).max(100),
-    successfulResponses: z.number().int().min(0).max(100),
+    responseCount: z.literal(5),
+    successfulResponses: z.number().int().min(0).max(5),
     brandMentionRate: z.number().finite().min(0).max(1).nullable(),
     averageRank: z.number().finite().positive().max(100).nullable(),
     factAccuracy: z.number().finite().min(0).max(1).nullable(),
@@ -271,7 +271,10 @@ export const AssessmentPlatformBreakdownSchema = z
         message: "successfulResponses cannot exceed responseCount",
       });
     }
-    if (platform.successfulResponses > 0 && platform.evidenceRefs.length === 0) {
+    if (
+      platform.successfulResponses > 0 &&
+      platform.evidenceRefs.length === 0
+    ) {
       context.addIssue({
         code: "custom",
         path: ["evidenceRefs"],
@@ -296,8 +299,9 @@ export const AssessmentRankingDiagnosticsSchema = z
   .strict()
   .superRefine((ranking, context) => {
     if (
+      ranking.eligible &&
       ranking.rankedObservations + ranking.unmentionedObservations !==
-      ranking.totalObservations
+        ranking.totalObservations
     ) {
       context.addIssue({
         code: "custom",
@@ -306,21 +310,38 @@ export const AssessmentRankingDiagnosticsSchema = z
           "rankedObservations + unmentionedObservations must equal totalObservations",
       });
     }
-    if (
-      !ranking.eligible &&
-      [
-        ranking.averageRank,
-        ranking.firstPlaceRate,
-        ranking.top3Rate,
-        ranking.top5Rate,
-        ranking.competitorRankGap,
-      ].some((value) => value !== null)
-    ) {
-      context.addIssue({
-        code: "custom",
-        path: ["eligible"],
-        message: "ineligible ranking diagnostics must use null metric values",
-      });
+    if (!ranking.eligible) {
+      if (ranking.rankedObservations !== 0) {
+        context.addIssue({
+          code: "custom",
+          path: ["rankedObservations"],
+          message:
+            "ineligible ranking diagnostics must use rankedObservations=0",
+        });
+      }
+      if (ranking.unmentionedObservations !== 0) {
+        context.addIssue({
+          code: "custom",
+          path: ["unmentionedObservations"],
+          message:
+            "ineligible ranking diagnostics must use unmentionedObservations=0",
+        });
+      }
+      for (const [metric, value] of [
+        ["averageRank", ranking.averageRank],
+        ["firstPlaceRate", ranking.firstPlaceRate],
+        ["top3Rate", ranking.top3Rate],
+        ["top5Rate", ranking.top5Rate],
+        ["competitorRankGap", ranking.competitorRankGap],
+      ] as const) {
+        if (value !== null) {
+          context.addIssue({
+            code: "custom",
+            path: [metric],
+            message: `ineligible ranking diagnostics must use ${metric}=null`,
+          });
+        }
+      }
     }
   });
 
@@ -402,11 +423,23 @@ export const AssessmentRawTaskOutputSchema = z
   })
   .strict()
   .superRefine((output, context) => {
+    if (
+      output.rankingDiagnostics.eligible !==
+      output.question.rankingMetricEligible
+    ) {
+      context.addIssue({
+        code: "custom",
+        path: ["rankingDiagnostics", "eligible"],
+        message:
+          "ranking diagnostics eligibility must match the question eligibility",
+      });
+    }
     const selected = new Set(output.sample.selectedPlatforms);
     const returned = new Set(
       output.platformBreakdown.map((item) => item.platform),
     );
     if (
+      output.platformBreakdown.length !== selected.size ||
       selected.size !== returned.size ||
       Array.from(selected).some((platform) => !returned.has(platform))
     ) {
@@ -422,7 +455,8 @@ export const AssessmentRawTaskOutputSchema = z
         context.addIssue({
           code: "custom",
           path: ["knowledgeVsAnswers"],
-          message: "knowledge comparisons may only reference selected platforms",
+          message:
+            "knowledge comparisons may only reference selected platforms",
         });
       }
       if (comparison.runIndex !== null && comparison.runIndex > 5) {
@@ -706,29 +740,100 @@ export async function buildAssessmentPrompt(input: AssessmentPromptInput) {
   ].join("\n");
 }
 
-export function parseAssessmentTaskOutput(
+export type AssessmentTaskOutputValidationCode =
+  | "NO_TRUSTED_OUTPUT"
+  | "INVALID_JSON"
+  | "SCHEMA_MISMATCH";
+
+export type AssessmentTaskOutputValidationIssue = Readonly<{
+  path: string;
+  message: string;
+}>;
+
+const ASSESSMENT_TASK_OUTPUT_ERROR_MESSAGE =
+  "Assessment task output did not contain strict geo-current-state-evaluator JSON";
+
+export class AssessmentTaskOutputValidationError extends Error {
+  readonly name = "AssessmentTaskOutputValidationError";
+
+  constructor(
+    readonly code: AssessmentTaskOutputValidationCode,
+    readonly issues: readonly AssessmentTaskOutputValidationIssue[] = [],
+  ) {
+    super(`${ASSESSMENT_TASK_OUTPUT_ERROR_MESSAGE}: ${code}`);
+  }
+}
+
+export type AssessmentTaskOutputInspection =
+  | Readonly<{ success: true; data: AssessmentRawTaskOutput }>
+  | Readonly<{
+      success: false;
+      error: AssessmentTaskOutputValidationError;
+    }>;
+
+/**
+ * Inspects assistant-authored task output without traversing task metadata,
+ * user messages, reasoning items, or naked top-level values. Failure details
+ * intentionally contain only schema paths and static messages.
+ */
+export function inspectAssessmentTaskOutput(
   value: unknown,
-): AssessmentRawTaskOutput {
-  for (const item of trustedAssistantOutputItems(value)) {
-    const parsed = AssessmentRawTaskOutputSchema.safeParse(item);
-    if (parsed.success) return parsed.data;
+): AssessmentTaskOutputInspection {
+  const trustedItems = trustedAssistantOutputItems(value);
+  const trustedTexts = trustedAssistantOutputTexts(value);
+  const structuredItems = trustedItems.filter(isTrustedStructuredOutputItem);
+
+  if (structuredItems.length === 0 && trustedTexts.length === 0) {
+    return {
+      success: false,
+      error: new AssessmentTaskOutputValidationError("NO_TRUSTED_OUTPUT"),
+    };
   }
 
-  for (const candidate of trustedAssistantOutputTexts(value)) {
+  const issues = new Map<string, AssessmentTaskOutputValidationIssue>();
+  let sawParsedJson = false;
+
+  const inspectParsedValue = (
+    candidate: unknown,
+  ): AssessmentRawTaskOutput | undefined => {
+    sawParsedJson = true;
+    const parsed = AssessmentRawTaskOutputSchema.safeParse(candidate);
+    if (parsed.success) return parsed.data;
+    collectSafeAssessmentIssues(issues, parsed.error);
+    return undefined;
+  };
+
+  for (const item of structuredItems) {
+    const parsed = inspectParsedValue(item);
+    if (parsed) return { success: true, data: parsed };
+  }
+
+  for (const candidate of trustedTexts) {
     for (const jsonText of possibleJsonObjects(candidate)) {
       try {
-        const parsed = AssessmentRawTaskOutputSchema.safeParse(
-          JSON.parse(jsonText),
-        );
-        if (parsed.success) return parsed.data;
+        const parsed = inspectParsedValue(JSON.parse(jsonText));
+        if (parsed) return { success: true, data: parsed };
       } catch {
-        // Continue to the next candidate.
+        // A later trusted candidate may still contain valid JSON.
       }
     }
   }
-  throw new Error(
-    "Assessment task output did not contain strict geo-current-state-evaluator JSON",
-  );
+
+  return {
+    success: false,
+    error: new AssessmentTaskOutputValidationError(
+      sawParsedJson ? "SCHEMA_MISMATCH" : "INVALID_JSON",
+      Array.from(issues.values()).slice(0, 8),
+    ),
+  };
+}
+
+export function parseAssessmentTaskOutput(
+  value: unknown,
+): AssessmentRawTaskOutput {
+  const inspection = inspectAssessmentTaskOutput(value);
+  if (inspection.success) return inspection.data;
+  throw inspection.error;
 }
 
 export function calculateQuestionBaselineAssessment(
@@ -1002,6 +1107,79 @@ export function clampRawIndicator(value: number) {
 export function clearAssessmentSkillCacheForTests() {
   assessmentSkillCache = undefined;
   knowledgeVerifierSkillCache = undefined;
+}
+
+function isTrustedStructuredOutputItem(value: unknown) {
+  if (!value || typeof value !== "object") return false;
+  if (Array.isArray(value)) return true;
+  const record = value as Record<string, unknown>;
+  return !["text", "output_text", "content"].some(
+    (key) => typeof record[key] === "string",
+  );
+}
+
+function collectSafeAssessmentIssues(
+  target: Map<string, AssessmentTaskOutputValidationIssue>,
+  error: z.ZodError,
+) {
+  for (const issue of error.issues) {
+    if (target.size >= 8) return;
+    const safeIssue = {
+      path: safeAssessmentIssuePath(issue.path),
+      message: staticAssessmentIssueMessage(issue.code),
+    };
+    const key = `${safeIssue.path}\u0000${safeIssue.message}`;
+    if (!target.has(key)) target.set(key, safeIssue);
+  }
+}
+
+function safeAssessmentIssuePath(pathSegments: readonly PropertyKey[]) {
+  if (pathSegments.length === 0) return "$";
+  let result = "";
+  for (const segment of pathSegments) {
+    if (typeof segment === "number" && Number.isSafeInteger(segment)) {
+      result += `[${segment}]`;
+      continue;
+    }
+    if (
+      typeof segment === "string" &&
+      /^[A-Za-z_$][A-Za-z0-9_$]*$/.test(segment)
+    ) {
+      result += result ? `.${segment}` : segment;
+      continue;
+    }
+    result += result ? ".[field]" : "[field]";
+  }
+  return result;
+}
+
+function staticAssessmentIssueMessage(code: string) {
+  switch (code) {
+    case "invalid_type":
+      return "value has an invalid type";
+    case "invalid_value":
+      return "value is not an allowed value";
+    case "too_small":
+      return "value is below the allowed minimum";
+    case "too_big":
+      return "value exceeds the allowed maximum";
+    case "invalid_format":
+      return "value has an invalid format";
+    case "not_multiple_of":
+      return "value is not an allowed multiple";
+    case "unrecognized_keys":
+      return "object contains unsupported fields";
+    case "invalid_union":
+      return "value does not match an allowed schema branch";
+    case "invalid_key":
+      return "object contains an invalid key";
+    case "invalid_element":
+      return "collection contains an invalid element";
+    case "custom":
+      return "value does not satisfy a cross-field requirement";
+    default:
+      return "value does not satisfy the assessment schema";
+  }
 }
 
 function possibleJsonObjects(value: string) {

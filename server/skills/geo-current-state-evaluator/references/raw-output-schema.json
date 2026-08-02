@@ -98,6 +98,8 @@
       "type": "array",
       "minItems": 1,
       "maxItems": 12,
+      "uniqueItems": true,
+      "description": "Contains every sample.selectedPlatforms value exactly once; platform set equality is checked separately because standard JSON Schema cannot compare the two arrays.",
       "items": { "$ref": "#/$defs/platformBreakdown" }
     },
     "knowledgeVsAnswers": {
@@ -119,6 +121,43 @@
       "items": { "type": "string", "minLength": 1, "maxLength": 500 }
     }
   },
+  "allOf": [
+    {
+      "if": {
+        "type": "object",
+        "properties": {
+          "question": {
+            "type": "object",
+            "properties": {
+              "rankingMetricEligible": { "const": false }
+            },
+            "required": ["rankingMetricEligible"]
+          }
+        },
+        "required": ["question"]
+      },
+      "then": {
+        "type": "object",
+        "properties": {
+          "rankingDiagnostics": {
+            "type": "object",
+            "properties": { "eligible": { "const": false } },
+            "required": ["eligible"]
+          }
+        }
+      },
+      "else": {
+        "type": "object",
+        "properties": {
+          "rankingDiagnostics": {
+            "type": "object",
+            "properties": { "eligible": { "const": true } },
+            "required": ["eligible"]
+          }
+        }
+      }
+    }
+  ],
   "$defs": {
     "question": {
       "type": "object",
@@ -156,10 +195,28 @@
           "uniqueItems": true,
           "items": { "type": "string", "minLength": 1, "maxLength": 80 }
         },
-        "repeatPerPlatform": { "const": 5 },
-        "expectedResponses": { "type": "integer", "minimum": 1 },
-        "successfulResponses": { "type": "integer", "minimum": 0 },
-        "failedResponses": { "type": "integer", "minimum": 0 }
+        "repeatPerPlatform": {
+          "const": 5,
+          "description": "Every selected platform always declares five run slots."
+        },
+        "expectedResponses": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 10000,
+          "description": "Must equal selectedPlatforms.length multiplied by repeatPerPlatform; this cross-field arithmetic is checked separately."
+        },
+        "successfulResponses": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 10000,
+          "description": "Together with failedResponses must sum to expectedResponses; this cross-field arithmetic is checked separately."
+        },
+        "failedResponses": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 10000,
+          "description": "Together with successfulResponses must sum to expectedResponses; this cross-field arithmetic is checked separately."
+        }
       }
     },
     "indicator": {
@@ -202,9 +259,11 @@
       "allOf": [
         {
           "if": {
+            "type": "object",
             "properties": { "measurementStatus": { "const": "unavailable" } }
           },
           "then": {
+            "type": "object",
             "properties": {
               "rawValue": { "type": "null" },
               "confidence": { "const": 0 },
@@ -212,6 +271,7 @@
             }
           },
           "else": {
+            "type": "object",
             "properties": {
               "rawValue": { "type": "number", "minimum": 0, "maximum": 1 },
               "evidenceRefs": { "type": "array", "minItems": 1 }
@@ -237,10 +297,27 @@
       ],
       "properties": {
         "eligible": { "type": "boolean" },
-        "totalObservations": { "type": "integer", "minimum": 0 },
-        "rankedObservations": { "type": "integer", "minimum": 0 },
-        "unmentionedObservations": { "type": "integer", "minimum": 0 },
-        "averageRank": { "type": ["number", "null"], "exclusiveMinimum": 0 },
+        "totalObservations": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 10000,
+          "description": "For eligible diagnostics, must equal rankedObservations plus unmentionedObservations; standard JSON Schema cannot express this arithmetic invariant."
+        },
+        "rankedObservations": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 10000
+        },
+        "unmentionedObservations": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 10000
+        },
+        "averageRank": {
+          "type": ["number", "null"],
+          "exclusiveMinimum": 0,
+          "maximum": 100
+        },
         "firstPlaceRate": {
           "type": ["number", "null"],
           "minimum": 0,
@@ -262,7 +339,29 @@
           "minLength": 8,
           "maxLength": 1200
         }
-      }
+      },
+      "allOf": [
+        {
+          "if": {
+            "type": "object",
+            "properties": { "eligible": { "const": false } },
+            "required": ["eligible"]
+          },
+          "then": {
+            "type": "object",
+            "properties": {
+              "totalObservations": { "const": 0 },
+              "rankedObservations": { "const": 0 },
+              "unmentionedObservations": { "const": 0 },
+              "averageRank": { "type": "null" },
+              "firstPlaceRate": { "type": "null" },
+              "top3Rate": { "type": "null" },
+              "top5Rate": { "type": "null" },
+              "competitorRankGap": { "type": "null" }
+            }
+          }
+        }
+      ]
     },
     "platformBreakdown": {
       "type": "object",
@@ -283,14 +382,26 @@
       ],
       "properties": {
         "platform": { "type": "string", "minLength": 1, "maxLength": 80 },
-        "responseCount": { "type": "integer", "minimum": 0 },
-        "successfulResponses": { "type": "integer", "minimum": 0 },
+        "responseCount": {
+          "const": 5,
+          "description": "The five declared run slots for this selected platform, including failed runs."
+        },
+        "successfulResponses": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 5,
+          "description": "Must not exceed responseCount. Values across platformBreakdown must sum to sample.successfulResponses; those cross-field checks are performed separately."
+        },
         "brandMentionRate": {
           "type": ["number", "null"],
           "minimum": 0,
           "maximum": 1
         },
-        "averageRank": { "type": ["number", "null"], "exclusiveMinimum": 0 },
+        "averageRank": {
+          "type": ["number", "null"],
+          "exclusiveMinimum": 0,
+          "maximum": 100
+        },
         "factAccuracy": {
           "type": ["number", "null"],
           "minimum": 0,
@@ -301,8 +412,16 @@
           "minimum": 0,
           "maximum": 1
         },
-        "citationCount": { "type": "integer", "minimum": 0 },
-        "referenceCount": { "type": "integer", "minimum": 0 },
+        "citationCount": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 10000
+        },
+        "referenceCount": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 10000
+        },
         "sentiment": {
           "enum": ["positive", "neutral", "negative", "mixed", "unknown"]
         },
@@ -316,6 +435,7 @@
       "allOf": [
         {
           "if": {
+            "type": "object",
             "properties": {
               "successfulResponses": {
                 "type": "integer",
@@ -324,6 +444,7 @@
             }
           },
           "then": {
+            "type": "object",
             "properties": {
               "evidenceRefs": { "type": "array", "minItems": 1 }
             }
@@ -399,9 +520,11 @@
       "allOf": [
         {
           "if": {
+            "type": "object",
             "properties": { "verdict": { "const": "omitted" } }
           },
           "then": {
+            "type": "object",
             "properties": {
               "platform": { "type": "null" },
               "runIndex": { "type": "null" },
@@ -409,6 +532,7 @@
             }
           },
           "else": {
+            "type": "object",
             "properties": {
               "platform": {
                 "type": "string",
@@ -430,6 +554,7 @@
         },
         {
           "if": {
+            "type": "object",
             "properties": {
               "verdict": {
                 "enum": ["supported", "contradicted", "omitted"]
@@ -437,6 +562,7 @@
             }
           },
           "then": {
+            "type": "object",
             "properties": {
               "kbClaimId": {
                 "type": "string",

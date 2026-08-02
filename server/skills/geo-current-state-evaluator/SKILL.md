@@ -15,7 +15,7 @@ Produce evidence extraction only. Read `references/bsas-baseline-methodology.md`
 4. Apply the embedded `geo-knowledge-answer-verifier` contract to atomic answer claims. Assign exactly one verdict to each material comparison: `supported`, `contradicted`, `omitted`, or `unverifiable`. Preserve its customer-readable topic, knowledge claim text, explanation, and recommended action when the parent schema permits them.
 5. Classify measurement availability before assigning a raw value. Use `unavailable` plus `rawValue: null` when the supplied ZIP and monitoring answers cannot support an indicator. Never convert missing evidence into a guessed value.
 6. Produce all five BSAS dimension objects using the exact indicator names in the schema. Emit positive `toneConsistency`, not a deviation rate. Keep every measured or derived `rawValue` on a 0-1 scale.
-7. Produce one platform breakdown for every selected platform. Count actual citations and retrieval references independently.
+7. Produce exactly one platform breakdown for every selected platform. Keep `responseCount: 5` for the five declared run slots, count successful responses separately, and count actual citations and retrieval references independently.
 8. Validate the entire object against `references/raw-output-schema.json`. Return the JSON object only.
 
 ## Model Boundary
@@ -28,7 +28,16 @@ Produce evidence extraction only. Read `references/bsas-baseline-methodology.md`
 
 ## Reputation Exclusion
 
-When `question.rankingMetricEligible` is `false`, set ranking diagnostics to ineligible with null ranking metrics. Set answer-driven visibility, multi-platform brand coverage, and first-mention rate to `unavailable`. A brand named by the question is not evidence of organic visibility or ranking strength. Keep `exclusiveSemanticSpace` independent from rank: derive it only when the knowledge base contains evidenced differentiators and the answers can be checked for whether they clearly convey those differentiators. If that evidence set is absent, return `unavailable`; never infer a score from tone or brand mention alone.
+When `question.rankingMetricEligible` is `false`, set `rankingDiagnostics.eligible` to `false`; set `totalObservations`, `rankedObservations`, and `unmentionedObservations` to `0`; and set all five ranking metrics (`averageRank`, `firstPlaceRate`, `top3Rate`, `top5Rate`, and `competitorRankGap`) to `null`. This `0/0/0` representation is the only canonical model output for an ineligible question, even when monitoring contains successful answers. Set answer-driven visibility, multi-platform brand coverage, and first-mention rate to `unavailable`. A brand named by the question is not evidence of organic visibility or ranking strength. Keep `exclusiveSemanticSpace` independent from rank: derive it only when the knowledge base contains evidenced differentiators and the answers can be checked for whether they clearly convey those differentiators. If that evidence set is absent, return `unavailable`; never infer a score from tone or brand mention alone.
+
+## Cross-Field Invariants
+
+The standard JSON Schema expresses fixed values, ranges, nullability, and eligibility branches. It cannot express every arithmetic or set-equality check, so also verify these invariants directly:
+
+- `rankingDiagnostics.eligible` must equal `question.rankingMetricEligible`. When it is `true`, `rankedObservations + unmentionedObservations` must equal `totalObservations`.
+- `sample.expectedResponses` must equal `sample.selectedPlatforms.length × sample.repeatPerPlatform`, and `sample.successfulResponses + sample.failedResponses` must equal `sample.expectedResponses`.
+- `platformBreakdown` must contain each selected platform exactly once. Every entry must use `responseCount: 5`; its `successfulResponses` must not exceed `responseCount`; and all platform `successfulResponses` values must sum to `sample.successfulResponses`.
+- A non-null `knowledgeVsAnswers[].platform` must be selected, and a non-null `runIndex` must identify one of the five declared run slots.
 
 ## Evidence Rules
 
@@ -41,4 +50,4 @@ When `question.rankingMetricEligible` is `false`, set ranking diagnostics to ine
 
 ## Final Check
 
-Verify strict schema compliance, selected-platform coverage, five answers per platform in the declared sample, all five dimensions, positive tone consistency, four-way fact classification, reputation exclusion with the separate evidence boundary for `exclusiveSemanticSpace`, and separate citation/reference counts. Return no prose outside the JSON.
+Verify strict schema compliance; all arithmetic and set-equality invariants above; canonical ineligible ranking output of `0/0/0` plus five null metrics; all five dimensions; positive tone consistency; four-way fact classification; reputation exclusion with the separate evidence boundary for `exclusiveSemanticSpace`; and separate citation/reference counts. Return no prose outside the JSON.

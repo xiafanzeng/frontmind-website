@@ -6641,7 +6641,7 @@ function AssessmentWaitingState() {
         <span>回答采集中</span>
         <h3>首批平台回答即将返回</h3>
         <p>
-          回答返回后，将按平台和轮次展示正文、媒体、答案实际引用与检索参考来源。采集完成后即可进入现状评估。
+          回答返回后，将按平台和轮次展示正文、媒体和检索参考来源。采集完成后即可进入现状评估。
         </p>
       </div>
     </section>
@@ -6665,7 +6665,7 @@ export function AssessmentOverview({
         <div>
           <strong>
             {assessment?.status === "failed"
-              ? "知识库对照评估未能完成"
+              ? "现状评估结果暂未通过校验"
               : "正在建立语义资产现状基线"}
           </strong>
           <p>
@@ -8263,8 +8263,7 @@ function MonitoringAnswerList({
                           : answer.error || "本轮未完成"}
                       </strong>
                       <small>
-                        引用 {answer.citations.length} · 来源{" "}
-                        {answer.references.length} ·{" "}
+                        检索参考 {answer.references.length} 条 ·{" "}
                         {formatDate(answer.capturedAt)}
                       </small>
                     </summary>
@@ -8370,66 +8369,28 @@ function AnswerMedia({ media }: { media: GeoAnswerMedia[] }) {
 }
 
 function AnswerSources({ answer }: { answer: GeoMonitoringAnswer }) {
-  const [openSourceKind, setOpenSourceKind] = useState<AnswerSourceKind | null>(
-    null,
-  );
-
-  const handleSourceToggle = (kind: AnswerSourceKind, isOpen: boolean) => {
-    setOpenSourceKind((currentKind) => {
-      if (isOpen) return kind;
-      return currentKind === kind ? null : currentKind;
-    });
-  };
-
   return (
     <section className="geo-answer-evidence">
       <p>
-        “答案实际引用”是平台明确用于回答的来源；“检索参考来源”是检索阶段返回的候选资料，不代表答案采用了它。
+        检索参考来源是平台检索阶段返回的候选资料，不代表答案逐条采用。
       </p>
       <div className="geo-answer-sources">
-        <SourceColumn
-          kind="citation"
-          title="答案实际引用"
-          sources={answer.citations}
-          open={openSourceKind === "citation"}
-          onToggle={handleSourceToggle}
-        />
-        <SourceColumn
-          kind="reference"
-          title="检索参考来源"
-          sources={answer.references}
-          open={openSourceKind === "reference"}
-          onToggle={handleSourceToggle}
-        />
+        <SourceColumn sources={answer.references} />
       </div>
     </section>
   );
 }
 
-type AnswerSourceKind = "citation" | "reference";
-
 function SourceColumn({
-  kind,
-  title,
   sources,
-  open,
-  onToggle,
 }: {
-  kind: AnswerSourceKind;
-  title: string;
-  sources: GeoMonitoringAnswer["citations"];
-  open: boolean;
-  onToggle: (kind: AnswerSourceKind, isOpen: boolean) => void;
+  sources: GeoMonitoringAnswer["references"];
 }) {
   return (
-    <details
-      className="geo-answer-source-group"
-      open={open}
-      onToggle={(event) => onToggle(kind, event.currentTarget.open)}
-    >
+    <details className="geo-answer-source-group">
       <summary>
         <span className="geo-answer-source-title">
-          <Link2 size={13} /> {title}
+          <Link2 size={13} /> 检索参考来源
         </span>
         <span className="geo-answer-source-count">{sources.length} 条</span>
         <ChevronDown
@@ -8454,11 +8415,7 @@ function SourceColumn({
             ))}
           </ul>
         ) : (
-          <p>
-            {kind === "citation"
-              ? "平台本轮未标记答案实际引用。"
-              : "平台本轮未返回检索参考来源。"}
-          </p>
+          <p>平台本轮未返回检索参考来源。</p>
         )}
       </div>
     </details>

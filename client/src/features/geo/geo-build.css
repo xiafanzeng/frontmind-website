@@ -10292,13 +10292,12 @@
   line-height: 1.55;
 }
 .geo-answer-sources {
-  display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  align-items: start;
-  gap: 9px;
+  width: 100%;
 }
 .geo-answer-sources > details {
   overflow: hidden;
+  box-sizing: border-box;
+  width: 100%;
   border: 1px solid #e4dfe6;
   background: #fff;
 }
@@ -11656,7 +11655,6 @@
   }
   .geo-run-matrix,
   .geo-dimension-list,
-  .geo-answer-sources,
   .geo-comparison-detail-grid {
     grid-template-columns: 1fr;
   }

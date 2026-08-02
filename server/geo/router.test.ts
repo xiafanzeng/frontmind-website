@@ -4926,13 +4926,35 @@ describe("GEO API", () => {
     );
     expect(first.response.status).toBe(201);
     expect(broker.assessmentTaskCount).toBe(1);
+    const invalidAssessmentOutput = validAssessmentOutput();
+    invalidAssessmentOutput.rankingDiagnostics = {
+      ...invalidAssessmentOutput.rankingDiagnostics,
+      totalObservations: 5,
+      rankedObservations: 0,
+      unmentionedObservations: 0,
+    };
     broker.tasks.set("assessment-1", {
       id: "assessment-1",
       status: "completed",
       output: [
-        { content: [{ text: '{"assessmentType":"question_baseline"}' }] },
+        {
+          role: "assistant",
+          content: [{ text: JSON.stringify(invalidAssessmentOutput) }],
+        },
       ],
     });
+
+    const failedView = await jsonRequest(
+      `/projects/${encodeURIComponent((first.body as any).projectToken)}`,
+      ready.cookie,
+    );
+    expect((failedView.body as any).project.assessment).toMatchObject({
+      status: "failed",
+      error: "现状评估结果暂未通过校验，系统未采用不完整结果",
+    });
+    expect(
+      (failedView.body as any).project.assessment.error,
+    ).not.toContain("strict geo-current-state-evaluator JSON");
 
     const retried = await jsonRequest(
       `/projects/${encodeURIComponent((first.body as any).projectToken)}/assessment`,
@@ -4947,6 +4969,69 @@ describe("GEO API", () => {
     );
     expect(broker.prompts.at(-1)).toContain("唯一一次结构校验重试");
     expect(broker.prompts.at(-1)).toContain("geo-knowledge-answer-verifier");
+    expect(broker.prompts.at(-1)).toContain(
+      "rankingDiagnostics.totalObservations",
+    );
+  });
+
+  it("reuses a completed reputation assessment with legacy 5/0/0 ranking counts", async () => {
+    const ready = await createReadyProject();
+    const monitored = await startOnePlatformMonitor(ready, "reputation-01");
+    const run = broker.monitorRuns.get("monitor-1")!;
+    broker.monitorRuns.set("monitor-1", {
+      ...run,
+      status: "completed",
+      completedItems: 5,
+      records: Array.from({ length: 5 }, (_, index) =>
+        monitorRecord(index + 1, `Acme 声誉回答 ${index + 1}`),
+      ),
+    });
+
+    const started = await jsonRequest(
+      `/projects/${encodeURIComponent(monitored.projectToken)}/assessment`,
+      ready.cookie,
+      { method: "POST", body: {} },
+    );
+    expect(started.response.status).toBe(201);
+    expect(broker.assessmentTaskCount).toBe(1);
+
+    const reputationQuestion = validQuestionSet().questions.find(
+      (question) => question.id === "reputation-01",
+    )!;
+    const legacyOutput = validAssessmentOutput(reputationQuestion);
+    legacyOutput.rankingDiagnostics.totalObservations = 5;
+    broker.tasks.set("assessment-1", {
+      id: "assessment-1",
+      status: "completed",
+      output: [
+        {
+          role: "assistant",
+          content: [{ text: JSON.stringify(legacyOutput) }],
+        },
+      ],
+    });
+
+    const completed = await jsonRequest(
+      `/projects/${encodeURIComponent((started.body as any).projectToken)}`,
+      ready.cookie,
+    );
+
+    expect(completed.response.status).toBe(200);
+    expect(completed.body).toMatchObject({
+      project: {
+        assessment: {
+          status: "ready",
+          rankingDiagnostics: {
+            eligible: false,
+            totalObservations: 0,
+            rankedObservations: 0,
+            unmentionedObservations: 0,
+          },
+        },
+        assessmentRetryAvailable: false,
+      },
+    });
+    expect(broker.assessmentTaskCount).toBe(1);
   });
 
   it("retries one cancelled assessment with an explicit cancellation reason", async () => {
@@ -5062,6 +5147,18 @@ describe("GEO API", () => {
         },
       ],
     });
+
+    const failedView = await jsonRequest(
+      `/projects/${encodeURIComponent((first.body as any).projectToken)}`,
+      ready.cookie,
+    );
+    expect((failedView.body as any).project.assessment).toMatchObject({
+      status: "failed",
+      error: "现状评估结果暂未通过校验，系统未采用不完整结果",
+    });
+    expect(
+      (failedView.body as any).project.assessment.error,
+    ).not.toContain("outside the packaged ZIP");
 
     const retried = await jsonRequest(
       `/projects/${encodeURIComponent((first.body as any).projectToken)}/assessment`,
@@ -5300,6 +5397,18 @@ describe("GEO API", () => {
       status: "completed",
       output: [{ content: [{ text: '{"assessmentType":"not-a-forecast"}' }] }],
     });
+
+    const failedView = await jsonRequest(
+      `/projects/${encodeURIComponent((firstForecast.body as any).projectToken)}`,
+      ready.cookie,
+    );
+    expect((failedView.body as any).project.optimizationForecast).toMatchObject({
+      status: "failed",
+      error: "优化效果评估结果暂未通过校验，系统未采用不完整结果",
+    });
+    expect(
+      (failedView.body as any).project.optimizationForecast.error,
+    ).not.toContain("strict");
 
     const retried = await jsonRequest(
       `/projects/${encodeURIComponent((firstForecast.body as any).projectToken)}/optimization-forecast`,
