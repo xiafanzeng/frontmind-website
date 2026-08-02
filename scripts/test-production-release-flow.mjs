@@ -134,7 +134,10 @@ try {
     throw new Error("IMAGE_BUILD_CHANGED_SOURCE_OR_TRACKED_OUTPUT");
   }
 
-  await writeFile(path.join(sourceRepository, "dist", "index.js"), "tampered\n");
+  await writeFile(
+    path.join(sourceRepository, "dist", "index.js"),
+    "tampered\n",
+  );
   expectFailure(
     sourceRepository,
     process.execPath,
@@ -171,6 +174,9 @@ try {
     "cosign sign --yes",
     "needs.build.outputs.digest",
     "StrictHostKeyChecking=yes",
+    "GHCR_USERNAME: ${{ github.actor }}",
+    "GHCR_TOKEN: ${{ secrets.GITHUB_TOKEN }}",
+    `printf '%s\\n%s\\n' "$GHCR_USERNAME" "$GHCR_TOKEN" |`,
     "${IMAGE_NAME}@${IMAGE_DIGEST} ${GITHUB_SHA}",
   ]) {
     if (!workflow.includes(required)) {

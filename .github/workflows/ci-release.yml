@@ -127,16 +127,21 @@ jobs:
           DEPLOY_PORT: ${{ vars.WEBSITE_DEPLOY_PORT || '22' }}
           DEPLOY_USER: ${{ vars.WEBSITE_DEPLOY_USER }}
           IMAGE_DIGEST: ${{ needs.build.outputs.digest }}
+          GHCR_USERNAME: ${{ github.actor }}
+          GHCR_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
+          set -euo pipefail
           test -n "$DEPLOY_HOST"
           test -n "$DEPLOY_USER"
-          ssh -i "$HOME/.ssh/website_deploy" \
-            -p "$DEPLOY_PORT" \
-            -o BatchMode=yes \
-            -o IdentitiesOnly=yes \
-            -o StrictHostKeyChecking=yes \
-            "$DEPLOY_USER@$DEPLOY_HOST" \
-            "${IMAGE_NAME}@${IMAGE_DIGEST} ${GITHUB_SHA}"
+          printf '%s\n%s\n' "$GHCR_USERNAME" "$GHCR_TOKEN" |
+            ssh -T \
+              -i "$HOME/.ssh/website_deploy" \
+              -p "$DEPLOY_PORT" \
+              -o BatchMode=yes \
+              -o IdentitiesOnly=yes \
+              -o StrictHostKeyChecking=yes \
+              "$DEPLOY_USER@$DEPLOY_HOST" \
+              "${IMAGE_NAME}@${IMAGE_DIGEST} ${GITHUB_SHA}"
       - name: Record immutable successful-deployment marker
         env:
           IMAGE_DIGEST: ${{ needs.build.outputs.digest }}

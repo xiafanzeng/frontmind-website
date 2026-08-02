@@ -36,7 +36,8 @@ Repository variables：
   自动调用服务器 controller。该变量不影响 PR 检查或镜像构建签名。
 
 GHCR 发布使用 GitHub 自动提供的 `GITHUB_TOKEN`，workflow 权限限制为 `packages: write` 和
-签名所需的 `id-token: write`，不配置长期 GHCR 写令牌。
+签名所需的 `id-token: write`，不配置长期 GHCR 写入或读取令牌。部署 step 通过 SSH stdin
+只发送两行 `github.actor + GITHUB_TOKEN`；token 不进入 SSH 原始命令、参数或日志。
 
 ## 服务器控制器约束
 
@@ -50,6 +51,10 @@ GHCR 发布使用 GitHub 自动提供的 `GITHUB_TOKEN`，workflow 权限限制�
 3. 执行 Cosign 验签，issuer 固定为 `https://token.actions.githubusercontent.com`，证书 identity
    固定为
    `https://github.com/xiafanzeng/frontmind-website/.github/workflows/ci-release.yml@refs/heads/main`。
+   普通 forced-command 发布必须先从 stdin 严格读取 actor 和 job-scoped token 两行，在
+   root-only 的 `/run` 临时 `DOCKER_CONFIG` 中登录 GHCR；验签和 pull 完成后立即删除该目录，
+   不读取或回退到 `/root/.docker/config.json`。缺失、畸形、多余或未关闭的输入必须在验签前
+   阻断。root-only 的首次 bootstrap 和维护入口保持独立。
 4. 用 root-only 临时 image env 只重建 Website Compose 服务，readiness 成功后才原子
    替换活跃 image env；不得调用数据库、Dashboard 或 PDF 镜像步骤。
 5. 为整次 rollout 建立一个 120 秒总 deadline；候选镜像最多使用前 90 秒检查
