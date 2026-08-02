@@ -1,7 +1,0 @@
-interface:
-  display_name: "企业 GEO 问题判定"
-  short_description: "根据企业知识库校验问题相关性、合规性并完成准确分类"
-  default_prompt: "Use $geo-custom-question-classifier to validate and classify one enterprise GEO question."
-
-policy:
-  allow_implicit_invocation: false

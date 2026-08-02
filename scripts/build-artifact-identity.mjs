@@ -1,4 +1,3 @@
-import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { lstat, mkdir, readFile, readdir, writeFile } from "node:fs/promises";
 import path from "node:path";
@@ -12,14 +11,6 @@ function fullSha(value, label) {
     .toLowerCase();
   if (!/^[a-f0-9]{40}$/u.test(sha)) throw new Error(label);
   return sha;
-}
-
-function git(repositoryRoot, args) {
-  return execFileSync("git", args, {
-    cwd: repositoryRoot,
-    encoding: "utf8",
-    stdio: ["ignore", "pipe", "pipe"],
-  }).trim();
 }
 
 export async function writeBuildArtifactIdentity(buildRoot, buildSourceSha) {
@@ -268,61 +259,4 @@ export async function verifyBuildArtifactManifest(buildRoot, options = {}) {
     throw new Error("BUILD_ARTIFACT_BYTES_MISMATCH");
   }
   return manifest;
-}
-
-/**
- * A release may add one or more approval commits after the source build, but
- * every path changed since the embedded source commit must remain under dist/.
- */
-export function assertBuildArtifactLineage(options) {
-  const repositoryRoot = path.resolve(options.repositoryRoot);
-  const approvalSha = fullSha(
-    options.approvalSha,
-    "BUILD_APPROVAL_SHA_INVALID",
-  );
-  const buildSourceSha = fullSha(
-    options.buildSourceSha,
-    "BUILD_ARTIFACT_SOURCE_SHA_INVALID",
-  );
-  if (approvalSha === buildSourceSha) {
-    throw new Error("BUILD_APPROVAL_MUST_DIFFER_FROM_SOURCE");
-  }
-  try {
-    git(repositoryRoot, ["cat-file", "-e", `${buildSourceSha}^{commit}`]);
-    execFileSync(
-      "git",
-      ["merge-base", "--is-ancestor", buildSourceSha, approvalSha],
-      {
-        cwd: repositoryRoot,
-        stdio: ["ignore", "ignore", "pipe"],
-      },
-    );
-  } catch {
-    throw new Error("BUILD_ARTIFACT_SOURCE_NOT_APPROVAL_ANCESTOR");
-  }
-  const changedPaths = execFileSync(
-    "git",
-    ["diff", "--name-only", "-z", buildSourceSha, approvalSha, "--"],
-    {
-      cwd: repositoryRoot,
-      encoding: "utf8",
-      stdio: ["ignore", "pipe", "pipe"],
-    },
-  )
-    .split("\0")
-    .filter(Boolean);
-  const nonArtifactPaths = changedPaths.filter(
-    (candidate) => candidate !== "dist" && !candidate.startsWith("dist/"),
-  );
-  if (nonArtifactPaths.length > 0) {
-    throw new Error(
-      `BUILD_APPROVAL_CONTAINS_SOURCE_CHANGES:${nonArtifactPaths
-        .slice(0, 20)
-        .join(",")}`,
-    );
-  }
-  if (changedPaths.length === 0) {
-    throw new Error("BUILD_APPROVAL_HAS_NO_ARTIFACT_CHANGES");
-  }
-  return { approvalSha, buildSourceSha, changedPaths };
 }

@@ -6904,6 +6904,11 @@ export function createGeoCustomQuestionRecoveryWorker(input: {
       );
 
       await input.store.collectGarbage({
+        // Recovery and retention must observe the same clock. Tests inject a
+        // deterministic clock, and production uses Date.now for both paths.
+        // Falling back to the store's/system clock here can retire a terminal
+        // receipt immediately after its temporary resources were cleaned.
+        now: new Date(input.now?.() ?? Date.now()),
         cleanup: async (target) => {
           const results = await Promise.allSettled([
             ...(target.taskId ? [input.broker.deleteTask(target.taskId)] : []),

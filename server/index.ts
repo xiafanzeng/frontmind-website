@@ -5,7 +5,10 @@ import { createHash } from "node:crypto";
 import path from "path";
 import { fileURLToPath } from "url";
 import { existsSync } from "fs";
-import { handleVisitorStatsRequest } from "./visitorStats";
+import {
+  assertVisitorStatsStoreReady,
+  handleVisitorStatsRequest,
+} from "./visitorStats";
 import {
   createGeoCustomQuestionRecoveryWorker,
   createGeoRouter,
@@ -33,10 +36,7 @@ import {
 import { loadGeoOptimizationOutcomeForecasterSkill } from "./geo/forecast";
 import { assertGeoPaymentConfigurationFromEnv } from "./geo/payment";
 import { createGeoCustomQuestionValidationStore } from "./geo/custom-question-validation-store";
-import {
-  createRuntimeReleaseArtifactVerifier,
-  runtimeReleaseArtifactHealth,
-} from "../scripts/runtime-artifact-integrity.mjs";
+import { collectWebsiteRuntimeReadiness } from "./runtime-readiness";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -70,17 +70,8 @@ async function getGeoRuntimeSkillReadiness() {
 
 async function startServer() {
   const buildSha = geoPublicBuildSha();
-  const releaseArtifactVerifier =
-    process.env.NODE_ENV === "production"
-      ? createRuntimeReleaseArtifactVerifier({
-          buildRoot: __dirname,
-          buildSourceSha: buildSha,
-          env: process.env,
-        })
-      : undefined;
-  const startupReleaseArtifact = releaseArtifactVerifier
-    ? await releaseArtifactVerifier.verify({ force: true })
-    : undefined;
+  const imageDigest =
+    process.env.FRONTMIND_IMAGE_DIGEST?.trim().toLowerCase() || null;
   const geoBroker = createGeoPresalesBrokerFromEnv();
   const projectOrderRegistry = createGeoProjectOrderRegistry();
   const paymentReceiptStore = createGeoPaymentReceiptStore();
@@ -95,13 +86,22 @@ async function startServer() {
     projectOrderRegistry,
     paymentReceiptStore,
   });
+  const getWebsiteRuntimeReadiness = () =>
+    collectWebsiteRuntimeReadiness({
+      buildSha,
+      imageDigest,
+      requireReleaseIdentity: process.env.NODE_ENV === "production",
+      getSkills: getGeoRuntimeSkillReadiness,
+      getDependencies: getGeoDependencyReadiness,
+      getVisitorStats: async () => assertVisitorStatsStoreReady(),
+      validationStore: customQuestionValidationStore,
+    });
   if (process.env.NODE_ENV === "production") {
     assertGeoPaymentConfigurationFromEnv(process.env);
-    await Promise.all([
-      getGeoRuntimeSkillReadiness(),
-      getGeoDependencyReadiness(),
-      customQuestionValidationStore.assertReady(),
-    ]);
+    // The same deep probe used by /readyz runs before the socket is opened.
+    // A container with invalid secrets, Skills or persistence never advertises
+    // itself as started and can be safely rolled back by the deploy controller.
+    await getWebsiteRuntimeReadiness();
   }
   const app = express();
   const server = createServer(app);
@@ -122,43 +122,21 @@ async function startServer() {
 
   app.use(compression());
 
-  app.get("/healthz", async (_req, res) => {
+  app.get("/healthz", (_req, res) => {
+    res.json({
+      status: "ok",
+      service: "frontmind-website",
+      buildSha,
+      imageDigest,
+    });
+  });
+
+  app.get("/readyz", async (_req, res) => {
     try {
-      const [
-        skills,
-        dependencies,
-        persistenceIdentity,
-        currentReleaseArtifact,
-      ] = await Promise.all([
-        getGeoRuntimeSkillReadiness(),
-        getGeoDependencyReadiness(),
-        customQuestionValidationStore
-          .assertReady()
-          .then(() => customQuestionValidationStore.persistenceIdentity()),
-        startupReleaseArtifact
-          ? releaseArtifactVerifier!.verify()
-          : Promise.resolve(undefined),
-      ]);
-      res.json({
-        status: "ok",
-        buildSha,
-        artifact: currentReleaseArtifact
-          ? runtimeReleaseArtifactHealth(currentReleaseArtifact)
-          : undefined,
-        skills,
-        dependencies: {
-          ...dependencies,
-          customQuestionValidationStore: {
-            ready: true,
-            persistenceIdentitySha256: createHash("sha256")
-              .update(persistenceIdentity, "utf8")
-              .digest("hex"),
-          },
-        },
-      });
+      res.json(await getWebsiteRuntimeReadiness());
     } catch (error) {
       console.error(
-        "[Health] GEO readiness check failed",
+        "[Readiness] GEO dependency check failed",
         geoReadinessErrorLabel(error),
       );
       res.status(503).json({ status: "unavailable" });

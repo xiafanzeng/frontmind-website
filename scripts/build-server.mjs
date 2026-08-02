@@ -1,10 +1,10 @@
 import { resolve } from "node:path";
 import { build } from "esbuild";
-import { assertCleanProductionBuildSource } from "./assert-clean-build-source.mjs";
+import { resolveProductionBuildSource } from "./assert-clean-build-source.mjs";
 import { writeBuildArtifactIdentity } from "./build-artifact-identity.mjs";
 
 const projectRoot = resolve(import.meta.dirname, "..");
-const buildSha = assertCleanProductionBuildSource({
+const buildSha = resolveProductionBuildSource({
   repositoryRoot: projectRoot,
   env: process.env,
 });

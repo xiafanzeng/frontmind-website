@@ -1,4 +1,0 @@
-interface:
-  display_name: "企业知识库构建"
-  short_description: "采集真实企业与产品信息并生成稳定的前台知识库候选包"
-  default_prompt: "使用 $website-one-shot-kb-builder 调研企业与产品事实，生成固定双文档并交付候选 ZIP。"

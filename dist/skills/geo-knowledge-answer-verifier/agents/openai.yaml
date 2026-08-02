@@ -1,4 +1,0 @@
-interface:
-  display_name: "GEO 知识答案核查"
-  short_description: "逐条核验企业知识库与多平台回答，保留事实、证据、平台与轮次"
-  default_prompt: "Use $geo-knowledge-answer-verifier to verify monitored AI answers against an enterprise knowledge base."

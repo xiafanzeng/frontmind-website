@@ -2,7 +2,6 @@ import { execFileSync } from "node:child_process";
 import path from "node:path";
 import {
   assertCleanProductionReleaseWorktree,
-  changedArtifactPaths,
   changedSourcePaths,
 } from "./assert-clean-build-source.mjs";
 import { writeBuildArtifactManifest } from "./build-artifact-identity.mjs";
@@ -40,10 +39,6 @@ if (dirtySourcePaths.length > 0) {
 }
 
 const manifest = await writeBuildArtifactManifest(buildRoot, buildSourceSha);
-const changedArtifacts = changedArtifactPaths(projectRoot);
-if (changedArtifacts.length === 0) {
-  throw new Error("BUILD_RELEASE_HAS_NO_ARTIFACT_CHANGES");
-}
 execFileSync(process.execPath, ["scripts/audit-production-bundle.mjs"], {
   cwd: projectRoot,
   env: releaseEnvironment,
@@ -51,5 +46,5 @@ execFileSync(process.execPath, ["scripts/audit-production-bundle.mjs"], {
 });
 
 console.log(
-  `PRODUCTION_RELEASE_CANDIDATE_BUILT source=${buildSourceSha} files=${manifest.files.length} root=${manifest.rootSha256}`,
+  `PRODUCTION_IMAGE_CONTENT_BUILT source=${buildSourceSha} files=${manifest.files.length} root=${manifest.rootSha256}`,
 );

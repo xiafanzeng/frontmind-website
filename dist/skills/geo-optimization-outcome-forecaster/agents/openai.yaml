@@ -1,5 +1,0 @@
-interface:
-  display_name: "GEO 优化效果评估"
-  short_description: "生成完整执行后不低于 60 分的一个月可验证目标区间"
-  brand_color: "#3D1560"
-  default_prompt: "Use $geo-optimization-outcome-forecaster to map all thirteen GEO indicators to an auditable one-month full-execution target whose server-scored applicable lower bound is at least 60/100."

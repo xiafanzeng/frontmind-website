@@ -18,6 +18,7 @@
     "test:client": "vitest run --config vitest.client.config.ts",
     "test:geo:custom-question-recovery": "vitest run --config vitest.server.config.ts server/geo/custom-question-validation-store.test.ts server/geo/output.test.ts server/geo/router.test.ts && vitest run --config vitest.client.config.ts client/src/features/geo/api.test.ts",
     "test:release:repository": "node scripts/test-production-release-flow.mjs",
+    "test:registry-retention": "node --test scripts/retention-tests/*.node-test.mjs",
     "acceptance:kb:build-candidate": "tsx scripts/build-local-kb-acceptance-candidate.ts",
     "acceptance:kb": "tsx scripts/run-local-kb-acceptance.ts",
     "format": "prettier --write .",

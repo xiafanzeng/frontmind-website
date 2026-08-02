@@ -1,4 +1,0 @@
-interface:
-  display_name: "GEO 现状评估"
-  short_description: "依据知识库与监控答案生成可追溯的单问题语义资产基线"
-  default_prompt: "使用 $geo-current-state-evaluator 对照企业知识库与 AI 监控答案，生成可追溯的单问题语义资产基线原始指标。"

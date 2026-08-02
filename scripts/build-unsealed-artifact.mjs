@@ -1,11 +1,11 @@
 import { execFileSync } from "node:child_process";
 import { unlink } from "node:fs/promises";
 import path from "node:path";
-import { assertCleanProductionBuildSource } from "./assert-clean-build-source.mjs";
+import { resolveProductionBuildSource } from "./assert-clean-build-source.mjs";
 import { BUILD_ARTIFACT_MANIFEST_FILENAME } from "./build-artifact-identity.mjs";
 
 const projectRoot = path.resolve(import.meta.dirname, "..");
-const buildSourceSha = assertCleanProductionBuildSource({
+const buildSourceSha = resolveProductionBuildSource({
   repositoryRoot: projectRoot,
   env: process.env,
 });

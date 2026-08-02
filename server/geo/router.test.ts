@@ -3877,6 +3877,21 @@ describe("GEO API", () => {
         retryable: true,
       },
     });
+    const terminal = await jsonRequest(
+      `${pathname}/${CUSTOM_QUESTION_CLIENT_REQUEST_ID}`,
+      ready.cookie,
+    );
+    expect(terminal.response.status).toBe(502);
+    expect(terminal.body).toMatchObject({
+      validation: {
+        state: "failed",
+        error: {
+          code: "CUSTOM_QUESTION_SKILL_PREPARATION_UNAVAILABLE",
+          retryable: true,
+        },
+      },
+      error: { code: "CUSTOM_QUESTION_SKILL_PREPARATION_UNAVAILABLE" },
+    });
     expect(
       broker.uploadAttempts.filter((id) => id === stagedFileId),
     ).toHaveLength(3);

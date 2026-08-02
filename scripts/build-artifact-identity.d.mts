@@ -31,16 +31,6 @@ export function writeBuildArtifactManifest(
 export function readBuildArtifactManifest(
   buildRoot: string,
 ): Promise<BuildArtifactManifest>;
-export function assertBuildArtifactLineage(options: {
-  repositoryRoot: string;
-  approvalSha: string;
-  buildSourceSha: string;
-}): {
-  approvalSha: string;
-  buildSourceSha: string;
-  changedPaths: string[];
-};
-
 export function verifyBuildArtifactManifest(
   buildRoot: string,
   options?: { expectedBuildSourceSha?: string | null },

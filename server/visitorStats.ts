@@ -189,13 +189,13 @@ export function summarizeVisitorStore(store: VisitorStore) {
   };
 }
 
-function readStore(): VisitorStore {
-  if (!fs.existsSync(STORE_PATH)) {
+function readStore(storePath = STORE_PATH): VisitorStore {
+  if (!fs.existsSync(storePath)) {
     return { visitors: {}, pageviews: 0 };
   }
 
   const parsed = JSON.parse(
-    fs.readFileSync(STORE_PATH, "utf-8"),
+    fs.readFileSync(storePath, "utf-8"),
   ) as Partial<VisitorStore>;
   if (
     !parsed.visitors ||
@@ -239,16 +239,49 @@ function readStore(): VisitorStore {
   };
 }
 
-function writeStore(store: VisitorStore) {
-  const directory = path.dirname(STORE_PATH);
+function writeStore(store: VisitorStore, storePath = STORE_PATH) {
+  const directory = path.dirname(storePath);
   fs.mkdirSync(directory, { recursive: true, mode: 0o700 });
-  const temporaryPath = `${STORE_PATH}.tmp`;
+  const temporaryPath = `${storePath}.tmp`;
   fs.writeFileSync(temporaryPath, `${JSON.stringify(store, null, 2)}\n`, {
     encoding: "utf-8",
     mode: 0o600,
   });
-  fs.renameSync(temporaryPath, STORE_PATH);
-  fs.chmodSync(STORE_PATH, 0o600);
+  fs.renameSync(temporaryPath, storePath);
+  fs.chmodSync(storePath, 0o600);
+}
+
+/**
+ * Production startup/readiness probe for the second Website persistence path.
+ * It validates any existing store, then proves that a distinct probe file can
+ * be created, read and removed without rewriting visitor data.
+ */
+export function assertVisitorStatsStoreReady(storePath = STORE_PATH) {
+  if (!path.isAbsolute(storePath)) {
+    throw new Error("VISITOR_STATS_STORE_PATH_MUST_BE_ABSOLUTE");
+  }
+  const directory = path.dirname(storePath);
+  fs.mkdirSync(directory, { recursive: true, mode: 0o700 });
+  readStore(storePath);
+
+  const probePath = path.join(
+    directory,
+    `.frontmind-visitor-readiness-${process.pid}-${crypto.randomUUID()}`,
+  );
+  const probeValue = crypto.randomBytes(32).toString("hex");
+  try {
+    fs.writeFileSync(probePath, probeValue, {
+      encoding: "utf8",
+      mode: 0o600,
+      flag: "wx",
+    });
+    if (fs.readFileSync(probePath, "utf8") !== probeValue) {
+      throw new Error("VISITOR_STATS_STORE_PROBE_MISMATCH");
+    }
+  } finally {
+    fs.rmSync(probePath, { force: true });
+  }
+  return { ready: true as const };
 }
 
 function sumVisits(visitors: Record<string, StoredVisitor>) {
