@@ -1,3 +1,4 @@
+import { existsSync } from "node:fs";
 import { readFile } from "node:fs/promises";
 import path from "node:path";
 
@@ -26,6 +27,8 @@ const agentV4FixturePath = path.resolve(
   siblingDashboardRepositoryRoot(),
   "shared/contracts/provisioning-v4.fixture.json",
 );
+const dashboardCopiesAvailable =
+  existsSync(agentFixturePath) && existsSync(agentV4FixturePath);
 
 async function fixture(filePath: string) {
   return JSON.parse(await readFile(filePath, "utf8")) as Record<
@@ -60,16 +63,19 @@ describe("Website ↔ Agent provisioning and archive shared contract", () => {
     ).toBe(knowledgeImport.descriptorHash);
   });
 
-  it("matches the Agent-owned copy when both repositories are checked out", async () => {
-    const [website, agent, websiteV4, agentV4] = await Promise.all([
-      fixture(localFixturePath),
-      fixture(agentFixturePath),
-      fixture(localV4FixturePath),
-      fixture(agentV4FixturePath),
-    ]);
-    expect(agent).toEqual(website);
-    expect(agentV4).toEqual(websiteV4);
-  });
+  it.skipIf(!dashboardCopiesAvailable)(
+    "matches the Agent-owned copy when both repositories are checked out",
+    async () => {
+      const [website, agent, websiteV4, agentV4] = await Promise.all([
+        fixture(localFixturePath),
+        fixture(agentFixturePath),
+        fixture(localV4FixturePath),
+        fixture(agentV4FixturePath),
+      ]);
+      expect(agent).toEqual(website);
+      expect(agentV4).toEqual(websiteV4);
+    },
+  );
 
   it("parses v4 and binds its candidate descriptor independently of the final file", async () => {
     const value = await fixture(localV4FixturePath);
