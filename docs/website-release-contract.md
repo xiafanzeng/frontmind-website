@@ -18,22 +18,21 @@ Dashboard 仓库的 `docs/operations/RELEASE.md` 是唯一权威发布手册。�
 
 ## GitHub 配置
 
-Secrets：
+仓库只需要一个 Actions Secret：
 
 - `WEBSITE_DEPLOY_SSH_PRIVATE_KEY`：专用 deploy key；对应公钥必须在服务器
-  `authorized_keys` 上绑定 forced-command，不能获得任意 Shell。
-- `WEBSITE_DEPLOY_KNOWN_HOSTS`：生产主机经过线下核验的完整 host-key 行；禁止运行时
-  `ssh-keyscan` 或关闭 host-key 校验。
+  `authorized_keys` 上绑定 Website forced-command，不能获得任意 Shell。
 
-Repository variables：
+生产主机 `149.88.85.148`、端口 `22`、用户 `frontmind-deploy` 和已人工核验的 ED25519
+host key 都是公开的发布策略，不是秘密；它们固定在 workflow 与
+`.github/deploy/production_known_hosts` 中，随代码评审。workflow 禁止运行时 `ssh-keyscan`
+或关闭 host-key 校验，也不再依赖容易漂移的 Repository variables。
 
-- `WEBSITE_DEPLOY_HOST`：生产部署主机。
-- `WEBSITE_DEPLOY_USER`：仅能执行 forced-command 的低权限用户。
-- `WEBSITE_DEPLOY_PORT`：SSH 端口；未设置时为 `22`。
-- `WEBSITE_AUTO_DEPLOY_ENABLED`：首次切换前保持未设置或 `false`，使 `main`
-  只构建并签名基线镜像；基线已由 root 启动、通过 `/readyz` 并执行
-  `frontmind-bootstrap-state website ...` 后再设为 `true`。后续进入 `main` 的提交才会
-  自动调用服务器 controller。该变量不影响 PR 检查或镜像构建签名。
+任何进入 `main` 的提交在 CI 全绿后自动构建、签名并调用服务器 controller；普通发布不再有
+`WEBSITE_AUTO_DEPLOY_ENABLED` 开关或额外人工审批。若 `state.json` 尚不存在，controller
+只允许从一个 source SHA/digest 与本机/公网 readiness 自洽的健康运行态完成一次首次签名
+镜像接管。当前 SHA 可以不同于候选，但候选必须是本次 `main` workflow 签名且 OCI revision
+精确匹配；错误签名或 readiness 不一致都失败关闭。
 
 GHCR 发布使用 GitHub 自动提供的 `GITHUB_TOKEN`，workflow 权限限制为 `packages: write` 和
 签名所需的 `id-token: write`，不配置长期 GHCR 写入或读取令牌。部署 step 通过 SSH stdin
@@ -54,7 +53,8 @@ GHCR 发布使用 GitHub 自动提供的 `GITHUB_TOKEN`，workflow 权限限制�
    普通 forced-command 发布必须先从 stdin 严格读取 actor 和 job-scoped token 两行，在
    root-only 的 `/run` 临时 `DOCKER_CONFIG` 中登录 GHCR；验签和 pull 完成后立即删除该目录，
    不读取或回退到 `/root/.docker/config.json`。缺失、畸形、多余或未关闭的输入必须在验签前
-   阻断。root-only 的首次 bootstrap 和维护入口保持独立。
+   阻断。受限 forced-command 的首次签名接管、root-only 兼容 bootstrap 和维护入口
+   彼此保持独立。
 4. 用 root-only 临时 image env 只重建 Website Compose 服务，readiness 成功后才原子
    替换活跃 image env；不得调用数据库、Dashboard 或 PDF 镜像步骤。
 5. 为整次 rollout 建立一个 120 秒总 deadline；候选镜像最多使用前 90 秒检查
