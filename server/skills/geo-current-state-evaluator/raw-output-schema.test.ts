@@ -17,20 +17,20 @@ const schemaPath = path.resolve(
   "server/skills/geo-current-state-evaluator/references/raw-output-schema.json",
 );
 
-function unavailableIndicator() {
+function measuredZeroIndicator() {
   return {
-    rawValue: null,
-    measurementStatus: "unavailable",
-    confidence: 0,
-    calculationBasis: "The supplied evidence cannot measure this indicator.",
-    evidenceRefs: [],
-    limitations: ["The supplied evidence is insufficient."],
+    rawValue: 0,
+    measurementStatus: "measured",
+    confidence: 0.8,
+    calculationBasis: "The supplied evidence measured a genuine zero result.",
+    evidenceRefs: ["deepseek/run-01"],
+    limitations: [],
   };
 }
 
 function canonicalIneligibleOutput() {
   return {
-    schemaVersion: 1,
+    schemaVersion: 2,
     assessmentType: "question_baseline",
     question: {
       id: "reputation-01",
@@ -47,27 +47,27 @@ function canonicalIneligibleOutput() {
     },
     dimensions: {
       semanticVisibility: {
-        aiSearchVisibility: unavailableIndicator(),
-        webSearchSov: unavailableIndicator(),
-        multiPlatformCoverage: unavailableIndicator(),
+        aiSearchVisibility: measuredZeroIndicator(),
+        webSearchSov: measuredZeroIndicator(),
+        multiPlatformCoverage: measuredZeroIndicator(),
       },
       semanticCoherence: {
-        corePropositionHitRate: unavailableIndicator(),
-        toneConsistency: unavailableIndicator(),
+        corePropositionHitRate: measuredZeroIndicator(),
+        toneConsistency: measuredZeroIndicator(),
       },
       semanticRichness: {
-        questionStageCoverage: unavailableIndicator(),
-        semanticEntityRichness: unavailableIndicator(),
-        contentFormatDiversity: unavailableIndicator(),
+        questionStageCoverage: measuredZeroIndicator(),
+        semanticEntityRichness: measuredZeroIndicator(),
+        contentFormatDiversity: measuredZeroIndicator(),
       },
       semanticAuthority: {
-        authoritativeSourceRatio: unavailableIndicator(),
-        structuredDataCompleteness: unavailableIndicator(),
-        thirdPartyEndorsement: unavailableIndicator(),
+        authoritativeSourceRatio: measuredZeroIndicator(),
+        structuredDataCompleteness: measuredZeroIndicator(),
+        thirdPartyEndorsement: measuredZeroIndicator(),
       },
       competitiveAdvantage: {
-        firstMentionRate: unavailableIndicator(),
-        exclusiveSemanticSpace: unavailableIndicator(),
+        firstMentionRate: measuredZeroIndicator(),
+        exclusiveSemanticSpace: measuredZeroIndicator(),
       },
     },
     rankingDiagnostics: {
@@ -92,8 +92,7 @@ function canonicalIneligibleOutput() {
         averageRank: null,
         factAccuracy: null,
         propositionHitRate: null,
-        citationCount: 0,
-        referenceCount: 5,
+        sourceCount: 5,
         sentiment: "unknown",
         verdict: "The evidence is insufficient for a platform verdict.",
         evidenceRefs: ["deepseek/run-01"],
@@ -118,6 +117,30 @@ function canonicalIneligibleOutput() {
     ],
     summary:
       "The single-question sample has insufficient evidence for ranking measurements.",
+    executiveSummary:
+      "当前回答已经形成基础认知，但重要事实仍需补强；本月先完善证据页面，并在月底按同一口径复测。",
+    dimensionNarratives: {
+      semanticVisibility: {
+        currentFinding: "当前回答能够识别企业及其所属领域。",
+        nextAction: "补齐核心能力与证据页面之间的引用关系。",
+      },
+      semanticCoherence: {
+        currentFinding: "核心主张在不同回答中的表达还不够稳定。",
+        nextAction: "统一企业定位、能力边界和风险说明。",
+      },
+      semanticRichness: {
+        currentFinding: "回答尚未覆盖采购者关心的全部关键方面。",
+        nextAction: "补充场景、风险和采购核验类问答。",
+      },
+      semanticAuthority: {
+        currentFinding: "重要判断仍缺少足够的权威来源支持。",
+        nextAction: "建设可追溯的官方事实页和独立证据路径。",
+      },
+      competitiveAdvantage: {
+        currentFinding: "已验证差异点尚未被清楚完整地表达。",
+        nextAction: "围绕可核验差异点建立统一对比语言。",
+      },
+    },
     priorityActions: [
       {
         priority: 1,
@@ -187,7 +210,8 @@ function validateProductionContract(output: unknown) {
   } catch (error) {
     return {
       success: false,
-      errors: error instanceof Error ? error.message : "scope validation failed",
+      errors:
+        error instanceof Error ? error.message : "scope validation failed",
     } as const;
   }
 }
@@ -215,9 +239,22 @@ describe("geo-current-state-evaluator model output contract", () => {
 
   const parityCases = [
     {
-      name: "canonical ineligible 0/0/0 output",
+      name: "canonical v2 output with genuine measured zeros",
       output: canonicalIneligibleOutput,
       expected: true,
+    },
+    {
+      name: "incomplete v2 indicator",
+      output: changedOutput(canonicalIneligibleOutput, (output) => {
+        Object.assign(output.dimensions.semanticVisibility.webSearchSov, {
+          rawValue: null,
+          measurementStatus: "unavailable",
+          confidence: 0,
+          evidenceRefs: [],
+          limitations: ["The supplied evidence is incomplete."],
+        });
+      }),
+      expected: false,
     },
     {
       name: "canonical eligible output",
@@ -235,8 +272,7 @@ describe("geo-current-state-evaluator model output contract", () => {
         });
         Object.assign(output.platformBreakdown[0], {
           averageRank: 100,
-          citationCount: 10_000,
-          referenceCount: 10_000,
+          sourceCount: 10_000,
         });
       }),
       expected: true,
@@ -293,9 +329,9 @@ describe("geo-current-state-evaluator model output contract", () => {
       expected: false,
     },
     {
-      name: "platform citation count above its upper bound",
+      name: "platform source count above its upper bound",
       output: changedOutput(canonicalIneligibleOutput, (output) => {
-        output.platformBreakdown[0].citationCount = 10_001;
+        output.platformBreakdown[0].sourceCount = 10_001;
       }),
       expected: false,
     },

@@ -53,6 +53,27 @@ describe("Website runtime readiness", () => {
     ).rejects.toThrow("agent unavailable");
   });
 
+  it("fails startup and readiness before probing dependencies when configuration is unsafe", async () => {
+    const getDependencies = vi.fn(async () => ({}));
+    await expect(
+      collectWebsiteRuntimeReadiness({
+        buildSha: null,
+        imageDigest: null,
+        assertConfiguration: () => {
+          throw new Error("GEO_RUNTIME_CONFIGURATION_INVALID");
+        },
+        getSkills: async () => [],
+        getDependencies,
+        getVisitorStats: async () => ({ ready: true as const }),
+        validationStore: {
+          assertReady: async () => undefined,
+          persistenceIdentity: async () => "store",
+        },
+      }),
+    ).rejects.toThrow("GEO_RUNTIME_CONFIGURATION_INVALID");
+    expect(getDependencies).not.toHaveBeenCalled();
+  });
+
   it("fails production preflight without an immutable source and image identity", async () => {
     await expect(
       collectWebsiteRuntimeReadiness({

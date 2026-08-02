@@ -1,3 +1,4 @@
+import { isIP } from "node:net";
 import { z } from "zod";
 import {
   GEO_MONITOR_PLATFORM_IDS,
@@ -35,6 +36,7 @@ const SourceSchema = z.union([
       source: z.string().trim().max(1000).optional(),
       url: z.string().trim().max(4096).optional(),
       domain: z.string().trim().max(255).optional(),
+      summary: z.string().trim().max(2000).optional(),
     })
     .passthrough(),
 ]);
@@ -54,6 +56,9 @@ const RecordSchema = z
     status: RecordStatusSchema,
     answerText: z.string().max(200_000).optional(),
     media: z.array(MediaSchema).max(24).default([]),
+    // Optional on purpose: an explicitly supplied empty canonical collection
+    // must not fall back to stale legacy citation/reference fields.
+    sources: z.array(SourceSchema).max(200).optional(),
     citations: z.array(SourceSchema).max(100).default([]),
     references: z.array(SourceSchema).max(200).default([]),
     error: z.string().max(2000).optional(),
@@ -92,7 +97,7 @@ function asRecord(value: unknown): Record<string, unknown> {
 
 /**
  * Treat the Agent response as untrusted. Only customer-safe final text,
- * allowlisted media links and the two distinct source collections survive this
+ * allowlisted media links and one canonical source collection survive this
  * adapter; page screenshots and model reasoning remain impossible to return.
  */
 export function normalizeMonitorRun(
@@ -164,8 +169,11 @@ export function normalizeMonitorRun(
           const normalized = normalizePublicMedia(item);
           return normalized ? [normalized] : [];
         }),
-        citations: record.citations.map(normalizeSource),
-        references: record.references.map(normalizeSource),
+        sources: normalizeMonitorSources(
+          record.sources !== undefined
+            ? record.sources
+            : [...record.citations, ...record.references],
+        ),
         error: record.error,
         completedAt: record.completedAt,
       };
@@ -258,28 +266,160 @@ function normalizeSource(source: z.infer<typeof SourceSchema>): {
   title?: string;
   url?: string;
   domain?: string;
+  summary?: string;
 } {
   if (typeof source === "string") {
     const url = safeHttpUrl(source);
     if (url) return { title: source, url };
+    if (/^[a-z][a-z0-9+.-]*:/i.test(source)) return {};
     return { title: source };
   }
+  const normalizedUrl = safeHttpUrl(source.url);
+  if (source.url && !normalizedUrl) return {};
   return {
     title: source.title || source.name || source.source,
-    url: safeHttpUrl(source.url),
+    url: normalizedUrl,
     domain: source.domain,
+    summary: source.summary,
   };
+}
+
+const TRACKING_PARAMETERS = new Set([
+  "fbclid",
+  "gclid",
+  "dclid",
+  "msclkid",
+  "mc_cid",
+  "mc_eid",
+  "igshid",
+  "ref_src",
+]);
+
+function privateHostname(value: string) {
+  const hostname = value
+    .toLowerCase()
+    .replace(/^\[|\]$/g, "")
+    .replace(/\.$/, "");
+  if (
+    hostname === "localhost" ||
+    hostname.endsWith(".localhost") ||
+    hostname.endsWith(".local") ||
+    hostname.endsWith(".internal")
+  ) {
+    return true;
+  }
+  if (isIP(hostname) === 4) {
+    const octets = hostname.split(".").map(Number);
+    return (
+      octets[0] === 0 ||
+      octets[0] === 10 ||
+      octets[0] === 127 ||
+      (octets[0] === 169 && octets[1] === 254) ||
+      (octets[0] === 172 && octets[1] >= 16 && octets[1] <= 31) ||
+      (octets[0] === 192 && octets[1] === 168) ||
+      octets[0] >= 224
+    );
+  }
+  if (isIP(hostname) === 6) {
+    if (hostname.startsWith("::ffff:")) {
+      const mappedTail = hostname.slice("::ffff:".length);
+      if (isIP(mappedTail) === 4) return privateHostname(mappedTail);
+      const mappedHex = /^(?:0:)?([0-9a-f]{1,4}):([0-9a-f]{1,4})$/.exec(
+        mappedTail,
+      );
+      if (mappedHex) {
+        const high = Number.parseInt(mappedHex[1], 16);
+        const low = Number.parseInt(mappedHex[2], 16);
+        return privateHostname(
+          [high >> 8, high & 0xff, low >> 8, low & 0xff].join("."),
+        );
+      }
+      return true;
+    }
+    return (
+      hostname === "::" ||
+      hostname === "::1" ||
+      hostname.startsWith("fc") ||
+      hostname.startsWith("fd") ||
+      /^fe[89ab]/.test(hostname)
+    );
+  }
+  return false;
+}
+
+function sourceIdentity(source: ReturnType<typeof normalizeSource>) {
+  if (source.url) return `url:${source.url}`;
+  const title = (source.title || "").trim().toLocaleLowerCase("en-US");
+  const domain = (source.domain || "").trim().toLocaleLowerCase("en-US");
+  return `label:${title}\u0000${domain}`;
+}
+
+export function normalizeMonitorSources(
+  values: Array<z.infer<typeof SourceSchema>>,
+) {
+  const byIdentity = new Map<
+    string,
+    { title?: string; url?: string; domain?: string; summary?: string }
+  >();
+  for (const value of values) {
+    const source = normalizeSource(value);
+    if (!source.title && !source.url && !source.domain) continue;
+    const identity = sourceIdentity(source);
+    const existing = byIdentity.get(identity);
+    if (!existing) {
+      byIdentity.set(identity, source);
+    } else {
+      const populatedFields = (item: typeof source) =>
+        Object.values(item).filter(
+          (value) => typeof value === "string" && value.trim().length > 0,
+        ).length;
+      const informationLength = (item: typeof source) =>
+        Object.values(item).reduce<number>(
+          (total, value) =>
+            total + (typeof value === "string" ? value.trim().length : 0),
+          0,
+        );
+      const sourceScore =
+        populatedFields(source) * 10_000 + informationLength(source);
+      const existingScore =
+        populatedFields(existing) * 10_000 + informationLength(existing);
+      const preferred = sourceScore > existingScore ? source : existing;
+      const secondary = preferred === source ? existing : source;
+      byIdentity.set(identity, {
+        title: preferred.title || secondary.title,
+        url: preferred.url || secondary.url,
+        domain: preferred.domain || secondary.domain,
+        summary: preferred.summary || secondary.summary,
+      });
+    }
+    if (byIdentity.size >= 200) break;
+  }
+  return Array.from(byIdentity.values());
 }
 
 function safeHttpUrl(value?: string) {
   if (!value) return undefined;
   try {
     const url = new URL(value);
-    return ["http:", "https:"].includes(url.protocol) &&
-      !url.username &&
-      !url.password
-      ? url.toString()
-      : undefined;
+    if (
+      !["http:", "https:"].includes(url.protocol) ||
+      url.username ||
+      url.password ||
+      privateHostname(url.hostname)
+    ) {
+      return undefined;
+    }
+    url.hash = "";
+    for (const key of Array.from(url.searchParams.keys())) {
+      if (
+        key.toLowerCase().startsWith("utm_") ||
+        TRACKING_PARAMETERS.has(key.toLowerCase())
+      ) {
+        url.searchParams.delete(key);
+      }
+    }
+    url.searchParams.sort();
+    return url.toString();
   } catch {
     return undefined;
   }

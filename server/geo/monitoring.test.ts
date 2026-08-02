@@ -1,5 +1,9 @@
 import { describe, expect, it } from "vitest";
-import { normalizeMonitorRun, toPublicMonitorView } from "./monitoring";
+import {
+  normalizeMonitorRun,
+  normalizeMonitorSources,
+  toPublicMonitorView,
+} from "./monitoring";
 
 function completedRun() {
   return {
@@ -40,7 +44,7 @@ function completedRun() {
 }
 
 describe("monitor result adapter", () => {
-  it("keeps final text, safe media and separate source collections", () => {
+  it("keeps final text, safe media and one canonical source collection", () => {
     const run = normalizeMonitorRun(completedRun(), {
       runId: "monitor-run-001",
       question: "Acme 适合科研团队吗？",
@@ -56,8 +60,7 @@ describe("monitor result adapter", () => {
           title: "相关采访",
         },
       ],
-      citations: [{ title: "实际引用" }],
-      references: [{ title: "检索参考" }],
+      sources: [{ title: "实际引用" }, { title: "检索参考" }],
     });
     expect(JSON.stringify(toPublicMonitorView(run))).not.toContain(
       "reasoningProcess",
@@ -68,6 +71,61 @@ describe("monitor result adapter", () => {
     expect(JSON.stringify(toPublicMonitorView(run))).not.toContain(
       "javascript:",
     );
+  });
+
+  it("treats an explicit canonical source list as authoritative even when empty", () => {
+    const payload = completedRun();
+    payload.records[0] = {
+      ...payload.records[0],
+      sources: [],
+      citations: [
+        { title: "不应回填的旧引用", url: "https://legacy.example/cited" },
+      ],
+      references: [
+        { title: "不应回填的旧参考", url: "https://legacy.example/reference" },
+      ],
+    };
+
+    expect(normalizeMonitorRun(payload).records?.[0].sources).toEqual([]);
+  });
+
+  it("keeps the most complete record when normalized source URLs repeat", () => {
+    expect(
+      normalizeMonitorSources([
+        {
+          title: "短标题",
+          url: "https://SOURCE.example:443/report?utm_source=test#part",
+        },
+        {
+          title: "重复来源的完整标题",
+          url: "https://source.example/report",
+          domain: "source.example",
+          summary: "这是一条可供核验的完整来源摘要。",
+        },
+      ]),
+    ).toEqual([
+      {
+        title: "重复来源的完整标题",
+        url: "https://source.example/report",
+        domain: "source.example",
+        summary: "这是一条可供核验的完整来源摘要。",
+      },
+    ]);
+  });
+
+  it("blocks IPv4-mapped IPv6 private source addresses", () => {
+    expect(
+      normalizeMonitorSources([
+        {
+          title: "本机地址",
+          url: "https://[::ffff:127.0.0.1]/private",
+        },
+        {
+          title: "内网地址",
+          url: "https://[::ffff:10.0.0.8]/private",
+        },
+      ]),
+    ).toEqual([]);
   });
 
   it("fails closed on an incomplete completed snapshot", () => {

@@ -589,6 +589,19 @@ export const GeoManualServiceOrderPaymentRequestSchema = z
   })
   .strict();
 
+export const GeoManualServiceOrderExternalAuthorizationRequestSchema = z
+  .object({
+    schemaVersion: z.literal(1),
+    authorization: z
+      .object({
+        mode: z.literal("external_wechat"),
+        eventReference: identifierSchema,
+        authorizedAt: isoDateTimeSchema,
+      })
+      .strict(),
+  })
+  .strict();
+
 export const GeoManualServiceOrderAccountRequestSchema = z
   .object({
     schemaVersion: z.literal(1),
@@ -619,10 +632,12 @@ export const GeoManualServiceOrderResponseSchema = z
         reference: identifierSchema,
         projectId: z.string().trim().min(8).max(80),
         status: GeoManualServiceOrderStatusSchema,
-        amountFen: z.number().int().positive().max(10_000_000),
+        amountFen: z.number().int().positive().max(10_000_000).optional(),
         contractId: identifierSchema.optional(),
         signingUrl: publicExternalAppUrlSchema.optional(),
         signedAt: isoDateTimeSchema.optional(),
+        contractAuthorizationMode: z.literal("external_wechat").optional(),
+        contractAuthorizedAt: isoDateTimeSchema.optional(),
         provisioningReference: identifierSchema.optional(),
         message: z.string().trim().min(1).max(1000).optional(),
         retryable: z.boolean().optional(),
@@ -659,6 +674,9 @@ export type GeoManualServiceOrderCreateRequest = z.infer<
 export type GeoManualServiceOrderPaymentRequest = z.infer<
   typeof GeoManualServiceOrderPaymentRequestSchema
 >;
+export type GeoManualServiceOrderExternalAuthorizationRequest = z.infer<
+  typeof GeoManualServiceOrderExternalAuthorizationRequestSchema
+>;
 export type GeoManualServiceOrderAccountRequest = z.infer<
   typeof GeoManualServiceOrderAccountRequestSchema
 >;
@@ -671,6 +689,10 @@ export type GeoManualServiceOrderCreator = (
 ) => Promise<GeoManualServiceOrderResponse>;
 export type GeoManualServiceOrderStatusReader = (
   reference: string,
+) => Promise<GeoManualServiceOrderResponse>;
+export type GeoManualServiceOrderExternalAuthorizer = (
+  reference: string,
+  request: GeoManualServiceOrderExternalAuthorizationRequest,
 ) => Promise<GeoManualServiceOrderResponse>;
 export type GeoManualServiceOrderPaymentConfirmer = (
   reference: string,
@@ -1219,6 +1241,41 @@ export function createGeoManualServiceOrderStatusReader(
   };
 }
 
+export function createGeoManualServiceOrderExternalAuthorizer(
+  options: GeoAccountProvisionerOptions = {},
+): GeoManualServiceOrderExternalAuthorizer {
+  const env = options.env ?? process.env;
+  const fetchImpl = options.fetchImpl ?? fetch;
+  const timeoutMs = options.timeoutMs ?? PROVISIONING_TIMEOUT_MS;
+  return async (reference, rawRequest) => {
+    const parsedReference = identifierSchema.parse(reference);
+    const request =
+      GeoManualServiceOrderExternalAuthorizationRequestSchema.parse(rawRequest);
+    const endpoint = provisioningBaseEndpoint(env);
+    endpoint.pathname = `${endpoint.pathname}/manual-orders/${encodeURIComponent(parsedReference)}/external-contract`;
+    return fetchProvisioningJson({
+      endpoint,
+      fetchImpl,
+      timeoutMs,
+      responseSchema: GeoManualServiceOrderResponseSchema,
+      invalidResponseMessage: "合同确认接口返回了无效结果",
+      unavailableMessage: "合同确认接口暂时不可用，请稍后重试",
+      timeoutMessage: "合同确认请求超时，请稍后重试",
+      fallbackCode: "MANUAL_ORDER_EXTERNAL_CONTRACT_FAILED",
+      fallbackMessage: "合同确认暂未完成",
+      init: {
+        method: "POST",
+        headers: {
+          Accept: "application/json",
+          "Content-Type": "application/json",
+          "x-frontmind-provisioning-token": serviceToken(env),
+        },
+        body: JSON.stringify(request),
+      },
+    });
+  };
+}
+
 export function createGeoManualServiceOrderPaymentConfirmer(
   options: GeoAccountProvisionerOptions = {},
 ): GeoManualServiceOrderPaymentConfirmer {
@@ -1326,15 +1383,15 @@ export function createGeoKnowledgeImporter(
                   "knowledge-v4",
                 ].join(":")
               : request.schemaVersion === 3
-              ? [
-                  "geo-basic",
-                  parsedProjectId,
-                  request.descriptorHash,
-                  request.artifactSha256,
-                  request.packageManifestSha256,
-                  "knowledge-v3",
-                ].join(":")
-              : `geo-basic:${parsedProjectId}:${request.descriptorHash}:${request.artifactSha256}:knowledge-v2`,
+                ? [
+                    "geo-basic",
+                    parsedProjectId,
+                    request.descriptorHash,
+                    request.artifactSha256,
+                    request.packageManifestSha256,
+                    "knowledge-v3",
+                  ].join(":")
+                : `geo-basic:${parsedProjectId}:${request.descriptorHash}:${request.artifactSha256}:knowledge-v2`,
           "x-frontmind-provisioning-token": serviceToken(env),
         },
         body: JSON.stringify(request),

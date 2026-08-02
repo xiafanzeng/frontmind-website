@@ -1,6 +1,6 @@
 # Conditional GEO Outcome Forecast Methodology
 
-This method preserves FrontMind Report Workflow S5.5 scoring and S9 action planning while adding the missing forecasting controls. The source workflow stores 12-week targets but does not derive or validate them, so this skill converts the planning window into a bounded first-month full-execution range, emits headroom-closure intervals only, and leaves target values and all weighted scoring to the server.
+This method preserves FrontMind Report Workflow S5.5 scoring and S9 action planning while adding the missing forecasting controls. The source workflow stores 12-week targets but does not derive or validate them. This skill emits evidence-backed headroom and action mappings; the service separately applies a transparent first-month full-execution planning policy and leaves all weighted scoring to deterministic server code.
 
 ## Scope
 
@@ -29,7 +29,7 @@ The server calculates `target raw = baseline raw + (1 - baseline raw) × gap clo
 The server retains two score ledgers:
 
 - **Raw weighted score:** always keeps the original 100-point BSAS weights. This is the audit ledger.
-- **Applicable-scope score:** normalizes the raw weighted score over the maximum still applicable to the selected question. Only service-enforced structural exclusions may reduce this denominator. An ordinary `unavailable` indicator remains zero and must not reduce the denominator.
+- **Applicable-scope score:** normalizes the raw weighted score over the maximum still applicable to the selected question. Only service-enforced structural exclusions may reduce this denominator. A v2 input with an unavailable indicator is invalid and cannot be published or forecast; legacy v1 audit records may retain unavailable indicators as zero without reducing the denominator.
 
 Grades shown for a question-level conditional target may use the applicable-scope score, while the raw score remains attached for audit. This does not turn the result into a full-domain BSAS audit.
 
@@ -42,29 +42,29 @@ Grades shown for a question-level conditional target may use the applicable-scop
 - `GEO_A5_site_schema`: improve official pages, entity pages, internal links, and Organization/Product/Service/FAQPage structured data.
 - `GEO_A6_distribution_citations`: establish publication, independent authority, directory, media, case, and citation paths.
 
-## One-Month Full-Execution Qualified Target
+## One-Month Conditional Planning Target
 
-The standard scenario represents completion of all six FrontMind action groups, not passive waiting for organic change. The server therefore enforces an applicable-scope target low bound of at least 60/100 whenever the current applicable score is below 60. The high bound is at least 66/100 and remains conditional on delivery and week-4 verification. When the current score is already 60 or higher, the server applies the grade-based incremental band without lowering the current score.
+The standard scenario represents completion of all six FrontMind action groups, not passive waiting for organic change. Every indicator must therefore carry its own evidence, action mapping, dependency, and verification path. In addition to retaining those evidence intervals for audit, the service presents a full-execution planning range: the lower bound is at least 60/100 and, while the score ceiling allows, at least 10 points above the conservative current score; the visible target is capped at 99. The server allocates the planning gap across projectable indicators so dimension and total sums remain consistent.
 
-This is a planning target, not a claim that an external platform has already adopted the work. Direct assets are checked through delivery evidence; observed outcomes remain subject to publication, crawl/index success, independent uptake, and same-scope remeasurement.
+This planning range is a product execution goal, not an empirical guarantee and not a claim that an external platform has already adopted the work. It is deliberately separate from the Report Workflow's 12-week experience bands. Direct assets are checked through delivery evidence; observed outcomes remain subject to publication, crawl/index success, independent uptake, and same-scope remeasurement.
 
-## Effect-Specific Full-Execution Bands
+## Effect-Specific One-Month Ceilings
 
-| Effect type        | Low closure target | High closure target | Boundary                                                     |
-| ------------------ | -----------------: | ------------------: | ------------------------------------------------------------ |
-| `direct_asset`     |               0.75 |                0.95 | FrontMind-controlled assets, subject to delivery check       |
-| `observed_outcome` |               0.55 |                0.75 | External uptake requiring week-4 same-scope remeasurement    |
+| Effect type        | Maximum low closure | Maximum high closure | Boundary                                                  |
+| ------------------ | ------------------: | -------------------: | --------------------------------------------------------- |
+| `direct_asset`     |                0.75 |                 0.95 | FrontMind-controlled assets, subject to delivery check    |
+| `observed_outcome` |                0.55 |                 0.75 | External uptake requiring week-4 same-scope remeasurement |
 
-Use these bands for the declared full-execution scenario. Do not return null or zero-to-zero ranges. If a current raw value is unavailable, keep the current value unknown, use the action-backed target band, lower confidence, and name the delivery or observation gate.
+Derive both bounds from the supplied evidence and keep them below the relevant ceilings. Do not return null or zero-to-zero ranges. If any indicator lacks enough evidence for a bounded interval, the complete v2 output is invalid and must be regenerated rather than filled with a default.
 
 ## Forecast Rules
 
 1. Start from the server-scored baseline and its raw indicators. Never reconstruct current scores from prose.
-2. Map every indicator to an auditable build-and-measure path under `full_execution`. An unavailable current value remains unknown but still receives an action-backed target and verification gate.
+2. Map every indicator to an auditable build-and-measure path under `full_execution`. A v2 forecast may only be generated from a complete v2 assessment; do not substitute a zero baseline or a default action for missing input.
 3. A direct asset target may describe work under FrontMind control, such as a completed facts page or Schema coverage, but it still requires delivery verification.
 4. An observed outcome target depends on publication, crawl/index success, third-party adoption, answer-engine update cycles, and remeasurement. It must stay inside the observed-outcome closure ceiling.
 5. Gap-closure low and high describe the share of remaining 0-1 headroom that could be closed under the stated scenario. They are not score deltas or uplift percentages. The server derives targets from the current raw value.
-6. Use the fixed full-execution bands. Express uncertainty through confidence, dependencies, and verification metrics rather than suppressing a dimension.
+6. Use evidence-derived intervals within the one-month effect ceilings. The service may apply its separately disclosed 60/+10/99 full-execution planning policy; do not reverse-engineer or inflate raw intervals to hit that policy. Express uncertainty through confidence, dependencies, and verification metrics.
 7. Evidence references must point to stable assessment paths, knowledge-base relative paths, comparison IDs, or priority-action IDs.
 8. Do not infer revenue, lead volume, consultation conversion, or market share from BSAS.
 
@@ -74,7 +74,7 @@ Use these bands for the declared full-execution scenario. Do not return null or 
 - Use the applicable-scope score only when the service has recorded a structural exclusion and its excluded maximum.
 - Never remove arbitrary missing evidence from the applicable denominator.
 - A B grade reached only at the high bound must be described as a challenge upper bound. Do not call it the expected result.
-- When the current applicable score is below 60, the completed full-execution plan must target at least 60/100. The server enforces this qualified planning floor; the model must provide all thirteen action mappings needed to support it.
+- Keep the grade calculation separate from the disclosed planning policy. Reaching 60 or gaining 10 points is a conditional execution target, not evidence that a grade has already improved.
 
 ## Reputation Exclusion
 

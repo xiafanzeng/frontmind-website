@@ -136,7 +136,11 @@ export type GeoMonitoringAnswer = {
   status: "completed" | "failed" | "stopped" | "error" | "processing";
   answer: string;
   media: GeoAnswerMedia[];
+  /** Canonical source list. New monitor responses expose only this field. */
+  sources: GeoAnswerSource[];
+  /** @deprecated Compatibility for locally stored pre-v2 projects. */
   citations: GeoAnswerSource[];
+  /** @deprecated Compatibility for locally stored pre-v2 projects. */
   references: GeoAnswerSource[];
   capturedAt?: string;
   error?: string;
@@ -170,6 +174,8 @@ export type GeoAssessmentDimension = {
   score: number;
   maxScore: number;
   summary?: string;
+  currentFinding?: string;
+  nextAction?: string;
 };
 
 export type GeoKnowledgeComparisonStatus =
@@ -202,8 +208,11 @@ export type GeoAssessmentPlatformBreakdown = {
   averageRank: number | null;
   factAccuracy: number | null;
   propositionHitRate: number | null;
-  citationCount: number;
-  referenceCount: number;
+  sourceCount: number;
+  /** @deprecated v1 assessment compatibility. */
+  citationCount?: number;
+  /** @deprecated v1 assessment compatibility. */
+  referenceCount?: number;
   sentiment: "positive" | "neutral" | "negative" | "mixed" | "unknown";
   verdict: string;
   evidenceRefs: string[];
@@ -241,6 +250,7 @@ export type GeoAssessmentMethodology = {
 };
 
 export type GeoAssessmentResult = {
+  schemaVersion?: 2;
   status: GeoAssessmentStatus;
   totalScore?: number;
   rawTotalScore?: number;
@@ -252,6 +262,7 @@ export type GeoAssessmentResult = {
   confidence?: "high" | "medium" | "low";
   scopeLabel?: string;
   summary?: string;
+  executiveSummary?: string;
   dimensions: GeoAssessmentDimension[];
   comparisons: GeoKnowledgeComparison[];
   platformBreakdown?: GeoAssessmentPlatformBreakdown[];
@@ -272,6 +283,8 @@ export type GeoOptimizationForecastDimension = {
   targetHigh: number;
   maxScore: number;
   summary?: string;
+  currentFinding?: string;
+  nextAction?: string;
   actions: string[];
 };
 
@@ -284,6 +297,7 @@ export type GeoOptimizationForecastRoadmapPhase = {
 };
 
 export type GeoOptimizationForecastResult = {
+  schemaVersion?: 2;
   status: GeoAssessmentStatus;
   horizonWeeks?: number;
   currentScore?: number;
@@ -303,6 +317,8 @@ export type GeoOptimizationForecastResult = {
     structuralExcludedMaxScore: number;
   };
   summary?: string;
+  executiveSummary?: string;
+  targetCondition?: string;
   dimensions: GeoOptimizationForecastDimension[];
   assumptions: string[];
   roadmap: GeoOptimizationForecastRoadmapPhase[];
@@ -507,6 +523,8 @@ export type GeoServiceActivation = {
   contractPreviewUrl?: string;
   signingUrl?: string;
   signedAt?: string;
+  contractAuthorizationMode?: "external_wechat";
+  contractAuthorizedAt?: string;
   contractWorkflowReference?: string;
   manualOrderReference?: string;
   manualOrderStatus?: GeoManualServiceOrderStatus;
@@ -558,6 +576,7 @@ export type GeoProject = {
   };
   questionRetryAvailable?: boolean;
   assessmentRetryAvailable?: boolean;
+  assessmentUpdatingToVersion2?: boolean;
   optimizationForecastRetryAvailable?: boolean;
   files: GeoFileReference[];
   knowledgeBase?: GeoKnowledgeBase;

@@ -668,6 +668,7 @@ export type GeoServiceContractProfile = z.infer<
 export const CreateServiceContractRequestSchema = z
   .object({
     profile: GeoServiceContractProfileSchema,
+    contractCode: z.string().trim().min(1).max(128),
   })
   .strict();
 

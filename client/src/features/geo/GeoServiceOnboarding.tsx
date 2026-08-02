@@ -4,7 +4,6 @@ import {
   Building2,
   Check,
   CreditCard,
-  ExternalLink,
   FileCheck2,
   FileText,
   KeyRound,
@@ -17,7 +16,15 @@ import {
   ShieldCheck,
   UserRound,
 } from "lucide-react";
-import { type FormEvent, useEffect, useId, useMemo, useState } from "react";
+import { type FormEvent, useEffect, useId, useState } from "react";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
 import {
   FRONTMIND_CONTACT_EMAILS,
   FRONTMIND_WECHAT_QR_PATH,
@@ -31,7 +38,7 @@ import type {
 import { safePublicAppUrl } from "./safe-url";
 import { localizedUserFacingError } from "./error-localization";
 
-type OnboardingStep = "profile" | "signature" | "payment" | "account";
+type OnboardingStep = "profile" | "payment" | "account";
 type GeoServiceContractProfileDraft = Omit<
   GeoServiceContractProfile,
   "authorized"
@@ -49,64 +56,67 @@ type GeoServiceAccountDraft = GeoServiceAccountCredentials & {
   confirmPassword: string;
 };
 
-export function buildPopulatedServiceContractHref(
-  contractHref: string,
-  profile: GeoServiceContractProfile,
-) {
-  const hash = new URLSearchParams({
-    legalName: profile.legalName.trim(),
-    creditCode: profile.creditCode.trim().toUpperCase(),
-    address: profile.address.trim(),
-    signatoryName: profile.signatoryName.trim(),
-    signatoryTitle: profile.signatoryTitle.trim(),
-    mobile: profile.mobile.trim(),
-    email: profile.email.trim().toLowerCase(),
-  });
-  return `${contractHref.split("#", 1)[0]}#${hash.toString()}`;
-}
-
-const STEP_ORDER: OnboardingStep[] = [
-  "profile",
-  "signature",
-  "payment",
-  "account",
-];
+const STEP_ORDER: OnboardingStep[] = ["profile", "payment", "account"];
 
 const STEP_CONTENT = {
   profile: {
     index: "01",
     label: "签约资料",
-    description: "提交企业与经办人",
+    description: "填写资料并联系管理员",
     icon: Building2,
   },
-  signature: {
-    index: "02",
-    label: "合同查看",
-    description: "查看合同并完成签署",
-    icon: ShieldCheck,
-  },
   payment: {
-    index: "03",
+    index: "02",
     label: "付款确认",
-    description: "签署完成后付款",
+    description: "管理员确认后付款",
     icon: CreditCard,
   },
   account: {
-    index: "04",
-    label: "开通看板",
+    index: "03",
+    label: "开通账号",
     description: "企业直接创建账号",
     icon: KeyRound,
   },
 } as const;
 
-function statusStep(status: GeoServiceActivationStatus): OnboardingStep {
+export type GeoServiceContractFlowIssue =
+  | "request_rejected"
+  | "request_failed"
+  | "paid_contract_mismatch";
+
+export function geoServiceContractFlowIssue(
+  activation?: GeoServiceActivation,
+): GeoServiceContractFlowIssue | undefined {
+  if (!activation) return undefined;
+  if (activation.manualOrderStatus === "rejected") return "request_rejected";
+  if (
+    activation.manualOrderStatus === "failed" ||
+    (activation.status === "failed" && !activation.paidAt)
+  ) {
+    return "request_failed";
+  }
+  if (
+    activation.paidAt &&
+    ["contract_preparing", "signature_required"].includes(activation.status)
+  ) {
+    return "paid_contract_mismatch";
+  }
+  return undefined;
+}
+
+function statusStep(
+  status: GeoServiceActivationStatus,
+  activation: GeoServiceActivation,
+): OnboardingStep {
+  if (geoServiceContractFlowIssue(activation)) return "profile";
   if (status === "not_started" || status === "profile_required") {
     return "profile";
   }
   if (status === "contract_preparing" || status === "signature_required") {
-    return "signature";
+    return "profile";
   }
   if (status === "payment_required") return "payment";
+  if (status === "failed" && !activation.paidAt) return "profile";
   return "account";
 }
 
@@ -132,33 +142,6 @@ function formatMoney(amountFen: number) {
   return `¥${(amountFen / 100).toLocaleString("zh-CN")}`;
 }
 
-function buildAdminReminderHref({
-  companyName,
-  reference,
-  question,
-}: {
-  companyName: string;
-  reference: string;
-  question: string;
-}) {
-  const safeCompanyName =
-    companyName.replace(/[\r\n]+/g, " ").trim() || "待确认企业";
-  const safeReference =
-    reference.replace(/[\r\n]+/g, " ").trim() || "编号生成中";
-  const subject = `FrontMind 合同发起提醒｜${safeCompanyName}`;
-  const body = [
-    "您好，FrontMind 团队：",
-    "",
-    "企业签约资料已提交，请协助核对并发起合同。",
-    `企业：${safeCompanyName}`,
-    `签约申请：${safeReference}`,
-    `本次问题：${question}`,
-    "",
-    "谢谢。",
-  ].join("\n");
-  return `mailto:${FRONTMIND_CONTACT_EMAILS[0]}?subject=${encodeURIComponent(subject)}&body=${encodeURIComponent(body)}`;
-}
-
 function buildProvisioningSupportHref({
   companyName,
   reference,
@@ -178,6 +161,30 @@ function buildProvisioningSupportHref({
     message
       ? `后台提示：${message.replace(/[\r\n]+/g, " ").trim()}`
       : "后台提示：未返回具体原因",
+    "",
+    "谢谢。",
+  ].join("\n");
+  return `mailto:${FRONTMIND_CONTACT_EMAILS[0]}?subject=${encodeURIComponent(subject)}&body=${encodeURIComponent(body)}`;
+}
+
+function buildContractStatusSupportHref({
+  activation,
+  companyName,
+  reference,
+}: {
+  activation: GeoServiceActivation;
+  companyName: string;
+  reference: string;
+}) {
+  const subject = `FrontMind 签约状态支持｜${companyName.replace(/[\r\n]+/g, " ").trim() || "待确认企业"}`;
+  const body = [
+    "您好，FrontMind 团队：",
+    "",
+    activation.paidAt
+      ? "本订单已付款，但签约状态尚未正确同步，请协助核对。"
+      : "本次签约申请未能继续，请协助核对并恢复流程。",
+    `企业：${companyName.replace(/[\r\n]+/g, " ").trim() || "待确认企业"}`,
+    `申请/订单编号：${reference.replace(/[\r\n]+/g, " ").trim() || "编号待确认"}`,
     "",
     "谢谢。",
   ].join("\n");
@@ -320,9 +327,7 @@ function StepButton({
 export function GeoServiceOnboarding({
   activation,
   companyName,
-  categoryLabel,
   question,
-  contractHref,
   isPreview,
   onSubmitProfile,
   onCheckout,
@@ -334,9 +339,11 @@ export function GeoServiceOnboarding({
   companyName: string;
   categoryLabel: string;
   question: string;
-  contractHref: string;
   isPreview: boolean;
-  onSubmitProfile: (profile: GeoServiceContractProfile) => Promise<void>;
+  onSubmitProfile: (
+    profile: GeoServiceContractProfile,
+    contractCode: string,
+  ) => Promise<void>;
   onCheckout: () => void;
   onCreateAccount: (credentials: GeoServiceAccountCredentials) => Promise<void>;
   onCheckStatus?: () => Promise<string | void>;
@@ -346,8 +353,11 @@ export function GeoServiceOnboarding({
   const [previewStatus, setPreviewStatus] =
     useState<GeoServiceActivationStatus>(activation.status);
   const effectiveStatus = isPreview ? previewStatus : activation.status;
+  const contractFlowIssue = geoServiceContractFlowIssue(
+    isPreview ? { ...activation, status: effectiveStatus } : activation,
+  );
   const failedRetryAvailable = canRetryGeoServiceKnowledgeImport(activation);
-  const actualStep = statusStep(effectiveStatus);
+  const actualStep = statusStep(effectiveStatus, activation);
   const [viewStep, setViewStep] = useState<OnboardingStep>(actualStep);
   const [profile, setProfile] = useState<GeoServiceContractProfileDraft>(
     () =>
@@ -367,6 +377,11 @@ export function GeoServiceOnboarding({
   >({});
   const [formError, setFormError] = useState("");
   const [profileSubmitting, setProfileSubmitting] = useState(false);
+  const [contractDialogOpen, setContractDialogOpen] = useState(false);
+  const [contractCode, setContractCode] = useState("");
+  const [contractCodeError, setContractCodeError] = useState("");
+  const [pendingProfile, setPendingProfile] =
+    useState<GeoServiceContractProfile>();
   const [account, setAccount] = useState<GeoServiceAccountDraft>({
     displayName: activation.accountDisplayName || companyName,
     username: activation.accountUsername || "",
@@ -389,18 +404,6 @@ export function GeoServiceOnboarding({
   };
 
   const currentIndex = STEP_ORDER.indexOf(actualStep);
-  const contractName = `FrontMind_GEO单题30天服务协议_${
-    activation.orderId || activation.contractWorkflowReference || "待生成"
-  }.pdf`;
-  const contractReference =
-    activation.orderId ||
-    activation.contractWorkflowReference ||
-    "资料已提交，编号生成中";
-  const adminReminderHref = buildAdminReminderHref({
-    companyName: profile.legalName || companyName,
-    reference: contractReference,
-    question,
-  });
   const provisioningSupportHref = buildProvisioningSupportHref({
     companyName,
     reference:
@@ -414,32 +417,24 @@ export function GeoServiceOnboarding({
       activation.provisioningMessage ||
       activation.knowledgeImport?.message,
   });
+  const contractStatusSupportHref = buildContractStatusSupportHref({
+    activation,
+    companyName,
+    reference:
+      activation.orderId ||
+      activation.manualOrderReference ||
+      activation.contractWorkflowReference ||
+      "",
+  });
   const activeWorkspaceUrl = agentLoginUrl(
     activation.workspaceUrl || activation.accountSetupUrl,
   );
-  const signingUrl = safePublicAppUrl(activation.signingUrl);
-  const populatedContractHref = profile.authorized
-    ? buildPopulatedServiceContractHref(
-        contractHref,
-        profile as GeoServiceContractProfile,
-      )
-    : contractHref;
-  const profileSummary = useMemo(
-    () => [
-      ["签约主体", profile.legalName || companyName],
-      ["服务类型", `${categoryLabel} · 1 个问题 / 30 天`],
-      ["订单金额", formatMoney(activation.amountFen)],
-      ["本次问题", question],
-    ],
-    [
-      activation.amountFen,
-      categoryLabel,
-      companyName,
-      profile.legalName,
-      question,
-    ],
-  );
-
+  const closeContractDialog = () => {
+    setContractDialogOpen(false);
+    setContractCode("");
+    setContractCodeError("");
+    setPendingProfile(undefined);
+  };
   const openStep = (step: OnboardingStep) => {
     const index = STEP_ORDER.indexOf(step);
     if (index <= currentIndex || isPreview) setViewStep(step);
@@ -465,30 +460,57 @@ export function GeoServiceOnboarding({
       email: profile.email.trim().toLowerCase(),
       authorized: true,
     };
+    setPendingProfile(normalizedProfile);
+    setContractCode("");
+    setContractCodeError("");
+    setContractDialogOpen(true);
+  };
+
+  const confirmContractCode = async (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    const normalizedCode = contractCode.trim();
+    if (!normalizedCode) {
+      setContractCodeError("请输入管理员提供的合同码。");
+      return;
+    }
+    if (!pendingProfile) {
+      setContractCodeError("签约资料已失效，请关闭窗口后重新提交。");
+      return;
+    }
+    setContractCodeError("");
+    setFormError("");
     if (isPreview) {
-      setProfile(normalizedProfile);
-      writeSessionContractProfile(companyName, question, normalizedProfile);
+      setProfile(pendingProfile);
+      writeSessionContractProfile(companyName, question, pendingProfile);
       setAccount((current) => ({
         ...current,
-        displayName: normalizedProfile.legalName || companyName,
+        displayName: pendingProfile.legalName || companyName,
       }));
-      setPreviewWorkflowStatus("contract_preparing");
-      setViewStep("signature");
+      setPreviewWorkflowStatus("payment_required");
+      setViewStep("payment");
+      closeContractDialog();
       return;
     }
     setProfileSubmitting(true);
     try {
-      await onSubmitProfile(normalizedProfile);
-      setProfile(normalizedProfile);
-      writeSessionContractProfile(companyName, question, normalizedProfile);
+      await onSubmitProfile(pendingProfile, normalizedCode);
+      setProfile(pendingProfile);
+      writeSessionContractProfile(companyName, question, pendingProfile);
+      setAccount((current) => ({
+        ...current,
+        displayName: pendingProfile.legalName || companyName,
+      }));
+      closeContractDialog();
+      setViewStep("payment");
     } catch (error) {
-      setFormError(
-        localizedUserFacingError(
-          error,
-          undefined,
-          "签约资料暂未提交成功，请稍后重试。",
-        ),
+      const message = localizedUserFacingError(
+        error,
+        undefined,
+        "签约资料暂未提交成功，请稍后重试。",
       );
+      setContractCodeError(message);
+      // Authorization secrets are never retained after a network attempt.
+      setContractCode("");
     } finally {
       setProfileSubmitting(false);
     }
@@ -541,12 +563,7 @@ export function GeoServiceOnboarding({
   const checkStatus = async () => {
     setFormError("");
     if (isPreview) {
-      if (previewStatus === "contract_preparing") {
-        setPreviewWorkflowStatus("signature_required");
-      } else if (previewStatus === "signature_required") {
-        setPreviewWorkflowStatus("payment_required");
-        setViewStep("payment");
-      } else if (previewStatus === "activation_pending") {
+      if (previewStatus === "activation_pending") {
         setPreviewWorkflowStatus("active");
       }
       return;
@@ -573,7 +590,7 @@ export function GeoServiceOnboarding({
       <header className="geo-service-onboarding-header">
         <div>
           <span>服务开通进度</span>
-          <h3>提交企业资料、查看合同并付款，再直接创建看板账号</h3>
+          <h3>确认签约资料并联系管理员，付款后直接创建看板账号</h3>
         </div>
         <div className="geo-service-order-reference">
           <small>{activation.orderId ? "付款订单" : "签约申请"}</small>
@@ -602,7 +619,36 @@ export function GeoServiceOnboarding({
       </nav>
 
       <div className="geo-onboarding-panel">
-        {viewStep === "profile" && (
+        {viewStep === "profile" && contractFlowIssue ? (
+          <div className="geo-onboarding-status-panel" role="status">
+            <span className="geo-onboarding-large-icon" aria-hidden="true">
+              <LockKeyhole size={27} />
+            </span>
+            <div>
+              <small>签约状态需要处理</small>
+              <h4>
+                {contractFlowIssue === "paid_contract_mismatch"
+                  ? "付款已记录，订单状态需要人工核对"
+                  : contractFlowIssue === "request_rejected"
+                    ? "本次签约申请未通过"
+                    : "本次签约申请未能完成"}
+              </h4>
+              <p>
+                {contractFlowIssue === "paid_contract_mismatch"
+                  ? "为避免重复提交合同码或重复付款，当前页面不会再次接受签约资料。请联系支持核对付款与合同确认记录。"
+                  : contractFlowIssue === "request_rejected"
+                    ? "当前申请不能继续提交合同码，也不会进入付款。请联系支持核对主体资料或重新发起申请。"
+                    : "当前申请不能继续提交合同码。请联系支持并提供申请编号，我们会协助核对并恢复流程。"}
+              </p>
+              <div className="geo-onboarding-actions">
+                <a href={contractStatusSupportHref}>
+                  <Mail size={15} />
+                  联系支持处理
+                </a>
+              </div>
+            </div>
+          </div>
+        ) : viewStep === "profile" ? (
           <form
             className="geo-contract-profile-form"
             onSubmit={submitProfile}
@@ -614,9 +660,9 @@ export function GeoServiceOnboarding({
               </span>
               <div>
                 <small>签约资料</small>
-                <h4>提交合同主体与签约经办人</h4>
+                <h4>提交主体资料并联系管理员</h4>
                 <p>
-                  管理员会据此生成合同并在电子签平台发起。实名认证材料直接提交给电子签平台。
+                  填写资料后扫码联系管理员，在企业微信查看并确认合同；管理员确认后会提供合同码。
                 </p>
               </div>
             </div>
@@ -779,7 +825,7 @@ export function GeoServiceOnboarding({
                       mobile: event.target.value.replace(/\D/g, ""),
                     }))
                   }
-                  placeholder="用于实名认证与签署通知"
+                  placeholder="用于管理员联系与服务通知"
                 />
                 {errors.mobile && (
                   <em id={`${formId}-mobile-error`} role="alert">
@@ -806,7 +852,7 @@ export function GeoServiceOnboarding({
                       email: event.target.value,
                     }))
                   }
-                  placeholder="用于接收合同副本"
+                  placeholder="用于接收服务通知"
                 />
                 {errors.email && (
                   <em id={`${formId}-email-error`} role="alert">
@@ -852,9 +898,6 @@ export function GeoServiceOnboarding({
             )}
 
             <div className="geo-onboarding-actions">
-              <a href={populatedContractHref} target="_blank" rel="noreferrer">
-                查看合同内容 <ExternalLink size={14} />
-              </a>
               <button type="submit" disabled={profileSubmitting}>
                 {profileSubmitting ? (
                   <>
@@ -863,149 +906,13 @@ export function GeoServiceOnboarding({
                   </>
                 ) : (
                   <>
-                    提交资料，等待管理员发起 <ArrowRight size={16} />
+                    提交资料并联系管理员 <ArrowRight size={16} />
                   </>
                 )}
               </button>
             </div>
           </form>
-        )}
-
-        {viewStep === "signature" && (
-          <div className="geo-signature-panel">
-            <div className="geo-onboarding-panel-heading">
-              <span className="geo-onboarding-large-icon">
-                <ShieldCheck size={25} />
-              </span>
-              <div>
-                <small>合同查看</small>
-                <h4>
-                  {effectiveStatus === "contract_preparing"
-                    ? "资料已提交，等待管理员发起合同"
-                    : "合同已准备，请查看并完成签署"}
-                </h4>
-                <p>
-                  {effectiveStatus === "contract_preparing"
-                    ? "可扫描下方微信二维码或发送提醒邮件，管理员核对主体、服务问题和金额后会发送合同链接。"
-                    : "查看合同并签署后，管理员会回传已签 PDF 和签署报告；核验通过即可付款。"}
-                </p>
-              </div>
-            </div>
-
-            <article className="geo-contract-file">
-              <span>
-                <FileCheck2 size={24} />
-              </span>
-              <div>
-                <strong>{contractName}</strong>
-                <small>
-                  {activation.contractId
-                    ? `合同编号：${activation.contractId}`
-                    : "FrontMind GEO 月度优化服务协议"}
-                </small>
-              </div>
-              <a href={populatedContractHref} target="_blank" rel="noreferrer">
-                查看并下载合同 PDF <ExternalLink size={14} />
-              </a>
-            </article>
-
-            <dl className="geo-contract-summary">
-              {profileSummary.map(([label, value]) => (
-                <div key={label}>
-                  <dt>{label}</dt>
-                  <dd>{value}</dd>
-                </div>
-              ))}
-            </dl>
-
-            {effectiveStatus === "contract_preparing" && (
-              <section
-                className="geo-admin-reminder"
-                aria-label="联系管理员发起合同"
-              >
-                <a
-                  className="geo-admin-reminder-qr"
-                  href={FRONTMIND_WECHAT_QR_PATH}
-                  target="_blank"
-                  rel="noreferrer"
-                  aria-label="打开 FrontMind 管理员企业微信二维码"
-                >
-                  <img
-                    src={FRONTMIND_WECHAT_QR_PATH}
-                    alt="FrontMind 管理员企业微信二维码"
-                  />
-                </a>
-                <div>
-                  <small>提醒管理员</small>
-                  <h5>企业微信扫码或邮件提醒发起合同</h5>
-                  <p>
-                    提醒时请附上企业名称和签约申请编号，管理员可据此快速定位本次资料。
-                  </p>
-                  <div>
-                    <a
-                      href={FRONTMIND_WECHAT_QR_PATH}
-                      target="_blank"
-                      rel="noreferrer"
-                    >
-                      打开企业微信二维码 <ExternalLink size={14} />
-                    </a>
-                    <a href={adminReminderHref}>
-                      邮件提醒管理员 <Mail size={14} />
-                    </a>
-                  </div>
-                </div>
-              </section>
-            )}
-
-            {formError && (
-              <p className="geo-onboarding-error" role="alert">
-                {formError}
-              </p>
-            )}
-            <div className="geo-onboarding-actions">
-              {effectiveStatus === "signature_required" &&
-                (signingUrl || isPreview) && (
-                  <button
-                    type="button"
-                    className="is-secondary"
-                    onClick={() => {
-                      if (isPreview) {
-                        setPreviewWorkflowStatus("payment_required");
-                        setViewStep("payment");
-                      } else if (signingUrl) {
-                        window.open(
-                          signingUrl,
-                          "_blank",
-                          "noopener,noreferrer",
-                        );
-                      }
-                    }}
-                  >
-                    查看并签署合同 <ExternalLink size={15} />
-                  </button>
-                )}
-              <button
-                type="button"
-                onClick={checkStatus}
-                disabled={statusChecking || (!isPreview && !onCheckStatus)}
-              >
-                {statusChecking ? (
-                  <>
-                    <Loader2 className="is-spinning" size={16} />
-                    正在检查
-                  </>
-                ) : (
-                  <>
-                    <RefreshCw size={15} />
-                    {effectiveStatus === "contract_preparing"
-                      ? "刷新发起状态"
-                      : "我已签署，刷新状态"}
-                  </>
-                )}
-              </button>
-            </div>
-          </div>
-        )}
+        ) : null}
 
         {viewStep === "payment" && (
           <div className="geo-onboarding-status-panel">
@@ -1017,10 +924,10 @@ export function GeoServiceOnboarding({
               <h4>
                 {activation.paidAt
                   ? "服务款项已确认"
-                  : "已签合同核验通过，可以付款"}
+                  : "合同已在企业微信确认，可以付款"}
               </h4>
               <p>
-                付款订单会锁定本次企业、问题、金额与已签合同。选择支付方式后，安全收银台会为本单实时生成二维码。
+                付款订单会锁定本次企业、问题与金额。选择支付方式后，安全收银台会为本单实时生成二维码。
               </p>
               <dl className="geo-onboarding-inline-facts">
                 <div>
@@ -1033,7 +940,7 @@ export function GeoServiceOnboarding({
                 </div>
                 <div>
                   <dt>合同状态</dt>
-                  <dd>已签署并核验</dd>
+                  <dd>管理员已确认</dd>
                 </div>
               </dl>
               <div
@@ -1374,6 +1281,102 @@ export function GeoServiceOnboarding({
           </div>
         ) : null}
       </div>
+
+      <Dialog
+        open={contractDialogOpen}
+        onOpenChange={(open) => {
+          if (profileSubmitting) return;
+          if (open) setContractDialogOpen(true);
+          else closeContractDialog();
+        }}
+      >
+        <DialogContent
+          className="geo-contract-code-dialog"
+          showCloseButton={!profileSubmitting}
+          onEscapeKeyDown={(event) => {
+            if (profileSubmitting) event.preventDefault();
+          }}
+          onInteractOutside={(event) => {
+            if (profileSubmitting) event.preventDefault();
+          }}
+        >
+          <form onSubmit={confirmContractCode} noValidate>
+            <DialogHeader>
+              <DialogTitle>联系管理员确认合同</DialogTitle>
+              <DialogDescription>
+                请先扫码添加管理员，在企业微信完成合同确认后，再输入管理员提供的合同码进入付款。
+              </DialogDescription>
+            </DialogHeader>
+
+            <a
+              className="geo-contract-code-qr"
+              href={FRONTMIND_WECHAT_QR_PATH}
+              target="_blank"
+              rel="noreferrer"
+              aria-label="打开 FrontMind 管理员企业微信二维码"
+            >
+              <img
+                src={FRONTMIND_WECHAT_QR_PATH}
+                alt="FrontMind 管理员企业微信二维码"
+              />
+            </a>
+
+            <label className="geo-contract-code-field">
+              <span>请输入管理员授权的合同码</span>
+              <input
+                name="contractCode"
+                type="password"
+                value={contractCode}
+                autoComplete="off"
+                autoFocus
+                aria-invalid={Boolean(contractCodeError)}
+                aria-describedby={
+                  contractCodeError
+                    ? `${formId}-contract-code-error`
+                    : undefined
+                }
+                onChange={(event) => {
+                  setContractCode(event.target.value);
+                  if (contractCodeError) setContractCodeError("");
+                }}
+                placeholder="请输入合同码"
+              />
+            </label>
+            {contractCodeError && (
+              <p
+                id={`${formId}-contract-code-error`}
+                className="geo-onboarding-error"
+                role="alert"
+              >
+                {contractCodeError}
+              </p>
+            )}
+
+            <DialogFooter className="geo-contract-code-actions">
+              <button
+                type="button"
+                className="is-secondary"
+                disabled={profileSubmitting}
+                onClick={closeContractDialog}
+              >
+                稍后处理
+              </button>
+              <button type="submit" disabled={profileSubmitting}>
+                {profileSubmitting ? (
+                  <>
+                    <Loader2 className="is-spinning" size={16} />
+                    正在确认
+                  </>
+                ) : (
+                  <>
+                    确认合同码并提交资料 <ArrowRight size={16} />
+                  </>
+                )}
+              </button>
+            </DialogFooter>
+          </form>
+        </DialogContent>
+      </Dialog>
     </section>
   );
 }

@@ -239,8 +239,8 @@ const SERVICE_STATUS_LABELS: Record<
 > = {
   not_started: "尚未开通",
   profile_required: "待完善签约信息",
-  contract_preparing: "合同准备中",
-  signature_required: "待签署合同",
+  contract_preparing: "待联系管理员确认",
+  signature_required: "待输入合同码",
   payment_required: "待完成付款",
   activation_pending: "等待开通",
   account_setup_required: "待设置账号",
@@ -1727,7 +1727,7 @@ export function ProgressPanel({
         <DashboardMetric
           label="本月服务"
           value={active ? "执行中" : "待启动"}
-          detail="完成签约、付款与管理员确认后开通"
+          detail="联系管理员确认合同后付款开通"
           tone="gold"
         />
       </div>

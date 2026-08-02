@@ -8,7 +8,6 @@ import {
   createGeoServicePaymentCheckout,
   downloadGeoArchive,
   getGeoPaymentStatus,
-  getGeoServiceContractStatus,
   getGeoServiceProvisioningStatus,
   getGeoServicePaymentStatus,
   normalizeGeoProject,
@@ -101,6 +100,45 @@ describe("normalizeGeoProject", () => {
     });
 
     expect(project.knowledgeBase?.archiveName).toBe("企业知识库.zip");
+  });
+
+  it("normalizes Unix seconds, Unix milliseconds, and ISO timestamps", () => {
+    const seconds = 1_785_570_132;
+    const project = normalizeGeoProject({
+      project: {
+        id: "timestamp-normalization",
+        status: "completed",
+        createdAt: seconds,
+        updatedAt: seconds * 1_000,
+        knowledgeBase: {
+          summary: "企业知识库摘要",
+          generatedAt: String(seconds),
+        },
+      },
+    });
+
+    const expected = new Date(seconds * 1_000).toISOString();
+    expect(project.createdAt).toBe(expected);
+    expect(project.updatedAt).toBe(expected);
+    expect(project.knowledgeBase?.generatedAt).toBe(expected);
+  });
+
+  it("normalizes the server-owned v2 assessment update flag", () => {
+    const camelCase = normalizeGeoProject({
+      project: {
+        id: "assessment-v2-update-camel",
+        assessmentUpdatingToVersion2: true,
+      },
+    });
+    const snakeCase = normalizeGeoProject({
+      project: {
+        id: "assessment-v2-update-snake",
+        assessment_updating_to_version_2: true,
+      },
+    });
+
+    expect(camelCase.assessmentUpdatingToVersion2).toBe(true);
+    expect(snakeCase.assessmentUpdatingToVersion2).toBe(true);
   });
 
   it("normalizes formal branch overviews, leaves, asset bindings, and local ZIP paths", () => {
@@ -3190,49 +3228,31 @@ describe("monitoring and assessment API", () => {
     ).rejects.toMatchObject({ code: "INVALID_PAYMENT_CHECKOUT" });
   });
 
-  it("submits a strict contract profile and polls only by the opaque project token", async () => {
+  it("submits a strict contract profile with the administrator code and enters payment", async () => {
     const response = {
       projectToken: "manual-contract-token",
       project: {
         id: "project-1",
         stage: "service_activation",
         serviceActivation: {
-          status: "contract_preparing",
+          status: "payment_required",
           questionId: "reputation-01",
           category: "reputation",
           amountFen: 200_000,
           billingMonths: 1,
-          contractId: "manual-contract-001",
           contractWorkflowReference: "manual-order-reference-001",
-          manualOrderStatus: "pending_admin",
+          manualOrderStatus: "payment_required",
+          contractAuthorizationMode: "external_wechat",
+          contractAuthorizedAt: "2026-07-24T08:05:00.000Z",
         },
       },
     };
-    const fetchMock = vi
-      .fn<typeof fetch>()
-      .mockResolvedValueOnce(
-        new Response(JSON.stringify(response), {
-          status: 201,
-          headers: { "content-type": "application/json" },
-        }),
-      )
-      .mockResolvedValueOnce(
-        new Response(
-          JSON.stringify({
-            ...response,
-            project: {
-              ...response.project,
-              serviceActivation: {
-                ...response.project.serviceActivation,
-                status: "signature_required",
-                manualOrderStatus: "signature_required",
-                signingUrl: "https://sign.example.com/manual-contract-001",
-              },
-            },
-          }),
-          { headers: { "content-type": "application/json" } },
-        ),
-      );
+    const fetchMock = vi.fn<typeof fetch>().mockResolvedValueOnce(
+      new Response(JSON.stringify(response), {
+        status: 201,
+        headers: { "content-type": "application/json" },
+      }),
+    );
     vi.stubGlobal("fetch", fetchMock);
     const profile = {
       legalName: "深圳星辰科技有限公司",
@@ -3245,29 +3265,24 @@ describe("monitoring and assessment API", () => {
       authorized: true as const,
     };
 
-    const submitted = await submitGeoServiceContractProfile(project, profile);
+    const submitted = await submitGeoServiceContractProfile(
+      project,
+      profile,
+      "administrator-code",
+    );
     expect(fetchMock.mock.calls[0][0]).toBe(
       "/api/geo/projects/signed-project-token/services/contracts",
     );
     expect(JSON.parse(String(fetchMock.mock.calls[0][1]?.body))).toEqual({
       profile,
+      contractCode: "administrator-code",
     });
     expect(submitted.serviceActivation).toMatchObject({
-      status: "contract_preparing",
-      contractId: "manual-contract-001",
+      status: "payment_required",
       contractWorkflowReference: "manual-order-reference-001",
-      manualOrderStatus: "pending_admin",
-    });
-
-    const refreshed = await getGeoServiceContractStatus(submitted);
-    expect(fetchMock.mock.calls[1][0]).toBe(
-      "/api/geo/projects/manual-contract-token/services/contracts/status",
-    );
-    expect(JSON.parse(String(fetchMock.mock.calls[1][1]?.body))).toEqual({});
-    expect(refreshed.serviceActivation).toMatchObject({
-      status: "signature_required",
-      manualOrderStatus: "signature_required",
-      signingUrl: "https://sign.example.com/manual-contract-001",
+      manualOrderStatus: "payment_required",
+      contractAuthorizationMode: "external_wechat",
+      contractAuthorizedAt: "2026-07-24T08:05:00.000Z",
     });
   });
 

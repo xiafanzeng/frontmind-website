@@ -10,6 +10,7 @@ export type WebsiteRuntimeReadinessOptions<
   getSkills: () => Promise<TSkills>;
   getDependencies: () => Promise<TDependencies>;
   getVisitorStats: () => Promise<{ ready: true }>;
+  assertConfiguration?: () => Promise<void> | void;
   validationStore: {
     assertReady(): Promise<void>;
     persistenceIdentity(): Promise<string>;
@@ -32,6 +33,7 @@ export async function collectWebsiteRuntimeReadiness<
   ) {
     throw new Error("WEBSITE_RELEASE_IDENTITY_INVALID");
   }
+  await options.assertConfiguration?.();
   const [skills, dependencies, visitorStats, persistenceIdentity] =
     await Promise.all([
       options.getSkills(),

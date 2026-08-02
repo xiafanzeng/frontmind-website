@@ -15,6 +15,7 @@ import {
   expandLegacyTruncatedOverview,
   formatExecutionElapsed,
   GeoWorkspaceHandoff,
+  KnowledgeComparison,
   MonitoringResults,
   OptimizationForecastView,
   QuestionRecommendation,
@@ -28,9 +29,11 @@ import { createGeoStylePreviewProject } from "./preview";
 import type { GeoAnswerSource } from "./types";
 
 function renderMonitoringAnswerSources({
+  sources,
   citations,
   references,
 }: {
+  sources: GeoAnswerSource[];
   citations: GeoAnswerSource[];
   references: GeoAnswerSource[];
 }) {
@@ -56,6 +59,7 @@ function renderMonitoringAnswerSources({
           answers: [
             {
               ...answer,
+              sources,
               citations,
               references,
             },
@@ -201,7 +205,15 @@ describe("GEO style preview rendering", () => {
   });
 
   it("shows the one-shot knowledge completeness entry without P0 copy", () => {
-    const project = createGeoStylePreviewProject();
+    const fixture = createGeoStylePreviewProject();
+    const project = {
+      ...fixture,
+      updatedAt: "1785570132",
+      knowledgeBase: {
+        ...fixture.knowledgeBase!,
+        generatedAt: "1785570132",
+      },
+    };
     const html = renderToStaticMarkup(
       <EnterpriseAnalysis
         project={project}
@@ -217,6 +229,7 @@ describe("GEO style preview rendering", () => {
     expect(html).not.toContain("首要优先级");
     expect(html).not.toContain("P0");
     expect(html).not.toContain("急需修复");
+    expect(html).not.toContain("1785570132");
   });
 
   it("shows GEO question generation as an explicit action below the archive actions", () => {
@@ -708,6 +721,15 @@ describe("GEO style preview rendering", () => {
         ? {
             ...fixture.optimizationForecast,
             limitations: ["仅适用于本次问题与所选平台样本。"],
+            roadmap: fixture.optimizationForecast.roadmap.map((item, index) =>
+              index === 0
+                ? {
+                    ...item,
+                    verificationGate:
+                      "验收标准：六类核心事实均有负责人确认和证据锚点。",
+                  }
+                : item,
+            ),
           }
         : undefined,
     };
@@ -717,16 +739,21 @@ describe("GEO style preview rendering", () => {
 
     expect(html).toContain("核验主体、方案边界与服务承诺");
     expect(html).toContain("形成可公开与待核验口径清单");
+    expect(html).toContain(
+      "验收标准：六类核心事实均有负责人确认和证据锚点。",
+    );
+    expect(html).not.toContain("验收标准：验收标准：");
     expect(html).toContain("路线执行条件");
     expect(html).not.toContain("目标适用限制");
     expect(html).not.toContain("仅适用于本次问题与所选平台样本");
     expect(html).toContain("预期 81.5");
-    expect(html).toContain("A 为挑战上沿");
-    expect(html).toContain("原始现状分");
-    expect(html).toContain("原始目标下沿");
-    expect(html).toContain("原始预期分");
-    expect(html).toContain("原始目标上沿");
-    expect(html).toContain("可测项口径");
+    expect(html).not.toContain("等级参考");
+    expect(html).not.toContain("A 为挑战上沿");
+    expect(html).not.toContain("原始现状分");
+    expect(html).not.toContain("原始目标下沿");
+    expect(html).not.toContain("原始预期分");
+    expect(html).not.toContain("原始目标上沿");
+    expect(html).not.toContain("可测项口径");
     expect(html).toContain("预期 23.5");
     expect(html.indexOf("geo-forecast-roadmap")).toBeLessThan(
       html.indexOf("geo-forecast-roadmap-assumptions"),
@@ -739,7 +766,7 @@ describe("GEO style preview rendering", () => {
     expect(html).not.toContain("18:18");
   });
 
-  it("renders every structured assessment result in the assessment overview", () => {
+  it("renders the customer-facing assessment without internal audit details", () => {
     const fixture = createGeoStylePreviewProject();
     const project = {
       ...fixture,
@@ -761,6 +788,7 @@ describe("GEO style preview rendering", () => {
             averageRank: 2,
             factAccuracy: 0.8,
             propositionHitRate: 0.7,
+            sourceCount: 4,
             citationCount: 3,
             referenceCount: 4,
             sentiment: "neutral" as const,
@@ -809,25 +837,197 @@ describe("GEO style preview rendering", () => {
     expect(html).toContain("真实平台拆分结论");
     expect(html).toContain("情绪判断");
     expect(html).toContain("中性");
-    expect(html).toContain("来源线索 1 条");
-    expect(html).toContain("doubao/run-01");
+    expect(html).toContain("可追溯来源");
+    expect(html).not.toContain("答案引用");
+    expect(html).not.toContain("检索参考");
+    expect(html).not.toContain("来源线索");
+    expect(html).not.toContain("doubao/run-01");
     expect(html).toContain("评估优先动作");
     expect(html).toContain("真实评估优先动作");
     expect(html).toContain("真实预期影响");
-    expect(html).toContain("真实排名计算口径");
-    expect(html).toContain("已排名样本");
-    expect(html).toContain("前五率");
-    expect(html).toContain("竞品排名差");
-    expect(html).toContain("真实评估适用限制");
-    expect(html).toContain("question_baseline");
-    expect(html).toContain("单问题可测口径");
-    expect(html).toContain("原始总分");
-    expect(html).toContain("原始等级");
-    expect(html).toContain("评估覆盖率");
-    expect(html).toContain("置信等级");
-    expect(html).toContain("完整 BSAS 审计");
-    expect(html).toContain("可测项归一分");
-    expect(html).toContain("可测项得分");
+    expect(html).toContain(
+      "本结果反映当前问题在所选平台的回答表现，不代表全网自然排名。",
+    );
+    expect(html.indexOf("评估优先动作")).toBeLessThan(
+      html.indexOf(
+        "本结果反映当前问题在所选平台的回答表现，不代表全网自然排名。",
+      ),
+    );
+    expect(html).not.toContain("真实排名计算口径");
+    expect(html).not.toContain("真实评估适用限制");
+    expect(html).not.toContain("question_baseline");
+    expect(html).not.toContain("单问题可测口径");
+    expect(html).not.toContain("原始总分");
+    expect(html).not.toContain("完整 BSAS 审计");
+    expect(html).not.toContain("SEMANTIC ASSET DIMENSIONS");
+    expect(html).not.toContain("PLATFORM BREAKDOWN");
+    expect(html).not.toContain("PRIORITY ACTIONS");
+    expect(html).not.toContain("ASSESSMENT SCOPE");
+  });
+
+  it("shows only the passive v2 update state while an old score is being replaced", () => {
+    const project = {
+      ...createGeoStylePreviewProject(),
+      assessmentUpdatingToVersion2: true,
+    };
+    const html = renderToStaticMarkup(
+      <AssessmentOverview project={project} assessmentReady />,
+    );
+
+    expect(html).toContain("评估结果正在按新版口径更新");
+    expect(html).toContain("无需手动刷新");
+    expect(html).not.toContain("当前等级");
+    expect(html).not.toContain("五维语义资产现状");
+  });
+
+  it("replaces internal assessment tokens and run identifiers in customer copy", () => {
+    const fixture = createGeoStylePreviewProject();
+    const comparison = fixture.assessment!.comparisons[0]!;
+    const dimension = fixture.assessment!.dimensions[0]!;
+    const project = {
+      ...fixture,
+      assessment: {
+        ...fixture.assessment!,
+        executiveSummary: "question_baseline_v2 来自 doubao/run-01。",
+        dimensions: [
+          {
+            ...dimension,
+            label: "Schema",
+            currentFinding: "依据 citationList 与 doubao/run-01 计算。",
+          },
+          ...fixture.assessment!.dimensions.slice(1),
+        ],
+        comparisons: [
+          {
+            ...comparison,
+            topic: "doubao/run-01",
+            knowledgeBaseFact: "referenceList 尚待处理",
+            answerFinding: "unknown",
+            recommendedAction: "检查 citationList",
+          },
+        ],
+        platformBreakdown: [
+          {
+            platformId: "doubao" as const,
+            responseCount: 5,
+            successfulResponses: 5,
+            brandMentionRate: null,
+            averageRank: null,
+            factAccuracy: 0.8,
+            propositionHitRate: 0.7,
+            sourceCount: 28,
+            sentiment: "mixed" as const,
+            verdict: "来自 doubao/run-01 的 unavailable 结论",
+            evidenceRefs: [],
+          },
+        ],
+        priorityActions: [
+          {
+            priority: 1,
+            dimension: "semantic_visibility" as const,
+            action: "处理 question_baseline",
+            expectedImpact: "复核 doubao/run-01",
+            evidenceRefs: [],
+          },
+        ],
+      },
+    };
+    const overview = renderToStaticMarkup(
+      <AssessmentOverview project={project} assessmentReady />,
+    );
+    const comparisons = renderToStaticMarkup(
+      <KnowledgeComparison project={project} />,
+    );
+    const combined = `${overview}${comparisons}`;
+
+    expect(combined).not.toMatch(/question_baseline/i);
+    expect(combined).not.toMatch(/citationList/i);
+    expect(combined).not.toMatch(/referenceList/i);
+    expect(combined).not.toMatch(/\bSchema\b/i);
+    expect(combined).not.toMatch(/doubao\/run-01/i);
+    expect(combined).not.toMatch(/\bunknown\b/i);
+    expect(combined).not.toMatch(/\bunavailable\b/i);
+    expect(comparisons).toContain("事实对照项 1");
+    expect(comparisons).toContain("未提供可核验事实");
+    expect(comparisons).toContain("未提供对照结论");
+    expect(comparisons).toContain("暂未提供建议处理动作");
+  });
+
+  it("renders all 25 fact comparisons and expands the remaining knowledge ledger items", () => {
+    const fixture = createGeoStylePreviewProject();
+    const baseSection = fixture.knowledgeBase!.sections[0]!;
+    const baseSource = fixture.knowledgeBase!.sources[0]!;
+    const baseComparisons = fixture.assessment!.comparisons;
+    const project = {
+      ...fixture,
+      knowledgeBase: {
+        ...fixture.knowledgeBase!,
+        generatedAt: "1785570132",
+        sections: Array.from({ length: 7 }, (_, index) => ({
+          ...baseSection,
+          id: `knowledge-section-${index + 1}`,
+          title: `知识主题 ${index + 1}`,
+        })),
+        sources: Array.from({ length: 28 }, (_, index) => ({
+          ...baseSource,
+          id: `knowledge-source-${index + 1}`,
+          title: `可追溯来源 ${index + 1}`,
+          url: `https://sources.example.invalid/${index + 1}`,
+        })),
+      },
+      assessment: {
+        ...fixture.assessment!,
+        comparisons: Array.from({ length: 25 }, (_, index) => ({
+          ...baseComparisons[index % baseComparisons.length]!,
+          id: `comparison-${index + 1}`,
+          topic: `回答事实主题 ${index + 1}`,
+        })),
+      },
+    };
+    const html = renderToStaticMarkup(
+      <KnowledgeComparison project={project} />,
+    );
+
+    expect(html).toContain("回答事实对照 25 项");
+    expect(html.match(/geo-comparison-card-header/g)).toHaveLength(25);
+    expect(html).toMatch(/知识主题<\/span><strong[^>]*>7 项/);
+    expect(html).toMatch(/可追溯来源<\/span><strong[^>]*>28 项/);
+    expect(html).toContain("展开其余 2 个知识主题");
+    expect(html).toContain("展开其余 23 个来源");
+    expect(html).toContain("收起知识主题");
+    expect(html).toContain("收起可追溯来源");
+    expect(html.match(/geo-comparison-ledger-disclosure/g)).toHaveLength(2);
+    expect(html).toContain("知识主题 7");
+    expect(html).toContain("可追溯来源 28");
+    expect(html).not.toContain("知识库生成于");
+    expect(html).not.toContain("1785570132");
+    expect(html).not.toContain("另有 2 个知识主题");
+    expect(html).not.toContain("另有 23 个来源");
+  });
+
+  it("shows a passive five-minute forecast wait state without a refresh control", () => {
+    const fixture = createGeoStylePreviewProject();
+    const project = {
+      ...fixture,
+      preview: undefined,
+      optimizationForecast: {
+        ...fixture.optimizationForecast!,
+        status: "running" as const,
+        currentScore: undefined,
+        targetLow: undefined,
+        targetHigh: undefined,
+      },
+    };
+    const html = renderToStaticMarkup(
+      <OptimizationForecastView project={project} onContact={vi.fn()} />,
+    );
+
+    expect(html).toContain("正在生成优化效果评估");
+    expect(html).toContain("通常需要约 5 分钟");
+    expect(html).toContain("完成后会自动显示，无需手动刷新");
+    expect(html).not.toContain("<button");
+    expect(html).not.toContain("重新生成");
+    expect(html).not.toContain("刷新评估");
   });
 
   it("keeps the user dashboard tab available in the local preview fixture", () => {
@@ -1000,7 +1200,7 @@ describe("GEO style preview rendering", () => {
     expect(html).not.toContain("127.0.0.1");
   });
 
-  it("offers explicit retries for failed assessment and forecast jobs", () => {
+  it("keeps failed assessment and forecast jobs free of manual retry controls", () => {
     const fixture = createGeoStylePreviewProject();
     const project = {
       ...fixture,
@@ -1023,14 +1223,7 @@ describe("GEO style preview rendering", () => {
       optimizationForecastRetryAvailable: true,
     };
     const assessmentHtml = renderToStaticMarkup(
-      <CurrentAssessment
-        project={project}
-        onRefresh={vi.fn(async () => undefined)}
-        onRetryAssessment={vi.fn(async () => undefined)}
-        onRetryForecast={vi.fn(async () => undefined)}
-        onContact={vi.fn()}
-        refreshing
-      />,
+      <CurrentAssessment project={project} onContact={vi.fn()} />,
     );
     const forecastHtml = renderToStaticMarkup(
       <OptimizationForecastView
@@ -1041,20 +1234,19 @@ describe("GEO style preview rendering", () => {
             status: "ready",
           },
         }}
-        onRetry={vi.fn(async () => undefined)}
         onContact={vi.fn()}
-        retrying
       />,
     );
 
-    expect(assessmentHtml).toContain("正在重试");
+    expect(assessmentHtml).toContain("联系技术支持");
     expect(assessmentHtml).toContain("现状评估结果暂未通过校验");
     expect(assessmentHtml).not.toContain("知识库对照评估未能完成");
-    expect(assessmentHtml).toContain("disabled");
-    expect(assessmentHtml).toContain('aria-busy="true"');
-    expect(forecastHtml).toContain("正在重试");
-    expect(forecastHtml).toContain("disabled");
-    expect(forecastHtml).toContain('aria-busy="true"');
+    expect(assessmentHtml).not.toContain("重新生成评估");
+    expect(assessmentHtml).not.toContain("刷新评估");
+    expect(assessmentHtml).not.toContain("最后刷新");
+    expect(forecastHtml).toContain("联系技术支持");
+    expect(forecastHtml).not.toContain("重新生成优化评估");
+    expect(forecastHtml).not.toContain("正在重试");
   });
 
   it("replaces exhausted assessment and forecast retries with technical support", () => {
@@ -1080,14 +1272,7 @@ describe("GEO style preview rendering", () => {
       },
     };
     const assessmentHtml = renderToStaticMarkup(
-      <CurrentAssessment
-        project={project}
-        onRefresh={vi.fn(async () => undefined)}
-        onRetryAssessment={vi.fn(async () => undefined)}
-        onRetryForecast={vi.fn(async () => undefined)}
-        onContact={vi.fn()}
-        refreshing={false}
-      />,
+      <CurrentAssessment project={project} onContact={vi.fn()} />,
     );
     const forecastHtml = renderToStaticMarkup(
       <OptimizationForecastView
@@ -1098,7 +1283,6 @@ describe("GEO style preview rendering", () => {
             status: "ready",
           },
         }}
-        onRetry={vi.fn(async () => undefined)}
         onContact={vi.fn()}
       />,
     );
@@ -1139,35 +1323,35 @@ describe("GEO style preview rendering", () => {
     },
   );
 
-  it("renders all 26 retrieval references in the single source box", () => {
-    const references = Array.from({ length: 26 }, (_, index) => ({
-      title: `检索候选来源 ${index + 1}`,
+  it("renders all 26 canonical sources in the single source box", () => {
+    const sources = Array.from({ length: 26 }, (_, index) => ({
+      title: `可追溯来源 ${index + 1}`,
       url: `https://references.example.invalid/${index + 1}`,
     }));
     const html = renderMonitoringAnswerSources({
+      sources,
       citations: [
         {
           title: "不应展示的实际引用",
           url: "https://citations.example.invalid/hidden",
         },
       ],
-      references,
+      references: [],
     });
 
-    expect(html).toContain("检索参考 26 条");
-    expect(html).toContain("检索参考来源");
-    expect(html).toContain("检索候选来源 1");
-    expect(html).toContain("检索候选来源 26");
+    expect(html).toContain("可追溯来源 26 条");
+    expect(html).toContain("可追溯来源");
+    expect(html).toContain("可追溯来源 1");
+    expect(html).toContain("可追溯来源 26");
     expect(html).toContain('href="https://references.example.invalid/26"');
-    expect(html).toContain(
-      "检索参考来源是平台检索阶段返回的候选资料，不代表答案逐条采用。",
-    );
+    expect(html).toContain("以下为本次回答关联的可追溯来源，供进一步核验。");
     expect(html).not.toContain("答案实际引用");
     expect(html).not.toContain("不应展示的实际引用");
   });
 
   it("does not expose citation-only source data in a monitoring answer", () => {
     const html = renderMonitoringAnswerSources({
+      sources: [],
       citations: [
         {
           title: "仅存在于 citations 的来源",
@@ -1177,7 +1361,7 @@ describe("GEO style preview rendering", () => {
       references: [],
     });
 
-    expect(html).toContain("检索参考 0 条");
+    expect(html).toContain("可追溯来源 0 条");
     expect(html).not.toContain("答案实际引用");
     expect(html).not.toContain("仅存在于 citations 的来源");
     expect(html).not.toContain("https://citations.example.invalid/only");
@@ -1185,13 +1369,14 @@ describe("GEO style preview rendering", () => {
 
   it("keeps the retrieval-reference empty state when no sources return", () => {
     const html = renderMonitoringAnswerSources({
+      sources: [],
       citations: [],
       references: [],
     });
 
-    expect(html).toContain("检索参考来源");
+    expect(html).toContain("可追溯来源");
     expect(html).toContain("0 条");
-    expect(html).toContain("平台本轮未返回检索参考来源。");
+    expect(html).toContain("平台本轮未返回可追溯来源。");
   });
 
   it("uses retrieval-only copy while waiting for the first answer", () => {

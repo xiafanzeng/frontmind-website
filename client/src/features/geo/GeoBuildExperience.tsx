@@ -168,6 +168,7 @@ import { localizedUserFacingError } from "./error-localization";
 import { KnowledgeCompletenessDialog } from "./KnowledgeCompletenessDialog";
 import {
   canRetryGeoServiceKnowledgeImport,
+  geoServiceContractFlowIssue,
   GeoServiceOnboarding,
   type GeoServiceAccountCredentials,
 } from "./GeoServiceOnboarding";
@@ -1547,21 +1548,20 @@ function GeoBuildExperienceZh() {
   const refreshProject = useCallback(
     (project: GeoProject) =>
       refreshGeoProjectOnce(project, {
-        fetchProject: (candidate) =>
-          candidate.serviceActivation?.contractWorkflowReference &&
-          [
-            "contract_preparing",
-            "signature_required",
+        fetchProject: (candidate) => {
+          const activation = candidate.serviceActivation;
+          const accountOpening = [
             "activation_pending",
             "provisioning",
-          ].includes(candidate.serviceActivation.status)
-            ? getGeoServiceContractStatus(candidate)
-            : candidate.serviceActivation?.provisioningVersion === 2 &&
-                ["signature_required", "provisioning"].includes(
-                  candidate.serviceActivation.status,
-                )
-              ? getGeoServiceProvisioningStatus(candidate)
-              : getGeoProject(candidate),
+          ].includes(activation?.status ?? "");
+          if (activation?.provisioningVersion === 2 && accountOpening) {
+            return getGeoServiceProvisioningStatus(candidate);
+          }
+          if (activation?.contractWorkflowReference && accountOpening) {
+            return getGeoServiceContractStatus(candidate);
+          }
+          return getGeoProject(candidate);
+        },
         inFlight: refreshInFlight.current,
         onStart: (projectId) =>
           setRefreshingProjectIds((current) => ({
@@ -1606,89 +1606,6 @@ function GeoBuildExperienceZh() {
       }
     }
   }, [activeProject, refreshProject]);
-
-  const retryCurrentAssessment = useCallback(async () => {
-    if (
-      !activeProject ||
-      isGeoStylePreviewProject(activeProject) ||
-      activeProject.assessment?.status !== "failed" ||
-      activeProject.assessmentRetryAvailable !== true ||
-      !activeProject.remoteToken ||
-      assessmentStartInFlight.current.has(activeProject.id)
-    )
-      return;
-
-    const projectId = activeProject.id;
-    assessmentStartInFlight.current.add(projectId);
-    setRefreshingProjectIds((current) => ({
-      ...current,
-      [projectId]: true,
-    }));
-    setStorageNotice("");
-    try {
-      const updated = await startGeoCurrentAssessment(activeProject);
-      commitProject(updated);
-      if (updated.assessment?.status === "failed") {
-        setStorageNotice(
-          updated.assessmentRetryAvailable === true
-            ? "现状评估仍未生成，请稍后重试。"
-            : "现状评估自动重试次数已用完，请联系技术支持。",
-        );
-      } else {
-        setStorageNotice("现状评估已重新提交，完成后会自动更新。");
-      }
-    } catch (error) {
-      setStorageNotice(`现状评估重试失败：${errorMessage(error)}`);
-    } finally {
-      assessmentStartInFlight.current.delete(projectId);
-      setRefreshingProjectIds((current) => ({
-        ...current,
-        [projectId]: false,
-      }));
-    }
-  }, [activeProject, commitProject]);
-
-  const retryOptimizationForecast = useCallback(async () => {
-    if (
-      !activeProject ||
-      isGeoStylePreviewProject(activeProject) ||
-      activeProject.assessment?.status !== "ready" ||
-      activeProject.optimizationForecast?.status !== "failed" ||
-      activeProject.optimizationForecastRetryAvailable !== true ||
-      !activeProject.remoteToken ||
-      forecastStartInFlight.current.has(activeProject.id)
-    )
-      return;
-
-    const projectId = activeProject.id;
-    forecastStartInFlight.current.add(projectId);
-    setRefreshingProjectIds((current) => ({
-      ...current,
-      [projectId]: true,
-    }));
-    setStorageNotice("");
-    try {
-      const updated = await startGeoOptimizationForecast(activeProject);
-      commitProject(updated);
-      if (updated.optimizationForecast?.status === "failed") {
-        setStorageNotice(
-          updated.optimizationForecastRetryAvailable === true
-            ? "优化后效果评估仍未生成，请稍后重试。"
-            : "优化后效果评估自动重试次数已用完，请联系技术支持。",
-        );
-      } else {
-        setStorageNotice("优化后效果评估已重新提交，完成后会自动更新。");
-      }
-    } catch (error) {
-      setStorageNotice(`优化后效果评估重试失败：${errorMessage(error)}`);
-    } finally {
-      forecastStartInFlight.current.delete(projectId);
-      setRefreshingProjectIds((current) => ({
-        ...current,
-        [projectId]: false,
-      }));
-    }
-  }, [activeProject, commitProject]);
 
   useEffect(() => {
     if (!import.meta.env.DEV || !stylePreviewEnabled) return;
@@ -2484,13 +2401,28 @@ function GeoBuildExperienceZh() {
     }
     if (activeProject.serviceActivation.status !== "payment_required") {
       setActiveStage("service_activation");
-      if (activeProject.serviceActivation.status === "not_started") {
-        setStorageNotice("请先提交签约资料，由管理员人工发起电子合同。");
+      const contractFlowIssue = geoServiceContractFlowIssue(
+        activeProject.serviceActivation,
+      );
+      if (contractFlowIssue === "paid_contract_mismatch") {
+        setStorageNotice(
+          "付款已记录，但合同确认状态需要人工核对；请在开通页联系支持。",
+        );
+      } else if (contractFlowIssue) {
+        setStorageNotice(
+          "本次签约申请当前不能继续提交合同码；请在开通页联系支持。",
+        );
+      } else if (activeProject.serviceActivation.status === "not_started") {
+        setStorageNotice(
+          "请先提交签约资料，联系管理员完成合同确认并获取合同码。",
+        );
       } else if (
         activeProject.serviceActivation.status === "contract_preparing" ||
         activeProject.serviceActivation.status === "signature_required"
       ) {
-        setStorageNotice("合同尚未完成签署与核验，暂不能付款。");
+        setStorageNotice(
+          "请联系管理员完成合同确认，并输入管理员提供的合同码。",
+        );
       } else if (
         activeProject.serviceActivation.status === "activation_pending"
       ) {
@@ -2513,6 +2445,7 @@ function GeoBuildExperienceZh() {
 
   const submitServiceContractProfile = async (
     profile: GeoServiceContractProfile,
+    contractCode: string,
   ): Promise<void> => {
     if (!activeProject) {
       throw new Error("当前项目不可用，请刷新后重试。");
@@ -2523,10 +2456,11 @@ function GeoBuildExperienceZh() {
     const updated = await submitGeoServiceContractProfile(
       activeProject,
       profile,
+      contractCode,
     );
     commitProject(updated);
     setActiveStage("service_activation");
-    setStorageNotice("签约资料已提交，管理员将人工发起电子合同。");
+    setStorageNotice("合同已由管理员确认，可以进入付款。");
   };
 
   const checkServiceContractStatus = async (): Promise<string | void> => {
@@ -2536,7 +2470,10 @@ function GeoBuildExperienceZh() {
     if (isGeoStylePreviewProject(activeProject)) {
       throw new Error("当前为预览模式，不会查询真实开通状态。");
     }
-    const updated = await getGeoServiceContractStatus(activeProject);
+    const updated =
+      activeProject.serviceActivation?.provisioningVersion === 2
+        ? await getGeoServiceProvisioningStatus(activeProject)
+        : await getGeoServiceContractStatus(activeProject);
     commitProject(updated);
     if (updated.serviceActivation?.status === "active") {
       return (
@@ -3940,11 +3877,6 @@ function GeoBuildExperienceZh() {
                 {activeStage === "current_assessment" && (
                   <CurrentAssessment
                     project={activeProject}
-                    onRefresh={refreshActiveProject}
-                    onRetryAssessment={retryCurrentAssessment}
-                    onRetryForecast={retryOptimizationForecast}
-                    refreshing={Boolean(refreshingProjectIds[activeProject.id])}
-                    lastRefreshedAt={lastRefreshedAtByProject[activeProject.id]}
                     onContact={() => setContactOpen(true)}
                     onStartService={() => {
                       setActiveStage("service_activation");
@@ -4554,10 +4486,6 @@ export function EnterpriseAnalysis({
             {knowledgeBase.summary || "摘要暂不可用，请查看知识树与证据索引。"}
           </p>
           <div className="geo-kb-meta">
-            <span>
-              <Clock3 size={13} />{" "}
-              {formatDate(knowledgeBase.generatedAt || project.updatedAt)}
-            </span>
             <span>
               <Archive size={13} /> ZIP 可下载归档
             </span>
@@ -5616,35 +5544,6 @@ function WechatPayBrandMark() {
   );
 }
 
-function buildServiceContractHref({
-  category,
-  question,
-  client,
-  order,
-}: {
-  category?: GeoServiceCategory;
-  question?: string;
-  client?: string;
-  order?: string;
-}) {
-  const serviceContractCategory =
-    category === "product_scenario" ||
-    category === "reputation" ||
-    category === "competitor_comparison"
-      ? category
-      : "reputation";
-  const params = new URLSearchParams({
-    category: serviceContractCategory,
-    question: question || "以付款确认页所列问题为准",
-    client: client || "待确认企业",
-  });
-  if (order) params.set("order", order);
-  return (
-    "/contracts/frontmind-geo-monthly-optimization-service-agreement.html?" +
-    params.toString()
-  );
-}
-
 function PaymentDialog({
   open,
   project,
@@ -5697,12 +5596,6 @@ function PaymentDialog({
   const categoryLabel =
     GEO_QUESTION_CATEGORIES.find((item) => item.id === category)?.title ??
     "GEO 优化";
-  const serviceContractHref = buildServiceContractHref({
-    category,
-    question: question?.question,
-    client: project?.knowledgeBase?.companyName || project?.title,
-  });
-
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent
@@ -5728,22 +5621,9 @@ function PaymentDialog({
                 : "确认问题监控订单"}
           </DialogTitle>
           <DialogDescription className="geo-dialog-description">
-            {serviceOrder ? (
-              <>
-                确认所选问题、服务周期与金额，请
-                <a
-                  className="geo-contract-link"
-                  href={serviceContractHref}
-                  target="_blank"
-                  rel="noreferrer"
-                >
-                  查看合同 <ExternalLink size={13} aria-hidden="true" />
-                </a>
-                。合同已核验完成；付款到账后即可创建企业服务账号与看板。
-              </>
-            ) : (
-              "确认监控范围与金额，付款完成后将自动开始获取平台回答。"
-            )}
+            {serviceOrder
+              ? "合同已在企业微信确认。请核对所选问题、服务周期与金额；付款到账后即可创建企业服务账号与看板。"
+              : "确认监控范围与金额，付款完成后将自动开始获取平台回答。"}
           </DialogDescription>
         </DialogHeader>
 
@@ -6148,13 +6028,16 @@ type AssessmentView = "knowledge" | "overview" | "forecast";
 
 type CurrentAssessmentProps = {
   project: GeoProject;
-  onRefresh: () => Promise<void>;
-  onRetryAssessment?: () => Promise<void>;
-  onRetryForecast?: () => Promise<void>;
   onContact: () => void;
+  onStartService?: () => void;
+};
+
+type MonitoringResultsProps = {
+  project: GeoProject;
+  onRefresh: () => Promise<void>;
   refreshing: boolean;
   lastRefreshedAt?: string;
-  onStartService?: () => void;
+  onContact: () => void;
 };
 
 const COMPARISON_LABELS: Record<
@@ -6169,12 +6052,7 @@ const COMPARISON_LABELS: Record<
 
 export function CurrentAssessment({
   project,
-  onRefresh,
-  onRetryAssessment,
-  onRetryForecast,
   onContact,
-  refreshing,
-  lastRefreshedAt,
   onStartService,
 }: CurrentAssessmentProps) {
   const [view, setView] = useState<AssessmentView>("overview");
@@ -6200,8 +6078,6 @@ export function CurrentAssessment({
 
   const assessmentReady = assessment?.status === "ready";
   const assessmentFailed = assessment?.status === "failed";
-  const assessmentRetryAvailable = project.assessmentRetryAvailable === true;
-  const generatedAt = forecast?.generatedAt || assessment?.generatedAt;
 
   return (
     <div className="geo-assessment-view">
@@ -6221,64 +6097,17 @@ export function CurrentAssessment({
             {assessmentReady
               ? "评估已生成"
               : assessmentFailed
-                ? assessmentRetryAvailable
-                  ? "评估待重试"
-                  : "评估需支持"
+                ? "评估需支持"
                 : "正在生成评估"}
           </span>
-          {assessmentFailed &&
-            !preview &&
-            (assessmentRetryAvailable && onRetryAssessment ? (
-              <button
-                type="button"
-                className="geo-assessment-refresh is-retry"
-                onClick={() => void onRetryAssessment()}
-                disabled={refreshing}
-                aria-busy={refreshing}
-              >
-                <RotateCw
-                  size={15}
-                  className={refreshing ? "is-spinning" : undefined}
-                />
-                {refreshing ? "正在重试" : "重新生成评估"}
-              </button>
-            ) : (
-              <button
-                type="button"
-                className="geo-assessment-refresh is-retry"
-                onClick={onContact}
-              >
-                联系技术支持
-              </button>
-            ))}
-          <button
-            type="button"
-            className="geo-assessment-refresh"
-            onClick={() => void onRefresh()}
-            disabled={preview || refreshing}
-            title={preview ? "样式预览中不可刷新" : "获取最新评估状态"}
-          >
-            <RotateCw
-              size={15}
-              className={refreshing ? "is-spinning" : undefined}
-            />
-            {refreshing ? "正在刷新" : "刷新评估"}
-          </button>
-          {!preview && (
-            <small className="geo-assessment-refreshed" aria-live="polite">
-              {lastRefreshedAt ? (
-                <>
-                  最后刷新{" "}
-                  <time dateTime={lastRefreshedAt}>
-                    {formatDate(lastRefreshedAt)}
-                  </time>
-                </>
-              ) : generatedAt ? (
-                <>生成于 {formatDate(generatedAt)}</>
-              ) : (
-                "生成完成后可查看全部板块"
-              )}
-            </small>
+          {assessmentFailed && !preview && (
+            <button
+              type="button"
+              className="geo-assessment-refresh is-retry"
+              onClick={onContact}
+            >
+              联系技术支持
+            </button>
           )}
         </div>
       </header>
@@ -6316,12 +6145,7 @@ export function CurrentAssessment({
           assessmentReady={assessmentReady}
         />
       ) : (
-        <OptimizationForecastView
-          project={project}
-          onRetry={onRetryForecast}
-          onContact={onContact}
-          retrying={refreshing}
-        />
+        <OptimizationForecastView project={project} onContact={onContact} />
       )}
 
       {assessmentReady &&
@@ -6358,12 +6182,7 @@ export function MonitoringResults({
   refreshing,
   lastRefreshedAt,
   onContact,
-}: Pick<
-  CurrentAssessmentProps,
-  "project" | "onRefresh" | "refreshing" | "lastRefreshedAt"
-> & {
-  onContact: () => void;
-}) {
+}: MonitoringResultsProps) {
   const monitoring = project.monitoring;
   if (!monitoring?.runId) return null;
 
@@ -6656,6 +6475,19 @@ export function AssessmentOverview({
   assessmentReady: boolean;
 }) {
   const assessment = project.assessment;
+  if (project.assessmentUpdatingToVersion2) {
+    return (
+      <section className="geo-evaluation-pending" aria-live="polite">
+        <span>
+          <Database size={22} />
+        </span>
+        <div>
+          <strong>评估结果正在按新版口径更新</strong>
+          <p>完成后会自动显示新版五维评分和优化建议，无需手动刷新。</p>
+        </div>
+      </section>
+    );
+  }
   if (!assessmentReady || assessment?.totalScore === undefined) {
     return (
       <section className="geo-evaluation-pending">
@@ -6678,6 +6510,13 @@ export function AssessmentOverview({
   }
 
   const score = Math.round(assessment.totalScore * 10) / 10;
+  const customerAssessment = assessment as GeoAssessmentResult & {
+    executiveSummary?: string;
+  };
+  const assessmentSummary = customerFacingText(
+    customerAssessment.executiveSummary,
+    "当前回答已经形成基础品牌认知，但事实边界、可信来源和差异化表达仍需加强。下一步应先统一事实口径，再补齐能够被平台理解和引用的内容。",
+  );
   return (
     <div className="geo-assessment-overview">
       <section className="geo-score-hero">
@@ -6694,19 +6533,11 @@ export function AssessmentOverview({
           </span>
         </div>
         <div className="geo-score-copy">
-          <span>
-            {assessment.scopeLabel ||
-              (assessment.applicableMaxScore !== undefined
-                ? "本题可测项表现"
-                : "本问题现状综合评分")}
-          </span>
+          <span>本题回答表现</span>
           <h3>
             当前等级 <b>{assessment.grade || "—"}</b>
           </h3>
-          <p>
-            {assessment.summary ||
-              "评分仅基于本次所选问题、真实平台回答和当前企业知识库，不替代完整品牌语义资产审计。"}
-          </p>
+          <p>{assessmentSummary}</p>
           {!isGeoStylePreviewProject(project) && (
             <div>
               <span>
@@ -6731,20 +6562,20 @@ function DimensionScores({
   if (dimensions.length === 0) {
     return (
       <div className="geo-no-derived-data">
-        五维原始指标尚未通过结构校验，因此不展示推测分值。
+        评估结果正在校验，完成前暂不展示分值。
       </div>
     );
   }
   return (
     <section className="geo-dimension-panel">
       <header>
-        <div>
-          <span>SEMANTIC ASSET DIMENSIONS</span>
-          <h3>五维语义资产现状</h3>
-        </div>
+        <h3>五维语义资产现状</h3>
       </header>
       <div className="geo-dimension-list">
         {dimensions.map((dimension, index) => {
+          const customerDimension = dimension as typeof dimension & {
+            currentFinding?: string;
+          };
           const ratio = Math.max(
             0,
             Math.min(100, (dimension.score / dimension.maxScore) * 100),
@@ -6756,7 +6587,12 @@ function DimensionScores({
               </span>
               <div>
                 <div className="geo-dimension-label">
-                  <strong>{dimension.label}</strong>
+                  <strong>
+                    {customerFacingText(
+                      dimension.label,
+                      CUSTOMER_DIMENSION_LABELS[dimension.id],
+                    )}
+                  </strong>
                   <span>
                     {dimension.score} / {dimension.maxScore}
                   </span>
@@ -6764,7 +6600,12 @@ function DimensionScores({
                 <div className="geo-dimension-track">
                   <span style={{ width: `${ratio}%` }} />
                 </div>
-                {dimension.summary && <small>{dimension.summary}</small>}
+                <small>
+                  {customerFacingText(
+                    customerDimension.currentFinding,
+                    CUSTOMER_DIMENSION_COPY[dimension.id].finding,
+                  )}
+                </small>
               </div>
             </article>
           );
@@ -6778,10 +6619,6 @@ function formatAssessmentRate(value: number | null) {
   return value === null ? "不适用" : `${Math.round(value * 1000) / 10}%`;
 }
 
-function formatAssessmentPercentage(value: number) {
-  return `${Math.round(value * 10) / 10}%`;
-}
-
 const ASSESSMENT_SENTIMENT_LABELS: Record<
   GeoAssessmentPlatformBreakdown["sentiment"],
   string
@@ -6793,14 +6630,65 @@ const ASSESSMENT_SENTIMENT_LABELS: Record<
   unknown: "未判定",
 };
 
-const ASSESSMENT_CONFIDENCE_LABELS: Record<
-  NonNullable<GeoAssessmentResult["confidence"]>,
-  string
+const INTERNAL_CUSTOMER_TERM_PATTERN =
+  /\b(?:unavailable|unknown|question_baseline(?:_v2)?|citationList|referenceList|evidenceRefs|calculationBasis|measurementStatus|sourceCount|rationale|observed_outcome|direct_asset|not_applicable|schema)\b|\b(?:[a-z][a-z0-9_-]*\/)?run[-_ ]?[0-9]+\b|来源线索|答案引用|检索参考/i;
+
+const CUSTOMER_DIMENSION_COPY: Record<
+  GeoAssessmentDimension["id"],
+  { finding: string; action: string }
 > = {
-  high: "高",
-  medium: "中",
-  low: "低",
+  semantic_visibility: {
+    finding: "当前回答已经能够识别品牌及其核心业务，稳定覆盖仍有提升空间。",
+    action: "围绕核心问题补齐清晰、可检索的品牌与业务说明。",
+  },
+  semantic_coherence: {
+    finding: "核心事实基本一致，部分能力边界和条件仍需统一。",
+    action: "建立统一事实口径，并同步到官网、问答和审核清单。",
+  },
+  semantic_richness: {
+    finding: "回答已覆盖部分关键方面，但场景、风险和采购建议还不够完整。",
+    action: "补齐场景问答、风险边界和采购核验内容。",
+  },
+  semantic_authority: {
+    finding: "现有事实具备一定依据，重要主张仍需更多可追溯来源支持。",
+    action: "为重要事实建立官方页面和独立、可核验的来源路径。",
+  },
+  competitive_advantage: {
+    finding: "部分差异点已经进入回答，但表达还不够稳定和具体。",
+    action: "集中说明已经证实的差异点，并写清适用范围。",
+  },
 };
+
+const CUSTOMER_DIMENSION_LABELS: Record<GeoAssessmentDimension["id"], string> =
+  {
+    semantic_visibility: "语义可见度",
+    semantic_coherence: "语义一致性",
+    semantic_richness: "语义多样性与深度",
+    semantic_authority: "语义权威性",
+    competitive_advantage: "竞品占优度",
+  };
+
+function customerFacingText(value: string | undefined, fallback: string) {
+  const normalized = value?.trim();
+  if (!normalized || INTERNAL_CUSTOMER_TERM_PATTERN.test(normalized)) {
+    return fallback;
+  }
+  return normalized;
+}
+
+function optionalCustomerFacingText(value: string | undefined) {
+  const normalized = value?.trim();
+  return normalized && !INTERNAL_CUSTOMER_TERM_PATTERN.test(normalized)
+    ? normalized
+    : undefined;
+}
+
+function customerFacingVerificationGate(value: string | undefined) {
+  return customerFacingText(
+    value,
+    "本阶段交付物已经完成核验并可以追溯。",
+  ).replace(/^(?:(?:阶段验证|验收标准)\s*[：:]\s*)+/, "");
+}
 
 function AssessmentSupportingResults({
   assessment,
@@ -6809,33 +6697,6 @@ function AssessmentSupportingResults({
 }) {
   const platformBreakdown = assessment.platformBreakdown ?? [];
   const priorityActions = assessment.priorityActions ?? [];
-  const limitations = assessment.limitations ?? [];
-  const diagnostics = assessment.rankingDiagnostics;
-  const methodology = assessment.methodology;
-  const hasMethodology = Boolean(
-    methodology &&
-      Object.values(methodology).some((value) => value !== undefined),
-  );
-  const hasAssessmentMetadata = [
-    assessment.rawTotalScore,
-    assessment.rawGrade,
-    assessment.structuralExcludedMaxScore,
-    assessment.applicableMaxScore,
-    assessment.coverage,
-    assessment.confidence,
-    assessment.scopeLabel,
-  ].some((value) => value !== undefined);
-
-  if (
-    platformBreakdown.length === 0 &&
-    priorityActions.length === 0 &&
-    limitations.length === 0 &&
-    !diagnostics &&
-    !hasMethodology &&
-    !hasAssessmentMetadata
-  ) {
-    return null;
-  }
 
   return (
     <div className="geo-assessment-supporting-results">
@@ -6843,16 +6704,26 @@ function AssessmentSupportingResults({
         <section className="geo-assessment-detail-panel">
           <header>
             <div>
-              <span>PLATFORM BREAKDOWN</span>
               <h3>平台评估拆分</h3>
             </div>
-            <small>仅展示评估 API 返回的有效样本与指标</small>
+            <small>仅展示本题有效回答与可理解的业务指标</small>
           </header>
           <div className="geo-assessment-platform-grid">
             {platformBreakdown.map((item) => {
               const platform = GEO_PLATFORMS.find(
                 (candidate) => candidate.id === item.platformId,
               );
+              const sourceData = item as GeoAssessmentPlatformBreakdown & {
+                sourceCount?: number;
+                citationCount?: number;
+                referenceCount?: number;
+              };
+              const sourceCount =
+                sourceData.sourceCount ??
+                Math.max(
+                  sourceData.citationCount ?? 0,
+                  sourceData.referenceCount ?? 0,
+                );
               return (
                 <article key={item.platformId}>
                   <div className="geo-assessment-platform-heading">
@@ -6886,28 +6757,21 @@ function AssessmentSupportingResults({
                       <dd>{item.averageRank ?? "不适用"}</dd>
                     </div>
                     <div>
-                      <dt>答案引用</dt>
-                      <dd>{item.citationCount}</dd>
-                    </div>
-                    <div>
-                      <dt>检索参考</dt>
-                      <dd>{item.referenceCount}</dd>
+                      <dt>可追溯来源</dt>
+                      <dd>{sourceCount}</dd>
                     </div>
                     <div>
                       <dt>情绪判断</dt>
                       <dd>{ASSESSMENT_SENTIMENT_LABELS[item.sentiment]}</dd>
                     </div>
                   </dl>
-                  {item.verdict && <p>{item.verdict}</p>}
-                  {item.evidenceRefs.length > 0 && (
-                    <details className="geo-assessment-evidence">
-                      <summary>来源线索 {item.evidenceRefs.length} 条</summary>
-                      <ul>
-                        {item.evidenceRefs.map((reference, index) => (
-                          <li key={`${reference}-${index}`}>{reference}</li>
-                        ))}
-                      </ul>
-                    </details>
+                  {item.verdict && (
+                    <p>
+                      {customerFacingText(
+                        item.verdict,
+                        "当前平台已返回有效回答，具体结论以本题的五维评分和优先动作为准。",
+                      )}
+                    </p>
                   )}
                 </article>
               );
@@ -6921,34 +6785,32 @@ function AssessmentSupportingResults({
           <section className="geo-assessment-detail-panel">
             <header>
               <div>
-                <span>PRIORITY ACTIONS</span>
                 <h3>评估优先动作</h3>
               </div>
             </header>
             <ol className="geo-assessment-priority-list">
               {priorityActions.map((item) => {
-                const dimensionLabel =
-                  assessment.dimensions.find(
-                    (dimension) => dimension.id === item.dimension,
-                  )?.label ?? item.dimension;
+                const dimensionLabel = assessment.dimensions.find(
+                  (dimension) => dimension.id === item.dimension,
+                )?.label;
                 return (
                   <li key={`${item.priority}-${item.dimension}-${item.action}`}>
                     <span>{item.priority}</span>
                     <div>
-                      <small>{dimensionLabel}</small>
-                      <strong>{item.action}</strong>
-                      {item.expectedImpact && <p>{item.expectedImpact}</p>}
-                      {item.evidenceRefs.length > 0 && (
-                        <details className="geo-assessment-evidence">
-                          <summary>
-                            来源线索 {item.evidenceRefs.length} 条
-                          </summary>
-                          <ul>
-                            {item.evidenceRefs.map((reference, index) => (
-                              <li key={`${reference}-${index}`}>{reference}</li>
-                            ))}
-                          </ul>
-                        </details>
+                      <small>
+                        {customerFacingText(
+                          dimensionLabel,
+                          CUSTOMER_DIMENSION_LABELS[item.dimension],
+                        )}
+                      </small>
+                      <strong>
+                        {customerFacingText(
+                          item.action,
+                          CUSTOMER_DIMENSION_COPY[item.dimension].action,
+                        )}
+                      </strong>
+                      {optionalCustomerFacingText(item.expectedImpact) && (
+                        <p>{optionalCustomerFacingText(item.expectedImpact)}</p>
                       )}
                     </div>
                   </li>
@@ -6958,182 +6820,9 @@ function AssessmentSupportingResults({
           </section>
         )}
 
-        {(hasAssessmentMetadata ||
-          diagnostics ||
-          hasMethodology ||
-          limitations.length > 0) && (
-          <section className="geo-assessment-detail-panel">
-            <header>
-              <div>
-                <span>ASSESSMENT SCOPE</span>
-                <h3>排名诊断与评估口径</h3>
-              </div>
-            </header>
-            <div className="geo-assessment-scope-body">
-              {hasAssessmentMetadata && (
-                <dl className="geo-assessment-methodology">
-                  {assessment.scopeLabel && (
-                    <div>
-                      <dt>评分口径</dt>
-                      <dd>{assessment.scopeLabel}</dd>
-                    </div>
-                  )}
-                  {assessment.rawTotalScore !== undefined && (
-                    <div>
-                      <dt>原始总分</dt>
-                      <dd>{assessment.rawTotalScore}</dd>
-                    </div>
-                  )}
-                  {assessment.rawGrade && (
-                    <div>
-                      <dt>原始等级</dt>
-                      <dd>{assessment.rawGrade}</dd>
-                    </div>
-                  )}
-                  {assessment.coverage !== undefined && (
-                    <div>
-                      <dt>评估覆盖率</dt>
-                      <dd>{formatAssessmentPercentage(assessment.coverage)}</dd>
-                    </div>
-                  )}
-                  {assessment.confidence && (
-                    <div>
-                      <dt>置信等级</dt>
-                      <dd>
-                        {ASSESSMENT_CONFIDENCE_LABELS[assessment.confidence]}
-                      </dd>
-                    </div>
-                  )}
-                  {assessment.applicableMaxScore !== undefined && (
-                    <div>
-                      <dt>可测项满分</dt>
-                      <dd>{assessment.applicableMaxScore}</dd>
-                    </div>
-                  )}
-                  {assessment.structuralExcludedMaxScore !== undefined && (
-                    <div>
-                      <dt>结构性排除</dt>
-                      <dd>{assessment.structuralExcludedMaxScore}</dd>
-                    </div>
-                  )}
-                </dl>
-              )}
-
-              {diagnostics && (
-                <div className="geo-assessment-ranking">
-                  <strong>
-                    {diagnostics.eligible
-                      ? "本题包含可计算的排名结构"
-                      : "本题不纳入排名指标"}
-                  </strong>
-                  {diagnostics.eligible && (
-                    <dl>
-                      <div>
-                        <dt>已排名样本</dt>
-                        <dd>
-                          {diagnostics.rankedObservations} /{" "}
-                          {diagnostics.totalObservations}
-                        </dd>
-                      </div>
-                      <div>
-                        <dt>平均排名</dt>
-                        <dd>{diagnostics.averageRank ?? "未返回"}</dd>
-                      </div>
-                      <div>
-                        <dt>首位率</dt>
-                        <dd>
-                          {formatAssessmentRate(diagnostics.firstPlaceRate)}
-                        </dd>
-                      </div>
-                      <div>
-                        <dt>前三率</dt>
-                        <dd>{formatAssessmentRate(diagnostics.top3Rate)}</dd>
-                      </div>
-                      <div>
-                        <dt>前五率</dt>
-                        <dd>{formatAssessmentRate(diagnostics.top5Rate)}</dd>
-                      </div>
-                      <div>
-                        <dt>竞品排名差</dt>
-                        <dd>{diagnostics.competitorRankGap ?? "不适用"}</dd>
-                      </div>
-                      <div>
-                        <dt>未提及样本</dt>
-                        <dd>
-                          {diagnostics.unmentionedObservations} /{" "}
-                          {diagnostics.totalObservations}
-                        </dd>
-                      </div>
-                    </dl>
-                  )}
-                  {diagnostics.calculationBasis && (
-                    <p>{diagnostics.calculationBasis}</p>
-                  )}
-                </div>
-              )}
-
-              {hasMethodology && methodology && (
-                <dl className="geo-assessment-methodology">
-                  {methodology.assessmentType && (
-                    <div>
-                      <dt>评估类型</dt>
-                      <dd>{methodology.assessmentType}</dd>
-                    </div>
-                  )}
-                  {methodology.isFullBsasAudit !== undefined && (
-                    <div>
-                      <dt>完整 BSAS 审计</dt>
-                      <dd>{methodology.isFullBsasAudit ? "是" : "否"}</dd>
-                    </div>
-                  )}
-                  {methodology.normalizedMeasuredScore !== undefined && (
-                    <div>
-                      <dt>可测项归一分</dt>
-                      <dd>{methodology.normalizedMeasuredScore}</dd>
-                    </div>
-                  )}
-                  {methodology.applicableScore !== undefined && (
-                    <div>
-                      <dt>可测项得分</dt>
-                      <dd>{methodology.applicableScore}</dd>
-                    </div>
-                  )}
-                  {methodology.applicableMaxScore !== undefined && (
-                    <div>
-                      <dt>可测项满分</dt>
-                      <dd>{methodology.applicableMaxScore}</dd>
-                    </div>
-                  )}
-                  {methodology.structuralExcludedMaxScore !== undefined && (
-                    <div>
-                      <dt>结构性排除</dt>
-                      <dd>{methodology.structuralExcludedMaxScore}</dd>
-                    </div>
-                  )}
-                  {methodology.confidenceScore !== undefined && (
-                    <div>
-                      <dt>评估置信度</dt>
-                      <dd>
-                        {formatAssessmentRate(methodology.confidenceScore)}
-                      </dd>
-                    </div>
-                  )}
-                </dl>
-              )}
-
-              {limitations.length > 0 && (
-                <div className="geo-assessment-limitations">
-                  <strong>适用限制</strong>
-                  <ul>
-                    {limitations.map((limitation) => (
-                      <li key={limitation}>{limitation}</li>
-                    ))}
-                  </ul>
-                </div>
-              )}
-            </div>
-          </section>
-        )}
+        <aside className="geo-assessment-scope-note">
+          本结果反映当前问题在所选平台的回答表现，不代表全网自然排名。
+        </aside>
       </div>
     </div>
   );
@@ -7141,14 +6830,10 @@ function AssessmentSupportingResults({
 
 export function OptimizationForecastView({
   project,
-  onRetry,
   onContact,
-  retrying = false,
 }: {
   project: GeoProject;
-  onRetry?: () => Promise<void>;
   onContact: () => void;
-  retrying?: boolean;
 }) {
   const forecast = project.optimizationForecast;
   const horizonWeeks = forecast?.horizonWeeks ?? 4;
@@ -7169,37 +6854,24 @@ export function OptimizationForecastView({
           <strong>
             {forecast?.status === "failed"
               ? "优化后效果评估暂未生成"
-              : `正在规划${horizonLabel}优化目标`}
+              : "正在生成优化效果评估"}
           </strong>
           <p>
-            {forecast?.error ||
-              "当前评估完成后，将结合知识缺口、平台回答表现与可执行优化动作，形成条件目标区间和分阶段路线。"}
+            {forecast?.status === "failed"
+              ? forecast.error ||
+                "系统暂时无法生成结果，请联系技术支持协助处理。"
+              : "正在生成优化效果评估，通常需要约 5 分钟；完成后会自动显示，无需手动刷新。"}
           </p>
           {forecast?.status === "failed" &&
-            !isGeoStylePreviewProject(project) &&
-            (project.optimizationForecastRetryAvailable === true && onRetry ? (
+            !isGeoStylePreviewProject(project) && (
               <button
                 type="button"
-                className="geo-assessment-refresh geo-evaluation-retry"
-                onClick={() => void onRetry()}
-                disabled={retrying}
-                aria-busy={retrying}
-              >
-                <RotateCw
-                  size={15}
-                  className={retrying ? "is-spinning" : undefined}
-                />
-                {retrying ? "正在重试" : "重新生成优化评估"}
-              </button>
-            ) : (
-              <button
-                type="button"
-                className="geo-assessment-refresh geo-evaluation-retry"
+                className="geo-assessment-refresh geo-evaluation-support"
                 onClick={onContact}
               >
                 联系技术支持
               </button>
-            ))}
+            )}
         </div>
       </section>
     );
@@ -7214,12 +6886,18 @@ export function OptimizationForecastView({
     forecast.targetExpected === undefined
       ? undefined
       : formatForecastScore(forecast.targetExpected);
-  const hasRawForecastScores = [
-    forecast.rawCurrentScore,
-    forecast.rawTargetLow,
-    forecast.rawTargetExpected,
-    forecast.rawTargetHigh,
-  ].some((value) => value !== undefined);
+  const customerForecast = forecast as typeof forecast & {
+    executiveSummary?: string;
+    targetCondition?: string;
+  };
+  const executiveSummary = customerFacingText(
+    customerForecast.executiveSummary,
+    "当前回答已经形成基础品牌认知，但事实边界、可信来源和差异化表达仍需加强。本月优先统一事实口径、补齐关键问答并建设可追溯来源。内容发布后，将按相同问题和采样规则复测实际效果。",
+  );
+  const targetCondition = customerFacingText(
+    customerForecast.targetCondition,
+    `完成路线中的事实核验、内容发布与来源建设后，第 ${horizonWeeks} 周按相同问题、平台和采样规则复测。`,
+  );
 
   return (
     <div className="geo-forecast-view">
@@ -7229,10 +6907,7 @@ export function OptimizationForecastView({
             <Sparkles size={14} /> {horizonLabel}条件目标区间
           </span>
           <h3>把现状差距，转化为可执行的提升路径</h3>
-          <p>
-            {forecast.summary ||
-              "围绕知识补全、内容建设、权威来源与多平台分发推进优化，并按阶段验证目标是否按计划接近。"}
-          </p>
+          <p>{executiveSummary}</p>
         </div>
 
         <div
@@ -7258,62 +6933,8 @@ export function OptimizationForecastView({
 
         <div className="geo-forecast-conditions">
           <ShieldCheck size={16} />
-          <span>
-            目标区间以路线执行条件落实为基础；第 {horizonWeeks}{" "}
-            周需使用同一问题、同一平台与同一采样规则复测确认。
-          </span>
-          {forecast.gradeLow && forecast.gradeHigh && (
-            <strong>
-              等级参考 {forecast.gradeLow}–{forecast.gradeHigh}
-              {forecast.challengeUpperOnly &&
-                `（${forecast.challengeUpperOnly} 为挑战上沿）`}
-            </strong>
-          )}
+          <span>{targetCondition}</span>
         </div>
-        {(forecast.scoreBasis || hasRawForecastScores) && (
-          <dl className="geo-forecast-score-basis">
-            {forecast.scoreBasis && (
-              <>
-                <div>
-                  <dt>评分口径</dt>
-                  <dd>可测项口径</dd>
-                </div>
-                <div>
-                  <dt>可测项满分</dt>
-                  <dd>{forecast.scoreBasis.applicableMaxScore}</dd>
-                </div>
-                <div>
-                  <dt>结构性排除</dt>
-                  <dd>{forecast.scoreBasis.structuralExcludedMaxScore}</dd>
-                </div>
-              </>
-            )}
-            {forecast.rawCurrentScore !== undefined && (
-              <div>
-                <dt>原始现状分</dt>
-                <dd>{formatForecastScore(forecast.rawCurrentScore)}</dd>
-              </div>
-            )}
-            {forecast.rawTargetLow !== undefined && (
-              <div>
-                <dt>原始目标下沿</dt>
-                <dd>{formatForecastScore(forecast.rawTargetLow)}</dd>
-              </div>
-            )}
-            {forecast.rawTargetExpected !== undefined && (
-              <div>
-                <dt>原始预期分</dt>
-                <dd>{formatForecastScore(forecast.rawTargetExpected)}</dd>
-              </div>
-            )}
-            {forecast.rawTargetHigh !== undefined && (
-              <div>
-                <dt>原始目标上沿</dt>
-                <dd>{formatForecastScore(forecast.rawTargetHigh)}</dd>
-              </div>
-            )}
-          </dl>
-        )}
       </section>
 
       {forecast.dimensions.length > 0 && (
@@ -7325,45 +6946,61 @@ export function OptimizationForecastView({
             </div>
           </header>
           <div className="geo-forecast-dimension-grid">
-            {forecast.dimensions.map((dimension, index) => (
-              <article key={dimension.id}>
-                <div className="geo-forecast-dimension-heading">
-                  <span>{String(index + 1).padStart(2, "0")}</span>
-                  <div>
-                    <strong>{dimension.label}</strong>
-                    <small>{dimension.summary}</small>
+            {forecast.dimensions.map((dimension, index) => {
+              const customerDimension = dimension as typeof dimension & {
+                currentFinding?: string;
+                nextAction?: string;
+              };
+              return (
+                <article key={dimension.id}>
+                  <div className="geo-forecast-dimension-heading">
+                    <span>{String(index + 1).padStart(2, "0")}</span>
+                    <div>
+                      <strong>
+                        {customerFacingText(
+                          dimension.label,
+                          CUSTOMER_DIMENSION_LABELS[dimension.id],
+                        )}
+                      </strong>
+                      <small>
+                        {customerFacingText(
+                          customerDimension.currentFinding,
+                          CUSTOMER_DIMENSION_COPY[dimension.id].finding,
+                        )}
+                      </small>
+                    </div>
                   </div>
-                </div>
-                <div className="geo-forecast-dimension-values">
-                  <span>
-                    当前{" "}
-                    <strong>
-                      {formatForecastScore(dimension.currentScore)}
-                    </strong>
-                  </span>
-                  <ArrowRight size={14} aria-hidden="true" />
-                  <span>
-                    目标{" "}
-                    <strong>
-                      {formatForecastScore(dimension.targetLow)}–
-                      {formatForecastScore(dimension.targetHigh)}
-                    </strong>
-                    <small>
-                      预期 {formatForecastScore(dimension.targetExpected)}
-                    </small>
-                  </span>
-                </div>
-                {dimension.actions.length > 0 && (
-                  <ul>
-                    {dimension.actions.map((action) => (
-                      <li key={action}>
-                        <Check size={13} /> <span>{action}</span>
-                      </li>
-                    ))}
-                  </ul>
-                )}
-              </article>
-            ))}
+                  <div className="geo-forecast-dimension-values">
+                    <span>
+                      当前{" "}
+                      <strong>
+                        {formatForecastScore(dimension.currentScore)}
+                      </strong>
+                    </span>
+                    <ArrowRight size={14} aria-hidden="true" />
+                    <span>
+                      目标{" "}
+                      <strong>
+                        {formatForecastScore(dimension.targetLow)}–
+                        {formatForecastScore(dimension.targetHigh)}
+                      </strong>
+                      <small>
+                        预期 {formatForecastScore(dimension.targetExpected)}
+                      </small>
+                    </span>
+                  </div>
+                  <p className="geo-forecast-next-action">
+                    <Check size={13} />
+                    <span>
+                      {customerFacingText(
+                        customerDimension.nextAction,
+                        CUSTOMER_DIMENSION_COPY[dimension.id].action,
+                      )}
+                    </span>
+                  </p>
+                </article>
+              );
+            })}
           </div>
         </section>
       )}
@@ -7381,15 +7018,25 @@ export function OptimizationForecastView({
                   <span>{item.phase}</span>
                   <div>
                     <small>{item.weeks}</small>
-                    <h4>{item.title}</h4>
+                    <h4>
+                      {customerFacingText(
+                        item.title,
+                        `第 ${item.phase} 周重点任务`,
+                      )}
+                    </h4>
                     <ul>
-                      {item.actions.map((action) => (
-                        <li key={action}>{action}</li>
+                      {item.actions.slice(0, 3).map((action) => (
+                        <li key={action}>
+                          {customerFacingText(
+                            action,
+                            "完成本阶段计划，并解决对应的事实与内容缺口。",
+                          )}
+                        </li>
                       ))}
                     </ul>
                     <p>
-                      <ShieldCheck size={13} /> 阶段验证：
-                      {item.verificationGate}
+                      <ShieldCheck size={13} /> 验收标准：
+                      {customerFacingVerificationGate(item.verificationGate)}
                     </p>
                   </div>
                 </li>
@@ -7403,13 +7050,10 @@ export function OptimizationForecastView({
           {forecast.assumptions.length > 0 && (
             <div className="geo-forecast-roadmap-assumptions">
               <strong>路线执行条件</strong>
-              <ul>
-                {forecast.assumptions.map((assumption) => (
-                  <li key={assumption}>
-                    <Check size={14} /> <span>{assumption}</span>
-                  </li>
-                ))}
-              </ul>
+              <p>
+                完成事实核验、内容发布与来源建设后，第 {horizonWeeks}{" "}
+                周按相同问题、平台和采样规则复测。
+              </p>
             </div>
           )}
         </section>
@@ -7734,7 +7378,10 @@ export function ServiceActivation({
   project: GeoProject;
   paymentPending: boolean;
   onCheckout: () => void;
-  onSubmitProfile: (profile: GeoServiceContractProfile) => Promise<void>;
+  onSubmitProfile: (
+    profile: GeoServiceContractProfile,
+    contractCode: string,
+  ) => Promise<void>;
   onCreateAccount: (credentials: GeoServiceAccountCredentials) => Promise<void>;
   onCheckStatus: () => Promise<string | void>;
   onBack: () => void;
@@ -7756,6 +7403,11 @@ export function ServiceActivation({
   const serviceStatus = project.preview
     ? previewServiceStatus
     : activation?.status;
+  const contractFlowIssue = geoServiceContractFlowIssue(
+    activation && serviceStatus
+      ? { ...activation, status: serviceStatus }
+      : activation,
+  );
   const active = serviceStatus === "active";
   const dashboardAvailable = true;
   const handlePathTabKeyDown = (event: ReactKeyboardEvent<HTMLDivElement>) => {
@@ -7812,13 +7464,6 @@ export function ServiceActivation({
       question &&
       amountFen > 0
     );
-  const serviceContractHref = buildServiceContractHref({
-    category,
-    question: question?.question,
-    client: project.knowledgeBase?.companyName || project.title,
-    order: activation?.orderId || activation?.contractWorkflowReference,
-  });
-
   if (sampleOnly && question) {
     return (
       <div className="geo-service-activation">
@@ -7915,27 +7560,35 @@ export function ServiceActivation({
           ) : onboardingStarted ? (
             <span className="geo-service-onboarding-badge">
               <ShieldCheck size={16} />
-              {serviceStatus === "profile_required"
-                ? "待填写签约资料"
-                : serviceStatus === "contract_preparing"
-                  ? "资料已提交，待发起合同"
-                  : serviceStatus === "signature_required"
-                    ? "待查看并签署合同"
-                    : serviceStatus === "payment_required"
-                      ? "签署已核验，待付款"
-                      : serviceStatus === "activation_pending"
-                        ? "账号已创建，正在开通"
-                        : serviceStatus === "account_setup_required"
-                          ? activation.accountMode === "bind_existing"
-                            ? "已有账号已绑定，待开通"
-                            : "待设置登录账号"
-                          : activation.status === "provisioning"
-                            ? "正在迁移知识库"
-                            : activation.status === "failed"
-                              ? canRetryGeoServiceKnowledgeImport(activation)
-                                ? "开通未完成，可重试同步"
-                                : "开通未完成，需人工处理"
-                              : "开通流程待处理"}
+              {contractFlowIssue === "paid_contract_mismatch"
+                ? "付款状态异常，需人工核对"
+                : contractFlowIssue === "request_rejected"
+                  ? "签约申请未通过，需联系支持"
+                  : contractFlowIssue === "request_failed"
+                    ? "签约状态异常，需联系支持"
+                    : serviceStatus === "profile_required"
+                      ? "待填写签约资料"
+                      : serviceStatus === "contract_preparing"
+                        ? "待联系管理员并输入合同码"
+                        : serviceStatus === "signature_required"
+                          ? "待联系管理员并输入合同码"
+                          : serviceStatus === "payment_required"
+                            ? "合同已确认，待付款"
+                            : serviceStatus === "activation_pending"
+                              ? "账号已创建，正在开通"
+                              : serviceStatus === "account_setup_required"
+                                ? activation.accountMode === "bind_existing"
+                                  ? "已有账号已绑定，待开通"
+                                  : "待设置登录账号"
+                                : activation.status === "provisioning"
+                                  ? "正在迁移知识库"
+                                  : activation.status === "failed"
+                                    ? canRetryGeoServiceKnowledgeImport(
+                                        activation,
+                                      )
+                                      ? "开通未完成，可重试同步"
+                                      : "开通未完成，需人工处理"
+                                    : "开通流程待处理"}
               {activation.paidAt && <small>付款已确认</small>}
             </span>
           ) : (
@@ -7960,7 +7613,6 @@ export function ServiceActivation({
           companyName={project.knowledgeBase?.companyName || project.title}
           categoryLabel={categoryLabel}
           question={question.question}
-          contractHref={serviceContractHref}
           isPreview={Boolean(project.preview)}
           onSubmitProfile={onSubmitProfile}
           onCheckout={onCheckout}
@@ -8254,16 +7906,14 @@ function MonitoringAnswerList({
                 platformAnswers.map((answer) => (
                   <details key={answer.id} open={answer.runIndex === 1}>
                     <summary>
-                      <span>
-                        RUN {String(answer.runIndex).padStart(2, "0")}
-                      </span>
+                      <span>第 {answer.runIndex} 次回答</span>
                       <strong>
                         {answer.status === "completed"
                           ? "回答已采集"
                           : answer.error || "本轮未完成"}
                       </strong>
                       <small>
-                        检索参考 {answer.references.length} 条 ·{" "}
+                        可追溯来源 {answer.sources.length} 条 ·{" "}
                         {formatDate(answer.capturedAt)}
                       </small>
                     </summary>
@@ -8371,11 +8021,9 @@ function AnswerMedia({ media }: { media: GeoAnswerMedia[] }) {
 function AnswerSources({ answer }: { answer: GeoMonitoringAnswer }) {
   return (
     <section className="geo-answer-evidence">
-      <p>
-        检索参考来源是平台检索阶段返回的候选资料，不代表答案逐条采用。
-      </p>
+      <p>以下为本次回答关联的可追溯来源，供进一步核验。</p>
       <div className="geo-answer-sources">
-        <SourceColumn sources={answer.references} />
+        <SourceColumn sources={answer.sources} />
       </div>
     </section>
   );
@@ -8384,13 +8032,13 @@ function AnswerSources({ answer }: { answer: GeoMonitoringAnswer }) {
 function SourceColumn({
   sources,
 }: {
-  sources: GeoMonitoringAnswer["references"];
+  sources: GeoMonitoringAnswer["sources"];
 }) {
   return (
     <details className="geo-answer-source-group">
       <summary>
         <span className="geo-answer-source-title">
-          <Link2 size={13} /> 检索参考来源
+          <Link2 size={13} /> 可追溯来源
         </span>
         <span className="geo-answer-source-count">{sources.length} 条</span>
         <ChevronDown
@@ -8415,14 +8063,14 @@ function SourceColumn({
             ))}
           </ul>
         ) : (
-          <p>平台本轮未返回检索参考来源。</p>
+          <p>平台本轮未返回可追溯来源。</p>
         )}
       </div>
     </details>
   );
 }
 
-function KnowledgeComparison({ project }: { project: GeoProject }) {
+export function KnowledgeComparison({ project }: { project: GeoProject }) {
   const [statusFilter, setStatusFilter] = useState<
     GeoKnowledgeComparisonStatus | "all"
   >("all");
@@ -8435,9 +8083,6 @@ function KnowledgeComparison({ project }: { project: GeoProject }) {
   const monitoringAnswers = project.monitoring?.answers ?? [];
   const platformIds = Array.from(
     new Set(comparisons.flatMap((comparison) => comparison.platforms)),
-  );
-  const evidenceRefs = Array.from(
-    new Set(comparisons.flatMap((comparison) => comparison.evidenceRefs)),
   );
   const completedAnswers = monitoringAnswers.filter(
     (answer) =>
@@ -8490,12 +8135,6 @@ function KnowledgeComparison({ project }: { project: GeoProject }) {
             <strong>
               {selectedQuestion?.question || "当前项目尚未返回选定问题"}
             </strong>
-            <small>
-              {knowledgeBase?.companyName || project.title}
-              {knowledgeBase?.generatedAt
-                ? ` · 知识库生成于 ${formatDate(knowledgeBase.generatedAt)}`
-                : ""}
-            </small>
           </div>
           {knowledgeBase?.summary && (
             <div className="geo-comparison-baseline">
@@ -8517,7 +8156,7 @@ function KnowledgeComparison({ project }: { project: GeoProject }) {
         <div className="geo-comparison-metrics" aria-label="知识库对照范围">
           <article>
             <strong>{comparisons.length}</strong>
-            <span>对照主题</span>
+            <span>回答事实对照</span>
             <small>逐项形成结论</small>
           </article>
           <article>
@@ -8535,17 +8174,12 @@ function KnowledgeComparison({ project }: { project: GeoProject }) {
             <span>有效回答样本</span>
             <small>用于本次对照</small>
           </article>
-          <article>
-            <strong>{evidenceRefs.length}</strong>
-            <span>证据锚点</span>
-            <small>可回到知识库核验</small>
-          </article>
         </div>
       </section>
 
       <div className="geo-comparison-section-heading">
         <div>
-          <span>主题结论</span>
+          <span>回答事实对照 {comparisons.length} 项</span>
           <h3>从事实差距定位具体优化动作</h3>
         </div>
         <small>
@@ -8606,12 +8240,20 @@ function KnowledgeComparison({ project }: { project: GeoProject }) {
                         : "待返回建议"}
                     </small>
                   </div>
-                  <h3>{comparison.topic}</h3>
+                  <h3>
+                    {customerFacingText(
+                      comparison.topic,
+                      `事实对照项 ${index + 1}`,
+                    )}
+                  </h3>
                 </div>
               </div>
               <div
                 className="geo-comparison-platforms"
-                aria-label={`${comparison.topic}涉及平台`}
+                aria-label={`${customerFacingText(
+                  comparison.topic,
+                  `事实对照项 ${index + 1}`,
+                )}涉及平台`}
               >
                 {comparison.platforms.map((platformId) => {
                   const platform = GEO_PLATFORMS.find(
@@ -8640,74 +8282,36 @@ function KnowledgeComparison({ project }: { project: GeoProject }) {
                 <span>
                   <Database size={14} /> 企业知识库事实
                 </span>
-                <p>{comparison.knowledgeBaseFact || "未提供可核验事实"}</p>
+                <p>
+                  {customerFacingText(
+                    comparison.knowledgeBaseFact,
+                    "未提供可核验事实",
+                  )}
+                </p>
               </section>
               <section>
                 <span>
                   <MessageSquareText size={14} /> 平台回答发现
                 </span>
-                <p>{comparison.answerFinding || "未提供对照结论"}</p>
+                <p>
+                  {customerFacingText(
+                    comparison.answerFinding,
+                    "未提供对照结论",
+                  )}
+                </p>
               </section>
               <section className="geo-comparison-action">
                 <span>
                   <ArrowRight size={14} /> 建议处理动作
                 </span>
                 <p>
-                  {comparison.recommendedAction ||
-                    "后台 API 未返回建议处理动作"}
+                  {customerFacingText(
+                    comparison.recommendedAction,
+                    "暂未提供建议处理动作",
+                  )}
                 </p>
               </section>
             </div>
-
-            <footer className="geo-comparison-card-footer">
-              <div>
-                <span>知识库证据锚点</span>
-                <div>
-                  {comparison.knowledgeClaimId && (
-                    <code>知识条目 · {comparison.knowledgeClaimId}</code>
-                  )}
-                  {comparison.evidenceRefs.length > 0 ? (
-                    comparison.evidenceRefs.map((reference) => (
-                      <code key={reference}>{reference}</code>
-                    ))
-                  ) : (
-                    <small>本主题尚未返回证据锚点</small>
-                  )}
-                </div>
-              </div>
-              <div>
-                <span>涉及平台样本</span>
-                <div>
-                  {comparison.platforms.map((platformId) => {
-                    const platform = GEO_PLATFORMS.find(
-                      (item) => item.id === platformId,
-                    );
-                    const sampleCount = monitoringAnswers.filter(
-                      (answer) =>
-                        answer.platformId === platformId &&
-                        answer.status === "completed",
-                    ).length;
-                    return (
-                      <small key={platformId}>
-                        {platform?.name ?? platformId}
-                        {comparison.runIndex
-                          ? ` · 第 ${comparison.runIndex} 轮`
-                          : ` · ${sampleCount} 条`}
-                      </small>
-                    );
-                  })}
-                  {comparison.confidence !== undefined && (
-                    <small>
-                      核查置信度{" "}
-                      {Math.round(
-                        Math.max(0, Math.min(1, comparison.confidence)) * 100,
-                      )}
-                      %
-                    </small>
-                  )}
-                </div>
-              </div>
-            </footer>
           </article>
         ))}
       </section>
@@ -8729,30 +8333,53 @@ function KnowledgeComparison({ project }: { project: GeoProject }) {
               <strong>{knowledgeBase?.sections.length ?? 0} 项</strong>
             </div>
             {knowledgeBase?.sections.length ? (
-              <ul>
-                {knowledgeBase.sections.slice(0, 5).map((section) => (
-                  <li key={section.id}>
-                    <div>
-                      <strong>{section.title}</strong>
-                      <small>
-                        {section.summary || "已纳入知识库并参与本次对照"}
-                      </small>
-                      {section.evidenceCount ? (
-                        <em>{section.evidenceCount} 条证据</em>
-                      ) : null}
-                    </div>
-                    <StatusPill status={section.status} />
-                  </li>
-                ))}
-              </ul>
+              <>
+                <ul>
+                  {knowledgeBase.sections.slice(0, 5).map((section) => (
+                    <li key={section.id}>
+                      <div>
+                        <strong>{section.title}</strong>
+                        <small>
+                          {section.summary || "已纳入知识库并参与本次对照"}
+                        </small>
+                        {section.evidenceCount ? (
+                          <em>{section.evidenceCount} 条证据</em>
+                        ) : null}
+                      </div>
+                      <StatusPill status={section.status} />
+                    </li>
+                  ))}
+                </ul>
+                {knowledgeBase.sections.length > 5 && (
+                  <details className="geo-comparison-ledger-disclosure">
+                    <summary>
+                      <span className="when-closed">
+                        展开其余 {knowledgeBase.sections.length - 5} 个知识主题
+                      </span>
+                      <span className="when-open">收起知识主题</span>
+                      <ChevronDown size={14} aria-hidden="true" />
+                    </summary>
+                    <ul>
+                      {knowledgeBase.sections.slice(5).map((section) => (
+                        <li key={section.id}>
+                          <div>
+                            <strong>{section.title}</strong>
+                            <small>
+                              {section.summary || "已纳入知识库并参与本次对照"}
+                            </small>
+                            {section.evidenceCount ? (
+                              <em>{section.evidenceCount} 条证据</em>
+                            ) : null}
+                          </div>
+                          <StatusPill status={section.status} />
+                        </li>
+                      ))}
+                    </ul>
+                  </details>
+                )}
+              </>
             ) : (
               <p>当前项目未返回可展示的知识主题。</p>
-            )}
-            {(knowledgeBase?.sections.length ?? 0) > 5 && (
-              <footer>
-                另有 {(knowledgeBase?.sections.length ?? 0) - 5}{" "}
-                个知识主题已参与分析
-              </footer>
             )}
           </article>
 
@@ -8764,40 +8391,79 @@ function KnowledgeComparison({ project }: { project: GeoProject }) {
               <strong>{knowledgeBase?.sources.length ?? 0} 项</strong>
             </div>
             {knowledgeBase?.sources.length ? (
-              <ul>
-                {knowledgeBase.sources.slice(0, 5).map((source) => (
-                  <li key={source.id}>
-                    <div>
-                      {source.url ? (
-                        <a href={source.url} target="_blank" rel="noreferrer">
-                          {source.title}
-                          <ExternalLink size={11} />
-                        </a>
-                      ) : (
-                        <strong>{source.title}</strong>
-                      )}
-                      <small>
-                        {[
-                          source.type,
-                          source.domain,
-                          source.capturedAt
-                            ? `采集于 ${formatDate(source.capturedAt)}`
-                            : undefined,
-                        ]
-                          .filter(Boolean)
-                          .join(" · ") || "知识库来源"}
-                      </small>
-                    </div>
-                  </li>
-                ))}
-              </ul>
+              <>
+                <ul>
+                  {knowledgeBase.sources.slice(0, 5).map((source) => (
+                    <li key={source.id}>
+                      <div>
+                        {source.url ? (
+                          <a href={source.url} target="_blank" rel="noreferrer">
+                            {source.title}
+                            <ExternalLink size={11} />
+                          </a>
+                        ) : (
+                          <strong>{source.title}</strong>
+                        )}
+                        <small>
+                          {[
+                            source.type,
+                            source.domain,
+                            source.capturedAt
+                              ? `采集于 ${formatDate(source.capturedAt)}`
+                              : undefined,
+                          ]
+                            .filter(Boolean)
+                            .join(" · ") || "知识库来源"}
+                        </small>
+                      </div>
+                    </li>
+                  ))}
+                </ul>
+                {knowledgeBase.sources.length > 5 && (
+                  <details className="geo-comparison-ledger-disclosure">
+                    <summary>
+                      <span className="when-closed">
+                        展开其余 {knowledgeBase.sources.length - 5} 个来源
+                      </span>
+                      <span className="when-open">收起可追溯来源</span>
+                      <ChevronDown size={14} aria-hidden="true" />
+                    </summary>
+                    <ul>
+                      {knowledgeBase.sources.slice(5).map((source) => (
+                        <li key={source.id}>
+                          <div>
+                            {source.url ? (
+                              <a
+                                href={source.url}
+                                target="_blank"
+                                rel="noreferrer"
+                              >
+                                {source.title}
+                                <ExternalLink size={11} />
+                              </a>
+                            ) : (
+                              <strong>{source.title}</strong>
+                            )}
+                            <small>
+                              {[
+                                source.type,
+                                source.domain,
+                                source.capturedAt
+                                  ? `采集于 ${formatDate(source.capturedAt)}`
+                                  : undefined,
+                              ]
+                                .filter(Boolean)
+                                .join(" · ") || "知识库来源"}
+                            </small>
+                          </div>
+                        </li>
+                      ))}
+                    </ul>
+                  </details>
+                )}
+              </>
             ) : (
               <p>当前项目未返回可展示的来源入口。</p>
-            )}
-            {(knowledgeBase?.sources.length ?? 0) > 5 && (
-              <footer>
-                另有 {(knowledgeBase?.sources.length ?? 0) - 5} 个来源已纳入索引
-              </footer>
             )}
           </article>
 

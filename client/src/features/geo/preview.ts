@@ -130,6 +130,7 @@ function previewAnswers(): GeoMonitoringAnswer[] {
           status: "failed" as const,
           answer: "",
           media: [],
+          sources: [],
           citations: [],
           references: [],
           capturedAt,
@@ -138,6 +139,8 @@ function previewAnswers(): GeoMonitoringAnswer[] {
       }
 
       const evidence = PREVIEW_MONITOR_EVIDENCE[`${platformId}:${runIndex}`];
+      const citations = evidence?.citations ?? [];
+      const references = evidence?.references ?? [];
       return {
         id: `preview-monitor-${platformId}-${runIndex}`,
         platformId,
@@ -145,8 +148,16 @@ function previewAnswers(): GeoMonitoringAnswer[] {
         status: "completed" as const,
         answer: syntheticAnswerCopy(platformId, runIndex),
         media: [],
-        citations: evidence?.citations ?? [],
-        references: evidence?.references ?? [],
+        sources: [...citations, ...references].filter(
+          (source, sourceIndex, allSources) =>
+            allSources.findIndex(
+              (candidate) =>
+                (candidate.url || candidate.title) ===
+                (source.url || source.title),
+            ) === sourceIndex,
+        ),
+        citations,
+        references,
         capturedAt,
       };
     }),

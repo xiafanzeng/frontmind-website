@@ -49,6 +49,7 @@ import type {
   GeoKnowledgeImportRequest,
   GeoManualServiceOrderAccountRequest,
   GeoManualServiceOrderCreateRequest,
+  GeoManualServiceOrderExternalAuthorizationRequest,
   GeoManualServiceOrderPaymentRequest,
   GeoManualServiceOrderResponse,
   GeoProjectOrder,
@@ -482,6 +483,13 @@ let knowledgeImportCalls: Array<{
 }>;
 let purchaseProvisionResponse: GeoPurchaseProvisionResponseV2;
 let manualOrderCreateCalls: GeoManualServiceOrderCreateRequest[];
+let manualOrderExternalAuthorizationCalls: Array<{
+  reference: string;
+  request: GeoManualServiceOrderExternalAuthorizationRequest;
+}>;
+let manualOrderExternalAuthorizationOverride:
+  | Partial<GeoManualServiceOrderResponse["order"]>
+  | undefined;
 let manualOrderStatusReads: string[];
 let manualOrderPaymentCalls: Array<{
   reference: string;
@@ -497,6 +505,7 @@ let knowledgeImportShouldFail: boolean;
 let adminNotificationShouldFail: boolean;
 let manualOrderAccountShouldRemainPending: boolean;
 let paymentAccepted: boolean;
+let servicePaymentPaidAt: string;
 let projectOrders: Map<string, GeoProjectOrder>;
 let projectOrderRegistry: GeoProjectOrderRegistry;
 let paymentGateway: GeoPaymentGateway;
@@ -505,6 +514,7 @@ let customQuestionValidationNowMs: number;
 
 const CUSTOM_QUESTION_CLIENT_REQUEST_ID =
   "11111111-1111-4111-8111-111111111111";
+const CONTRACT_AUTH_CODE = "contract-code-from-server-env";
 
 beforeEach(async () => {
   broker = new MockBroker();
@@ -521,6 +531,8 @@ beforeEach(async () => {
   purchaseProvisionCalls = [];
   purchaseStatusReads = [];
   manualOrderCreateCalls = [];
+  manualOrderExternalAuthorizationCalls = [];
+  manualOrderExternalAuthorizationOverride = undefined;
   manualOrderStatusReads = [];
   manualOrderPaymentCalls = [];
   manualOrderAccountCalls = [];
@@ -552,6 +564,7 @@ beforeEach(async () => {
     },
   };
   paymentAccepted = true;
+  servicePaymentPaidAt = new Date(Date.now() + 60_000).toISOString();
   projectOrders = new Map();
   projectOrderRegistry = {
     async assertReady() {},
@@ -639,7 +652,7 @@ beforeEach(async () => {
         status: paymentAccepted ? "paid" : "pending",
         orderId: "zpay-service-order-001",
         amountFen: input.expectedAmountFen,
-        paidAt: paymentAccepted ? "2026-07-22T10:10:00.000Z" : undefined,
+        paidAt: paymentAccepted ? servicePaymentPaidAt : undefined,
       };
     },
     async verifyCallback(params) {
@@ -680,7 +693,7 @@ beforeEach(async () => {
       return {
         orderId: "zpay-service-order-001",
         amountFen: input.expectedAmountFen,
-        paidAt: "2026-07-22T10:10:00.000Z",
+        paidAt: servicePaymentPaidAt,
       };
     },
   };
@@ -742,6 +755,27 @@ beforeEach(async () => {
         };
         manualOrderResponse = response;
         return response;
+      },
+      manualOrderExternalAuthorizer: async (reference, request) => {
+        manualOrderExternalAuthorizationCalls.push({ reference, request });
+        const {
+          contractId: _contractId,
+          signingUrl: _signingUrl,
+          signedAt: _signedAt,
+          ...orderWithoutElectronicContract
+        } = manualOrderResponse.order;
+        manualOrderResponse = {
+          ...manualOrderResponse,
+          order: {
+            ...orderWithoutElectronicContract,
+            status: "payment_required",
+            contractAuthorizationMode: "external_wechat",
+            contractAuthorizedAt: request.authorization.authorizedAt,
+            updatedAt: request.authorization.authorizedAt,
+            ...manualOrderExternalAuthorizationOverride,
+          },
+        };
+        return manualOrderResponse;
       },
       manualOrderStatusReader: async (reference) => {
         manualOrderStatusReads.push(reference);
@@ -841,6 +875,7 @@ beforeEach(async () => {
         FRONTMIND_GEO_INVITE_CODE: "frontmind666",
         FRONTMIND_GEO_SESSION_SECRET:
           "test-session-secret-at-least-16-characters",
+        FRONTMIND_GEO_CONTRACT_AUTH_CODE: CONTRACT_AUTH_CODE,
       },
     }),
   );
@@ -1073,6 +1108,62 @@ describe("GEO API", () => {
       } finally {
         await new Promise<void>((resolve, reject) =>
           unsafeInviteServer.close((error) =>
+            error ? reject(error) : resolve(),
+          ),
+        );
+      }
+    },
+  );
+
+  it.each([
+    "",
+    "frontmind666",
+    "short-contract-code",
+    "replace-with-contract-auth-code",
+  ])(
+    "fails closed when production uses an unsafe contract authorization code: %s",
+    async (unsafeContractCode) => {
+      const app = express();
+      app.use(
+        "/api/geo",
+        createGeoRouter({
+          broker,
+          projectOrderRegistry,
+          customQuestionValidationStore:
+            new MemoryGeoCustomQuestionValidationStore(),
+          env: {
+            NODE_ENV: "production",
+            FRONTMIND_GEO_INVITE_CODE:
+              "secure-production-invite-20260802",
+            FRONTMIND_GEO_SESSION_SECRET:
+              "production-session-secret-with-enough-entropy-20260802",
+            FRONTMIND_GEO_CONTRACT_AUTH_CODE: unsafeContractCode,
+          },
+        }),
+      );
+      const unsafeContractServer = app.listen(0);
+      await new Promise<void>((resolve) =>
+        unsafeContractServer.once("listening", resolve),
+      );
+      try {
+        const port = (unsafeContractServer.address() as AddressInfo).port;
+        const response = await fetch(
+          `http://127.0.0.1:${port}/api/geo/invite/verify`,
+          {
+            method: "POST",
+            headers: { "content-type": "application/json" },
+            body: JSON.stringify({
+              code: "secure-production-invite-20260802",
+            }),
+          },
+        );
+        expect(response.status).toBe(503);
+        expect(await response.json()).toMatchObject({
+          error: { code: "GEO_NOT_CONFIGURED" },
+        });
+      } finally {
+        await new Promise<void>((resolve, reject) =>
+          unsafeContractServer.close((error) =>
             error ? reject(error) : resolve(),
           ),
         );
@@ -4698,10 +4789,8 @@ describe("GEO API", () => {
           records: [
             {
               answerText: "渐进返回的第一条真实回答",
-              citations: [
+              sources: [
                 { title: "Acme 官网", url: "https://acme.example/about" },
-              ],
-              references: [
                 {
                   title: "检索参考",
                   url: "https://search.example/result",
@@ -4874,10 +4963,10 @@ describe("GEO API", () => {
         stage: "current_assessment",
         assessment: {
           status: "ready",
-          totalScore: 50,
+          totalScore: 52.5,
           grade: "C",
           coverage: 1,
-          scopeLabel: "本问题现状综合评分",
+          scopeLabel: "本题证据表现",
         },
       },
     });
@@ -4901,8 +4990,10 @@ describe("GEO API", () => {
       broker.uploads.get(monitoringAttachment.file_id)!.toString("utf8"),
     );
     expect(parsedMonitoring.records).toHaveLength(5);
-    expect(parsedMonitoring.records[0].citations[0].title).toBe("Acme 官网");
-    expect(parsedMonitoring.records[0].references[0].title).toBe("检索参考");
+    expect(parsedMonitoring.records[0].sources).toEqual([
+      { title: "Acme 官网", url: "https://acme.example/about" },
+      { title: "检索参考", url: "https://search.example/result" },
+    ]);
     expect(parsedMonitoring.records[0].media).toBeUndefined();
   });
 
@@ -4944,25 +5035,14 @@ describe("GEO API", () => {
       ],
     });
 
-    const failedView = await jsonRequest(
+    const retried = await jsonRequest(
       `/projects/${encodeURIComponent((first.body as any).projectToken)}`,
       ready.cookie,
     );
-    expect((failedView.body as any).project.assessment).toMatchObject({
-      status: "failed",
-      error: "现状评估结果暂未通过校验，系统未采用不完整结果",
+    expect((retried.body as any).project.assessment).toMatchObject({
+      status: "running",
     });
-    expect(
-      (failedView.body as any).project.assessment.error,
-    ).not.toContain("strict geo-current-state-evaluator JSON");
-
-    const retried = await jsonRequest(
-      `/projects/${encodeURIComponent((first.body as any).projectToken)}/assessment`,
-      ready.cookie,
-      { method: "POST", body: {} },
-    );
-
-    expect(retried.response.status).toBe(201);
+    expect(retried.response.status).toBe(200);
     expect(broker.assessmentTaskCount).toBe(2);
     expect((retried.body as any).project.executionLog.currentEntryId).toBe(
       "current-assessment",
@@ -4972,9 +5052,15 @@ describe("GEO API", () => {
     expect(broker.prompts.at(-1)).toContain(
       "rankingDiagnostics.totalObservations",
     );
+    const repeated = await jsonRequest(
+      `/projects/${encodeURIComponent((retried.body as any).projectToken)}`,
+      ready.cookie,
+    );
+    expect(repeated.response.status).toBe(200);
+    expect(broker.assessmentTaskCount).toBe(2);
   });
 
-  it("reuses a completed reputation assessment with legacy 5/0/0 ranking counts", async () => {
+  it("reuses a completed v2 reputation assessment without exposing ranking internals", async () => {
     const ready = await createReadyProject();
     const monitored = await startOnePlatformMonitor(ready, "reputation-01");
     const run = broker.monitorRuns.get("monitor-1")!;
@@ -5000,6 +5086,10 @@ describe("GEO API", () => {
     )!;
     const legacyOutput = validAssessmentOutput(reputationQuestion);
     legacyOutput.rankingDiagnostics.totalObservations = 5;
+    legacyOutput.platformBreakdown[0].verdict =
+      "来自 doubao/run-01 的 unavailable 结论";
+    legacyOutput.knowledgeVsAnswers[0].recommendedAction =
+      "检查 citationList 后再处理";
     broker.tasks.set("assessment-1", {
       id: "assessment-1",
       status: "completed",
@@ -5021,17 +5111,96 @@ describe("GEO API", () => {
       project: {
         assessment: {
           status: "ready",
-          rankingDiagnostics: {
-            eligible: false,
-            totalObservations: 0,
-            rankedObservations: 0,
-            unmentionedObservations: 0,
-          },
+          schemaVersion: 2,
         },
         assessmentRetryAvailable: false,
       },
     });
+    const publicAssessment = JSON.stringify(
+      (completed.body as any).project.assessment,
+    );
+    expect(publicAssessment).not.toContain("doubao/run-01");
+    expect(publicAssessment).not.toContain("evidenceRefs");
+    expect(publicAssessment).not.toContain("runIndex");
+    expect(publicAssessment).not.toContain("kbClaimId");
+    expect((completed.body as any).project.assessment).toMatchObject({
+      platformBreakdown: [{ verdict: "平台回答已完成事实与来源核验。" }],
+      comparisons: [{ recommendedAction: "补充清晰、可追溯的事实说明。" }],
+    });
     expect(broker.assessmentTaskCount).toBe(1);
+  });
+
+  it("upgrades a historical assessment to v2 exactly once when the project is opened", async () => {
+    const ready = await createServiceReadyProject();
+    const codec = new GeoTokenCodec(
+      "test-session-secret-at-least-16-characters",
+    );
+    const historicalValue = codec.open<Record<string, any>>(
+      ready.projectToken,
+      "project",
+    ).value;
+    delete historicalValue.assessmentVersion;
+    delete historicalValue.optimizationForecastVersion;
+    const historicalToken = codec.seal(
+      "project",
+      historicalValue,
+      60 * 60 * 1000,
+    );
+    broker.idempotentTasks.clear();
+    broker.completeAssessmentImmediately = false;
+
+    const upgraded = await jsonRequest(
+      `/projects/${encodeURIComponent(historicalToken)}`,
+      ready.cookie,
+    );
+
+    expect(upgraded.response.status).toBe(200);
+    expect((upgraded.body as any).project).toMatchObject({
+      assessmentUpdatingToVersion2: true,
+      assessment: { status: "running" },
+    });
+    expect((upgraded.body as any).project.optimizationForecast).toBeUndefined();
+    expect(broker.assessmentTaskCount).toBe(2);
+    const upgradedValue = codec.open<Record<string, any>>(
+      (upgraded.body as any).projectToken,
+      "project",
+    ).value;
+    expect(upgradedValue).toMatchObject({
+      assessmentVersion: 2,
+      assessmentTaskId: "assessment-2",
+      previousAssessmentTaskIds: [ready.assessmentTaskId],
+      previousOptimizationForecastTaskIds: [ready.forecastTaskId],
+    });
+
+    const repeated = await jsonRequest(
+      `/projects/${encodeURIComponent((upgraded.body as any).projectToken)}`,
+      ready.cookie,
+    );
+    expect(repeated.response.status).toBe(200);
+    expect(broker.assessmentTaskCount).toBe(2);
+
+    broker.tasks.set("assessment-2", {
+      id: "assessment-2",
+      status: "completed",
+      output: [
+        {
+          role: "assistant",
+          content: [{ text: JSON.stringify(validAssessmentOutput()) }],
+        },
+      ],
+    });
+    broker.completeForecastImmediately = true;
+    const completed = await jsonRequest(
+      `/projects/${encodeURIComponent((repeated.body as any).projectToken)}`,
+      ready.cookie,
+    );
+    expect(completed.response.status).toBe(200);
+    expect((completed.body as any).project).toMatchObject({
+      assessmentUpdatingToVersion2: false,
+      assessment: { status: "ready", schemaVersion: 2 },
+      optimizationForecast: { status: "ready", schemaVersion: 2 },
+    });
+    expect(broker.forecastTaskCount).toBe(2);
   });
 
   it("retries one cancelled assessment with an explicit cancellation reason", async () => {
@@ -5061,12 +5230,11 @@ describe("GEO API", () => {
     });
 
     const retried = await jsonRequest(
-      `/projects/${encodeURIComponent((first.body as any).projectToken)}/assessment`,
+      `/projects/${encodeURIComponent((first.body as any).projectToken)}`,
       ready.cookie,
-      { method: "POST", body: {} },
     );
 
-    expect(retried.response.status).toBe(201);
+    expect(retried.response.status).toBe(200);
     expect(broker.assessmentTaskCount).toBe(2);
     expect(broker.prompts.at(-1)).toContain("唯一一次结构校验重试");
     expect(broker.prompts.at(-1)).toContain("上一次现状评估任务已取消");
@@ -5148,25 +5316,14 @@ describe("GEO API", () => {
       ],
     });
 
-    const failedView = await jsonRequest(
+    const retried = await jsonRequest(
       `/projects/${encodeURIComponent((first.body as any).projectToken)}`,
       ready.cookie,
     );
-    expect((failedView.body as any).project.assessment).toMatchObject({
-      status: "failed",
-      error: "现状评估结果暂未通过校验，系统未采用不完整结果",
+    expect((retried.body as any).project.assessment).toMatchObject({
+      status: "running",
     });
-    expect(
-      (failedView.body as any).project.assessment.error,
-    ).not.toContain("outside the packaged ZIP");
-
-    const retried = await jsonRequest(
-      `/projects/${encodeURIComponent((first.body as any).projectToken)}/assessment`,
-      ready.cookie,
-      { method: "POST", body: {} },
-    );
-
-    expect(retried.response.status).toBe(201);
+    expect(retried.response.status).toBe(200);
     expect(broker.assessmentTaskCount).toBe(2);
     expect(broker.prompts.at(-1)).toContain(
       "assessment comparison references knowledge evidence outside the packaged ZIP",
@@ -5274,13 +5431,11 @@ describe("GEO API", () => {
     expect(
       forecastedPayload.project.assessment.dimensions.competitive_advantage
         .summary,
-    ).toBe(
-      "由五次真实回答与知识库证据逐项对照计算。；由五次真实回答与知识库证据逐项对照计算。",
-    );
+    ).toBe("部分已验证差异点能够被回答准确表达。");
     expect(forecastedPayload.project.optimizationForecast).toMatchObject({
       status: "ready",
       horizonWeeks: 4,
-      currentScore: 50,
+      currentScore: 52.5,
       dimensions: expect.arrayContaining([
         expect.objectContaining({ id: "semantic_visibility" }),
         expect.objectContaining({ id: "semantic_coherence" }),
@@ -5296,10 +5451,12 @@ describe("GEO API", () => {
         (dimension: Record<string, unknown>) =>
           dimension.id === "competitive_advantage",
       )?.summary,
-    ).toBe("知识库差距与当前基线支持建立可复测的条件提升区间。");
+    ).toBe("可核验差异点尚未形成稳定的统一表达。");
     expect(
       forecastedPayload.project.optimizationForecast.targetLow,
-    ).toBeGreaterThanOrEqual(60);
+    ).toBeGreaterThan(
+      forecastedPayload.project.optimizationForecast.currentScore,
+    );
     expect(
       JSON.stringify(forecastedPayload.project.optimizationForecast),
     ).not.toContain("当前样本不支持");
@@ -5339,7 +5496,7 @@ describe("GEO API", () => {
       JSON.parse(
         broker.uploads.get(assessmentAttachment.file_id)!.toString("utf8"),
       ),
-    ).toMatchObject({ assessment: { overview: { score: 50 } } });
+    ).toMatchObject({ assessment: { overview: { score: 52.5 } } });
     expect(
       JSON.parse(
         broker.uploads.get(scenarioAttachment.file_id)!.toString("utf8"),
@@ -5398,25 +5555,14 @@ describe("GEO API", () => {
       output: [{ content: [{ text: '{"assessmentType":"not-a-forecast"}' }] }],
     });
 
-    const failedView = await jsonRequest(
+    const retried = await jsonRequest(
       `/projects/${encodeURIComponent((firstForecast.body as any).projectToken)}`,
       ready.cookie,
     );
-    expect((failedView.body as any).project.optimizationForecast).toMatchObject({
-      status: "failed",
-      error: "优化效果评估结果暂未通过校验，系统未采用不完整结果",
+    expect((retried.body as any).project.optimizationForecast).toMatchObject({
+      status: "running",
     });
-    expect(
-      (failedView.body as any).project.optimizationForecast.error,
-    ).not.toContain("strict");
-
-    const retried = await jsonRequest(
-      `/projects/${encodeURIComponent((firstForecast.body as any).projectToken)}/optimization-forecast`,
-      ready.cookie,
-      { method: "POST", body: {} },
-    );
-
-    expect(retried.response.status).toBe(201);
+    expect(retried.response.status).toBe(200);
     expect(broker.forecastTaskCount).toBe(2);
     expect((retried.body as any).project.executionLog.currentEntryId).toBe(
       "optimization-forecast",
@@ -5433,12 +5579,11 @@ describe("GEO API", () => {
     });
 
     const retried = await jsonRequest(
-      `/projects/${encodeURIComponent(ready.projectToken)}/optimization-forecast`,
+      `/projects/${encodeURIComponent(ready.projectToken)}`,
       ready.cookie,
-      { method: "POST", body: {} },
     );
 
-    expect(retried.response.status).toBe(201);
+    expect(retried.response.status).toBe(200);
     expect(broker.forecastTaskCount).toBe(2);
     expect(broker.prompts.at(-1)).toContain("唯一一次结构校验重试");
     expect(broker.prompts.at(-1)).toContain("上一次优化效果评估任务已取消");
@@ -5530,17 +5675,53 @@ describe("GEO API", () => {
     expect(servicePaymentCheckoutCalls).toHaveLength(0);
   });
 
-  it("creates one manual order, accepts a corrected legal name, and blocks payment before signing", async () => {
+  it("rejects a forged payable status that has no contract evidence", async () => {
+    const ready = await createServiceReadyProject();
+    const codec = new GeoTokenCodec(
+      "test-session-secret-at-least-16-characters",
+    );
+    const value = codec.open<Record<string, any>>(
+      ready.projectToken,
+      "project",
+    ).value;
+    const forgedToken = codec.seal(
+      "project",
+      {
+        ...value,
+        serviceQuestionId: ready.question.id,
+        serviceCategory: ready.question.category,
+        serviceAmountFen: 150_000,
+        serviceManualOrderReference: "forged-payable-order",
+        serviceManualOrderStatus: "payment_required",
+      },
+      60 * 60 * 1000,
+    );
+
+    const checkout = await jsonRequest(
+      `/projects/${encodeURIComponent(forgedToken)}/services/payments`,
+      ready.cookie,
+      { method: "POST", body: { method: "alipay" } },
+    );
+
+    expect(checkout.response.status).toBe(409);
+    expect(checkout.body).toMatchObject({
+      error: { code: "SERVICE_CONTRACT_EVIDENCE_REQUIRED" },
+    });
+    expect(servicePaymentCheckoutCalls).toHaveLength(0);
+  });
+
+  it("validates the contract code, creates one order, and advances it to payment", async () => {
     const ready = await createServiceReadyProject();
     const profile = validServiceContractProfile("深圳星辰科技有限公司");
     const created = await jsonRequest(
       `/projects/${encodeURIComponent(ready.projectToken)}/services/contracts`,
       ready.cookie,
-      { method: "POST", body: { profile } },
+      { method: "POST", body: { profile, contractCode: CONTRACT_AUTH_CODE } },
     );
 
     expect(created.response.status).toBe(201);
     expect(manualOrderCreateCalls).toHaveLength(1);
+    expect(manualOrderExternalAuthorizationCalls).toHaveLength(1);
     expect(manualOrderCreateCalls[0]).toMatchObject({
       project: { companyName: "深圳星辰科技有限公司" },
       contract: { templateVersion: "basic-2026.07-v2", profile },
@@ -5558,6 +5739,13 @@ describe("GEO API", () => {
         submittedAt: "2026-07-22T10:12:00.000Z",
       },
     ]);
+    for (const value of [
+      created.body,
+      adminNotificationCalls,
+      manualOrderExternalAuthorizationCalls,
+    ]) {
+      expect(JSON.stringify(value)).not.toContain(CONTRACT_AUTH_CODE);
+    }
     expect(JSON.stringify(adminNotificationCalls)).not.toMatch(
       /13800138000|contracts@example\.com|91440300MA5F12345X|科技园一号/,
     );
@@ -5565,9 +5753,10 @@ describe("GEO API", () => {
       project: {
         companyName: "深圳星辰科技有限公司",
         serviceActivation: {
-          status: "contract_preparing",
+          status: "payment_required",
           contractWorkflowReference: "manual-order-reference-001",
-          manualOrderStatus: "pending_admin",
+          manualOrderStatus: "payment_required",
+          contractAuthorizationMode: "external_wechat",
         },
       },
     });
@@ -5585,7 +5774,7 @@ describe("GEO API", () => {
     const replayed = await jsonRequest(
       `/projects/${encodeURIComponent((created.body as any).projectToken)}/services/contracts`,
       ready.cookie,
-      { method: "POST", body: { profile } },
+      { method: "POST", body: { profile, contractCode: CONTRACT_AUTH_CODE } },
     );
     expect(replayed.response.status).toBe(200);
     expect(manualOrderCreateCalls).toHaveLength(1);
@@ -5599,21 +5788,179 @@ describe("GEO API", () => {
       "project",
     ).value;
     expect(decoded.companyName).toBe("深圳星辰科技有限公司");
+    expect(JSON.stringify(decoded)).not.toContain(CONTRACT_AUTH_CODE);
     expect(JSON.stringify(decoded)).not.toMatch(
       /13800138000|contracts@example\.com|91440300MA5F12345X|科技园一号/,
     );
 
-    const prematurePayment = await jsonRequest(
+    const checkout = await jsonRequest(
       `/projects/${encodeURIComponent((replayed.body as any).projectToken)}/services/payments`,
       ready.cookie,
       { method: "POST", body: { method: "alipay" } },
     );
-    expect(prematurePayment.response.status).toBe(409);
-    expect(prematurePayment.body).toMatchObject({
-      error: { code: "SERVICE_PAYMENT_NOT_ALLOWED" },
-    });
-    expect(servicePaymentCheckoutCalls).toHaveLength(0);
+    expect(checkout.response.status).toBe(201);
+    expect(servicePaymentCheckoutCalls).toHaveLength(1);
   });
+
+  it("clears legacy electronic-signing fields when a historical order is authorized in WeChat", async () => {
+    const ready = await createServiceReadyProject();
+    const codec = new GeoTokenCodec(
+      "test-session-secret-at-least-16-characters",
+    );
+    const stored = codec.open<Record<string, any>>(
+      ready.projectToken,
+      "project",
+    ).value;
+    const historicalToken = codec.seal(
+      "project",
+      {
+        ...stored,
+        serviceManualOrderReference: "manual-order-reference-001",
+        serviceManualOrderStatus: "signature_required",
+        serviceManualContractId: "legacy-electronic-contract",
+        serviceManualSigningUrl: "https://sign.example.com/legacy-contract",
+        serviceManualSignedAt: "2026-07-22T10:10:00.000Z",
+      },
+      60 * 60 * 1000,
+    );
+    manualOrderResponse = {
+      ...manualOrderResponse,
+      order: {
+        ...manualOrderResponse.order,
+        projectId: stored.projectId,
+        status: "signature_required",
+        contractId: "legacy-electronic-contract",
+        signingUrl: "https://sign.example.com/legacy-contract",
+        signedAt: "2026-07-22T10:10:00.000Z",
+      },
+    };
+
+    const result = await jsonRequest(
+      `/projects/${encodeURIComponent(historicalToken)}/services/contracts`,
+      ready.cookie,
+      {
+        method: "POST",
+        body: {
+          profile: validServiceContractProfile(),
+          contractCode: CONTRACT_AUTH_CODE,
+        },
+      },
+    );
+    expect(result.response.status).toBe(200);
+    const activation = (result.body as any).project.serviceActivation;
+    expect(activation).toMatchObject({
+      status: "payment_required",
+      manualOrderStatus: "payment_required",
+      contractAuthorizationMode: "external_wechat",
+    });
+    expect(activation).not.toHaveProperty("contractId");
+    expect(activation).not.toHaveProperty("signingUrl");
+    expect(activation).not.toHaveProperty("signedAt");
+    const refreshed = codec.open<Record<string, unknown>>(
+      (result.body as any).projectToken,
+      "project",
+    ).value;
+    expect(refreshed).not.toHaveProperty("serviceManualContractId");
+    expect(refreshed).not.toHaveProperty("serviceManualSigningUrl");
+    expect(refreshed).not.toHaveProperty("serviceManualSignedAt");
+  });
+
+  it("rejects an invalid contract code before creating an order", async () => {
+    const ready = await createServiceReadyProject();
+    const result = await jsonRequest(
+      `/projects/${encodeURIComponent(ready.projectToken)}/services/contracts`,
+      ready.cookie,
+      {
+        method: "POST",
+        body: {
+          profile: validServiceContractProfile(),
+          contractCode: "incorrect-contract-code",
+        },
+      },
+    );
+    expect(result.response.status).toBe(403);
+    expect(result.body).toEqual({
+      ok: false,
+      error: {
+        code: "CONTRACT_CODE_INVALID",
+        message: "合同码不正确，请联系管理员确认",
+      },
+    });
+    expect(manualOrderCreateCalls).toHaveLength(0);
+    expect(manualOrderExternalAuthorizationCalls).toHaveLength(0);
+    expect(JSON.stringify(result.body)).not.toContain(
+      "incorrect-contract-code",
+    );
+  });
+
+  it("limits five failed contract codes for one session and project without blocking another", async () => {
+    const limited = await createServiceReadyProject();
+    const isolated = await createServiceReadyProject();
+    const request = (projectToken: string, cookie: string) =>
+      jsonRequest(
+        `/projects/${encodeURIComponent(projectToken)}/services/contracts`,
+        cookie,
+        {
+          method: "POST",
+          body: {
+            profile: validServiceContractProfile(),
+            contractCode: "incorrect-contract-code",
+          },
+        },
+      );
+
+    for (let attempt = 0; attempt < 5; attempt += 1) {
+      const failed = await request(limited.projectToken, limited.cookie);
+      expect(failed.response.status).toBe(403);
+    }
+    const throttled = await request(limited.projectToken, limited.cookie);
+    expect(throttled.response.status).toBe(429);
+    expect(
+      Number(throttled.response.headers.get("retry-after")),
+    ).toBeGreaterThan(0);
+    expect(
+      Number(throttled.response.headers.get("retry-after")),
+    ).toBeLessThanOrEqual(15 * 60);
+
+    const isolatedFailure = await request(
+      isolated.projectToken,
+      isolated.cookie,
+    );
+    expect(isolatedFailure.response.status).toBe(403);
+    expect(manualOrderCreateCalls).toHaveLength(0);
+  });
+
+  it.each([
+    ["仍为待管理员状态", { status: "pending_admin" as const }],
+    ["仍为待签署状态", { status: "signature_required" as const }],
+    ["缺少授权方式", { contractAuthorizationMode: undefined }],
+    ["缺少授权时间", { contractAuthorizedAt: undefined }],
+    ["授权时间无效", { contractAuthorizedAt: "not-a-date" }],
+  ])(
+    "fails closed when Dashboard contract confirmation %s",
+    async (_label, override) => {
+      const ready = await createServiceReadyProject();
+      manualOrderExternalAuthorizationOverride = override;
+      const result = await jsonRequest(
+        `/projects/${encodeURIComponent(ready.projectToken)}/services/contracts`,
+        ready.cookie,
+        {
+          method: "POST",
+          body: {
+            profile: validServiceContractProfile(),
+            contractCode: CONTRACT_AUTH_CODE,
+          },
+        },
+      );
+      expect(result.response.status).toBe(502);
+      expect(result.body).toMatchObject({
+        ok: false,
+        error: { code: "MANUAL_ORDER_EXTERNAL_CONTRACT_INCOMPLETE" },
+      });
+      expect(result.body).not.toHaveProperty("projectToken");
+      expect(adminNotificationCalls).toHaveLength(0);
+    },
+  );
 
   it("does not block an order when the administrator alert fails and retries it idempotently", async () => {
     const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
@@ -5624,7 +5971,10 @@ describe("GEO API", () => {
       const created = await jsonRequest(
         `/projects/${encodeURIComponent(ready.projectToken)}/services/contracts`,
         ready.cookie,
-        { method: "POST", body: { profile } },
+        {
+          method: "POST",
+          body: { profile, contractCode: CONTRACT_AUTH_CODE },
+        },
       );
 
       expect(created.response.status).toBe(201);
@@ -5637,7 +5987,10 @@ describe("GEO API", () => {
       const retried = await jsonRequest(
         `/projects/${encodeURIComponent((created.body as any).projectToken)}/services/contracts`,
         ready.cookie,
-        { method: "POST", body: { profile } },
+        {
+          method: "POST",
+          body: { profile, contractCode: CONTRACT_AUTH_CODE },
+        },
       );
 
       expect(retried.response.status).toBe(200);
@@ -5676,20 +6029,19 @@ describe("GEO API", () => {
       });
       if (category === "reputation") {
         expect(ready.project.assessment).toMatchObject({
-          totalScore: 50,
-          rawTotalScore: 36,
-          applicableMaxScore: 72,
-          structuralExcludedMaxScore: 28,
+          totalScore: 52.5,
+          schemaVersion: 2,
         });
         expect(ready.project.optimizationForecast).toMatchObject({
-          currentScore: 50,
-          rawCurrentScore: 36,
-          scoreBasis: {
-            type: "applicable_scope",
-            applicableMaxScore: 72,
-            structuralExcludedMaxScore: 28,
-          },
+          currentScore: 52.5,
+          schemaVersion: 2,
         });
+        expect(ready.project.optimizationForecast).not.toHaveProperty(
+          "rawCurrentScore",
+        );
+        expect(ready.project.optimizationForecast).not.toHaveProperty(
+          "scoreBasis",
+        );
         const competitiveForecast =
           ready.project.optimizationForecast.dimensions.find(
             (dimension: Record<string, unknown>) =>
@@ -5822,7 +6174,7 @@ describe("GEO API", () => {
           billingMonths: 1,
           questionId: "product-scenario-01",
           orderId: "zpay-service-order-001",
-          paidAt: "2026-07-22T10:10:00.000Z",
+          paidAt: servicePaymentPaidAt,
         },
       },
     });
@@ -6105,7 +6457,10 @@ describe("GEO API", () => {
       ready.cookie,
       {
         method: "POST",
-        body: { profile: validServiceContractProfile() },
+        body: {
+          profile: validServiceContractProfile(),
+          contractCode: CONTRACT_AUTH_CODE,
+        },
       },
     );
     const attempted = await jsonRequest(
@@ -6192,10 +6547,12 @@ describe("GEO API", () => {
         serviceActivation: {
           status: "account_setup_required",
           manualOrderStatus: "account_setup_required",
-          contractId: "manual-contract-001",
         },
       },
     });
+    expect((started.body as any).project.serviceActivation).not.toHaveProperty(
+      "contractId",
+    );
     expect(knowledgeImportCalls).toHaveLength(0);
 
     const accountSubmitted = await jsonRequest(
@@ -6890,7 +7247,10 @@ async function advanceManualOrder(
     ready.cookie,
     {
       method: "POST",
-      body: { profile: validServiceContractProfile() },
+      body: {
+        profile: validServiceContractProfile(),
+        contractCode: CONTRACT_AUTH_CODE,
+      },
     },
   );
   expect(created.response.status).toBe(201);
@@ -6941,8 +7301,10 @@ function monitorRecord(runIndex: number, answerText: string) {
     status: "completed" as const,
     answerText,
     media: [],
-    citations: [{ title: "Acme 官网", url: "https://acme.example/about" }],
-    references: [{ title: "检索参考", url: "https://search.example/result" }],
+    sources: [
+      { title: "Acme 官网", url: "https://acme.example/about" },
+      { title: "检索参考", url: "https://search.example/result" },
+    ],
   };
 }
 
@@ -6967,7 +7329,7 @@ function validAssessmentOutput(
     limitations: [],
   });
   return {
-    schemaVersion: 1,
+    schemaVersion: 2,
     assessmentType: "question_baseline",
     question: {
       id: question.id,
@@ -7041,8 +7403,7 @@ function validAssessmentOutput(
         averageRank: 2,
         factAccuracy: 0.5,
         propositionHitRate: 0.5,
-        citationCount: 5,
-        referenceCount: 5,
+        sourceCount: 2,
         sentiment: "neutral",
         verdict: "品牌已被提及，但核心主张和证据密度仍需提升。",
         evidenceRefs: ["doubao/run-01"],
@@ -7066,6 +7427,30 @@ function validAssessmentOutput(
     ],
     summary:
       "该问题下品牌已有基础可见度，但核心主张、权威引用和差异化表达仍有提升空间。",
+    executiveSummary:
+      "当前回答已形成基础认知，但核心事实和权威来源仍需加强；本月应补齐证据页面与问答内容，并在月底按同一口径复测。",
+    dimensionNarratives: {
+      semanticVisibility: {
+        currentFinding: "五次回答能够识别企业及其主要服务方向。",
+        nextAction: "补齐核心能力与权威证据之间的引用路径。",
+      },
+      semanticCoherence: {
+        currentFinding: "核心主张在不同回答中的表达基本一致。",
+        nextAction: "统一定位、能力边界与风险说明的表达口径。",
+      },
+      semanticRichness: {
+        currentFinding: "回答已覆盖部分关键方面但采购信息仍不完整。",
+        nextAction: "补齐场景、部署和采购核验类问答。",
+      },
+      semanticAuthority: {
+        currentFinding: "重要判断已有部分来源支持但独立证据偏少。",
+        nextAction: "建设可追溯事实页并拓展独立来源。",
+      },
+      competitiveAdvantage: {
+        currentFinding: "部分已验证差异点能够被回答准确表达。",
+        nextAction: "围绕可核验差异点建立统一对比语言。",
+      },
+    },
     priorityActions: [
       {
         priority: 1,
@@ -7080,28 +7465,47 @@ function validAssessmentOutput(
 }
 
 function validForecastOutput() {
-  const indicator = (effectType: "direct_asset" | "observed_outcome") => ({
+  const indicator = (
+    effectType: "direct_asset" | "observed_outcome",
+    actionIds: Array<
+      | "GEO_A1_entity_facts"
+      | "GEO_A2_ai_visibility"
+      | "GEO_A3_qa_assets"
+      | "GEO_A4_positioning_language"
+      | "GEO_A5_site_schema"
+      | "GEO_A6_distribution_citations"
+    >,
+  ) => ({
     measurementStatus: "projectable" as const,
     gapClosureLow: 0.2,
     gapClosureHigh: 0.4,
     effectType,
     confidence: 0.7,
-    actionIds: ["GEO_A3_qa_assets"],
+    actionIds,
     rationale: "知识库差距与当前基线支持建立可复测的条件提升区间。",
     dependencies: ["完成内容建设、真实发布、抓取收录与质量检查"],
     evidenceRefs: ["current-assessment.json#/assessment/priorityActions/0"],
     timeToSignalWeeks: 4,
     verificationMetric: "使用相同问题、平台与每平台五次回答重新测量",
   });
-  const observed = () => indicator("observed_outcome");
-  const direct = () => indicator("direct_asset");
+  const observed = (actionIds: Parameters<typeof indicator>[1]) =>
+    indicator("observed_outcome", actionIds);
+  const direct = (actionIds: Parameters<typeof indicator>[1]) =>
+    indicator("direct_asset", actionIds);
   return {
-    schemaVersion: 1,
+    schemaVersion: 2,
     forecastType: "conditional_4_week",
     horizonWeeks: 4,
     scenario: {
       name: "full_execution",
-      actionIds: ["GEO_A3_qa_assets"],
+      actionIds: [
+        "GEO_A1_entity_facts",
+        "GEO_A2_ai_visibility",
+        "GEO_A3_qa_assets",
+        "GEO_A4_positioning_language",
+        "GEO_A5_site_schema",
+        "GEO_A6_distribution_citations",
+      ],
       assumptions: [
         "企业按计划完成全部事实核验与内容资产建设",
         "发布页面能够被正常抓取、收录并保持稳定访问",
@@ -7111,27 +7515,48 @@ function validForecastOutput() {
     },
     dimensions: {
       semanticVisibility: {
-        aiSearchVisibility: observed(),
-        webSearchSov: observed(),
-        multiPlatformCoverage: observed(),
+        aiSearchVisibility: observed([
+          "GEO_A2_ai_visibility",
+          "GEO_A3_qa_assets",
+        ]),
+        webSearchSov: observed([
+          "GEO_A2_ai_visibility",
+          "GEO_A6_distribution_citations",
+        ]),
+        multiPlatformCoverage: observed([
+          "GEO_A3_qa_assets",
+          "GEO_A6_distribution_citations",
+        ]),
       },
       semanticCoherence: {
-        corePropositionHitRate: observed(),
-        toneConsistency: direct(),
+        corePropositionHitRate: observed([
+          "GEO_A3_qa_assets",
+          "GEO_A4_positioning_language",
+        ]),
+        toneConsistency: direct(["GEO_A4_positioning_language"]),
       },
       semanticRichness: {
-        questionStageCoverage: direct(),
-        semanticEntityRichness: direct(),
-        contentFormatDiversity: direct(),
+        questionStageCoverage: direct(["GEO_A3_qa_assets"]),
+        semanticEntityRichness: direct([
+          "GEO_A1_entity_facts",
+          "GEO_A3_qa_assets",
+        ]),
+        contentFormatDiversity: direct(["GEO_A3_qa_assets"]),
       },
       semanticAuthority: {
-        authoritativeSourceRatio: observed(),
-        structuredDataCompleteness: direct(),
-        thirdPartyEndorsement: observed(),
+        authoritativeSourceRatio: observed(["GEO_A6_distribution_citations"]),
+        structuredDataCompleteness: direct(["GEO_A5_site_schema"]),
+        thirdPartyEndorsement: observed(["GEO_A6_distribution_citations"]),
       },
       competitiveAdvantage: {
-        firstMentionRate: observed(),
-        exclusiveSemanticSpace: observed(),
+        firstMentionRate: observed([
+          "GEO_A4_positioning_language",
+          "GEO_A6_distribution_citations",
+        ]),
+        exclusiveSemanticSpace: observed([
+          "GEO_A1_entity_facts",
+          "GEO_A4_positioning_language",
+        ]),
       },
     },
     roadmap: [
@@ -7166,6 +7591,30 @@ function validForecastOutput() {
     ],
     summary:
       "在完整执行、成功发布收录并按相同范围复测的前提下，企业语义资产存在可验证的一个月条件提升空间。",
+    executiveSummary:
+      "当前已有稳定的基础认知，但证据和内容覆盖仍需加强；未来四周先补齐事实与问答资产，并在月底按同一口径复测。",
+    dimensionNarratives: {
+      semanticVisibility: {
+        currentFinding: "当前回答已能识别企业及其主要服务方向。",
+        nextAction: "补齐核心能力内容并建立持续分发路径。",
+      },
+      semanticCoherence: {
+        currentFinding: "核心主张仍有少量边界不清的问题。",
+        nextAction: "统一定位、能力边界和风险说明语言。",
+      },
+      semanticRichness: {
+        currentFinding: "采购决策所需的部分关键问题尚未覆盖。",
+        nextAction: "补齐场景、部署和采购核验类问答。",
+      },
+      semanticAuthority: {
+        currentFinding: "重要判断已有部分来源支持但仍不充分。",
+        nextAction: "建设可追溯事实页并拓展独立来源。",
+      },
+      competitiveAdvantage: {
+        currentFinding: "可核验差异点尚未形成稳定的统一表达。",
+        nextAction: "围绕真实差异点完善对比内容和证据。",
+      },
+    },
     limitations: [
       "该预测仅覆盖当前选择的单一问题。",
       "模型更新与第三方引用不受企业直接控制。",

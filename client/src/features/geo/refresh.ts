@@ -37,17 +37,14 @@ export function shouldAutoRefreshGeoProject(project: GeoProject): boolean {
     return false;
   if (
     project.serviceActivation?.contractWorkflowReference &&
-    [
-      "contract_preparing",
-      "signature_required",
-      "activation_pending",
-      "provisioning",
-    ].includes(project.serviceActivation.status)
+    ["activation_pending", "provisioning"].includes(
+      project.serviceActivation.status,
+    )
   )
     return true;
   if (
     project.serviceActivation?.provisioningVersion === 2 &&
-    ["signature_required", "provisioning"].includes(
+    ["activation_pending", "provisioning"].includes(
       project.serviceActivation.status,
     )
   )

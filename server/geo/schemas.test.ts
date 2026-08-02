@@ -306,6 +306,7 @@ describe("CreatePaymentRequestSchema", () => {
 describe("service payment schemas", () => {
   it("normalizes a strict, authorized enterprise contract profile", () => {
     const parsed = CreateServiceContractRequestSchema.parse({
+      contractCode: "frontmind666",
       profile: {
         legalName: " 深圳星辰科技有限公司 ",
         creditCode: "91440300ma5f12345x",
@@ -325,16 +326,19 @@ describe("service payment schemas", () => {
     });
     expect(() =>
       CreateServiceContractRequestSchema.parse({
+        contractCode: "frontmind666",
         profile: { ...parsed.profile, authorized: false },
       }),
     ).toThrow();
     expect(() =>
       CreateServiceContractRequestSchema.parse({
+        contractCode: "frontmind666",
         profile: { ...parsed.profile, mobile: "12345" },
       }),
     ).toThrow();
     expect(() =>
       CreateServiceContractRequestSchema.parse({
+        contractCode: "frontmind666",
         profile: { ...parsed.profile, status: "payment_required" },
       }),
     ).toThrow();

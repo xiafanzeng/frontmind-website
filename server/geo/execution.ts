@@ -560,8 +560,21 @@ function latestTimestamp(values: unknown[]) {
 
 function timestampValue(...values: unknown[]): string | undefined {
   for (const value of values) {
-    if (typeof value !== "string" || !value.trim()) continue;
-    const timestamp = Date.parse(value);
+    const normalized =
+      typeof value === "number"
+        ? value
+        : typeof value === "string" && value.trim()
+          ? /^\d{10,13}$/.test(value.trim())
+            ? Number(value.trim())
+            : value.trim()
+          : undefined;
+    if (normalized === undefined) continue;
+    const timestamp =
+      typeof normalized === "number"
+        ? normalized < 100_000_000_000
+          ? normalized * 1000
+          : normalized
+        : Date.parse(normalized);
     if (!Number.isFinite(timestamp)) continue;
     return new Date(timestamp).toISOString();
   }

@@ -5,6 +5,7 @@ import {
   createGeoKnowledgeImporter,
   createGeoManualServiceOrderAccountSubmitter,
   createGeoManualServiceOrderCreator,
+  createGeoManualServiceOrderExternalAuthorizer,
   createGeoManualServiceOrderPaymentConfirmer,
   createGeoManualServiceOrderStatusReader,
   createGeoPaymentReceiptStore,
@@ -1064,6 +1065,55 @@ describe("website to Agent account provisioner", () => {
     });
     expect(accountSubmitted.order.status).toBe("active");
     expect(fetchImpl).toHaveBeenCalledTimes(4);
+  });
+
+  it("accepts the real pre-payment response and confirms an external contract", async () => {
+    const fetchImpl = vi.fn(async (url: URL, init?: RequestInit) => {
+      expect(url.pathname).toMatch(
+        /\/manual-orders\/manual-order-20260724\/external-contract$/,
+      );
+      expect(init?.headers).toMatchObject({
+        "x-frontmind-provisioning-token": "a".repeat(48),
+      });
+      expect(JSON.parse(String(init?.body))).toEqual({
+        schemaVersion: 1,
+        authorization: {
+          mode: "external_wechat",
+          eventReference: "wechat-contract-event-001",
+          authorizedAt: "2026-07-24T08:05:00.000Z",
+        },
+      });
+      return new Response(
+        JSON.stringify({
+          schemaVersion: 1,
+          order: {
+            reference: "manual-order-20260724",
+            projectId: manualOrderRequest.project.id,
+            status: "payment_required",
+            contractAuthorizationMode: "external_wechat",
+            contractAuthorizedAt: "2026-07-24T08:05:00.000Z",
+            updatedAt: "2026-07-24T08:05:00.000Z",
+          },
+        }),
+        { headers: { "Content-Type": "application/json" } },
+      );
+    });
+    const result = await createGeoManualServiceOrderExternalAuthorizer({
+      env,
+      fetchImpl,
+    })("manual-order-20260724", {
+      schemaVersion: 1,
+      authorization: {
+        mode: "external_wechat",
+        eventReference: "wechat-contract-event-001",
+        authorizedAt: "2026-07-24T08:05:00.000Z",
+      },
+    });
+    expect(result.order).toMatchObject({
+      status: "payment_required",
+      contractAuthorizationMode: "external_wechat",
+    });
+    expect(result.order.amountFen).toBeUndefined();
   });
 
   it("forwards a new manual-order password only in the account request body", async () => {

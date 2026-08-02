@@ -414,6 +414,30 @@ function textValue(...values: unknown[]): string | undefined {
     ?.trim();
 }
 
+function timestampValue(...values: unknown[]): string | undefined {
+  for (const value of values) {
+    if (value === null || value === undefined || value === "") continue;
+    const numeric =
+      typeof value === "number"
+        ? value
+        : typeof value === "string" && /^\d{10,13}$/.test(value.trim())
+          ? Number(value.trim())
+          : undefined;
+    const timestamp =
+      numeric !== undefined && Number.isFinite(numeric)
+        ? numeric < 100_000_000_000
+          ? numeric * 1_000
+          : numeric
+        : typeof value === "string"
+          ? Date.parse(value.trim())
+          : Number.NaN;
+    if (!Number.isFinite(timestamp)) continue;
+    const date = new Date(timestamp);
+    if (!Number.isNaN(date.getTime())) return date.toISOString();
+  }
+  return undefined;
+}
+
 function numberValue(...values: unknown[]): number | undefined {
   for (const value of values) {
     if (typeof value === "number" && Number.isFinite(value)) return value;
@@ -974,7 +998,7 @@ function normalizeKnowledgeCompleteness(
           : [],
       )
       .slice(0, 20),
-    evaluatedAt: textValue(record.evaluatedAt),
+    evaluatedAt: timestampValue(record.evaluatedAt),
     caveat:
       textValue(record.caveat)?.slice(0, 500) ||
       "该比例仅衡量本次已定义采集范围与知识节点，不代表对整个互联网的绝对覆盖率。",
@@ -1129,7 +1153,7 @@ function normalizeSources(value: unknown): GeoKnowledgeSource[] {
         url: textValue(record.url, record.href),
         domain: textValue(record.domain, record.host),
         type: textValue(record.type, record.sourceType),
-        capturedAt: textValue(record.capturedAt, record.date),
+        capturedAt: timestampValue(record.capturedAt, record.date),
       },
     ];
   });
@@ -1261,7 +1285,7 @@ function normalizeKnowledgeBase(
       manifest.companySummary,
       manifest.description,
     ),
-    generatedAt: textValue(
+    generatedAt: timestampValue(
       manifest.generatedAt,
       manifest.generated_at,
       archive.createdAt,
@@ -1366,10 +1390,18 @@ function normalizeAnswerSource(value: unknown): GeoAnswerSource | undefined {
 }
 
 function normalizeAnswerSources(value: unknown): GeoAnswerSource[] {
-  return asArray(value).flatMap((item) => {
+  const result = asArray(value).flatMap((item) => {
     const source = normalizeAnswerSource(item);
     return source ? [source] : [];
   });
+  const byIdentity = new Map<string, GeoAnswerSource>();
+  for (const source of result) {
+    const identity = source.url
+      ? `url:${source.url}`
+      : `title:${source.title.trim().toLocaleLowerCase("en-US")}`;
+    if (!byIdentity.has(identity)) byIdentity.set(identity, source);
+  }
+  return Array.from(byIdentity.values()).slice(0, 200);
 }
 
 function normalizeMonitoringStatus(value: unknown): GeoMonitoringStatus {
@@ -1482,6 +1514,18 @@ function normalizeMonitoringAnswer(
     ),
   );
 
+  const legacyCitations = normalizeAnswerSources(
+    record.citations ?? record.citationList ?? record.citation_list,
+  );
+  const legacyReferences = normalizeAnswerSources(
+    record.references ?? record.referenceList ?? record.reference_list,
+  );
+  const sources = normalizeAnswerSources(
+    record.sources ??
+      record.sourceList ??
+      record.source_list ?? [...legacyCitations, ...legacyReferences],
+  );
+
   return {
     id:
       textValue(record.id, record.recordId, record.record_id) ??
@@ -1497,13 +1541,10 @@ function normalizeMonitoringAnswer(
         record.mediaContent ??
         record.media_content,
     ),
-    citations: normalizeAnswerSources(
-      record.citations ?? record.citationList ?? record.citation_list,
-    ),
-    references: normalizeAnswerSources(
-      record.references ?? record.referenceList ?? record.reference_list,
-    ),
-    capturedAt: textValue(
+    sources,
+    citations: legacyCitations,
+    references: legacyReferences,
+    capturedAt: timestampValue(
       record.capturedAt,
       record.captured_at,
       record.time,
@@ -1642,9 +1683,13 @@ function normalizeMonitoring(value: unknown): GeoMonitoringResult | undefined {
         ) ?? failedFromAnswers,
       ),
     ),
-    nextPollAt: textValue(source.nextPollAt, source.next_poll_at),
-    startedAt: textValue(source.startedAt, source.started_at, source.createdAt),
-    completedAt: textValue(source.completedAt, source.completed_at),
+    nextPollAt: timestampValue(source.nextPollAt, source.next_poll_at),
+    startedAt: timestampValue(
+      source.startedAt,
+      source.started_at,
+      source.createdAt,
+    ),
+    completedAt: timestampValue(source.completedAt, source.completed_at),
     partialAccepted:
       source.partialAccepted === true || source.partial_accepted === true,
     answers,
@@ -1700,6 +1745,12 @@ function normalizeAssessmentDimension(
       record.calculationBasis,
       record.calculation_basis,
     ),
+    currentFinding: textValue(
+      record.currentFinding,
+      record.current_finding,
+      record.summary,
+    ),
+    nextAction: textValue(record.nextAction, record.next_action),
   };
 }
 
@@ -1837,13 +1888,14 @@ function normalizeAssessmentPlatformBreakdown(
         propositionHitRate: nullableNumberValue(
           record.propositionHitRate ?? record.proposition_hit_rate,
         ),
-        citationCount: Math.max(
+        sourceCount: Math.max(
           0,
-          numberValue(record.citationCount, record.citation_count) ?? 0,
-        ),
-        referenceCount: Math.max(
-          0,
-          numberValue(record.referenceCount, record.reference_count) ?? 0,
+          numberValue(
+            record.sourceCount,
+            record.source_count,
+            (numberValue(record.citationCount, record.citation_count) || 0) +
+              (numberValue(record.referenceCount, record.reference_count) || 0),
+          ) ?? 0,
         ),
         sentiment,
         verdict: textValue(record.verdict) ?? "",
@@ -2045,6 +2097,10 @@ function normalizeAssessment(value: unknown): GeoAssessmentResult | undefined {
       : undefined;
 
   return {
+    schemaVersion:
+      numberValue(scorecard.schemaVersion, root.schemaVersion) === 2
+        ? 2
+        : undefined,
     status,
     totalScore:
       totalScore === undefined
@@ -2083,7 +2139,19 @@ function normalizeAssessment(value: unknown): GeoAssessmentResult | undefined {
         root.scopeLabel,
         root.scope_label,
       ) ?? "本问题现状综合评分",
-    summary: textValue(scorecard.summary, scorecard.diagnosis, root.summary),
+    summary: textValue(
+      scorecard.executiveSummary,
+      scorecard.executive_summary,
+      scorecard.summary,
+      scorecard.diagnosis,
+      root.summary,
+    ),
+    executiveSummary: textValue(
+      scorecard.executiveSummary,
+      scorecard.executive_summary,
+      root.executiveSummary,
+      root.executive_summary,
+    ),
     dimensions,
     comparisons: normalizeKnowledgeComparisons(
       scorecard.comparisons ??
@@ -2110,7 +2178,7 @@ function normalizeAssessment(value: unknown): GeoAssessmentResult | undefined {
       .filter((item): item is string => Boolean(item)),
     rankingDiagnostics,
     methodology,
-    generatedAt: textValue(
+    generatedAt: timestampValue(
       scorecard.generatedAt,
       scorecard.generated_at,
       root.completedAt,
@@ -2207,6 +2275,12 @@ function normalizeOptimizationForecast(
           candidate.rationale,
           candidate.mechanism,
         ),
+        currentFinding: textValue(
+          candidate.currentFinding,
+          candidate.current_finding,
+          candidate.summary,
+        ),
+        nextAction: textValue(candidate.nextAction, candidate.next_action),
         actions: asArray(
           candidate.actions ?? candidate.actionIds ?? candidate.action_ids,
         )
@@ -2317,6 +2391,10 @@ function normalizeOptimizationForecast(
       : undefined;
 
   return {
+    schemaVersion:
+      numberValue(forecast.schemaVersion, root.schemaVersion) === 2
+        ? 2
+        : undefined,
     status,
     horizonWeeks: numberValue(forecast.horizonWeeks, forecast.horizon_weeks),
     currentScore,
@@ -2333,7 +2411,19 @@ function normalizeOptimizationForecast(
     rawTargetExpected,
     rawTargetHigh,
     scoreBasis,
-    summary: textValue(forecast.summary),
+    summary: textValue(
+      forecast.executiveSummary,
+      forecast.executive_summary,
+      forecast.summary,
+    ),
+    executiveSummary: textValue(
+      forecast.executiveSummary,
+      forecast.executive_summary,
+    ),
+    targetCondition: textValue(
+      forecast.targetCondition,
+      forecast.target_condition,
+    ),
     dimensions,
     assumptions: asArray(forecast.assumptions)
       .map((item) => textValue(item))
@@ -2342,7 +2432,7 @@ function normalizeOptimizationForecast(
     limitations: asArray(forecast.limitations ?? root.limitations)
       .map((item) => textValue(item))
       .filter((item): item is string => Boolean(item)),
-    generatedAt: textValue(
+    generatedAt: timestampValue(
       forecast.generatedAt,
       forecast.generated_at,
       root.completedAt,
@@ -2422,7 +2512,11 @@ function normalizeExecutionLog(value: unknown): GeoExecutionLog | undefined {
           kind: rawKind as GeoExecutionLog["entries"][number]["events"][number]["kind"],
           message:
             rawKind === "error" ? localizedUserFacingError(message) : message,
-          createdAt: textValue(event.createdAt, event.created_at, event.at),
+          createdAt: timestampValue(
+            event.createdAt,
+            event.created_at,
+            event.at,
+          ),
         },
       ];
     });
@@ -2438,10 +2532,10 @@ function normalizeExecutionLog(value: unknown): GeoExecutionLog | undefined {
         title,
         status: status as GeoExecutionLog["entries"][number]["status"],
         progress: progress === undefined ? undefined : clampProgress(progress),
-        startedAt: textValue(entry.startedAt, entry.started_at),
-        updatedAt: textValue(entry.updatedAt, entry.updated_at),
-        completedAt: textValue(entry.completedAt, entry.completed_at),
-        nextPollAt: textValue(entry.nextPollAt, entry.next_poll_at),
+        startedAt: timestampValue(entry.startedAt, entry.started_at),
+        updatedAt: timestampValue(entry.updatedAt, entry.updated_at),
+        completedAt: timestampValue(entry.completedAt, entry.completed_at),
+        nextPollAt: timestampValue(entry.nextPollAt, entry.next_poll_at),
         counters,
         ...(crawlProgress ? { crawlProgress } : {}),
         events,
@@ -2639,8 +2733,8 @@ function normalizeServiceActivation(
     amountFen: amountFen!,
     billingMonths: 1,
     orderId: textValue(source.orderId, source.order_id),
-    paidAt: textValue(source.paidAt, source.paid_at),
-    profileSubmittedAt: textValue(
+    paidAt: timestampValue(source.paidAt, source.paid_at),
+    profileSubmittedAt: timestampValue(
       source.profileSubmittedAt,
       source.profile_submitted_at,
     ),
@@ -2650,7 +2744,18 @@ function normalizeServiceActivation(
       source.contract_preview_url,
     ),
     signingUrl: textValue(source.signingUrl, source.signing_url),
-    signedAt: textValue(source.signedAt, source.signed_at),
+    signedAt: timestampValue(source.signedAt, source.signed_at),
+    contractAuthorizationMode:
+      textValue(
+        source.contractAuthorizationMode,
+        source.contract_authorization_mode,
+      ) === "external_wechat"
+        ? "external_wechat"
+        : undefined,
+    contractAuthorizedAt: timestampValue(
+      source.contractAuthorizedAt,
+      source.contract_authorized_at,
+    ),
     contractWorkflowReference: textValue(
       source.contractWorkflowReference,
       source.contract_workflow_reference,
@@ -2735,8 +2840,8 @@ function normalizeServiceActivation(
       source.account_setup_url,
     ),
     workspaceUrl: textValue(source.workspaceUrl, source.workspace_url),
-    provisionedAt: textValue(source.provisionedAt, source.provisioned_at),
-    activatedAt: textValue(source.activatedAt, source.activated_at),
+    provisionedAt: timestampValue(source.provisionedAt, source.provisioned_at),
+    activatedAt: timestampValue(source.activatedAt, source.activated_at),
     knowledgeImport: (() => {
       const knowledge = asRecord(
         source.knowledgeImport ?? source.knowledge_import,
@@ -2761,7 +2866,7 @@ function normalizeServiceActivation(
           undefined,
           "",
         ),
-        updatedAt: textValue(knowledge.updatedAt, knowledge.updated_at),
+        updatedAt: timestampValue(knowledge.updatedAt, knowledge.updated_at),
       };
     })(),
     error: localizedUserFacingError(textValue(source.error), undefined, ""),
@@ -2937,9 +3042,12 @@ export function normalizeGeoProject(
     input:
       textValue(project.input, project.companyWebsite, fallback?.input) ?? "",
     createdAt:
-      textValue(project.createdAt, project.created_at, fallback?.createdAt) ??
-      now,
-    updatedAt: textValue(project.updatedAt, project.updated_at) ?? now,
+      timestampValue(
+        project.createdAt,
+        project.created_at,
+        fallback?.createdAt,
+      ) ?? now,
+    updatedAt: timestampValue(project.updatedAt, project.updated_at) ?? now,
     stage: normalizeStage(
       project,
       questions,
@@ -3009,6 +3117,9 @@ export function normalizeGeoProject(
     })(),
     questionRetryAvailable: project.questionRetryAvailable === true,
     assessmentRetryAvailable: project.assessmentRetryAvailable === true,
+    assessmentUpdatingToVersion2:
+      project.assessmentUpdatingToVersion2 === true ||
+      project.assessment_updating_to_version_2 === true,
     optimizationForecastRetryAvailable:
       project.optimizationForecastRetryAvailable === true,
     files: hasOwnField(project, "attachments", "files")
@@ -3752,12 +3863,13 @@ export async function createGeoServicePaymentCheckout(
 export async function submitGeoServiceContractProfile(
   project: GeoProject,
   profile: GeoServiceContractProfile,
+  contractCode: string,
 ): Promise<GeoProject> {
   const payload = await requestJson(
     `/projects/${encodeURIComponent(project.remoteToken)}/services/contracts`,
     {
       method: "POST",
-      body: JSON.stringify({ profile }),
+      body: JSON.stringify({ profile, contractCode }),
     },
   );
   return normalizeRequiredProjectResponse(payload, project);

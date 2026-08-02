@@ -260,6 +260,25 @@ describe("GEO execution log", () => {
     });
   });
 
+  it("normalizes Unix seconds and milliseconds before publishing timestamps", () => {
+    const seconds = Date.parse("2026-08-02T10:00:00.000Z") / 1000;
+    const milliseconds = Date.parse("2026-08-02T10:05:00.000Z");
+    const log = buildGeoExecutionLog({
+      knowledgeBaseTask: {
+        status: "completed",
+        created_at: seconds,
+        completed_at: String(milliseconds),
+        output: [],
+      } as BrokerTask,
+      now: new Date("2026-08-02T10:06:00.000Z"),
+    });
+
+    expect(log.entries[0]).toMatchObject({
+      startedAt: "2026-08-02T10:00:00.000Z",
+      completedAt: "2026-08-02T10:05:00.000Z",
+    });
+  });
+
   it("returns structured crawl progress without exposing its marker as model output", () => {
     const marker =
       'FRONTMIND_GEO_CRAWL_PROGRESS_V1 {"schemaVersion":1,"reportedAt":"2026-07-28T08:05:00.000Z","phase":"crawling","visitedLinks":12,"successfulPages":10,"failedPages":2,"textCharacters":24680,"imagesDiscovered":18,"imagesDownloaded":11,"documentsParsed":3,"webQueriesExecuted":2}';

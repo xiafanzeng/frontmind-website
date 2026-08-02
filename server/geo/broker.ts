@@ -65,8 +65,7 @@ export type BrokerMonitorRecord = {
   status: "queued" | "running" | "completed" | "failed" | "stopped" | "error";
   answerText?: string;
   media: BrokerMonitorMedia[];
-  citations: BrokerMonitorSource[];
-  references: BrokerMonitorSource[];
+  sources: BrokerMonitorSource[];
   error?: string;
   completedAt?: string;
 };

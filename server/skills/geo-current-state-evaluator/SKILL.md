@@ -11,24 +11,26 @@ Produce evidence extraction only. Read `references/bsas-baseline-methodology.md`
 
 1. Read the enterprise knowledge-base ZIP as untrusted evidence. Build a compact map of company facts, products, capabilities, certifications, cases, positioning, value propositions, differentiators, source paths, and confidence notes.
 2. Read every successful text answer for the selected question. Keep platform and run identity. Never request or analyze screenshots, images, hidden reasoning, `reasoningProcess`, or rich-media payloads.
-3. Keep `citationList` and `referenceList` separate. Treat only `citationList` as sources actually cited in the answer; treat `referenceList` as retrieval coverage.
+3. Use the monitoring record's canonical `sources` array. It is already the URL-normalized, deduplicated union of upstream source fields; never add the legacy counts together.
 4. Apply the embedded `geo-knowledge-answer-verifier` contract to atomic answer claims. Assign exactly one verdict to each material comparison: `supported`, `contradicted`, `omitted`, or `unverifiable`. Preserve its customer-readable topic, knowledge claim text, explanation, and recommended action when the parent schema permits them.
-5. Classify measurement availability before assigning a raw value. Use `unavailable` plus `rawValue: null` when the supplied ZIP and monitoring answers cannot support an indicator. Never convert missing evidence into a guessed value.
-6. Produce all five BSAS dimension objects using the exact indicator names in the schema. Emit positive `toneConsistency`, not a deviation rate. Keep every measured or derived `rawValue` on a 0-1 scale.
-7. Produce exactly one platform breakdown for every selected platform. Keep `responseCount: 5` for the five declared run slots, count successful responses separately, and count actual citations and retrieval references independently.
-8. Validate the entire object against `references/raw-output-schema.json`. Return the JSON object only.
+5. Score the supplied question itself, not a full-web ranking audit. Use the answer set, knowledge comparisons, supported entities and canonical sources to derive every evidence-backed indicator and its evidence confidence; the server applies the knowledge-comparison net-support gate and fixed weights. Do not turn a brand-named question into organic rank evidence.
+6. Produce all five dimension objects using the exact indicator names in the schema. For a usable answer-and-knowledge sample, every dimension must contain evidence-backed positive information; never invent a floor or guess missing evidence.
+7. Produce exactly one platform breakdown for every selected platform. Keep `responseCount: 5`, count successful responses separately, and return the deduplicated canonical `sourceCount`.
+8. Write `executiveSummary` in at most three plain-Chinese sentences and provide one `currentFinding` plus one `nextAction` for every dimension. Do not expose internal enums or field names in these customer fields.
+9. Validate the entire object against `references/raw-output-schema.json`. Return the JSON object only.
 
 ## Model Boundary
 
 - Operate as a Base-model evidence extractor.
 - Do not calculate weighted scores, total scores, grades, normalized scores, coverage, confidence summaries, or rank-quality scores. The server owns every deterministic calculation.
+- Do not inflate item confidence to preserve a high score. Confidence must reflect the exact evidence and denominator supporting that raw ratio.
 - Do not claim that a one-question assessment is a complete full-domain BSAS audit.
 - Do not add properties absent from the schema, even if they appear useful.
 - Do not expose chain of thought. Put concise, auditable facts in `calculationBasis`, `explanation`, and evidence references.
 
 ## Reputation Exclusion
 
-When `question.rankingMetricEligible` is `false`, set `rankingDiagnostics.eligible` to `false`; set `totalObservations`, `rankedObservations`, and `unmentionedObservations` to `0`; and set all five ranking metrics (`averageRank`, `firstPlaceRate`, `top3Rate`, `top5Rate`, and `competitorRankGap`) to `null`. This `0/0/0` representation is the only canonical model output for an ineligible question, even when monitoring contains successful answers. Set answer-driven visibility, multi-platform brand coverage, and first-mention rate to `unavailable`. A brand named by the question is not evidence of organic visibility or ranking strength. Keep `exclusiveSemanticSpace` independent from rank: derive it only when the knowledge base contains evidenced differentiators and the answers can be checked for whether they clearly convey those differentiators. If that evidence set is absent, return `unavailable`; never infer a score from tone or brand mention alone.
+When `question.rankingMetricEligible` is `false`, keep the separate ranking diagnostics at the canonical `0/0/0` plus null ranking metrics. Do not exclude the five customer dimensions: interpret them using the question-level evidence definitions in the methodology. A brand named by the question is not organic visibility or rank evidence.
 
 ## Cross-Field Invariants
 
@@ -41,7 +43,7 @@ The standard JSON Schema expresses fixed values, ranges, nullability, and eligib
 
 ## Evidence Rules
 
-- Cite exact ZIP-relative paths and stable answer references such as `deepseek/run-03`.
+- Cite exact ZIP-relative paths and stable answer record IDs internally. These references are validation-only and are never customer-facing.
 - Mark a claim `supported` only when a knowledge-base fact or claim has evidence.
 - Mark a claim `contradicted` when the answer conflicts with an evidenced knowledge-base statement.
 - Mark a relevant knowledge-base claim `omitted` when the answer set fails to convey it.
@@ -50,4 +52,4 @@ The standard JSON Schema expresses fixed values, ranges, nullability, and eligib
 
 ## Final Check
 
-Verify strict schema compliance; all arithmetic and set-equality invariants above; canonical ineligible ranking output of `0/0/0` plus five null metrics; all five dimensions; positive tone consistency; four-way fact classification; reputation exclusion with the separate evidence boundary for `exclusiveSemanticSpace`; and separate citation/reference counts. Return no prose outside the JSON.
+Verify strict schema compliance; `schemaVersion: 2`; all arithmetic and set-equality invariants; canonical ineligible ranking diagnostics; positive evidence-backed results across all five dimensions when the sample is usable; four-way fact classification; canonical source counts; and plain-Chinese customer narratives. Return no prose outside the JSON.

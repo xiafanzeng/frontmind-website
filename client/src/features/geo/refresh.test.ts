@@ -46,8 +46,8 @@ describe("GEO project refresh policy", () => {
     expect(GEO_AUTO_REFRESH_INTERVAL_MS).toBe(30_000);
   });
 
-  it.each(["signature_required", "provisioning"] as const)(
-    "keeps polling a v2 service while activation is %s",
+  it.each(["activation_pending", "provisioning"] as const)(
+    "keeps polling a v2 service after payment while activation is %s",
     (status) => {
       expect(
         shouldAutoRefreshGeoProject(
@@ -66,13 +66,8 @@ describe("GEO project refresh policy", () => {
     },
   );
 
-  it.each([
-    "contract_preparing",
-    "signature_required",
-    "activation_pending",
-    "provisioning",
-  ] as const)(
-    "keeps polling a manual service while activation is %s",
+  it.each(["activation_pending", "provisioning"] as const)(
+    "keeps polling a manual service after payment while activation is %s",
     (status) => {
       expect(
         shouldAutoRefreshGeoProject(
@@ -90,6 +85,44 @@ describe("GEO project refresh policy", () => {
       ).toBe(true);
     },
   );
+
+  it.each(["contract_preparing", "signature_required"] as const)(
+    "does not poll a manual contract while activation is %s",
+    (status) => {
+      expect(
+        shouldAutoRefreshGeoProject(
+          project({
+            serviceActivation: {
+              status,
+              contractWorkflowReference: "manual-order-001",
+              questionId: "question-1",
+              category: "reputation",
+              amountFen: 200_000,
+              billingMonths: 1,
+            },
+          }),
+        ),
+      ).toBe(false);
+    },
+  );
+
+  it("does not poll a paid legacy order that is still marked signature required", () => {
+    expect(
+      shouldAutoRefreshGeoProject(
+        project({
+          serviceActivation: {
+            status: "signature_required",
+            contractWorkflowReference: "manual-order-001",
+            questionId: "question-1",
+            category: "reputation",
+            amountFen: 200_000,
+            billingMonths: 1,
+            paidAt: "2026-07-28T01:00:00.000Z",
+          },
+        }),
+      ),
+    ).toBe(false);
+  });
 
   it.each(["submitted", "capturing"] as const)(
     "refreshes while monitoring is %s",

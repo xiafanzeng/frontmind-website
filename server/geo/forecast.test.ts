@@ -39,7 +39,12 @@ function unavailableAssessmentIndicator() {
 
 function baseline(
   rawValue: number,
-  options: { reputation?: boolean; unavailableStructuredData?: boolean } = {},
+  options: {
+    reputation?: boolean;
+    unavailableStructuredData?: boolean;
+    schemaVersion?: 1 | 2;
+    supportedComparison?: boolean;
+  } = {},
 ) {
   const measured = () => assessmentIndicator(rawValue);
   const rankingEligible = !options.reputation;
@@ -133,10 +138,12 @@ function baseline(
       {
         id: "comparison-01",
         topic: "企业定位",
-        verdict: "omitted",
-        platform: null,
-        runIndex: null,
-        answerExcerpt: null,
+        verdict: options.supportedComparison ? "supported" : "omitted",
+        platform: options.supportedComparison ? "deepseek" : null,
+        runIndex: options.supportedComparison ? 1 : null,
+        answerExcerpt: options.supportedComparison
+          ? "回答准确提到了企业定位。"
+          : null,
         kbClaimId: "claims.positioning",
         kbClaimText: "企业知识库包含一条与当前问题相关的可核验定位主张。",
         kbEvidenceRefs: ["kb/01_company.md"],
@@ -158,6 +165,39 @@ function baseline(
     ],
     limitations: ["本次仅覆盖一个问题与一个平台。"],
   };
+  if (options.schemaVersion === 2) {
+    value.schemaVersion = 2;
+    value.platformBreakdown = value.platformBreakdown.map(
+      ({ citationCount = 0, referenceCount = 0, ...platform }) => ({
+        ...platform,
+        sourceCount: citationCount + referenceCount,
+      }),
+    );
+    value.executiveSummary =
+      "当前已形成基础认知，但事实和来源覆盖仍需提升；本月将补齐内容和证据，并在月底按同一口径复测。";
+    value.dimensionNarratives = {
+      semanticVisibility: {
+        currentFinding: "当前回答已经能够识别企业及其主要服务。",
+        nextAction: "补齐核心业务内容和稳定的公开来源路径。",
+      },
+      semanticCoherence: {
+        currentFinding: "核心事实基本一致，部分边界仍需统一。",
+        nextAction: "统一定位、能力边界和风险说明语言。",
+      },
+      semanticRichness: {
+        currentFinding: "回答已覆盖部分场景，采购信息仍不完整。",
+        nextAction: "补齐场景、部署和采购核验类问答。",
+      },
+      semanticAuthority: {
+        currentFinding: "重要事实已有部分来源支持，独立证据偏少。",
+        nextAction: "建设可追溯事实页并拓展独立来源。",
+      },
+      competitiveAdvantage: {
+        currentFinding: "部分差异点已经出现，但表达还不稳定。",
+        nextAction: "围绕真实差异点完善对比内容和证据。",
+      },
+    };
+  }
   return calculateQuestionBaselineAssessment(value);
 }
 
@@ -326,7 +366,120 @@ function rawForecast(
   };
 }
 
+function rawV2Forecast(): ForecastRawTaskOutput {
+  const legacy = rawForecast();
+  return {
+    ...legacy,
+    schemaVersion: 2,
+    scenario: {
+      ...legacy.scenario,
+      actionIds: [
+        "GEO_A1_entity_facts",
+        "GEO_A2_ai_visibility",
+        "GEO_A3_qa_assets",
+        "GEO_A4_positioning_language",
+        "GEO_A5_site_schema",
+        "GEO_A6_distribution_citations",
+      ],
+    },
+    dimensions: {
+      ...legacy.dimensions,
+      semanticVisibility: {
+        ...legacy.dimensions.semanticVisibility,
+        aiSearchVisibility: {
+          ...legacy.dimensions.semanticVisibility.aiSearchVisibility,
+          actionIds: [
+            "GEO_A1_entity_facts",
+            "GEO_A2_ai_visibility",
+            "GEO_A3_qa_assets",
+            "GEO_A4_positioning_language",
+            "GEO_A5_site_schema",
+            "GEO_A6_distribution_citations",
+          ],
+        },
+      },
+    },
+    executiveSummary:
+      "当前已有稳定的基础认知，但证据与内容覆盖仍需加强；未来四周先补齐事实和问答资产，并在月底按同一口径复测。",
+    dimensionNarratives: {
+      semanticVisibility: {
+        currentFinding: "当前回答已能识别企业及其主要服务方向。",
+        nextAction: "补齐核心能力内容并建立持续分发路径。",
+      },
+      semanticCoherence: {
+        currentFinding: "核心主张的表达存在少量边界不清问题。",
+        nextAction: "统一定位、能力边界和风险说明语言。",
+      },
+      semanticRichness: {
+        currentFinding: "采购决策所需的部分关键问题尚未覆盖。",
+        nextAction: "补齐场景、部署和采购核验类问答。",
+      },
+      semanticAuthority: {
+        currentFinding: "重要判断已有部分来源支持但仍不充分。",
+        nextAction: "建设可追溯事实页并拓展独立来源。",
+      },
+      competitiveAdvantage: {
+        currentFinding: "可核验差异点尚未形成稳定的统一表达。",
+        nextAction: "围绕真实差异点完善对比内容和证据。",
+      },
+    },
+  };
+}
+
 describe("GEO optimization forecast schema and parser", () => {
+  it("accepts v2 customer narratives and keeps the roadmap concise", () => {
+    const raw = rawV2Forecast();
+    const parsed = ForecastRawTaskOutputSchema.parse(raw);
+    expect(parsed.schemaVersion).toBe(2);
+    expect(parsed.executiveSummary).toContain("未来四周");
+    expect(parsed.roadmap.every((phase) => phase.actions.length <= 3)).toBe(
+      true,
+    );
+  });
+
+  it("rejects incomplete v2 indicators and action mappings instead of filling defaults", () => {
+    const missingIndicator = rawV2Forecast();
+    missingIndicator.dimensions.semanticVisibility.aiSearchVisibility =
+      notProjectable();
+    expect(
+      ForecastRawTaskOutputSchema.safeParse(missingIndicator).success,
+    ).toBe(false);
+
+    const missingScenarioAction = rawV2Forecast();
+    missingScenarioAction.scenario.actionIds = ["GEO_A3_qa_assets"];
+    expect(
+      ForecastRawTaskOutputSchema.safeParse(missingScenarioAction).success,
+    ).toBe(false);
+
+    const unmappedAction = rawV2Forecast();
+    unmappedAction.dimensions.semanticVisibility.aiSearchVisibility = {
+      ...unmappedAction.dimensions.semanticVisibility.aiSearchVisibility,
+      actionIds: ["GEO_A3_qa_assets"],
+    };
+    expect(ForecastRawTaskOutputSchema.safeParse(unmappedAction).success).toBe(
+      false,
+    );
+
+    const wrongEffect = rawV2Forecast();
+    wrongEffect.dimensions.semanticRichness.questionStageCoverage = {
+      ...wrongEffect.dimensions.semanticRichness.questionStageCoverage,
+      effectType: "observed_outcome",
+    };
+    expect(ForecastRawTaskOutputSchema.safeParse(wrongEffect).success).toBe(
+      false,
+    );
+
+    const emptyRange = rawV2Forecast();
+    emptyRange.dimensions.semanticAuthority.authoritativeSourceRatio = {
+      ...emptyRange.dimensions.semanticAuthority.authoritativeSourceRatio,
+      gapClosureLow: 0,
+      gapClosureHigh: 0,
+    };
+    expect(ForecastRawTaskOutputSchema.safeParse(emptyRange).success).toBe(
+      false,
+    );
+  });
+
   it("strictly parses a fenced nested Base response", () => {
     const raw = rawForecast();
     const parsed = parseOptimizationOutcomeForecastTaskOutput({
@@ -473,7 +626,70 @@ describe("GEO optimization forecast schema and parser", () => {
 });
 
 describe("deterministic GEO optimization forecast scoring", () => {
-  it("turns legacy sparse projections into a complete qualified target", () => {
+  it("applies the v2 conditional target policy without changing action mapping", () => {
+    const raw = rawV2Forecast();
+    for (const indicators of Object.values(raw.dimensions)) {
+      for (const indicator of Object.values(
+        indicators,
+      ) as ForecastIndicator[]) {
+        indicator.gapClosureLow = 0.01;
+        indicator.gapClosureHigh = 0.02;
+      }
+    }
+
+    const result = calculateOptimizationOutcomeForecast(
+      baseline(0.1, { schemaVersion: 2 }),
+      raw,
+    );
+
+    expect(result.total.current).toBe(8.8);
+    expect(result.total.low).toBe(60);
+    expect(result.total.expected).toBe(62);
+    expect(result.total.high).toBe(64);
+    expect(result.applicableTotal.low).toBe(60);
+    expect(result.total.upliftLow).toBe(51.2);
+    expect(result.total.high).toBeLessThan(100);
+    expect(
+      Object.values(result.dimensions).reduce(
+        (sum, dimension) => sum + dimension.low,
+        0,
+      ),
+    ).toBeCloseTo(result.total.low, 1);
+    expect(
+      Object.values(result.dimensions).reduce(
+        (sum, dimension) => sum + dimension.high,
+        0,
+      ),
+    ).toBeCloseTo(result.total.high, 1);
+    expect(
+      result.dimensions.semanticVisibility.indicators.aiSearchVisibility
+        .actionIds,
+    ).toEqual(raw.dimensions.semanticVisibility.aiSearchVisibility.actionIds);
+  });
+
+  it("keeps a high v2 planning target below 100 when ten points of headroom do not remain", () => {
+    const result = calculateOptimizationOutcomeForecast(
+      baseline(0.95, {
+        schemaVersion: 2,
+        supportedComparison: true,
+      }),
+      rawV2Forecast(),
+    );
+
+    expect(result.applicableTotal.current).toBeGreaterThan(89);
+    expect(result.applicableTotal.low).toBe(99);
+    expect(result.applicableTotal.high).toBe(99);
+    expect(result.applicableTotal.high).toBeLessThan(100);
+    expect(result.applicableTotal.upliftLow).toBeLessThan(10);
+  });
+
+  it("does not run a v2 forecast against a legacy assessment", () => {
+    expect(() =>
+      calculateOptimizationOutcomeForecast(baseline(0.1), rawV2Forecast()),
+    ).toThrow(/require a v2 assessment/i);
+  });
+
+  it("keeps historical v1 sparse-projection compatibility", () => {
     const onlyVisibility = rawForecast((path) =>
       path === "semanticVisibility.aiSearchVisibility"
         ? projectable(0.2, 0.4)
@@ -489,9 +705,7 @@ describe("deterministic GEO optimization forecast scoring", () => {
     expect(indicator.current.raw).toBe(0.5);
     expect(indicator.low.raw).toBeGreaterThan(indicator.current.raw);
     expect(indicator.expected.raw).toBeGreaterThanOrEqual(indicator.low.raw!);
-    expect(indicator.high.raw).toBeGreaterThanOrEqual(
-      indicator.expected.raw!,
-    );
+    expect(indicator.high.raw).toBeGreaterThanOrEqual(indicator.expected.raw!);
     expect(result.total).toMatchObject({
       current: 50,
       low: 60,
@@ -499,8 +713,8 @@ describe("deterministic GEO optimization forecast scoring", () => {
       high: 66,
     });
     expect(
-      result.dimensions.semanticAuthority.indicators
-        .structuredDataCompleteness.measurementStatus,
+      result.dimensions.semanticAuthority.indicators.structuredDataCompleteness
+        .measurementStatus,
     ).toBe("projectable");
   });
 
@@ -584,7 +798,7 @@ describe("deterministic GEO optimization forecast scoring", () => {
     );
   });
 
-  it("keeps the qualified target floor when the accepted sample is partial", () => {
+  it("keeps the historical v1 target floor when the accepted sample is partial", () => {
     const complete = baseline(1 / 3, { reputation: true });
     const partial = {
       ...complete,
@@ -692,8 +906,12 @@ describe("forecast Base prompt and audited skill loader", () => {
 
     expect(prompt).toContain("始终使用 Base 模型");
     expect(prompt).toContain("不得计算或返回分数、等级、分数增量");
-    expect(prompt).toContain("适用范围");
-    expect(prompt).toContain("总目标下沿不低于 60/100");
+    expect(prompt).toContain("v2 保守五维分数");
+    expect(prompt).toContain("至少 60 分");
+    expect(prompt).toContain("尽量较当前提升 10 分");
+    expect(prompt).toContain("不得把规划门槛写成已实现结果");
+    expect(prompt).toContain("缺失或不可用时应校验失败");
+    expect(prompt).not.toContain("保留现状评估中的单问题范围、不可用指标");
     expect(prompt).not.toContain("不确定时返回 not_projectable");
     expect(prompt).toContain(
       '"currentAssessmentAttachment": "FrontMind-current-assessment.json"',
@@ -715,5 +933,23 @@ describe("forecast Base prompt and audited skill loader", () => {
       "references/output-schema.json",
       "references/source-manifest.json",
     ]);
+    const outputSchema = JSON.parse(
+      await zip.file("references/output-schema.json")!.async("string"),
+    );
+    expect(outputSchema.properties.scenario.properties.actionIds).toMatchObject(
+      {
+        minItems: 6,
+        maxItems: 6,
+      },
+    );
+    expect(
+      outputSchema.$defs.indicatorForecast.properties.measurementStatus,
+    ).toEqual({ const: "projectable" });
+    expect(
+      outputSchema.$defs.indicatorForecast.properties.gapClosureHigh,
+    ).toMatchObject({
+      type: "number",
+      exclusiveMinimum: 0,
+    });
   });
 });

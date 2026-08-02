@@ -124,6 +124,7 @@ import {
   createGeoKnowledgeImporter,
   createGeoManualServiceOrderAccountSubmitter,
   createGeoManualServiceOrderCreator,
+  createGeoManualServiceOrderExternalAuthorizer,
   createGeoManualServiceOrderPaymentConfirmer,
   createGeoManualServiceOrderStatusReader,
   createGeoProjectOrderRegistry,
@@ -135,6 +136,7 @@ import {
   type GeoKnowledgeImportResponse,
   type GeoManualServiceOrderAccountSubmitter,
   type GeoManualServiceOrderCreator,
+  type GeoManualServiceOrderExternalAuthorizer,
   type GeoManualServiceOrderPaymentConfirmer,
   type GeoManualServiceOrderResponse,
   type GeoManualServiceOrderStatus,
@@ -171,6 +173,7 @@ import {
   parseCookies,
   safeSecretEqual,
 } from "./tokens";
+import { resolveGeoRuntimeConfiguration } from "./runtime-config";
 import {
   assertResponseLengthWithinLimit,
   createByteLimitTransform,
@@ -311,10 +314,13 @@ type ProjectTokenValue = {
   assessmentTaskId?: string;
   assessmentSubmittedAt?: string;
   assessmentAttempt?: 1 | 2;
+  assessmentVersion?: 2;
+  assessmentUpgradeFromV1?: boolean;
   previousAssessmentTaskIds?: string[];
   optimizationForecastTaskId?: string;
   optimizationForecastSubmittedAt?: string;
   optimizationForecastAttempt?: 1 | 2;
+  optimizationForecastVersion?: 2;
   previousOptimizationForecastTaskIds?: string[];
   serviceOrderId?: string;
   serviceQuestionId?: string;
@@ -359,6 +365,8 @@ type ProjectTokenValue = {
   serviceManualContractId?: string;
   serviceManualSigningUrl?: string;
   serviceManualSignedAt?: string;
+  serviceContractAuthorizationMode?: "external_wechat";
+  serviceContractAuthorizedAt?: string;
   serviceProfileSubmittedAt?: string;
   serviceAdminNotificationDeliveredAt?: string;
 };
@@ -371,6 +379,7 @@ type GeoRouterOptions = {
   purchaseProvisioner?: GeoPurchaseProvisioner;
   purchaseStatusReader?: GeoPurchaseStatusReader;
   manualOrderCreator?: GeoManualServiceOrderCreator;
+  manualOrderExternalAuthorizer?: GeoManualServiceOrderExternalAuthorizer;
   manualOrderStatusReader?: GeoManualServiceOrderStatusReader;
   manualOrderPaymentConfirmer?: GeoManualServiceOrderPaymentConfirmer;
   manualOrderAccountSubmitter?: GeoManualServiceOrderAccountSubmitter;
@@ -478,25 +487,8 @@ async function verifyUploadedKnowledgeBaseArchive(
 export function createGeoRouter(options: GeoRouterOptions = {}): Router {
   const env = options.env ?? process.env;
   const production = env.NODE_ENV === "production";
-  const inviteCode =
-    env.FRONTMIND_GEO_INVITE_CODE?.trim() || (production ? "" : "frontmind666");
-  const sessionSecret =
-    env.FRONTMIND_GEO_SESSION_SECRET?.trim() ||
-    (production ? "" : "frontmind-geo-local-development-secret");
-  const unsafeProductionInvite =
-    production &&
-    (inviteCode.length < 16 ||
-      inviteCode === "frontmind666" ||
-      isUnsafePlaceholder(inviteCode));
-  const unsafeProductionSessionSecret = production && sessionSecret.length < 32;
-  const configurationError =
-    !inviteCode ||
-    unsafeProductionInvite ||
-    sessionSecret.length < 16 ||
-    unsafeProductionSessionSecret ||
-    isUnsafePlaceholder(sessionSecret)
-      ? "GEO 邀请码或会话密钥尚未配置"
-      : "";
+  const { inviteCode, contractAuthCode, sessionSecret, configurationError } =
+    resolveGeoRuntimeConfiguration(env);
   const codec = new GeoTokenCodec(
     sessionSecret.length >= 16
       ? sessionSecret
@@ -514,6 +506,9 @@ export function createGeoRouter(options: GeoRouterOptions = {}): Router {
     options.purchaseStatusReader ?? createGeoPurchaseStatusReader({ env });
   const manualOrderCreator =
     options.manualOrderCreator ?? createGeoManualServiceOrderCreator({ env });
+  const manualOrderExternalAuthorizer =
+    options.manualOrderExternalAuthorizer ??
+    createGeoManualServiceOrderExternalAuthorizer({ env });
   const manualOrderStatusReader =
     options.manualOrderStatusReader ??
     createGeoManualServiceOrderStatusReader({ env });
@@ -551,6 +546,7 @@ export function createGeoRouter(options: GeoRouterOptions = {}): Router {
     throw new Error("custom-question legacy compatibility timing is invalid");
   }
   const failedInvites = new Map<string, FailedInviteWindow>();
+  const failedContractCodes = new Map<string, FailedInviteWindow>();
   const sessionRates = new Map<string, RateWindow>();
   const identityRates = new Map<string, RateWindow>();
   const serviceOrderLocks = new Map<string, ServiceOrderLock>();
@@ -1577,7 +1573,8 @@ export function createGeoRouter(options: GeoRouterOptions = {}): Router {
   ): ProjectTokenValue => {
     if (
       response.order.projectId !== value.projectId ||
-      response.order.amountFen !== value.serviceAmountFen ||
+      (response.order.amountFen !== undefined &&
+        response.order.amountFen !== value.serviceAmountFen) ||
       (value.serviceManualOrderReference &&
         response.order.reference !== value.serviceManualOrderReference)
     ) {
@@ -1587,6 +1584,8 @@ export function createGeoRouter(options: GeoRouterOptions = {}): Router {
         "MANUAL_ORDER_SCOPE_MISMATCH",
       );
     }
+    const externallyAuthorized =
+      response.order.contractAuthorizationMode === "external_wechat";
     return {
       ...value,
       serviceManualOrderReference: response.order.reference,
@@ -1594,12 +1593,21 @@ export function createGeoRouter(options: GeoRouterOptions = {}): Router {
       serviceManualOrderMessage: response.order.message,
       serviceManualOrderRetryable: response.order.retryable,
       serviceManualOrderUpdatedAt: response.order.updatedAt,
-      serviceManualContractId:
-        response.order.contractId || value.serviceManualContractId,
-      serviceManualSigningUrl:
-        response.order.signingUrl || value.serviceManualSigningUrl,
-      serviceManualSignedAt:
-        response.order.signedAt || value.serviceManualSignedAt,
+      serviceManualContractId: externallyAuthorized
+        ? undefined
+        : response.order.contractId || value.serviceManualContractId,
+      serviceManualSigningUrl: externallyAuthorized
+        ? undefined
+        : response.order.signingUrl || value.serviceManualSigningUrl,
+      serviceManualSignedAt: externallyAuthorized
+        ? undefined
+        : response.order.signedAt || value.serviceManualSignedAt,
+      serviceContractAuthorizationMode:
+        response.order.contractAuthorizationMode ||
+        value.serviceContractAuthorizationMode,
+      serviceContractAuthorizedAt:
+        response.order.contractAuthorizedAt ||
+        value.serviceContractAuthorizedAt,
       serviceProvisioningReference:
         response.order.provisioningReference ||
         value.serviceProvisioningReference,
@@ -2245,6 +2253,359 @@ export function createGeoRouter(options: GeoRouterOptions = {}): Router {
     }),
   );
 
+  const createAutomaticAssessmentTask = async (
+    value: ProjectTokenValue,
+    knowledgeBaseTask: BrokerTask,
+    questionTask: BrokerTask,
+    monitorRun: BrokerMonitorRun,
+    retryReason?: string,
+  ) => {
+    const question = value.monitorQuestionId
+      ? findOwnedQuestion(
+          value,
+          parseQuestionSetFromTask(questionTask)?.questions,
+          value.monitorQuestionId,
+        )
+      : undefined;
+    if (!question) {
+      throw new GeoHttpError(
+        "监控问题与当前项目不匹配",
+        409,
+        "MONITOR_QUESTION_MISMATCH",
+      );
+    }
+    if (monitorRun.status !== "completed" || !monitorRun.records) {
+      throw new GeoHttpError(
+        "监控仍在采集中，完成后将自动生成现状评估",
+        409,
+        "MONITOR_NOT_COMPLETE",
+      );
+    }
+    const archive = resolveKnowledgeBaseArtifact(value, knowledgeBaseTask);
+    if (!archive) {
+      throw new GeoHttpError(
+        "企业知识库 ZIP 尚未就绪",
+        409,
+        "ARCHIVE_NOT_READY",
+      );
+    }
+    await loadKnowledgeBaseManifest(
+      broker,
+      value.knowledgeBaseTaskId,
+      knowledgeBaseTask,
+      value.companyName,
+      archive,
+      value.knowledgeBaseValidationProfile,
+    );
+
+    const monitoringDocument = {
+      schemaVersion: 1,
+      question: {
+        id: question.id,
+        text: question.question,
+        category: question.category,
+        rankingMetricEligible: question.category !== "reputation",
+      },
+      platforms: monitorRun.platforms,
+      repeatPerPlatform: 5,
+      expectedResponses: monitorRun.expectedItems,
+      successfulResponses: monitorRun.records.filter(
+        (record) => record.status === "completed" && Boolean(record.answerText),
+      ).length,
+      records: monitorRun.records.map((record) => ({
+        recordId: record.recordId,
+        platform: record.platform,
+        runIndex: record.runIndex,
+        status: record.status,
+        answerText: record.answerText,
+        sources: record.sources,
+        error: record.error,
+        completedAt: record.completedAt,
+      })),
+    };
+    const monitoringBytes = Buffer.from(
+      JSON.stringify(monitoringDocument),
+      "utf8",
+    );
+    if (monitoringBytes.length > MAX_ASSESSMENT_INPUT_BYTES) {
+      throw new GeoHttpError(
+        "监控文字结果超过现状评估输入上限",
+        413,
+        "ASSESSMENT_INPUT_TOO_LARGE",
+      );
+    }
+
+    const monitoringFilename = `${sanitizeFilename(
+      value.companyName,
+      "company",
+    )}-monitoring-records.json`;
+    const temporaryFiles: string[] = [];
+    try {
+      const monitoringFile = await broker.createFile({
+        filename: monitoringFilename,
+        mimeType: "application/json",
+        sizeBytes: monitoringBytes.length,
+      });
+      temporaryFiles.push(monitoringFile.id);
+      await broker.uploadFile(
+        monitoringFile.id,
+        monitoringBytes,
+        "application/json",
+        monitoringFile.proxy_upload_ticket,
+      );
+      const archiveAttachment = await materializeArchiveAttachment(
+        broker,
+        value.knowledgeBaseTaskId,
+        archive,
+      );
+      if (archiveAttachment.temporary) {
+        temporaryFiles.push(archiveAttachment.file_id);
+      }
+      const successfulResponses = monitoringDocument.successfulResponses;
+      const created = await createGeoTaskWithSkillPackages(
+        broker,
+        {
+          projectId: value.projectId,
+          prompt: await buildAssessmentPrompt({
+            companyName: value.companyName,
+            archiveFilename: archiveAttachment.filename,
+            monitoringFilename: monitoringFile.filename || monitoringFilename,
+            question: monitoringDocument.question,
+            monitoring: {
+              platforms: monitorRun.platforms,
+              repeatPerPlatform: 5,
+              expectedResponses: monitorRun.expectedItems,
+              successfulResponses,
+              failedResponses: monitorRun.expectedItems - successfulResponses,
+            },
+            retryReason,
+          }),
+          attachments: [
+            {
+              file_id: archiveAttachment.file_id,
+              filename: archiveAttachment.filename,
+            },
+            {
+              file_id: monitoringFile.id,
+              filename: monitoringFile.filename || monitoringFilename,
+            },
+          ],
+          idempotencyKey: `geo:${value.projectId}:assessment:v2-conservative:${value.monitorRunId}:${value.assessmentAttempt || 1}`,
+        },
+        [
+          {
+            filename: KNOWLEDGE_VERIFIER_SKILL_ARCHIVE_FILENAME,
+            body: await buildGeoKnowledgeAnswerVerifierSkillArchive(),
+          },
+          {
+            filename: ASSESSMENT_SKILL_ARCHIVE_FILENAME,
+            body: await buildGeoCurrentStateEvaluatorSkillArchive(),
+          },
+        ],
+      );
+      temporaryFiles.push(
+        ...created.skillAttachments.map((item) => item.file_id),
+      );
+      const assessmentTaskId = taskIdFrom(created.task);
+      if (!assessmentTaskId) {
+        throw new GeoHttpError(
+          "创建现状评估任务失败：缺少任务 ID",
+          502,
+          "TASK_ID_MISSING",
+        );
+      }
+      return {
+        task: created.task,
+        value: {
+          ...value,
+          assessmentTaskId,
+          assessmentSubmittedAt: new Date().toISOString(),
+          assessmentAttempt: value.assessmentAttempt || 1,
+          assessmentVersion: 2 as const,
+          temporaryFileIds: Array.from(
+            new Set([...(value.temporaryFileIds || []), ...temporaryFiles]),
+          ),
+        },
+      };
+    } catch (error) {
+      await Promise.allSettled(
+        temporaryFiles.map((fileId) => broker.deleteFile(fileId)),
+      );
+      throw error;
+    }
+  };
+
+  const createAutomaticOptimizationForecastTask = async (
+    value: ProjectTokenValue,
+    knowledgeBaseTask: BrokerTask,
+    scoredAssessment: ReturnType<typeof calculateQuestionBaselineAssessment>,
+    retryReason?: string,
+  ) => {
+    const archive = resolveKnowledgeBaseArtifact(value, knowledgeBaseTask);
+    if (!archive) {
+      throw new GeoHttpError(
+        "企业知识库 ZIP 尚未就绪",
+        409,
+        "ARCHIVE_NOT_READY",
+      );
+    }
+    await loadKnowledgeBaseManifest(
+      broker,
+      value.knowledgeBaseTaskId,
+      knowledgeBaseTask,
+      value.companyName,
+      archive,
+      value.knowledgeBaseValidationProfile,
+    );
+    const assessmentFilename = `${sanitizeFilename(
+      value.companyName,
+      "company",
+    )}-current-assessment.json`;
+    const assessmentBytes = Buffer.from(
+      JSON.stringify({
+        schemaVersion: 2,
+        generatedAt: new Date().toISOString(),
+        sourceAssessmentTaskId: value.assessmentTaskId,
+        assessment: scoredAssessment,
+      }),
+      "utf8",
+    );
+    const scenarioFilename = "frontmind-standard-one-month-scenario.json";
+    const scenarioBytes = Buffer.from(
+      JSON.stringify({
+        schemaVersion: 2,
+        name: "full_execution",
+        horizonWeeks: FORECAST_HORIZON_WEEKS,
+        allowedActionIds: [
+          "GEO_A1_entity_facts",
+          "GEO_A2_ai_visibility",
+          "GEO_A3_qa_assets",
+          "GEO_A4_positioning_language",
+          "GEO_A5_site_schema",
+          "GEO_A6_distribution_citations",
+        ],
+        executionAssumptions: [
+          "企业事实、定位、产品、案例与合规边界完成核验",
+          "内容完成真实发布并通过抓取与收录检查",
+          "第三方信源由独立、可追溯页面提供",
+          "第 2 周检查执行进度，第 4 周按相同问题、平台和每平台五次回答复测",
+        ],
+      }),
+      "utf8",
+    );
+    if (
+      assessmentBytes.length + scenarioBytes.length >
+      MAX_FORECAST_INPUT_BYTES
+    ) {
+      throw new GeoHttpError(
+        "优化效果评估输入超过安全上限",
+        413,
+        "FORECAST_INPUT_TOO_LARGE",
+      );
+    }
+
+    const temporaryFiles: string[] = [];
+    try {
+      const assessmentFile = await broker.createFile({
+        filename: assessmentFilename,
+        mimeType: "application/json",
+        sizeBytes: assessmentBytes.length,
+      });
+      temporaryFiles.push(assessmentFile.id);
+      await broker.uploadFile(
+        assessmentFile.id,
+        assessmentBytes,
+        "application/json",
+        assessmentFile.proxy_upload_ticket,
+      );
+      const scenarioFile = await broker.createFile({
+        filename: scenarioFilename,
+        mimeType: "application/json",
+        sizeBytes: scenarioBytes.length,
+      });
+      temporaryFiles.push(scenarioFile.id);
+      await broker.uploadFile(
+        scenarioFile.id,
+        scenarioBytes,
+        "application/json",
+        scenarioFile.proxy_upload_ticket,
+      );
+      const archiveAttachment = await materializeArchiveAttachment(
+        broker,
+        value.knowledgeBaseTaskId,
+        archive,
+      );
+      if (archiveAttachment.temporary) {
+        temporaryFiles.push(archiveAttachment.file_id);
+      }
+      const created = await createGeoTaskWithSkillPackages(
+        broker,
+        {
+          projectId: value.projectId,
+          prompt: await buildOptimizationOutcomeForecastPrompt({
+            currentAssessmentFilename:
+              assessmentFile.filename || assessmentFilename,
+            knowledgeBaseArchiveFilename: archiveAttachment.filename,
+            executionScenarioFilename:
+              scenarioFile.filename || scenarioFilename,
+            scenarioName: "full_execution",
+            retryReason,
+          }),
+          attachments: [
+            {
+              file_id: archiveAttachment.file_id,
+              filename: archiveAttachment.filename,
+            },
+            {
+              file_id: assessmentFile.id,
+              filename: assessmentFile.filename || assessmentFilename,
+            },
+            {
+              file_id: scenarioFile.id,
+              filename: scenarioFile.filename || scenarioFilename,
+            },
+          ],
+          idempotencyKey: `geo:${value.projectId}:optimization-forecast:${value.assessmentTaskId}:planning-target-4w-v4:${value.optimizationForecastAttempt || 1}`,
+        },
+        [
+          {
+            filename: FORECAST_SKILL_ARCHIVE_FILENAME,
+            body: await buildGeoOptimizationOutcomeForecasterSkillArchive(),
+          },
+        ],
+      );
+      temporaryFiles.push(
+        ...created.skillAttachments.map((item) => item.file_id),
+      );
+      const forecastTaskId = taskIdFrom(created.task);
+      if (!forecastTaskId) {
+        throw new GeoHttpError(
+          "创建优化效果评估任务失败：缺少任务 ID",
+          502,
+          "TASK_ID_MISSING",
+        );
+      }
+      return {
+        task: created.task,
+        value: {
+          ...value,
+          optimizationForecastTaskId: forecastTaskId,
+          optimizationForecastSubmittedAt: new Date().toISOString(),
+          optimizationForecastAttempt: value.optimizationForecastAttempt || 1,
+          optimizationForecastVersion: 2 as const,
+          temporaryFileIds: Array.from(
+            new Set([...(value.temporaryFileIds || []), ...temporaryFiles]),
+          ),
+        },
+      };
+    } catch (error) {
+      await Promise.allSettled(
+        temporaryFiles.map((fileId) => broker.deleteFile(fileId)),
+      );
+      throw error;
+    }
+  };
+
   router.get(
     "/projects/:projectToken",
     requireConfiguration,
@@ -2256,8 +2617,8 @@ export function createGeoRouter(options: GeoRouterOptions = {}): Router {
         knowledgeBaseTask,
         initialQuestionTask,
         rawMonitorRun,
-        assessmentTask,
-        optimizationForecastTask,
+        initialAssessmentTask,
+        initialOptimizationForecastTask,
       ] = await Promise.all([
         getResolvedTask(broker, value.knowledgeBaseTaskId),
         value.questionTaskId
@@ -2289,6 +2650,285 @@ export function createGeoRouter(options: GeoRouterOptions = {}): Router {
       );
       currentValue = await syncMonitoringOrder(currentValue, rawMonitorRun);
       currentValue = await syncServiceOrder(currentValue);
+      let currentAssessmentTask = initialAssessmentTask;
+      let currentOptimizationForecastTask = initialOptimizationForecastTask;
+      const question =
+        initialQuestionTask && currentValue.monitorQuestionId
+          ? findOwnedQuestion(
+              currentValue,
+              parseQuestionSetFromTask(initialQuestionTask)?.questions,
+              currentValue.monitorQuestionId,
+            )
+          : undefined;
+      const automationReady = Boolean(
+        initialQuestionTask &&
+          question &&
+          rawMonitorRun?.status === "completed" &&
+          rawMonitorRun.records,
+      );
+      let knowledgeEvidencePaths: string[] | undefined;
+      const getKnowledgeEvidencePaths = async () => {
+        if (!knowledgeEvidencePaths) {
+          knowledgeEvidencePaths = await loadKnowledgeEvidencePaths(
+            broker,
+            currentValue,
+            currentValue.knowledgeBaseTaskId,
+            currentKnowledgeBaseTask,
+            currentValue.companyName,
+            currentValue.knowledgeBaseValidationProfile,
+          );
+        }
+        return knowledgeEvidencePaths;
+      };
+
+      if (automationReady && initialQuestionTask && rawMonitorRun && question) {
+        let assessmentRetryReason: string | undefined;
+        if (
+          currentValue.assessmentTaskId &&
+          currentValue.assessmentVersion !== 2
+        ) {
+          const previousAssessmentTaskId = currentValue.assessmentTaskId;
+          const previousForecastTaskId =
+            currentValue.optimizationForecastTaskId;
+          currentValue = {
+            ...currentValue,
+            assessmentTaskId: undefined,
+            assessmentSubmittedAt: undefined,
+            assessmentAttempt: 1,
+            assessmentVersion: 2,
+            assessmentUpgradeFromV1: true,
+            optimizationForecastTaskId: undefined,
+            optimizationForecastSubmittedAt: undefined,
+            optimizationForecastAttempt: 1,
+            optimizationForecastVersion: 2,
+            previousAssessmentTaskIds: Array.from(
+              new Set([
+                ...(currentValue.previousAssessmentTaskIds || []),
+                previousAssessmentTaskId,
+              ]),
+            ),
+            previousOptimizationForecastTaskIds: previousForecastTaskId
+              ? Array.from(
+                  new Set([
+                    ...(currentValue.previousOptimizationForecastTaskIds || []),
+                    previousForecastTaskId,
+                  ]),
+                )
+              : currentValue.previousOptimizationForecastTaskIds,
+          };
+          currentAssessmentTask = undefined;
+          currentOptimizationForecastTask = undefined;
+        }
+
+        if (currentValue.assessmentTaskId && currentAssessmentTask) {
+          const assessmentStatus = normalizeTaskStatus(
+            currentAssessmentTask.status,
+          );
+          if (["failed", "cancelled"].includes(assessmentStatus)) {
+            assessmentRetryReason =
+              assessmentStatus === "cancelled"
+                ? "上一次现状评估任务已取消"
+                : normalizeTask(currentAssessmentTask, "assessment").error ||
+                  "上一次现状评估任务执行失败";
+          } else if (assessmentStatus === "completed") {
+            try {
+              calculateQuestionBaselineAssessment(
+                parseScopedAssessmentTaskOutput(
+                  currentAssessmentTask,
+                  question,
+                  rawMonitorRun.platforms,
+                  rawMonitorRun,
+                  await getKnowledgeEvidencePaths(),
+                ),
+              );
+            } catch (error) {
+              logAssessmentOutputValidation(error);
+              assessmentRetryReason = assessmentOutputRetryReason(error);
+            }
+          }
+          if (
+            assessmentRetryReason &&
+            (currentValue.assessmentAttempt || 1) < 2
+          ) {
+            const previousAssessmentTaskId = currentValue.assessmentTaskId;
+            const previousForecastTaskId =
+              currentValue.optimizationForecastTaskId;
+            currentValue = {
+              ...currentValue,
+              assessmentTaskId: undefined,
+              assessmentSubmittedAt: undefined,
+              assessmentAttempt: 2,
+              assessmentVersion: 2,
+              optimizationForecastTaskId: undefined,
+              optimizationForecastSubmittedAt: undefined,
+              optimizationForecastAttempt: 1,
+              optimizationForecastVersion: 2,
+              previousAssessmentTaskIds: Array.from(
+                new Set([
+                  ...(currentValue.previousAssessmentTaskIds || []),
+                  previousAssessmentTaskId,
+                ]),
+              ),
+              previousOptimizationForecastTaskIds: previousForecastTaskId
+                ? Array.from(
+                    new Set([
+                      ...(currentValue.previousOptimizationForecastTaskIds ||
+                        []),
+                      previousForecastTaskId,
+                    ]),
+                  )
+                : currentValue.previousOptimizationForecastTaskIds,
+            };
+            currentAssessmentTask = undefined;
+            currentOptimizationForecastTask = undefined;
+          }
+        }
+
+        if (!currentValue.assessmentTaskId) {
+          try {
+            const created = await createAutomaticAssessmentTask(
+              currentValue,
+              currentKnowledgeBaseTask,
+              initialQuestionTask,
+              rawMonitorRun,
+              assessmentRetryReason,
+            );
+            currentValue = created.value;
+            currentAssessmentTask = created.task;
+          } catch (error) {
+            console.warn("[GEO assessment automation] Task start deferred", {
+              projectId: currentValue.projectId,
+              error:
+                error instanceof GeoHttpError
+                  ? error.code
+                  : error instanceof GeoBrokerError
+                    ? error.code
+                    : "ASSESSMENT_AUTOMATION_FAILED",
+            });
+          }
+        }
+
+        let scoredAssessment:
+          | ReturnType<typeof calculateQuestionBaselineAssessment>
+          | undefined;
+        if (
+          currentAssessmentTask &&
+          normalizeTaskStatus(currentAssessmentTask.status) === "completed"
+        ) {
+          try {
+            scoredAssessment = calculateQuestionBaselineAssessment(
+              parseScopedAssessmentTaskOutput(
+                currentAssessmentTask,
+                question,
+                rawMonitorRun.platforms,
+                rawMonitorRun,
+                await getKnowledgeEvidencePaths(),
+              ),
+            );
+          } catch {
+            scoredAssessment = undefined;
+          }
+        }
+
+        if (scoredAssessment) {
+          let forecastRetryReason: string | undefined;
+          if (
+            currentValue.optimizationForecastTaskId &&
+            currentValue.optimizationForecastVersion !== 2
+          ) {
+            const previousForecastTaskId =
+              currentValue.optimizationForecastTaskId;
+            currentValue = {
+              ...currentValue,
+              optimizationForecastTaskId: undefined,
+              optimizationForecastSubmittedAt: undefined,
+              optimizationForecastAttempt: 1,
+              optimizationForecastVersion: 2,
+              previousOptimizationForecastTaskIds: Array.from(
+                new Set([
+                  ...(currentValue.previousOptimizationForecastTaskIds || []),
+                  previousForecastTaskId,
+                ]),
+              ),
+            };
+            currentOptimizationForecastTask = undefined;
+          }
+          if (
+            currentValue.optimizationForecastTaskId &&
+            currentOptimizationForecastTask
+          ) {
+            const forecastStatus = normalizeTaskStatus(
+              currentOptimizationForecastTask.status,
+            );
+            if (["failed", "cancelled"].includes(forecastStatus)) {
+              forecastRetryReason =
+                forecastStatus === "cancelled"
+                  ? "上一次优化效果评估任务已取消"
+                  : normalizeTask(
+                      currentOptimizationForecastTask,
+                      "optimization-forecast",
+                    ).error || "上一次优化效果评估任务执行失败";
+            } else if (forecastStatus === "completed") {
+              try {
+                calculateOptimizationOutcomeForecast(
+                  scoredAssessment,
+                  parseOptimizationOutcomeForecastTaskOutput(
+                    currentOptimizationForecastTask,
+                  ),
+                );
+              } catch (error) {
+                forecastRetryReason =
+                  error instanceof Error
+                    ? error.message
+                    : "上一次优化效果评估输出未通过结构校验";
+              }
+            }
+            if (
+              forecastRetryReason &&
+              (currentValue.optimizationForecastAttempt || 1) < 2
+            ) {
+              const previousForecastTaskId =
+                currentValue.optimizationForecastTaskId;
+              currentValue = {
+                ...currentValue,
+                optimizationForecastTaskId: undefined,
+                optimizationForecastSubmittedAt: undefined,
+                optimizationForecastAttempt: 2,
+                optimizationForecastVersion: 2,
+                previousOptimizationForecastTaskIds: Array.from(
+                  new Set([
+                    ...(currentValue.previousOptimizationForecastTaskIds || []),
+                    previousForecastTaskId,
+                  ]),
+                ),
+              };
+              currentOptimizationForecastTask = undefined;
+            }
+          }
+          if (!currentValue.optimizationForecastTaskId) {
+            try {
+              const created = await createAutomaticOptimizationForecastTask(
+                currentValue,
+                currentKnowledgeBaseTask,
+                scoredAssessment,
+                forecastRetryReason,
+              );
+              currentValue = created.value;
+              currentOptimizationForecastTask = created.task;
+            } catch (error) {
+              console.warn("[GEO forecast automation] Task start deferred", {
+                projectId: currentValue.projectId,
+                error:
+                  error instanceof GeoHttpError
+                    ? error.code
+                    : error instanceof GeoBrokerError
+                      ? error.code
+                      : "FORECAST_AUTOMATION_FAILED",
+              });
+            }
+          }
+        }
+      }
       let currentToken: string;
       try {
         currentToken =
@@ -2310,8 +2950,8 @@ export function createGeoRouter(options: GeoRouterOptions = {}): Router {
         currentKnowledgeBaseTask,
         initialQuestionTask,
         rawMonitorRun,
-        assessmentTask,
-        optimizationForecastTask,
+        currentAssessmentTask,
+        currentOptimizationForecastTask,
       );
       res.json({ projectToken: currentToken, project });
     }),
@@ -3181,6 +3821,35 @@ export function createGeoRouter(options: GeoRouterOptions = {}): Router {
         value.knowledgeBaseValidationProfile,
       );
 
+      if (value.assessmentTaskId && value.assessmentVersion !== 2) {
+        value = {
+          ...value,
+          assessmentTaskId: undefined,
+          assessmentSubmittedAt: undefined,
+          assessmentAttempt: 1,
+          assessmentVersion: 2,
+          assessmentUpgradeFromV1: true,
+          optimizationForecastTaskId: undefined,
+          optimizationForecastSubmittedAt: undefined,
+          optimizationForecastAttempt: 1,
+          optimizationForecastVersion: 2,
+          previousAssessmentTaskIds: Array.from(
+            new Set([
+              ...(value.previousAssessmentTaskIds || []),
+              value.assessmentTaskId,
+            ]),
+          ),
+          previousOptimizationForecastTaskIds: value.optimizationForecastTaskId
+            ? Array.from(
+                new Set([
+                  ...(value.previousOptimizationForecastTaskIds || []),
+                  value.optimizationForecastTaskId,
+                ]),
+              )
+            : value.previousOptimizationForecastTaskIds,
+        };
+      }
+
       if (value.assessmentTaskId) {
         const [assessmentTask, optimizationForecastTask] = await Promise.all([
           getResolvedTask(broker, value.assessmentTaskId),
@@ -3306,8 +3975,7 @@ export function createGeoRouter(options: GeoRouterOptions = {}): Router {
           runIndex: record.runIndex,
           status: record.status,
           answerText: record.answerText,
-          citations: record.citations,
-          references: record.references,
+          sources: record.sources,
           error: record.error,
           completedAt: record.completedAt,
         })),
@@ -3392,7 +4060,7 @@ export function createGeoRouter(options: GeoRouterOptions = {}): Router {
                 filename: monitoringFile.filename || monitoringFilename,
               },
             ],
-            idempotencyKey: `geo:${value.projectId}:assessment:${value.monitorRunId}:${value.assessmentAttempt || 1}`,
+            idempotencyKey: `geo:${value.projectId}:assessment:v2-conservative:${value.monitorRunId}:${value.assessmentAttempt || 1}`,
           },
           [
             {
@@ -3429,6 +4097,7 @@ export function createGeoRouter(options: GeoRouterOptions = {}): Router {
         assessmentTaskId,
         assessmentSubmittedAt: new Date().toISOString(),
         assessmentAttempt: value.assessmentAttempt || 1,
+        assessmentVersion: 2,
         temporaryFileIds: Array.from(
           new Set([
             ...(value.temporaryFileIds || []),
@@ -3526,6 +4195,9 @@ export function createGeoRouter(options: GeoRouterOptions = {}): Router {
             knowledgeEvidencePaths,
           ),
         );
+        if (scoredAssessment.schemaVersion !== 2) {
+          throw new Error("Optimization forecast requires assessment v2");
+        }
       } catch (error) {
         logAssessmentOutputValidation(error);
         throw new GeoHttpError(
@@ -3533,6 +4205,25 @@ export function createGeoRouter(options: GeoRouterOptions = {}): Router {
           409,
           "ASSESSMENT_INVALID",
         );
+      }
+
+      if (
+        value.optimizationForecastTaskId &&
+        value.optimizationForecastVersion !== 2
+      ) {
+        value = {
+          ...value,
+          optimizationForecastTaskId: undefined,
+          optimizationForecastSubmittedAt: undefined,
+          optimizationForecastAttempt: 1,
+          optimizationForecastVersion: 2,
+          previousOptimizationForecastTaskIds: Array.from(
+            new Set([
+              ...(value.previousOptimizationForecastTaskIds || []),
+              value.optimizationForecastTaskId,
+            ]),
+          ),
+        };
       }
 
       if (value.optimizationForecastTaskId) {
@@ -3731,7 +4422,7 @@ export function createGeoRouter(options: GeoRouterOptions = {}): Router {
                   filename: scenarioFile.filename || scenarioFilename,
                 },
               ],
-              idempotencyKey: `geo:${value.projectId}:optimization-forecast:${value.assessmentTaskId}:standard-4w-v2:${value.optimizationForecastAttempt || 1}`,
+              idempotencyKey: `geo:${value.projectId}:optimization-forecast:${value.assessmentTaskId}:planning-target-4w-v4:${value.optimizationForecastAttempt || 1}`,
             },
             [
               {
@@ -3766,6 +4457,7 @@ export function createGeoRouter(options: GeoRouterOptions = {}): Router {
         optimizationForecastTaskId: forecastTaskId,
         optimizationForecastSubmittedAt: new Date().toISOString(),
         optimizationForecastAttempt: value.optimizationForecastAttempt || 1,
+        optimizationForecastVersion: 2,
         temporaryFileIds: Array.from(
           new Set([...(value.temporaryFileIds || []), ...temporaryFiles]),
         ),
@@ -3793,6 +4485,45 @@ export function createGeoRouter(options: GeoRouterOptions = {}): Router {
     asyncHandler(async (req, res) => {
       const value = openOwnedProject(req, res);
       const input = CreateServiceContractRequestSchema.parse(req.body);
+      const contractCodeKey = `${String(res.locals.geoSessionId || "")}:${value.projectId}`;
+      const contractCodeNow = Date.now();
+      pruneExpiringMap(failedContractCodes, contractCodeNow, 2000);
+      const failedContractCode = failedContractCodes.get(contractCodeKey);
+      if (
+        failedContractCode &&
+        failedContractCode.resetAt > contractCodeNow &&
+        failedContractCode.count >= 5
+      ) {
+        res.setHeader(
+          "Retry-After",
+          String(
+            Math.max(
+              1,
+              Math.ceil((failedContractCode.resetAt - contractCodeNow) / 1000),
+            ),
+          ),
+        );
+        throw new GeoHttpError(
+          "合同码尝试次数过多，请 15 分钟后再试",
+          429,
+          "CONTRACT_CODE_RATE_LIMITED",
+        );
+      }
+      if (!safeSecretEqual(input.contractCode, contractAuthCode)) {
+        const activeFailure =
+          failedContractCode && failedContractCode.resetAt > contractCodeNow
+            ? failedContractCode
+            : { count: 0, resetAt: contractCodeNow + 15 * 60 * 1000 };
+        activeFailure.count += 1;
+        failedContractCodes.set(contractCodeKey, activeFailure);
+        pruneExpiringMap(failedContractCodes, contractCodeNow, 2000);
+        throw new GeoHttpError(
+          "合同码不正确，请联系管理员确认",
+          403,
+          "CONTRACT_CODE_INVALID",
+        );
+      }
+      failedContractCodes.delete(contractCodeKey);
       const scope = await resolveServiceScope(value);
       if (value.serviceOrderId || value.servicePaidAt) {
         throw new GeoHttpError(
@@ -3814,7 +4545,7 @@ export function createGeoRouter(options: GeoRouterOptions = {}): Router {
         serviceCategory: scope.category,
         serviceAmountFen: scope.amountFen,
       };
-      const response = value.serviceManualOrderReference
+      let response = value.serviceManualOrderReference
         ? await manualOrderStatusReader(value.serviceManualOrderReference)
         : await manualOrderCreator({
             schemaVersion: 1,
@@ -3836,11 +4567,51 @@ export function createGeoRouter(options: GeoRouterOptions = {}): Router {
               profile: input.profile,
             },
           });
+      const profileSubmittedAt =
+        value.serviceProfileSubmittedAt || response.order.updatedAt;
+      if (
+        response.order.status === "pending_admin" ||
+        response.order.status === "signature_required"
+      ) {
+        const eventReference = `wechat-${crypto
+          .createHash("sha256")
+          .update(
+            `${value.projectId}:${response.order.reference}:external-contract-v1`,
+            "utf8",
+          )
+          .digest("hex")
+          .slice(0, 48)}`;
+        response = await manualOrderExternalAuthorizer(
+          response.order.reference,
+          {
+            schemaVersion: 1,
+            authorization: {
+              mode: "external_wechat",
+              eventReference,
+              authorizedAt: new Date().toISOString(),
+            },
+          },
+        );
+        const authorizedAt = Date.parse(
+          response.order.contractAuthorizedAt || "",
+        );
+        if (
+          response.order.status !== "payment_required" ||
+          response.order.contractAuthorizationMode !== "external_wechat" ||
+          !Number.isFinite(authorizedAt) ||
+          authorizedAt > Date.now() + 5 * 60 * 1000
+        ) {
+          throw new GeoHttpError(
+            "合同确认结果不完整，请联系管理员后重试",
+            502,
+            "MANUAL_ORDER_EXTERNAL_CONTRACT_INCOMPLETE",
+          );
+        }
+      }
       let nextValue = mergeManualOrder(preparedValue, response);
       nextValue = {
         ...nextValue,
-        serviceProfileSubmittedAt:
-          value.serviceProfileSubmittedAt || response.order.updatedAt,
+        serviceProfileSubmittedAt: profileSubmittedAt,
       };
       if (!nextValue.serviceAdminNotificationDeliveredAt) {
         const eventId = `geo-manual:${response.order.reference}:submitted-v1`;
@@ -3955,12 +4726,13 @@ export function createGeoRouter(options: GeoRouterOptions = {}): Router {
       ) {
         throw new GeoHttpError(
           value.serviceManualOrderReference
-            ? "合同尚未完成签署确认，暂不能付款"
-            : "请先提交签约资料并等待合同签署完成",
+            ? "合同尚未完成确认，暂不能付款"
+            : "请先提交签约资料并联系管理员确认合同",
           409,
           "SERVICE_PAYMENT_NOT_ALLOWED",
         );
       }
+      assertServiceContractEvidence(value);
       if (value.serviceOrderId) {
         throw new GeoHttpError(
           "该问题的首月服务已经启动，无需重复支付",
@@ -4029,6 +4801,7 @@ export function createGeoRouter(options: GeoRouterOptions = {}): Router {
           "SERVICE_PAYMENT_NOT_ALLOWED",
         );
       }
+      assertServiceContractEvidence(value);
       const payment = await paymentGateway.getServiceStatus({
         authorization: input.authorization,
         ownerSessionId: String(res.locals.geoSessionId || ""),
@@ -4101,11 +4874,12 @@ export function createGeoRouter(options: GeoRouterOptions = {}): Router {
         value.serviceManualOrderStatus !== "payment_required"
       ) {
         throw new GeoHttpError(
-          "人工合同尚未签署完成，不能确认付款并开通服务",
+          "合同尚未完成确认，不能确认付款并开通服务",
           409,
           "SERVICE_PAYMENT_NOT_ALLOWED",
         );
       }
+      assertServiceContractEvidence(value);
 
       const receipt = await paymentGateway.verifyService({
         authorization: input.authorization,
@@ -4124,6 +4898,20 @@ export function createGeoRouter(options: GeoRouterOptions = {}): Router {
           "支付订单金额或状态与本次服务不匹配",
           "PAYMENT_SCOPE_MISMATCH",
           402,
+        );
+      }
+      const contractAuthorizedAt = normalizedIsoTimestamp(
+        value.serviceContractAuthorizedAt,
+      );
+      if (
+        value.serviceContractAuthorizationMode === "external_wechat" &&
+        contractAuthorizedAt &&
+        Date.parse(receipt.paidAt) <= Date.parse(contractAuthorizedAt)
+      ) {
+        throw new GeoPaymentVerificationError(
+          "支付时间必须晚于合同确认时间",
+          "PAYMENT_PRECEDES_CONTRACT_AUTHORIZATION",
+          409,
         );
       }
       const paidOrder = await transitionProjectOrder(
@@ -4939,6 +5727,31 @@ function parseScopedAssessmentTaskOutput(
       )
       .map((record) => `${record.platform}:${record.runIndex}`),
   );
+  if (scoped.schemaVersion === 2) {
+    const sourceCounts = new Map<string, Set<string>>();
+    for (const record of monitorRun.records || []) {
+      if (record.status !== "completed") continue;
+      const identities = sourceCounts.get(record.platform) || new Set<string>();
+      for (const source of record.sources) {
+        identities.add(
+          source.url
+            ? `url:${source.url}`
+            : `label:${source.title || ""}\u0000${source.domain || ""}`,
+        );
+      }
+      sourceCounts.set(record.platform, identities);
+    }
+    for (const platform of scoped.platformBreakdown) {
+      if (
+        platform.sourceCount !==
+        (sourceCounts.get(platform.platform)?.size || 0)
+      ) {
+        throw new Error(
+          "assessment source count does not match canonical monitoring sources",
+        );
+      }
+    }
+  }
   const allowedEvidenceRefs = new Set(knowledgeEvidencePaths || []);
   for (const record of monitorRun.records || []) {
     allowedEvidenceRefs.add(record.recordId);
@@ -5172,6 +5985,8 @@ async function buildProjectView(
     knowledgeBaseManifest &&
     serviceQuestion &&
     serviceCategory &&
+    value.assessmentVersion === 2 &&
+    value.optimizationForecastVersion === 2 &&
     assessmentTask &&
     optimizationForecastTask &&
     assessmentTaskView?.status === "completed" &&
@@ -5453,6 +6268,9 @@ async function buildProjectView(
     questionRetryAvailable,
     assessmentRetryAvailable,
     optimizationForecastRetryAvailable,
+    assessmentUpdatingToVersion2: Boolean(
+      value.assessmentUpgradeFromV1 && publicAssessment?.status !== "ready",
+    ),
     monitoring: publicMonitoring,
     assessment: publicAssessment,
     optimizationForecast: publicOptimizationForecast,
@@ -5476,6 +6294,8 @@ async function buildProjectView(
             contractId: value.serviceManualContractId,
             signingUrl: value.serviceManualSigningUrl,
             signedAt: value.serviceManualSignedAt,
+            contractAuthorizationMode: value.serviceContractAuthorizationMode,
+            contractAuthorizedAt: value.serviceContractAuthorizedAt,
             contractWorkflowReference: value.serviceManualOrderReference,
             manualOrderReference: value.serviceManualOrderReference,
             manualOrderStatus: value.serviceManualOrderStatus,
@@ -5612,6 +6432,13 @@ function toPublicAssessmentView(
             knowledgeEvidencePaths,
           )
         : parseAssessmentTaskOutput(task);
+    if (raw.schemaVersion !== 2) {
+      return {
+        status: "not_started" as const,
+        dimensions: {},
+        comparisons: [],
+      };
+    }
     const result = calculateQuestionBaselineAssessment(raw);
     const dimensionEntries = [
       ["semantic_visibility", result.dimensions.semanticVisibility],
@@ -5628,14 +6455,12 @@ function toPublicAssessmentView(
     } as const;
     const allowedPlatforms = new Set<string>(GEO_MONITOR_PLATFORM_IDS);
     const confidenceScore = result.overview.confidence.score;
+    const narratives = result.customerNarratives;
     return {
       status: "ready",
-      totalScore: result.overview.applicableScore,
-      rawTotalScore: result.overview.score,
-      grade: determineBsasGrade(result.overview.applicableScore),
-      rawGrade: result.overview.grade,
-      structuralExcludedMaxScore: result.overview.structuralExcludedMaxScore,
-      applicableMaxScore: result.overview.applicableMaxScore,
+      schemaVersion: 2 as const,
+      totalScore: result.overview.score,
+      grade: result.overview.grade,
       coverage: result.overview.coverage.ratio,
       confidence:
         confidenceScore >= 0.75
@@ -5643,11 +6468,15 @@ function toPublicAssessmentView(
           : confidenceScore >= 0.5
             ? "medium"
             : "low",
-      scopeLabel:
-        result.overview.structuralExcludedMaxScore > 0
-          ? "本题可测项表现"
-          : result.scope.label,
-      summary: result.overview.summary,
+      scopeLabel: result.scope.label,
+      summary: publicAssessmentText(
+        result.overview.executiveSummary,
+        "当前问题已完成回答、知识事实与来源核验。",
+      ),
+      executiveSummary: publicAssessmentText(
+        result.overview.executiveSummary,
+        "当前问题已完成回答、知识事实与来源核验。",
+      ),
       dimensions: Object.fromEntries(
         dimensionEntries.map(([id, dimension]) => [
           id,
@@ -5657,52 +6486,112 @@ function toPublicAssessmentView(
             score: dimension.score,
             maxScore: dimension.maxScore,
             coverage: dimension.coverage,
-            summary: Object.values(dimension.indicators)
-              .filter(
-                (indicator) => indicator.measurementStatus !== "unavailable",
-              )
-              .slice(0, 2)
-              .map((indicator) => indicator.calculationBasis)
-              .join("；"),
+            summary: publicAssessmentText(
+              narratives?.[
+                id === "semantic_visibility"
+                  ? "semanticVisibility"
+                  : id === "semantic_coherence"
+                    ? "semanticCoherence"
+                    : id === "semantic_richness"
+                      ? "semanticRichness"
+                      : id === "semantic_authority"
+                        ? "semanticAuthority"
+                        : "competitiveAdvantage"
+              ]?.currentFinding,
+              "本维度已依据当前回答与知识库完成核验。",
+            ),
+            currentFinding: publicAssessmentText(
+              narratives?.[
+                id === "semantic_visibility"
+                  ? "semanticVisibility"
+                  : id === "semantic_coherence"
+                    ? "semanticCoherence"
+                    : id === "semantic_richness"
+                      ? "semanticRichness"
+                      : id === "semantic_authority"
+                        ? "semanticAuthority"
+                        : "competitiveAdvantage"
+              ]?.currentFinding,
+              "本维度已依据当前回答与知识库完成核验。",
+            ),
+            nextAction: publicAssessmentText(
+              narratives?.[
+                id === "semantic_visibility"
+                  ? "semanticVisibility"
+                  : id === "semantic_coherence"
+                    ? "semanticCoherence"
+                    : id === "semantic_richness"
+                      ? "semanticRichness"
+                      : id === "semantic_authority"
+                        ? "semanticAuthority"
+                        : "competitiveAdvantage"
+              ]?.nextAction,
+              "本月围绕该维度补齐可核验内容，并在同口径下复测。",
+            ),
           },
         ]),
       ),
       comparisons: result.knowledgeVsAnswers.map((comparison) => ({
         id: comparison.id,
-        topic:
-          comparison.topic ||
-          comparison.kbClaimText ||
-          (comparison.verdict === "unverifiable"
+        topic: publicAssessmentText(
+          comparison.topic || comparison.kbClaimText,
+          comparison.verdict === "unverifiable"
             ? "AI 新增但知识库未证实"
-            : "知识库事实对照"),
+            : "知识库事实对照",
+        ),
         status: verdictStatus[comparison.verdict],
-        knowledgeBaseFact: comparison.kbClaimText || undefined,
-        knowledgeClaimId: comparison.kbClaimId || undefined,
-        answerExcerpt: comparison.answerExcerpt || undefined,
-        explanation: comparison.explanation,
-        answerFinding: comparison.explanation || comparison.answerExcerpt,
-        recommendedAction: comparison.recommendedAction,
-        runIndex: comparison.runIndex || undefined,
-        confidence: comparison.confidence,
+        knowledgeBaseFact: publicAssessmentText(
+          comparison.kbClaimText,
+          "知识库暂未提供对应事实。",
+        ),
+        answerExcerpt: publicAssessmentText(
+          comparison.answerExcerpt,
+          "当前回答未直接覆盖该事实。",
+        ),
+        explanation: publicAssessmentText(
+          comparison.explanation,
+          "已完成该项事实与回答对照。",
+        ),
+        answerFinding: publicAssessmentText(
+          comparison.explanation || comparison.answerExcerpt,
+          "已完成该项事实与回答对照。",
+        ),
+        recommendedAction: publicAssessmentText(
+          comparison.recommendedAction,
+          "补充清晰、可追溯的事实说明。",
+        ),
         platforms:
           comparison.platform && allowedPlatforms.has(comparison.platform)
             ? [comparison.platform]
             : [],
-        evidenceRefs: comparison.kbEvidenceRefs,
       })),
-      platformBreakdown: result.platformBreakdown,
-      priorityActions: result.priorityActions,
-      limitations: result.scope.limitations,
-      rankingDiagnostics: result.rankingDiagnostics,
-      methodology: {
-        assessmentType: result.assessmentType,
-        isFullBsasAudit: result.scope.isFullBsasAudit,
-        normalizedMeasuredScore: result.overview.normalizedMeasuredScore,
-        applicableScore: result.overview.applicableScore,
-        applicableMaxScore: result.overview.applicableMaxScore,
-        structuralExcludedMaxScore: result.overview.structuralExcludedMaxScore,
-        confidenceScore,
-      },
+      platformBreakdown: result.platformBreakdown.map((platform) => ({
+        platform: platform.platform,
+        responseCount: platform.responseCount,
+        successfulResponses: platform.successfulResponses,
+        brandMentionRate: platform.brandMentionRate,
+        averageRank: platform.averageRank,
+        factAccuracy: platform.factAccuracy,
+        propositionHitRate: platform.propositionHitRate,
+        sourceCount: platform.sourceCount,
+        sentiment: platform.sentiment,
+        verdict: publicAssessmentText(
+          platform.verdict,
+          "平台回答已完成事实与来源核验。",
+        ),
+      })),
+      priorityActions: result.priorityActions.map((action) => ({
+        priority: action.priority,
+        dimension: action.dimension,
+        action: publicAssessmentText(action.action, "补齐该维度的可核验内容。"),
+        expectedImpact: publicAssessmentText(
+          action.expectedImpact,
+          "提升回答的准确性与可追溯性。",
+        ),
+      })),
+      limitations: [
+        "本结果反映当前问题在所选平台的回答表现，不代表全网自然排名。",
+      ],
     };
   } catch (error) {
     logAssessmentOutputValidation(error);
@@ -5746,9 +6635,18 @@ function toPublicOptimizationForecastView(
           )
         : parseAssessmentTaskOutput(assessmentTask);
     const assessment = calculateQuestionBaselineAssessment(rawAssessment);
+    const rawForecast = parseOptimizationOutcomeForecastTaskOutput(task);
+    if (rawForecast.schemaVersion !== 2) {
+      return {
+        status: "not_started" as const,
+        dimensions: [],
+        assumptions: [],
+        roadmap: [],
+      };
+    }
     const result = calculateOptimizationOutcomeForecast(
       assessment,
-      parseOptimizationOutcomeForecastTaskOutput(task),
+      rawForecast,
     );
     const dimensionEntries = [
       ["semantic_visibility", result.dimensions.semanticVisibility],
@@ -5760,28 +6658,32 @@ function toPublicOptimizationForecastView(
     const actionLabelById = new Map(
       result.actions.map((action) => [action.id, action.label]),
     );
+    const narrativeKeyById = {
+      semantic_visibility: "semanticVisibility",
+      semantic_coherence: "semanticCoherence",
+      semantic_richness: "semanticRichness",
+      semantic_authority: "semanticAuthority",
+      competitive_advantage: "competitiveAdvantage",
+    } as const;
 
     return {
       status: "ready",
+      schemaVersion: 2 as const,
       horizonWeeks: result.horizonWeeks,
       currentScore: result.applicableTotal.current,
       targetLow: result.applicableTotal.low,
       targetExpected: result.applicableTotal.expected,
       targetHigh: result.applicableTotal.high,
-      gradeLow: result.applicableGradeRange.low,
-      gradeHigh: result.applicableGradeRange.high,
-      challengeUpperOnly: result.applicableGradeRange.challengeUpperOnly,
-      rawCurrentScore: result.total.current,
-      rawTargetLow: result.total.low,
-      rawTargetExpected: result.total.expected,
-      rawTargetHigh: result.total.high,
-      scoreBasis: {
-        type: "applicable_scope",
-        applicableMaxScore: result.applicableTotal.rawApplicableMaxScore,
-        structuralExcludedMaxScore:
-          result.applicableTotal.structuralExcludedMaxScore,
-      },
-      summary: result.summary,
+      summary: publicAssessmentText(
+        result.executiveSummary,
+        "本月将围绕当前缺口补齐内容与来源，并在第 4 周按相同口径复测。",
+      ),
+      executiveSummary: publicAssessmentText(
+        result.executiveSummary,
+        "本月将围绕当前缺口补齐内容与来源，并在第 4 周按相同口径复测。",
+      ),
+      targetCondition:
+        "本区间是完成四周路线后的规划目标，不是效果承诺；第 4 周将按相同问题、平台和采样次数复测确认。",
       dimensions: dimensionEntries.flatMap(([id, dimension]) => {
         const projected = Object.values(dimension.indicators).filter(
           (indicator) => indicator.measurementStatus === "projectable",
@@ -5796,16 +6698,26 @@ function toPublicOptimizationForecastView(
             targetExpected: dimension.expected,
             targetHigh: dimension.high,
             maxScore: dimension.maxScore,
-            summary: Array.from(
-              new Set(projected.map((indicator) => indicator.rationale)),
-            )
-              .slice(0, 2)
-              .join("；"),
+            summary: publicAssessmentText(
+              result.customerNarratives?.[narrativeKeyById[id]]?.currentFinding,
+              "当前表现已按本题证据完成核验。",
+            ),
+            currentFinding: publicAssessmentText(
+              result.customerNarratives?.[narrativeKeyById[id]]?.currentFinding,
+              "当前表现已按本题证据完成核验。",
+            ),
+            nextAction: publicAssessmentText(
+              result.customerNarratives?.[narrativeKeyById[id]]?.nextAction,
+              "本月补齐可核验内容，并在同口径下复测。",
+            ),
             actions: Array.from(
               new Set(
                 projected.flatMap((indicator) =>
-                  indicator.actionIds.map(
-                    (actionId) => actionLabelById.get(actionId) || actionId,
+                  indicator.actionIds.map((actionId) =>
+                    publicAssessmentText(
+                      actionLabelById.get(actionId),
+                      "补齐对应内容与来源",
+                    ),
                   ),
                 ),
               ),
@@ -5813,8 +6725,18 @@ function toPublicOptimizationForecastView(
           },
         ];
       }),
-      assumptions: result.assumptions,
-      roadmap: result.roadmap,
+      assumptions: [],
+      roadmap: result.roadmap.map((phase) => ({
+        ...phase,
+        title: publicAssessmentText(phase.title, `第 ${phase.phase} 周重点`),
+        actions: phase.actions
+          .slice(0, 3)
+          .map((action) => publicAssessmentText(action, "完成对应优化动作。")),
+        verificationGate: publicAssessmentText(
+          phase.verificationGate,
+          "检查本周交付物是否完整、可访问且可追溯。",
+        ),
+      })),
       generatedAt: new Date().toISOString(),
     };
   } catch (error) {
@@ -5845,8 +6767,24 @@ const assetPreviewCacheByBroker = new WeakMap<
 >();
 
 function omitKnowledgeEvidencePaths(manifest: KnowledgeBaseManifest) {
-  const { evidencePaths: _evidencePaths, ...publicManifest } = manifest;
-  return publicManifest;
+  const {
+    evidencePaths: _evidencePaths,
+    generatedAt: rawGeneratedAt,
+    sources,
+    ...publicManifest
+  } = manifest;
+  const generatedAt = normalizedIsoTimestamp(rawGeneratedAt);
+  return {
+    ...publicManifest,
+    ...(generatedAt ? { generatedAt } : {}),
+    sources: sources.map(({ capturedAt, ...source }) => {
+      const normalizedCapturedAt = normalizedIsoTimestamp(capturedAt);
+      return {
+        ...source,
+        ...(normalizedCapturedAt ? { capturedAt: normalizedCapturedAt } : {}),
+      };
+    }),
+  };
 }
 
 async function loadKnowledgeEvidencePaths(
@@ -5952,12 +6890,7 @@ async function loadKnowledgeBaseManifest(
       manifest = await parseKnowledgeBaseArchive(bytes, {
         companyName,
         validationProfile,
-        generatedAt:
-          typeof task.completed_at === "string"
-            ? task.completed_at
-            : typeof task.updated_at === "string"
-              ? task.updated_at
-              : undefined,
+        generatedAt: normalizedIsoTimestamp(task.completed_at, task.updated_at),
       });
     } catch (error) {
       console.warn(
@@ -7304,6 +8237,70 @@ function sha256(value: string) {
   return crypto.createHash("sha256").update(value, "utf8").digest("hex");
 }
 
+function normalizedIsoTimestamp(...values: unknown[]) {
+  for (const value of values) {
+    const normalized =
+      typeof value === "number"
+        ? value
+        : typeof value === "string" && value.trim()
+          ? /^\d{10,13}$/.test(value.trim())
+            ? Number(value.trim())
+            : value.trim()
+          : undefined;
+    if (normalized === undefined) continue;
+    const timestamp =
+      typeof normalized === "number"
+        ? normalized < 100_000_000_000
+          ? normalized * 1000
+          : normalized
+        : Date.parse(normalized);
+    if (!Number.isFinite(timestamp)) continue;
+    return new Date(timestamp).toISOString();
+  }
+  return undefined;
+}
+
+function hasServiceContractEvidence(value: ProjectTokenValue) {
+  const externalWechatEvidence =
+    value.serviceContractAuthorizationMode === "external_wechat" &&
+    Boolean(normalizedIsoTimestamp(value.serviceContractAuthorizedAt));
+  const legacyManualEvidence = Boolean(
+    value.serviceManualOrderReference &&
+      value.serviceManualContractId &&
+      normalizedIsoTimestamp(value.serviceManualSignedAt),
+  );
+  const legacyElectronicEvidence = Boolean(
+    value.serviceContractId &&
+      value.serviceContractTemplateVersion &&
+      /^[a-f0-9]{64}$/i.test(value.serviceContractDocumentSha256 || "") &&
+      normalizedIsoTimestamp(value.serviceContractSignedAt) &&
+      value.serviceContractSignatoryId,
+  );
+  return (
+    externalWechatEvidence || legacyManualEvidence || legacyElectronicEvidence
+  );
+}
+
+function assertServiceContractEvidence(value: ProjectTokenValue) {
+  if (hasServiceContractEvidence(value)) return;
+  throw new GeoHttpError(
+    "合同确认记录不完整，请联系管理员后再付款",
+    409,
+    "SERVICE_CONTRACT_EVIDENCE_REQUIRED",
+  );
+}
+
+const PUBLIC_ASSESSMENT_INTERNAL_PATTERN =
+  /\b(?:unavailable|unknown|question_baseline(?:_v2)?|citationlist|referencelist|evidencerefs|calculationbasis|observed_outcome|direct_asset|not_applicable|measurementstatus|sourcecount|rationale|schema)\b|\b(?:[a-z][a-z0-9_-]*\/)?run[-_ ]?\d+\b/i;
+
+function publicAssessmentText(value: unknown, fallback: string) {
+  if (typeof value !== "string" || !value.trim()) return fallback;
+  const normalized = value.trim();
+  return PUBLIC_ASSESSMENT_INTERNAL_PATTERN.test(normalized)
+    ? fallback
+    : normalized;
+}
+
 function hasServiceOrderFacts(value: ProjectTokenValue) {
   return Boolean(
     value.serviceManualOrderReference ||
@@ -7520,12 +8517,6 @@ function hasElapsed(
 
 function requestRateLimitKey(req: Request) {
   return String(req.ip || req.socket.remoteAddress || "unknown").slice(0, 160);
-}
-
-function isUnsafePlaceholder(value: string) {
-  return /^(?:replace[-_ ]?with|change[-_ ]?me|example|placeholder|your[-_ ])/i.test(
-    value.trim(),
-  );
 }
 
 function pruneExpiringMap<T extends { expiresAt?: number; resetAt?: number }>(

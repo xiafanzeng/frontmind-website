@@ -37,6 +37,7 @@ import { loadGeoOptimizationOutcomeForecasterSkill } from "./geo/forecast";
 import { assertGeoPaymentConfigurationFromEnv } from "./geo/payment";
 import { createGeoCustomQuestionValidationStore } from "./geo/custom-question-validation-store";
 import { collectWebsiteRuntimeReadiness } from "./runtime-readiness";
+import { assertGeoRuntimeConfigurationFromEnv } from "./geo/runtime-config";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -94,6 +95,9 @@ async function startServer() {
       getSkills: getGeoRuntimeSkillReadiness,
       getDependencies: getGeoDependencyReadiness,
       getVisitorStats: async () => assertVisitorStatsStoreReady(),
+      assertConfiguration: () => {
+        assertGeoRuntimeConfigurationFromEnv(process.env);
+      },
       validationStore: customQuestionValidationStore,
     });
   if (process.env.NODE_ENV === "production") {

@@ -235,6 +235,85 @@ function validIneligibleRawOutput(
   };
 }
 
+function validV2RawOutput(): AssessmentRawTaskOutput {
+  const legacy = validIneligibleRawOutput();
+  return {
+    ...legacy,
+    schemaVersion: 2,
+    dimensions: {
+      ...legacy.dimensions,
+      semanticVisibility: {
+        ...legacy.dimensions.semanticVisibility,
+        webSearchSov: indicator(
+          0.4,
+          "按知识库证据与五次回答中的品牌事实覆盖比例计算。",
+        ),
+      },
+      semanticRichness: {
+        ...legacy.dimensions.semanticRichness,
+        contentFormatDiversity: indicator(
+          0.6,
+          "按结论、优势、场景、风险与核验建议五个层次计算。",
+        ),
+      },
+      semanticAuthority: {
+        ...legacy.dimensions.semanticAuthority,
+        structuredDataCompleteness: indicator(
+          0.5,
+          "按重要主张能够追溯至统一来源的比例计算。",
+        ),
+      },
+      competitiveAdvantage: {
+        ...legacy.dimensions.competitiveAdvantage,
+        exclusiveSemanticSpace: indicator(
+          0.5,
+          "按已验证差异点被准确表达的比例计算。",
+        ),
+      },
+    },
+    platformBreakdown: legacy.platformBreakdown.map(
+      ({ citationCount = 0, referenceCount = 0, ...platform }) => ({
+        ...platform,
+        sourceCount: citationCount + referenceCount,
+      }),
+    ),
+    knowledgeVsAnswers: legacy.knowledgeVsAnswers.map((comparison, index) =>
+      index === 1
+        ? {
+            ...comparison,
+            verdict: "supported" as const,
+            explanation:
+              "回答主张已经由知识库中的目标客户事实和来源支持。",
+          }
+        : comparison,
+    ),
+    executiveSummary:
+      "当前回答已形成基础认知，但证据覆盖仍不完整；本月应补齐核心事实和来源路径，并在月底按同一口径复测。",
+    dimensionNarratives: {
+      semanticVisibility: {
+        currentFinding: "五次回答能够识别企业及其主要服务方向。",
+        nextAction: "补充核心能力与权威证据之间的清晰引用路径。",
+      },
+      semanticCoherence: {
+        currentFinding: "核心主张在不同回答中的表达基本一致。",
+        nextAction: "统一定位、能力边界与风险说明的表达口径。",
+      },
+      semanticRichness: {
+        currentFinding: "回答已覆盖部分关键方面，但采购信息仍不完整。",
+        nextAction: "补齐部署、风险和采购核验类问答内容。",
+      },
+      semanticAuthority: {
+        currentFinding: "部分重要判断已有来源支持，但独立证据偏少。",
+        nextAction: "建设可追溯的官方事实页并拓展独立来源。",
+      },
+      competitiveAdvantage: {
+        currentFinding: "部分已验证差异点能够被回答准确表达。",
+        nextAction: "围绕可核验差异点建立统一的对比语言。",
+      },
+    },
+  };
+}
+
 describe("GEO current-state assessment task output", () => {
   it("asks Base for schema-required item confidence without asking for a confidence summary", async () => {
     const prompt = await buildAssessmentPrompt({
@@ -759,6 +838,123 @@ describe("deterministic question-baseline scoring", () => {
     );
   });
 
+  it("scores all five dimensions for a named-brand reputation question in v2", () => {
+    const assessment = calculateQuestionBaselineAssessment(validV2RawOutput());
+
+    expect(assessment.schemaVersion).toBe(2);
+    expect(assessment.algorithmVersion).toBe(
+      "question_baseline_v2_conservative",
+    );
+    expect(assessment.reputationExclusionApplied).toBe(false);
+    expect(
+      Object.values(assessment.dimensions).every(
+        (dimension) => dimension.score > 0,
+      ),
+    ).toBe(true);
+    expect(
+      assessment.dimensions.semanticVisibility.indicators.multiPlatformCoverage
+        .normalizedRawValue,
+    ).toBe(0.9);
+    expect(assessment.overview.score).toBe(
+      Object.values(assessment.dimensions).reduce(
+        (total, dimension) => total + dimension.score,
+        0,
+      ),
+    );
+    expect(assessment.platformBreakdown[0].sourceCount).toBe(11);
+  });
+
+  it("scores the fixed five-answer, 25-comparison, 28-source acceptance sample", () => {
+    const fixture = validV2RawOutput();
+    const comparison = fixture.knowledgeVsAnswers[0];
+    const raw: AssessmentRawTaskOutput = {
+      ...fixture,
+      sample: {
+        selectedPlatforms: ["doubao"],
+        repeatPerPlatform: 5,
+        expectedResponses: 5,
+        successfulResponses: 5,
+        failedResponses: 0,
+      },
+      platformBreakdown: [
+        {
+          ...fixture.platformBreakdown[1],
+          responseCount: 5,
+          successfulResponses: 5,
+          sourceCount: 28,
+        },
+      ],
+      knowledgeVsAnswers: Array.from({ length: 25 }, (_, index) => ({
+        ...comparison,
+        id: `acceptance-comparison-${index + 1}`,
+        topic: `验收事实 ${index + 1}`,
+        platform: "doubao" as const,
+        runIndex: (index % 5) + 1,
+      })),
+    };
+
+    const parsed = AssessmentRawTaskOutputSchema.parse(raw);
+    const assessment = calculateQuestionBaselineAssessment(parsed);
+    const dimensions = Object.values(assessment.dimensions);
+
+    expect(parsed.sample.successfulResponses).toBe(5);
+    expect(parsed.knowledgeVsAnswers).toHaveLength(25);
+    expect(parsed.platformBreakdown[0].sourceCount).toBe(28);
+    expect(dimensions).toHaveLength(5);
+    expect(dimensions.every((dimension) => dimension.score > 0)).toBe(true);
+    expect(assessment.overview.score).toBeCloseTo(
+      dimensions.reduce((sum, dimension) => sum + dimension.score, 0),
+      8,
+    );
+  });
+
+  it("rejects incomplete v2 indicators instead of publishing them as zero", () => {
+    const raw = validV2RawOutput();
+    raw.dimensions.semanticAuthority.structuredDataCompleteness = unavailable();
+
+    expect(AssessmentRawTaskOutputSchema.safeParse(raw).success).toBe(false);
+  });
+
+  it("preserves a genuine evidence-backed zero without adding a score floor", () => {
+    const raw = validV2RawOutput();
+    raw.dimensions.semanticCoherence.corePropositionHitRate = indicator(0);
+    raw.dimensions.semanticCoherence.toneConsistency = indicator(0);
+
+    const assessment = calculateQuestionBaselineAssessment(raw);
+    expect(assessment.dimensions.semanticCoherence.score).toBe(0);
+  });
+
+  it("caps knowledge-dependent v2 indicators by comparison net support", () => {
+    const raw = validV2RawOutput();
+    raw.dimensions.semanticVisibility.webSearchSov = {
+      ...raw.dimensions.semanticVisibility.webSearchSov,
+      rawValue: 1,
+    };
+
+    const assessment = calculateQuestionBaselineAssessment(raw);
+    expect(
+      assessment.dimensions.semanticVisibility.indicators.webSearchSov,
+    ).toMatchObject({
+      rawValue: 1,
+      normalizedRawValue: 0.5,
+      score: 5,
+    });
+    expect(
+      assessment.dimensions.semanticVisibility.indicators.aiSearchVisibility
+        .normalizedRawValue,
+    ).toBe(0.5);
+  });
+
+  it("rejects a publishable v2 indicator with zero evidence confidence", () => {
+    const raw = validV2RawOutput();
+    raw.dimensions.semanticAuthority.authoritativeSourceRatio = {
+      ...raw.dimensions.semanticAuthority.authoritativeSourceRatio,
+      confidence: 0,
+    };
+
+    expect(AssessmentRawTaskOutputSchema.safeParse(raw).success).toBe(false);
+  });
+
   it("keeps actual citations separate from retrieval references", () => {
     const assessment = calculateQuestionBaselineAssessment(validRawOutput());
     expect(assessment.platformBreakdown[0]).toMatchObject({
@@ -804,7 +1000,8 @@ describe("assessment prompt", () => {
     expect(prompt).not.toContain("# FILE:");
     expect(Buffer.byteLength(prompt, "utf8")).toBeLessThan(4 * 1024);
     expect(prompt).toContain("不得自行计算或输出最终分数");
-    expect(prompt).toContain("citationList 与 referenceList 必须分开保留");
+    expect(prompt).toContain("sources 是去重后的唯一来源集合");
+    expect(prompt).toContain("输出 schemaVersion 必须为 2");
     expect(prompt).toContain(
       '"monitoringRecordsFile": "FrontMind-monitoring.json"',
     );
