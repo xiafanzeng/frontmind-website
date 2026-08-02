@@ -15,7 +15,6 @@ permissions:
 
 env:
   NODE_VERSION: "22.22.2"
-  PNPM_VERSION: "10.4.1"
   IMAGE_NAME: ghcr.io/${{ github.repository }}
 
 jobs:
@@ -36,8 +35,6 @@ jobs:
         with:
           persist-credentials: false
       - uses: pnpm/action-setup@v4
-        with:
-          version: ${{ env.PNPM_VERSION }}
       - uses: actions/setup-node@v4
         with:
           node-version: ${{ env.NODE_VERSION }}
