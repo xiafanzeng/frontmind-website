@@ -53,10 +53,14 @@ const KnowledgeBaseArtifactSchema = z
 
 const CleanupTargetSchema = z
   .object({
+    // Accepted only for backward compatibility with cleanup tombstones written
+    // before upstream tasks became permanent evidence. The transform strips it
+    // so no cleanup callback can request task deletion.
     taskId: z.string().min(1).max(200).optional(),
     temporaryFileIds: z.array(z.string().min(1).max(200)).max(22).default([]),
   })
-  .strict();
+  .strict()
+  .transform(({ temporaryFileIds }) => ({ temporaryFileIds }));
 
 const CustomQuestionValidationRecordSchema = z
   .object({
@@ -393,7 +397,6 @@ function cleanupTargetFromRecord(
   record: GeoCustomQuestionValidationRecord,
 ): GeoCustomQuestionValidationCleanupTarget {
   return CleanupTargetSchema.parse({
-    taskId: record.taskId,
     temporaryFileIds: Array.from(
       new Set([
         ...record.orphanedTemporaryFileIds,

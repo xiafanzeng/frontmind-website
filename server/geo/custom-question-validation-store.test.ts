@@ -328,11 +328,12 @@ describe("custom-question validation persistence", () => {
       const retained = await store.collectGarbage({
         now: new Date(start + 2_000),
         cleanup: async (target) => {
-          if (target.taskId) cleaned.push(target.taskId);
+          expect(target).not.toHaveProperty("taskId");
+          cleaned.push(...target.temporaryFileIds);
         },
       });
       expect(retained.retained).toBeGreaterThan(0);
-      expect(cleaned).toEqual(["completed-task"]);
+      expect(cleaned).toEqual([]);
       await expect(
         store.get(input.projectId, input.clientRequestId),
       ).resolves.toMatchObject({
@@ -1592,7 +1593,7 @@ describe("custom-question validation persistence", () => {
     });
   });
 
-  it("retries failed cleanup, expires plaintext records, and retains a permanent compact tombstone", async () => {
+  it("retries failed temporary-file cleanup without retaining or deleting the upstream task", async () => {
     const directory = await makeStoreDirectory();
     let now = Date.parse("2026-08-01T00:00:00.000Z");
     const store = new FileGeoCustomQuestionValidationStore(directory, {
@@ -1610,7 +1611,7 @@ describe("custom-question validation persistence", () => {
       {
         ...created.record,
         state: "submitted",
-        taskId: "task-to-delete",
+        taskId: "task-to-retain",
         skillAttachment: {
           fileId: "temporary-skill",
           filename: "skill.zip",
@@ -1639,18 +1640,20 @@ describe("custom-question validation persistence", () => {
       ),
     );
     expect(afterFailedCleanup.join("\n")).not.toContain(QUESTION);
-    expect(afterFailedCleanup.join("\n")).toContain("task-to-delete");
+    expect(afterFailedCleanup.join("\n")).not.toContain("task-to-retain");
+    expect(afterFailedCleanup.join("\n")).toContain("temporary-skill");
 
     const cleanedIds: string[] = [];
     const succeeded = await store.collectGarbage({
       now: new Date(now),
       tombstoneTtlMs: 1_000,
       cleanup: async (target) => {
-        cleanedIds.push(target.taskId!, ...target.temporaryFileIds);
+        expect(target).not.toHaveProperty("taskId");
+        cleanedIds.push(...target.temporaryFileIds);
       },
     });
     expect(succeeded).toMatchObject({ deleted: 0, retained: 0 });
-    expect(cleanedIds).toEqual(["task-to-delete", "temporary-skill"]);
+    expect(cleanedIds).toEqual(["temporary-skill"]);
     await expect(
       store.get(created.record.projectId, created.record.clientRequestId),
     ).rejects.toMatchObject({ code: "RESERVATION_EXPIRED" });
@@ -1686,7 +1689,7 @@ describe("custom-question validation persistence", () => {
     expect(await restarted.persistenceIdentity()).toBe(firstIdentity);
   });
 
-  it("removes expired plaintext during a cleanup outage and retains only retry metadata", async () => {
+  it("removes expired plaintext during a file-cleanup outage and retains only temporary-file retry metadata", async () => {
     const directory = await makeStoreDirectory();
     let now = Date.parse("2026-08-01T00:00:00.000Z");
     const store = new FileGeoCustomQuestionValidationStore(directory, {
@@ -1704,7 +1707,12 @@ describe("custom-question validation persistence", () => {
       {
         ...created.record,
         state: "submitted",
-        taskId: "retry-cleanup-task",
+        taskId: "retry-retained-task",
+        skillAttachment: {
+          fileId: "retry-cleanup-file",
+          filename: "skill.zip",
+          temporary: true,
+        },
       },
       lease!,
     );
@@ -1734,17 +1742,21 @@ describe("custom-question validation persistence", () => {
       ),
     );
     expect(persistedAfterOutage.join("\n")).not.toContain(QUESTION);
-    expect(persistedAfterOutage.join("\n")).toContain("retry-cleanup-task");
+    expect(persistedAfterOutage.join("\n")).not.toContain(
+      "retry-retained-task",
+    );
+    expect(persistedAfterOutage.join("\n")).toContain("retry-cleanup-file");
 
     const cleaned: string[] = [];
     const recovered = await store.collectGarbage({
       now: new Date(now),
       tombstoneTtlMs: 1_000,
       cleanup: async (target) => {
-        if (target.taskId) cleaned.push(target.taskId);
+        expect(target).not.toHaveProperty("taskId");
+        cleaned.push(...target.temporaryFileIds);
       },
     });
-    expect(cleaned).toEqual(["retry-cleanup-task"]);
+    expect(cleaned).toEqual(["retry-cleanup-file"]);
     expect(recovered).toMatchObject({ tombstonesDeleted: 0, retained: 0 });
     expect(
       (await fs.readdir(directory)).some((name) =>

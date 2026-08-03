@@ -503,10 +503,6 @@ class LocalAcceptanceBroker implements GeoPresalesBroker {
     return this.completeTask(taskId);
   }
 
-  async deleteTask(taskId: string) {
-    this.tasks.delete(taskId);
-  }
-
   async deleteFile(fileId: string) {
     this.metrics.deletedFileCount += 1;
     this.uploads.delete(fileId);
@@ -668,6 +664,8 @@ class LocalAcceptanceBroker implements GeoPresalesBroker {
       realForecastResultPath: realForecastEvidenceEnabled
         ? realForecastResultPath
         : undefined,
+      retainedTaskCount: this.tasks.size,
+      retainedTaskIds: [...this.tasks.keys()].sort(),
       ...this.metrics,
     };
   }

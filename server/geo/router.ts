@@ -5565,19 +5565,16 @@ export function createGeoRouter(options: GeoRouterOptions = {}): Router {
         ...(value.archiveFileIds || []),
         ...(value.temporaryFileIds || []),
       ];
+      const retainedTaskIds = new Set(taskIds);
+      const uniqueFileIds = new Set(fileIds);
+      const uniqueMonitorRunIds = new Set(monitorRunIds);
       const operations = [
-        ...Array.from(new Set(taskIds)).map(() => "task"),
-        ...Array.from(new Set(fileIds)).map(() => "file"),
-        ...Array.from(new Set(monitorRunIds)).map(() => "monitor"),
+        ...Array.from(uniqueFileIds).map(() => "file"),
+        ...Array.from(uniqueMonitorRunIds).map(() => "monitor"),
       ];
       const results = await Promise.allSettled([
-        ...Array.from(new Set(taskIds)).map((taskId) =>
-          broker.deleteTask(taskId),
-        ),
-        ...Array.from(new Set(fileIds)).map((fileId) =>
-          broker.deleteFile(fileId),
-        ),
-        ...Array.from(new Set(monitorRunIds)).map((runId) =>
+        ...Array.from(uniqueFileIds).map((fileId) => broker.deleteFile(fileId)),
+        ...Array.from(uniqueMonitorRunIds).map((runId) =>
           broker.deleteMonitorRun(runId),
         ),
       ]);
@@ -5595,9 +5592,10 @@ export function createGeoRouter(options: GeoRouterOptions = {}): Router {
       projectOrderProtections.delete(value.projectId);
       res.json({
         ok: true,
-        deletedTasks: new Set(taskIds).size,
-        deletedFiles: new Set(fileIds).size,
-        deletedMonitorRuns: new Set(monitorRunIds).size,
+        deletedTasks: 0,
+        retainedTasks: retainedTaskIds.size,
+        deletedFiles: uniqueFileIds.size,
+        deletedMonitorRuns: uniqueMonitorRunIds.size,
       });
     }),
   );
@@ -7783,7 +7781,6 @@ async function cleanupCustomQuestionValidation(
     ]),
   );
   const results = await Promise.allSettled([
-    ...(record.taskId ? [broker.deleteTask(record.taskId)] : []),
     ...temporaryFileIds.map((fileId) => broker.deleteFile(fileId)),
   ]);
   const failed = results.filter(
@@ -7875,7 +7872,6 @@ export function createGeoCustomQuestionRecoveryWorker(input: {
         now: new Date(input.now?.() ?? Date.now()),
         cleanup: async (target) => {
           const results = await Promise.allSettled([
-            ...(target.taskId ? [input.broker.deleteTask(target.taskId)] : []),
             ...target.temporaryFileIds.map((fileId) =>
               input.broker.deleteFile(fileId),
             ),

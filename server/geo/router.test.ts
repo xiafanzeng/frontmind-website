@@ -391,10 +391,6 @@ class MockBroker implements GeoPresalesBroker {
     return this.taskResults.get(taskId) ?? this.getTask(taskId);
   }
 
-  async deleteTask(taskId: string) {
-    this.tasks.delete(taskId);
-  }
-
   async deleteFile(fileId: string) {
     if (this.failDeleteFile) throw new Error("delete failed");
     this.deletedFiles.push(fileId);
@@ -1133,8 +1129,7 @@ describe("GEO API", () => {
             new MemoryGeoCustomQuestionValidationStore(),
           env: {
             NODE_ENV: "production",
-            FRONTMIND_GEO_INVITE_CODE:
-              "secure-production-invite-20260802",
+            FRONTMIND_GEO_INVITE_CODE: "secure-production-invite-20260802",
             FRONTMIND_GEO_SESSION_SECRET:
               "production-session-secret-with-enough-entropy-20260802",
             FRONTMIND_GEO_CONTRACT_AUTH_CODE: unsafeContractCode,
@@ -1320,7 +1315,7 @@ describe("GEO API", () => {
     expect(wrongSize.status).toBe(400);
   });
 
-  it("finalizes a candidate, returns fixed knowledge sections and strict questions, then deletes both tasks", async () => {
+  it("finalizes a candidate, returns fixed knowledge sections and strict questions, then retains both tasks", async () => {
     const { cookie } = await verifyInvite();
     const created = await jsonRequest("/projects", cookie, {
       method: "POST",
@@ -1416,7 +1411,13 @@ describe("GEO API", () => {
       cookie,
       { method: "DELETE" },
     );
-    expect(removed.body).toMatchObject({ ok: true, deletedTasks: 2 });
+    expect(removed.body).toMatchObject({
+      ok: true,
+      deletedTasks: 0,
+      retainedTasks: 2,
+    });
+    expect(broker.tasks.has("kb-1")).toBe(true);
+    expect(broker.tasks.has("question-1")).toBe(true);
   });
 
   it("finalizes the single candidate pipeline once and serves the same final ZIP everywhere", async () => {
@@ -2282,6 +2283,7 @@ describe("GEO API", () => {
       },
     });
     const payload = created.body as Record<string, any>;
+    const retainedTaskIds = [...broker.tasks.keys()];
     broker.failDeleteFile = true;
     const failed = await jsonRequest(
       `/projects/${encodeURIComponent(payload.projectToken)}`,
@@ -2302,9 +2304,13 @@ describe("GEO API", () => {
     expect(retried.response.status).toBe(200);
     expect(retried.body).toMatchObject({
       ok: true,
-      deletedTasks: 1,
+      deletedTasks: 0,
+      retainedTasks: 1,
       deletedFiles: 2,
     });
+    expect(retainedTaskIds.every((taskId) => broker.tasks.has(taskId))).toBe(
+      true,
+    );
   });
 
   it("blocks deletion for a pending monitoring order and until paid monitoring is fulfilled", async () => {
@@ -3291,6 +3297,7 @@ describe("GEO API", () => {
     expect(expiredPost.body).toMatchObject({
       error: { code: "CUSTOM_QUESTION_VALIDATION_EXPIRED" },
     });
+    expect(broker.tasks.has("custom-question-classifier-1")).toBe(true);
   });
 
   it("coalesces double-clicks and rejects cross-session recovery", async () => {
@@ -4332,6 +4339,7 @@ describe("GEO API", () => {
         CUSTOM_QUESTION_CLIENT_REQUEST_ID,
       ),
     ).resolves.toMatchObject({ cleanupCompleted: true });
+    expect(broker.tasks.has("custom-question-classifier-1")).toBe(true);
   });
 
   it("completes an active reservation in the background without another browser poll", async () => {
@@ -4384,6 +4392,7 @@ describe("GEO API", () => {
       },
     });
     expect(broker.customQuestionClassifierTaskCount).toBe(1);
+    expect(broker.tasks.has("custom-question-classifier-1")).toBe(true);
   });
 
   it("accepts finished as a terminal classifier status", async () => {

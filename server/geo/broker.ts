@@ -121,7 +121,6 @@ export interface GeoPresalesBroker {
   }): Promise<BrokerTask>;
   getTask(taskId: string): Promise<BrokerTask>;
   getTaskResult(taskId: string): Promise<BrokerTask>;
-  deleteTask(taskId: string): Promise<void>;
   deleteFile(fileId: string): Promise<void>;
   downloadFile(fileId: string): Promise<Response>;
   downloadTaskOutput(
@@ -322,14 +321,6 @@ export class HttpGeoPresalesBroker implements GeoPresalesBroker {
     return this.requestJson<BrokerTask>(
       `/tasks/${encodeURIComponent(taskId)}/result`,
     );
-  }
-
-  async deleteTask(taskId: string) {
-    const response = await this.request(
-      `/tasks/${encodeURIComponent(taskId)}`,
-      { method: "DELETE" },
-    );
-    if (response.body) await response.body.cancel().catch(() => undefined);
   }
 
   async deleteFile(fileId: string) {
