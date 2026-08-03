@@ -1220,7 +1220,7 @@ describe("GEO style preview rendering", () => {
     expect(html).not.toContain("127.0.0.1");
   });
 
-  it("keeps failed assessment and forecast jobs free of manual retry controls", () => {
+  it("offers a manual assessment retry while keeping forecast support-only", () => {
     const fixture = createGeoStylePreviewProject();
     const project = {
       ...fixture,
@@ -1243,7 +1243,11 @@ describe("GEO style preview rendering", () => {
       optimizationForecastRetryAvailable: true,
     };
     const assessmentHtml = renderToStaticMarkup(
-      <CurrentAssessment project={project} onContact={vi.fn()} />,
+      <CurrentAssessment
+        project={project}
+        onContact={vi.fn()}
+        onRetryAssessment={vi.fn()}
+      />,
     );
     const forecastHtml = renderToStaticMarkup(
       <OptimizationForecastView
@@ -1259,9 +1263,9 @@ describe("GEO style preview rendering", () => {
     );
 
     expect(assessmentHtml).toContain("联系技术支持");
-    expect(assessmentHtml).toContain("现状评估结果暂未通过校验");
+    expect(assessmentHtml).toContain("重新评估");
+    expect(assessmentHtml).toContain("现状评估暂未生成");
     expect(assessmentHtml).not.toContain("知识库对照评估未能完成");
-    expect(assessmentHtml).not.toContain("重新生成评估");
     expect(assessmentHtml).not.toContain("刷新评估");
     expect(assessmentHtml).not.toContain("最后刷新");
     expect(forecastHtml).toContain("联系技术支持");
@@ -1269,7 +1273,7 @@ describe("GEO style preview rendering", () => {
     expect(forecastHtml).not.toContain("正在重试");
   });
 
-  it("replaces exhausted assessment and forecast retries with technical support", () => {
+  it("keeps manual assessment retry available after the legacy retry flag is exhausted", () => {
     const fixture = createGeoStylePreviewProject();
     const project = {
       ...fixture,
@@ -1292,7 +1296,11 @@ describe("GEO style preview rendering", () => {
       },
     };
     const assessmentHtml = renderToStaticMarkup(
-      <CurrentAssessment project={project} onContact={vi.fn()} />,
+      <CurrentAssessment
+        project={project}
+        onContact={vi.fn()}
+        onRetryAssessment={vi.fn()}
+      />,
     );
     const forecastHtml = renderToStaticMarkup(
       <OptimizationForecastView
@@ -1309,10 +1317,38 @@ describe("GEO style preview rendering", () => {
 
     expect(assessmentHtml).toContain("联系技术支持");
     expect(assessmentHtml).toContain("评估需支持");
+    expect(assessmentHtml).toContain("重新评估");
     expect(assessmentHtml).not.toContain("评估待重试");
-    expect(assessmentHtml).not.toContain("重新生成评估");
     expect(forecastHtml).toContain("联系技术支持");
     expect(forecastHtml).not.toContain("重新生成优化评估");
+  });
+
+  it("disables manual assessment retry while a retry request is in flight", () => {
+    const fixture = createGeoStylePreviewProject();
+    const project = {
+      ...fixture,
+      preview: undefined,
+      assessmentRetryAvailable: false,
+      assessment: {
+        ...fixture.assessment!,
+        status: "failed" as const,
+        totalScore: undefined,
+        error: "评估任务失败",
+      },
+    };
+    const html = renderToStaticMarkup(
+      <CurrentAssessment
+        project={project}
+        onContact={vi.fn()}
+        onRetryAssessment={vi.fn()}
+        retryingAssessment
+      />,
+    );
+
+    expect(html).toContain("正在重新评估");
+    expect(html).toContain('aria-busy="true"');
+    expect(html).toContain("disabled");
+    expect(html).toContain("联系技术支持");
   });
 
   it.each(["failed", "partial_review"] as const)(

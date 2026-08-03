@@ -21,7 +21,7 @@ import {
   QUESTION_SKILL_ARCHIVE_FILENAME,
   WEBSITE_KB_SKILL_ARCHIVE_FILENAME,
 } from "./skills";
-import { loadGeoKnowledgeAnswerVerifierSkill } from "./assessment";
+import { loadGeoCurrentStateEvaluatorSkill } from "./assessment";
 import { parseKnowledgeBaseCandidate } from "./knowledge-base-candidate";
 
 const execFileAsync = promisify(execFile);
@@ -664,7 +664,7 @@ describe("GEO custom-question classifier skill", () => {
 });
 
 describe("GEO production runtime Skill release gates", () => {
-  it("loads, audits, and verifies the exact six-Skill runtime set", () => {
+  it("loads, copies, audits, and verifies the exact five-Skill runtime set", () => {
     const serverEntry = fs.readFileSync(
       path.resolve(process.cwd(), "server/index.ts"),
       "utf8",
@@ -677,26 +677,35 @@ describe("GEO production runtime Skill release gates", () => {
       path.resolve(process.cwd(), "scripts/verify-production-release.mjs"),
       "utf8",
     );
+    const skillCopier = fs.readFileSync(
+      path.resolve(process.cwd(), "scripts/copy-server-skills.mjs"),
+      "utf8",
+    );
     const requiredSkills = [
       "website-one-shot-kb-builder",
       "geo-question-recommender",
       "geo-custom-question-classifier",
-      "geo-knowledge-answer-verifier",
       "geo-current-state-evaluator",
       "geo-optimization-outcome-forecaster",
     ];
     expect(serverEntry).toContain("loadGeoCustomQuestionClassifierSkill");
     for (const skillName of requiredSkills) {
       expect(serverEntry).toContain(skillName);
+      expect(skillCopier).toContain(skillName);
       expect(bundleAudit).toContain(skillName);
       expect(productionVerifier).toContain(skillName);
     }
     expect(productionVerifier).toContain(
-      "Production must expose the exact six runtime Skills",
+      "Production must expose the exact five runtime Skills",
     );
-    expect(productionVerifier).not.toMatch(
-      /skills\.length\s*!==?\s*5|All five runtime Skills/,
-    );
+    for (const runtimeSource of [
+      serverEntry,
+      skillCopier,
+      bundleAudit,
+      productionVerifier,
+    ]) {
+      expect(runtimeSource).not.toContain("geo-knowledge-answer-verifier");
+    }
     expect(bundleAudit).not.toContain("must contain exactly 21 files");
     expect(bundleAudit).not.toContain("legacy visitor-stat baseline");
   });
@@ -717,21 +726,24 @@ describe("GEO production runtime Skill release gates", () => {
   });
 });
 
-describe("GEO knowledge-answer verifier skill", () => {
-  it("requires evidence-linked, customer-readable comparison output", async () => {
-    const skill = await loadGeoKnowledgeAnswerVerifierSkill();
+describe("GEO current-state evaluator skill", () => {
+  it("performs the lightweight comparison and assessment in one pass", async () => {
+    const skill = await loadGeoCurrentStateEvaluatorSkill();
     for (const invariant of [
-      "geo-knowledge-answer-verifier",
+      "no more than 25 topic labels",
+      "exactly the top 10 unique topics",
+      "Do not analyze the discarded candidate topics",
+      "Never output all 25 candidate topics",
       "supported",
       "contradicted",
       "omitted",
       "unverifiable",
-      '"topic"',
-      '"kbClaimText"',
-      '"recommendedAction"',
-      "Never invent a source, platform, run, claim, or quotation",
+      "optional",
+      "single task run",
+      "Do not create a second verifier pass",
     ]) {
       expect(skill).toContain(invariant);
     }
+    expect(skill).not.toContain("geo-knowledge-answer-verifier");
   });
 });

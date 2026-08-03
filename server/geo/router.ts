@@ -24,11 +24,9 @@ import {
   AssessmentTaskOutputValidationError,
   assertAssessmentOutputScope,
   buildGeoCurrentStateEvaluatorSkillArchive,
-  buildGeoKnowledgeAnswerVerifierSkillArchive,
   buildAssessmentPrompt,
   calculateQuestionBaselineAssessment,
   determineBsasGrade,
-  KNOWLEDGE_VERIFIER_SKILL_ARCHIVE_FILENAME,
   parseAssessmentTaskOutput,
 } from "./assessment";
 import {
@@ -313,7 +311,7 @@ type ProjectTokenValue = {
   monitorPaidAt?: string;
   assessmentTaskId?: string;
   assessmentSubmittedAt?: string;
-  assessmentAttempt?: 1 | 2;
+  assessmentAttempt?: number;
   assessmentVersion?: 2;
   assessmentUpgradeFromV1?: boolean;
   previousAssessmentTaskIds?: string[];
@@ -1492,14 +1490,6 @@ export function createGeoRouter(options: GeoRouterOptions = {}): Router {
         "SERVICE_ASSESSMENT_NOT_READY",
       );
     }
-    const knowledgeEvidencePaths = await loadKnowledgeEvidencePaths(
-      broker,
-      value,
-      value.knowledgeBaseTaskId,
-      resolved.knowledgeBaseTask,
-      value.companyName,
-      value.knowledgeBaseValidationProfile,
-    );
     try {
       validateServiceAssessmentOutputs(
         resolved.question,
@@ -1507,7 +1497,6 @@ export function createGeoRouter(options: GeoRouterOptions = {}): Router {
         forecastTask,
         monitorRun.platforms,
         monitorRun,
-        knowledgeEvidencePaths,
       );
     } catch (error) {
       logAssessmentOutputValidation(error);
@@ -2262,7 +2251,6 @@ export function createGeoRouter(options: GeoRouterOptions = {}): Router {
     knowledgeBaseTask: BrokerTask,
     questionTask: BrokerTask,
     monitorRun: BrokerMonitorRun,
-    retryReason?: string,
   ) => {
     const question = value.monitorQuestionId
       ? findOwnedQuestion(
@@ -2382,7 +2370,6 @@ export function createGeoRouter(options: GeoRouterOptions = {}): Router {
               successfulResponses,
               failedResponses: monitorRun.expectedItems - successfulResponses,
             },
-            retryReason,
           }),
           attachments: [
             {
@@ -2394,13 +2381,9 @@ export function createGeoRouter(options: GeoRouterOptions = {}): Router {
               filename: monitoringFile.filename || monitoringFilename,
             },
           ],
-          idempotencyKey: `geo:${value.projectId}:assessment:v2-conservative:${value.monitorRunId}:${value.assessmentAttempt || 1}`,
+          idempotencyKey: `geo:${value.projectId}:assessment:v3-top10:${value.monitorRunId}:${value.assessmentAttempt || 1}`,
         },
         [
-          {
-            filename: KNOWLEDGE_VERIFIER_SKILL_ARCHIVE_FILENAME,
-            body: await buildGeoKnowledgeAnswerVerifierSkillArchive(),
-          },
           {
             filename: ASSESSMENT_SKILL_ARCHIVE_FILENAME,
             body: await buildGeoCurrentStateEvaluatorSkillArchive(),
@@ -2670,23 +2653,7 @@ export function createGeoRouter(options: GeoRouterOptions = {}): Router {
           rawMonitorRun?.status === "completed" &&
           rawMonitorRun.records,
       );
-      let knowledgeEvidencePaths: string[] | undefined;
-      const getKnowledgeEvidencePaths = async () => {
-        if (!knowledgeEvidencePaths) {
-          knowledgeEvidencePaths = await loadKnowledgeEvidencePaths(
-            broker,
-            currentValue,
-            currentValue.knowledgeBaseTaskId,
-            currentKnowledgeBaseTask,
-            currentValue.companyName,
-            currentValue.knowledgeBaseValidationProfile,
-          );
-        }
-        return knowledgeEvidencePaths;
-      };
-
       if (automationReady && initialQuestionTask && rawMonitorRun && question) {
-        let assessmentRetryReason: string | undefined;
         if (
           currentValue.assessmentTaskId &&
           currentValue.assessmentVersion !== 2
@@ -2724,70 +2691,6 @@ export function createGeoRouter(options: GeoRouterOptions = {}): Router {
           currentOptimizationForecastTask = undefined;
         }
 
-        if (currentValue.assessmentTaskId && currentAssessmentTask) {
-          const assessmentStatus = normalizeTaskStatus(
-            currentAssessmentTask.status,
-          );
-          if (["failed", "cancelled"].includes(assessmentStatus)) {
-            assessmentRetryReason =
-              assessmentStatus === "cancelled"
-                ? "上一次现状评估任务已取消"
-                : normalizeTask(currentAssessmentTask, "assessment").error ||
-                  "上一次现状评估任务执行失败";
-          } else if (assessmentStatus === "completed") {
-            try {
-              calculateQuestionBaselineAssessment(
-                parseScopedAssessmentTaskOutput(
-                  currentAssessmentTask,
-                  question,
-                  rawMonitorRun.platforms,
-                  rawMonitorRun,
-                  await getKnowledgeEvidencePaths(),
-                ),
-              );
-            } catch (error) {
-              logAssessmentOutputValidation(error);
-              assessmentRetryReason = assessmentOutputRetryReason(error);
-            }
-          }
-          if (
-            assessmentRetryReason &&
-            (currentValue.assessmentAttempt || 1) < 2
-          ) {
-            const previousAssessmentTaskId = currentValue.assessmentTaskId;
-            const previousForecastTaskId =
-              currentValue.optimizationForecastTaskId;
-            currentValue = {
-              ...currentValue,
-              assessmentTaskId: undefined,
-              assessmentSubmittedAt: undefined,
-              assessmentAttempt: 2,
-              assessmentVersion: 2,
-              optimizationForecastTaskId: undefined,
-              optimizationForecastSubmittedAt: undefined,
-              optimizationForecastAttempt: 1,
-              optimizationForecastVersion: 2,
-              previousAssessmentTaskIds: Array.from(
-                new Set([
-                  ...(currentValue.previousAssessmentTaskIds || []),
-                  previousAssessmentTaskId,
-                ]),
-              ),
-              previousOptimizationForecastTaskIds: previousForecastTaskId
-                ? Array.from(
-                    new Set([
-                      ...(currentValue.previousOptimizationForecastTaskIds ||
-                        []),
-                      previousForecastTaskId,
-                    ]),
-                  )
-                : currentValue.previousOptimizationForecastTaskIds,
-            };
-            currentAssessmentTask = undefined;
-            currentOptimizationForecastTask = undefined;
-          }
-        }
-
         if (!currentValue.assessmentTaskId) {
           try {
             const created = await createAutomaticAssessmentTask(
@@ -2795,7 +2698,6 @@ export function createGeoRouter(options: GeoRouterOptions = {}): Router {
               currentKnowledgeBaseTask,
               initialQuestionTask,
               rawMonitorRun,
-              assessmentRetryReason,
             );
             currentValue = created.value;
             currentAssessmentTask = created.task;
@@ -2826,7 +2728,6 @@ export function createGeoRouter(options: GeoRouterOptions = {}): Router {
                 question,
                 rawMonitorRun.platforms,
                 rawMonitorRun,
-                await getKnowledgeEvidencePaths(),
               ),
             );
           } catch {
@@ -3806,7 +3707,6 @@ export function createGeoRouter(options: GeoRouterOptions = {}): Router {
     requireCostRate("assessment-create", 8),
     asyncHandler(async (req, res) => {
       let value = openOwnedProject(req, res);
-      let assessmentRetryReason: string | undefined;
       if (!value.monitorRunId || !value.monitorQuestionId) {
         throw new GeoHttpError(
           "真实监控任务提交后才能生成现状评估",
@@ -3842,15 +3742,6 @@ export function createGeoRouter(options: GeoRouterOptions = {}): Router {
           "MONITOR_QUESTION_MISMATCH",
         );
       }
-      const knowledgeEvidencePaths = await loadKnowledgeEvidencePaths(
-        broker,
-        value,
-        value.knowledgeBaseTaskId,
-        knowledgeBaseTask,
-        value.companyName,
-        value.knowledgeBaseValidationProfile,
-      );
-
       if (value.assessmentTaskId && value.assessmentVersion !== 2) {
         value = {
           ...value,
@@ -3888,13 +3779,8 @@ export function createGeoRouter(options: GeoRouterOptions = {}): Router {
             : Promise.resolve(undefined),
         ]);
         const assessmentStatus = normalizeTaskStatus(assessmentTask.status);
-        if (["failed", "cancelled"].includes(assessmentStatus)) {
-          assessmentRetryReason =
-            assessmentStatus === "cancelled"
-              ? "上一次现状评估任务已取消"
-              : normalizeTask(assessmentTask, "assessment").error ||
-                "上一次现状评估任务执行失败";
-        } else if (assessmentStatus === "completed") {
+        let manualRestart = ["failed", "cancelled"].includes(assessmentStatus);
+        if (assessmentStatus === "completed") {
           try {
             calculateQuestionBaselineAssessment(
               parseScopedAssessmentTaskOutput(
@@ -3902,44 +3788,45 @@ export function createGeoRouter(options: GeoRouterOptions = {}): Router {
                 question,
                 monitorRun.platforms,
                 monitorRun,
-                knowledgeEvidencePaths,
               ),
             );
           } catch (error) {
             logAssessmentOutputValidation(error);
-            assessmentRetryReason = assessmentOutputRetryReason(error);
+            manualRestart = true;
           }
         }
-        if (assessmentRetryReason && (value.assessmentAttempt || 1) < 2) {
+        if (manualRestart) {
+          const previousAssessmentTaskId = value.assessmentTaskId;
+          const previousForecastTaskId = value.optimizationForecastTaskId;
           value = {
             ...value,
             assessmentTaskId: undefined,
-            assessmentAttempt: 2,
+            assessmentSubmittedAt: undefined,
+            assessmentAttempt: Math.max(
+              2,
+              Math.floor(value.assessmentAttempt || 1) + 1,
+            ),
+            assessmentVersion: 2,
             optimizationForecastTaskId: undefined,
+            optimizationForecastSubmittedAt: undefined,
+            optimizationForecastAttempt: 1,
+            optimizationForecastVersion: 2,
             previousAssessmentTaskIds: Array.from(
               new Set([
                 ...(value.previousAssessmentTaskIds || []),
-                value.assessmentTaskId,
+                previousAssessmentTaskId,
               ]),
             ),
-            previousOptimizationForecastTaskIds:
-              value.optimizationForecastTaskId
-                ? Array.from(
-                    new Set([
-                      ...(value.previousOptimizationForecastTaskIds || []),
-                      value.optimizationForecastTaskId,
-                    ]),
-                  )
-                : value.previousOptimizationForecastTaskIds,
+            previousOptimizationForecastTaskIds: previousForecastTaskId
+              ? Array.from(
+                  new Set([
+                    ...(value.previousOptimizationForecastTaskIds || []),
+                    previousForecastTaskId,
+                  ]),
+                )
+              : value.previousOptimizationForecastTaskIds,
           };
         } else {
-          if (assessmentRetryReason) {
-            throw new GeoHttpError(
-              "现状评估自动重试次数已用完，请联系技术支持",
-              409,
-              "ASSESSMENT_RETRY_EXHAUSTED",
-            );
-          }
           const project = await buildProjectView(
             broker,
             value,
@@ -4070,7 +3957,6 @@ export function createGeoRouter(options: GeoRouterOptions = {}): Router {
           successfulResponses,
           failedResponses: monitorRun.expectedItems - successfulResponses,
         },
-        retryReason: assessmentRetryReason,
       });
       let assessmentTask: BrokerTask;
       let skillAttachments: Array<{ file_id: string; filename: string }>;
@@ -4090,13 +3976,9 @@ export function createGeoRouter(options: GeoRouterOptions = {}): Router {
                 filename: monitoringFile.filename || monitoringFilename,
               },
             ],
-            idempotencyKey: `geo:${value.projectId}:assessment:v2-conservative:${value.monitorRunId}:${value.assessmentAttempt || 1}`,
+            idempotencyKey: `geo:${value.projectId}:assessment:v3-top10:${value.monitorRunId}:${value.assessmentAttempt || 1}`,
           },
           [
-            {
-              filename: KNOWLEDGE_VERIFIER_SKILL_ARCHIVE_FILENAME,
-              body: await buildGeoKnowledgeAnswerVerifierSkillArchive(),
-            },
             {
               filename: ASSESSMENT_SKILL_ARCHIVE_FILENAME,
               body: await buildGeoCurrentStateEvaluatorSkillArchive(),
@@ -4195,15 +4077,6 @@ export function createGeoRouter(options: GeoRouterOptions = {}): Router {
           "ASSESSMENT_SCOPE_MISMATCH",
         );
       }
-      const knowledgeEvidencePaths = await loadKnowledgeEvidencePaths(
-        broker,
-        value,
-        value.knowledgeBaseTaskId,
-        knowledgeBaseTask,
-        value.companyName,
-        value.knowledgeBaseValidationProfile,
-      );
-
       if (normalizeTaskStatus(assessmentTask.status) !== "completed") {
         throw new GeoHttpError(
           "当前评估仍在生成，完成后将自动建立优化目标区间",
@@ -4222,7 +4095,6 @@ export function createGeoRouter(options: GeoRouterOptions = {}): Router {
             question,
             monitorRun?.platforms || value.monitorPlatformIds || [],
             monitorRun,
-            knowledgeEvidencePaths,
           ),
         );
         if (scoredAssessment.schemaVersion !== 2) {
@@ -5707,14 +5579,12 @@ function validateServiceAssessmentOutputs(
   forecastTask: BrokerTask,
   platforms: GeoMonitorPlatformId[],
   monitorRun?: BrokerMonitorRun,
-  knowledgeEvidencePaths?: readonly string[],
 ) {
   const assessmentOutput = parseScopedAssessmentTaskOutput(
     assessmentTask,
     question,
     platforms,
     monitorRun,
-    knowledgeEvidencePaths,
   );
   const assessment = calculateQuestionBaselineAssessment(assessmentOutput);
   calculateOptimizationOutcomeForecast(
@@ -5728,7 +5598,6 @@ function parseScopedAssessmentTaskOutput(
   question: GeoQuestion,
   platforms: GeoMonitorPlatformId[],
   monitorRun?: BrokerMonitorRun,
-  knowledgeEvidencePaths?: readonly string[],
 ) {
   const scoped = assertAssessmentOutputScope(parseAssessmentTaskOutput(task), {
     question: {
@@ -5747,108 +5616,30 @@ function parseScopedAssessmentTaskOutput(
   });
   if (!monitorRun) return scoped;
 
-  const successfulSlots = new Set(
-    (monitorRun.records || [])
-      .filter(
-        (record) =>
-          record.status === "completed" && Boolean(record.answerText?.trim()),
-      )
-      .map((record) => `${record.platform}:${record.runIndex}`),
-  );
-  if (scoped.schemaVersion === 2) {
-    const sourceCounts = new Map<string, Set<string>>();
-    for (const record of monitorRun.records || []) {
-      if (record.status !== "completed") continue;
-      const identities = sourceCounts.get(record.platform) || new Set<string>();
-      for (const source of record.sources) {
-        identities.add(
-          source.url
-            ? `url:${source.url}`
-            : `label:${source.title || ""}\u0000${source.domain || ""}`,
-        );
-      }
-      sourceCounts.set(record.platform, identities);
-    }
-    for (const platform of scoped.platformBreakdown) {
-      if (
-        platform.sourceCount !==
-        (sourceCounts.get(platform.platform)?.size || 0)
-      ) {
-        throw new Error(
-          "assessment source count does not match canonical monitoring sources",
-        );
-      }
-    }
-  }
-  const allowedEvidenceRefs = new Set(knowledgeEvidencePaths || []);
+  const sourceCounts = new Map<string, Set<string>>();
   for (const record of monitorRun.records || []) {
-    allowedEvidenceRefs.add(record.recordId);
-    allowedEvidenceRefs.add(
-      `${record.platform}/run-${String(record.runIndex).padStart(2, "0")}`,
-    );
-  }
-  if (successfulSlots.size !== monitorRun.completedItems) {
-    throw new Error(
-      "monitoring successful-response records do not match the reported count",
-    );
-  }
-  for (const comparison of scoped.knowledgeVsAnswers) {
-    if (comparison.verdict === "omitted") continue;
-    const slot = `${comparison.platform}:${comparison.runIndex}`;
-    if (!successfulSlots.has(slot)) {
-      throw new Error(
-        "assessment comparison references a monitoring response that did not complete",
+    if (record.status !== "completed") continue;
+    const identities = sourceCounts.get(record.platform) || new Set<string>();
+    for (const source of record.sources) {
+      identities.add(
+        source.url
+          ? `url:${source.url}`
+          : `label:${source.title || ""}\u0000${source.domain || ""}`,
       );
     }
+    sourceCounts.set(record.platform, identities);
   }
-  if (knowledgeEvidencePaths) {
-    const allowedPaths = new Set(knowledgeEvidencePaths);
-    for (const comparison of scoped.knowledgeVsAnswers) {
-      for (const evidenceRef of comparison.kbEvidenceRefs) {
-        if (!allowedPaths.has(evidenceRef)) {
-          throw new Error(
-            "assessment comparison references knowledge evidence outside the packaged ZIP",
-          );
-        }
-      }
-    }
-  }
-  const conclusionEvidenceRefs = [
-    ...Object.values(scoped.dimensions).flatMap((dimension) =>
-      Object.values(dimension).flatMap((indicator) => indicator.evidenceRefs),
-    ),
-    ...scoped.platformBreakdown.flatMap((platform) => platform.evidenceRefs),
-    ...scoped.priorityActions.flatMap((action) => action.evidenceRefs),
-  ];
-  for (const evidenceRef of conclusionEvidenceRefs) {
-    if (!allowedEvidenceRefs.has(evidenceRef)) {
-      throw new Error(
-        "assessment conclusion references evidence outside the current knowledge ZIP or monitoring run",
-      );
-    }
-  }
-  return scoped;
-}
-
-function assessmentOutputRetryReason(error: unknown) {
-  if (error instanceof AssessmentTaskOutputValidationError) {
-    if (error.issues.length > 0) {
-      return `上一次返回已解析为 JSON，但未通过以下字段校验：${error.issues
-        .map((issue) => `${issue.path}: ${issue.message}`)
-        .join("；")}`;
-    }
-    if (error.code === "INVALID_JSON") {
-      return "上一次现状评估没有返回可解析的 JSON 对象";
-    }
-    return "上一次现状评估没有返回可信的 assistant 最终输出";
-  }
-  return error instanceof Error
-    ? error.message
-    : "上一次现状评估输出未通过结构校验";
+  return {
+    ...scoped,
+    platformBreakdown: scoped.platformBreakdown.map((platform) => ({
+      ...platform,
+      sourceCount: sourceCounts.get(platform.platform)?.size || 0,
+    })),
+  };
 }
 
 function publicAssessmentValidationMessage(_error: unknown) {
-  return "现状评估结果暂未通过校验，系统未采用不完整结果";
+  return "现状评估结果暂未生成，请点击“重新评估”再试";
 }
 
 function logAssessmentOutputValidation(error: unknown) {
@@ -6027,7 +5818,6 @@ async function buildProjectView(
         optimizationForecastTask,
         monitorRun?.platforms || value.monitorPlatformIds || [],
         monitorRun,
-        knowledgeBaseManifest.evidencePaths,
       );
       serviceAssessmentReady = true;
     } catch {
@@ -6156,12 +5946,7 @@ async function buildProjectView(
     ? toPublicMonitorView(monitorRun)
     : undefined;
   const publicAssessment = assessmentTask
-    ? toPublicAssessmentView(
-        assessmentTask,
-        serviceQuestion,
-        monitorRun,
-        knowledgeBaseManifest?.evidencePaths,
-      )
+    ? toPublicAssessmentView(assessmentTask, serviceQuestion, monitorRun)
     : undefined;
   const publicOptimizationForecast =
     optimizationForecastTask && assessmentTask
@@ -6170,13 +5955,11 @@ async function buildProjectView(
           assessmentTask,
           serviceQuestion,
           monitorRun,
-          knowledgeBaseManifest?.evidencePaths,
         )
       : undefined;
   const questionRetryAvailable = false;
   const assessmentRetryAvailable =
     Boolean(assessmentTask) &&
-    (value.assessmentAttempt || 1) < 2 &&
     assessmentTaskView?.status !== "unknown" &&
     (publicAssessment?.status === "failed" ||
       ["failed", "cancelled"].includes(assessmentTaskView?.status || ""));
@@ -6437,7 +6220,6 @@ function toPublicAssessmentView(
   task: BrokerTask,
   question?: GeoQuestion,
   monitorRun?: BrokerMonitorRun,
-  knowledgeEvidencePaths?: readonly string[],
 ) {
   const taskView = normalizeTask(task, "assessment");
   if (taskView.status !== "completed") {
@@ -6457,7 +6239,6 @@ function toPublicAssessmentView(
             question,
             monitorRun.platforms,
             monitorRun,
-            knowledgeEvidencePaths,
           )
         : parseAssessmentTaskOutput(task);
     if (raw.schemaVersion !== 2) {
@@ -6637,7 +6418,6 @@ function toPublicOptimizationForecastView(
   assessmentTask: BrokerTask,
   question?: GeoQuestion,
   monitorRun?: BrokerMonitorRun,
-  knowledgeEvidencePaths?: readonly string[],
 ) {
   const taskView = normalizeTask(task, "optimization-forecast");
   if (taskView.status !== "completed") {
@@ -6659,7 +6439,6 @@ function toPublicOptimizationForecastView(
             question,
             monitorRun.platforms,
             monitorRun,
-            knowledgeEvidencePaths,
           )
         : parseAssessmentTaskOutput(assessmentTask);
     const assessment = calculateQuestionBaselineAssessment(rawAssessment);
@@ -6813,29 +6592,6 @@ function omitKnowledgeEvidencePaths(manifest: KnowledgeBaseManifest) {
       };
     }),
   };
-}
-
-async function loadKnowledgeEvidencePaths(
-  broker: GeoPresalesBroker,
-  value: ProjectTokenValue,
-  taskId: string,
-  task: BrokerTask,
-  companyName: string,
-  validationProfile?: "website-lead-v1",
-) {
-  const archive = resolveKnowledgeBaseArtifact(value, task);
-  if (!archive) {
-    throw new GeoHttpError("知识库 ZIP 尚未准备完成", 409, "ARCHIVE_NOT_READY");
-  }
-  const manifest = await loadKnowledgeBaseManifest(
-    broker,
-    taskId,
-    task,
-    companyName,
-    archive,
-    validationProfile,
-  );
-  return manifest.evidencePaths;
 }
 
 async function loadKnowledgeBaseManifest(

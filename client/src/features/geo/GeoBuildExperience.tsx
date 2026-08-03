@@ -1359,6 +1359,8 @@ function GeoBuildExperienceZh() {
   const [startingAnalysisId, setStartingAnalysisId] = useState<string>();
   const [startingQuestionProjectId, setStartingQuestionProjectId] =
     useState<string>();
+  const [retryingAssessmentProjectId, setRetryingAssessmentProjectId] =
+    useState<string>();
   const [projects, setProjects] = useState<GeoProject[]>([]);
   const [projectsHydrated, setProjectsHydrated] = useState(false);
   const [activeProjectId, setActiveProjectId] = useState<string | undefined>();
@@ -1625,6 +1627,35 @@ function GeoBuildExperienceZh() {
       }
     }
   }, [activeProject, refreshProject]);
+
+  const retryCurrentAssessment = useCallback(async () => {
+    const project = activeProject;
+    if (
+      !project ||
+      isGeoStylePreviewProject(project) ||
+      isGeoDraftProject(project) ||
+      !project.remoteToken ||
+      project.assessment?.status !== "failed" ||
+      assessmentStartInFlight.current.has(project.id)
+    )
+      return;
+
+    const projectId = project.id;
+    assessmentStartInFlight.current.add(projectId);
+    setRetryingAssessmentProjectId(projectId);
+    setStorageNotice("");
+    try {
+      const updated = await startGeoCurrentAssessment(project);
+      commitProject(updated);
+    } catch (error) {
+      setStorageNotice(`现状评估未能重新启动：${errorMessage(error)}`);
+    } finally {
+      assessmentStartInFlight.current.delete(projectId);
+      setRetryingAssessmentProjectId((current) =>
+        current === projectId ? undefined : current,
+      );
+    }
+  }, [activeProject, commitProject]);
 
   useEffect(() => {
     if (!import.meta.env.DEV || !stylePreviewEnabled) return;
@@ -3913,6 +3944,10 @@ function GeoBuildExperienceZh() {
                   <CurrentAssessment
                     project={activeProject}
                     onContact={() => setContactOpen(true)}
+                    onRetryAssessment={retryCurrentAssessment}
+                    retryingAssessment={
+                      retryingAssessmentProjectId === activeProject.id
+                    }
                     onStartService={() => {
                       setActiveStage("service_activation");
                     }}
@@ -6067,6 +6102,8 @@ type AssessmentView = "knowledge" | "overview" | "forecast";
 type CurrentAssessmentProps = {
   project: GeoProject;
   onContact: () => void;
+  onRetryAssessment?: () => void | Promise<void>;
+  retryingAssessment?: boolean;
   onStartService?: () => void;
 };
 
@@ -6091,6 +6128,8 @@ const COMPARISON_LABELS: Record<
 export function CurrentAssessment({
   project,
   onContact,
+  onRetryAssessment,
+  retryingAssessment = false,
   onStartService,
 }: CurrentAssessmentProps) {
   const [view, setView] = useState<AssessmentView>("overview");
@@ -6129,23 +6168,44 @@ export function CurrentAssessment({
         </div>
         <div className="geo-assessment-actions">
           <span
-            className={`geo-assessment-state state-${assessment?.status ?? "queued"}`}
+            className={`geo-assessment-state state-${
+              retryingAssessment ? "running" : (assessment?.status ?? "queued")
+            }`}
           >
             <span />
             {assessmentReady
               ? "评估已生成"
-              : assessmentFailed
-                ? "评估需支持"
-                : "正在生成评估"}
+              : retryingAssessment
+                ? "正在重新评估"
+                : assessmentFailed
+                  ? "评估需支持"
+                  : "正在生成评估"}
           </span>
           {assessmentFailed && !preview && (
-            <button
-              type="button"
-              className="geo-assessment-refresh is-retry"
-              onClick={onContact}
-            >
-              联系技术支持
-            </button>
+            <>
+              {onRetryAssessment && (
+                <button
+                  type="button"
+                  className="geo-assessment-refresh is-retry"
+                  onClick={() => void onRetryAssessment()}
+                  disabled={retryingAssessment}
+                  aria-busy={retryingAssessment}
+                >
+                  <RotateCw
+                    size={14}
+                    className={retryingAssessment ? "is-spinning" : undefined}
+                  />
+                  {retryingAssessment ? "正在重新评估" : "重新评估"}
+                </button>
+              )}
+              <button
+                type="button"
+                className="geo-assessment-refresh is-retry"
+                onClick={onContact}
+              >
+                联系技术支持
+              </button>
+            </>
           )}
         </div>
       </header>
@@ -6535,7 +6595,7 @@ export function AssessmentOverview({
         <div>
           <strong>
             {assessment?.status === "failed"
-              ? "现状评估结果暂未通过校验"
+              ? "现状评估暂未生成"
               : "正在建立语义资产现状基线"}
           </strong>
           <p>

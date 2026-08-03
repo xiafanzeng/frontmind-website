@@ -8,7 +8,9 @@ if (!baseUrl) {
   throw new Error("--url or FRONTMIND_PUBLIC_BASE_URL is required");
 }
 const expectedBuildSha = (
-  args.get("--build-sha") || process.env.FRONTMIND_BUILD_SHA || ""
+  args.get("--build-sha") ||
+  process.env.FRONTMIND_BUILD_SHA ||
+  ""
 )
   .trim()
   .toLowerCase();
@@ -19,8 +21,7 @@ const expectedRuntimeSkills = [
   { name: "website-one-shot-kb-builder", version: 6 },
   { name: "geo-question-recommender", version: 1 },
   { name: "geo-custom-question-classifier", version: 1 },
-  { name: "geo-knowledge-answer-verifier", version: 1 },
-  { name: "geo-current-state-evaluator", version: 1 },
+  { name: "geo-current-state-evaluator", version: 3 },
   { name: "geo-optimization-outcome-forecaster", version: 1 },
 ];
 
@@ -62,7 +63,7 @@ const runtimeSkills = readiness.skills.map(({ name, version }) => ({
   version,
 }));
 if (JSON.stringify(runtimeSkills) !== JSON.stringify(expectedRuntimeSkills)) {
-  throw new Error("Production must expose the exact six runtime Skills");
+  throw new Error("Production must expose the exact five runtime Skills");
 }
 console.log(
   JSON.stringify({

@@ -7,11 +7,9 @@ import {
   assertAssessmentOutputScope,
   buildAssessmentPrompt,
   buildGeoCurrentStateEvaluatorSkillArchive,
-  buildGeoKnowledgeAnswerVerifierSkillArchive,
   calculateQuestionBaselineAssessment,
   clampRawIndicator,
   inspectAssessmentTaskOutput,
-  KNOWLEDGE_VERIFIER_SKILL_ARCHIVE_FILENAME,
   parseAssessmentTaskOutput,
   type AssessmentRawTaskOutput,
 } from "./assessment";
@@ -282,8 +280,7 @@ function validV2RawOutput(): AssessmentRawTaskOutput {
         ? {
             ...comparison,
             verdict: "supported" as const,
-            explanation:
-              "回答主张已经由知识库中的目标客户事实和来源支持。",
+            explanation: "回答主张已经由知识库中的目标客户事实和来源支持。",
           }
         : comparison,
     ),
@@ -315,7 +312,7 @@ function validV2RawOutput(): AssessmentRawTaskOutput {
 }
 
 describe("GEO current-state assessment task output", () => {
-  it("asks Base for schema-required item confidence without asking for a confidence summary", async () => {
+  it("asks Base for item confidence while leaving aggregate results to the server", async () => {
     const prompt = await buildAssessmentPrompt({
       companyName: "Acme",
       archiveFilename: "Acme.zip",
@@ -335,9 +332,11 @@ describe("GEO current-state assessment task output", () => {
       },
     });
 
-    expect(prompt).toContain("schema 要求的逐项 confidence");
-    expect(prompt).toContain("不得自行计算或输出最终分数、等级、coverage");
-    expect(prompt).not.toContain("coverage 或 confidence。");
+    expect(prompt).toContain(
+      "schema 要求的事实四分类、confidence 与 0-1 原始指标",
+    );
+    expect(prompt).toContain("最终分数、等级和来源数量由服务端计算或校正");
+    expect(prompt).not.toContain("confidence 汇总");
   });
 
   it("strictly parses a fenced nested task response", () => {
@@ -595,7 +594,7 @@ describe("GEO current-state assessment task output", () => {
     );
   });
 
-  it("rejects unbounded or evidence-free available indicators", () => {
+  it("rejects unbounded indicators and accepts optional evidence references", () => {
     const raw = validRawOutput();
     const unbounded = {
       ...raw,
@@ -627,12 +626,37 @@ describe("GEO current-state assessment task output", () => {
         },
       },
     };
-    expect(AssessmentRawTaskOutputSchema.safeParse(evidenceFree).success).toBe(
-      false,
-    );
+    const evidenceFreeResult =
+      AssessmentRawTaskOutputSchema.safeParse(evidenceFree);
+    expect(evidenceFreeResult.success).toBe(true);
+    if (evidenceFreeResult.success) {
+      expect(
+        evidenceFreeResult.data.dimensions.semanticVisibility.aiSearchVisibility
+          .evidenceRefs,
+      ).toEqual([]);
+    }
+
+    const omittedEvidence = structuredClone(raw) as unknown as {
+      dimensions: {
+        semanticVisibility: {
+          aiSearchVisibility: { evidenceRefs?: string[] };
+        };
+      };
+    };
+    delete omittedEvidence.dimensions.semanticVisibility.aiSearchVisibility
+      .evidenceRefs;
+    const omittedEvidenceResult =
+      AssessmentRawTaskOutputSchema.safeParse(omittedEvidence);
+    expect(omittedEvidenceResult.success).toBe(true);
+    if (omittedEvidenceResult.success) {
+      expect(
+        omittedEvidenceResult.data.dimensions.semanticVisibility
+          .aiSearchVisibility.evidenceRefs,
+      ).toEqual([]);
+    }
   });
 
-  it("requires evidence for successful platform results and evidenced omissions", () => {
+  it("accepts empty evidence for platform results and knowledge comparisons", () => {
     const raw = validRawOutput();
     const evidenceFreePlatform = {
       ...raw,
@@ -642,7 +666,7 @@ describe("GEO current-state assessment task output", () => {
     };
     expect(
       AssessmentRawTaskOutputSchema.safeParse(evidenceFreePlatform).success,
-    ).toBe(false);
+    ).toBe(true);
 
     const evidenceFreeOmission = {
       ...raw,
@@ -654,7 +678,7 @@ describe("GEO current-state assessment task output", () => {
     };
     expect(
       AssessmentRawTaskOutputSchema.safeParse(evidenceFreeOmission).success,
-    ).toBe(false);
+    ).toBe(true);
   });
 
   it("requires each selected platform exactly once in the platform breakdown", () => {
@@ -864,9 +888,36 @@ describe("deterministic question-baseline scoring", () => {
     expect(assessment.platformBreakdown[0].sourceCount).toBe(11);
   });
 
-  it("scores the fixed five-answer, 25-comparison, 28-source acceptance sample", () => {
+  it("deduplicates 25 candidate topics in order, keeps the first 10, and still scores them", () => {
     const fixture = validV2RawOutput();
     const comparison = fixture.knowledgeVsAnswers[0];
+    const candidateTopics = [
+      "企业定位",
+      "目标客户",
+      "  企业定位  ",
+      "科研验证方法",
+      "服务范围",
+      "部署方式",
+      "合规能力",
+      "价格边界",
+      "数据安全",
+      "客户案例",
+      "实施周期",
+      "投资回报",
+      "技术架构",
+      "交付团队",
+      "售后支持",
+      "行业经验",
+      "模型覆盖",
+      "内容能力",
+      "监测能力",
+      "优化方法",
+      "风险控制",
+      "采购流程",
+      "服务地域",
+      "合作模式",
+      "未来规划",
+    ];
     const raw: AssessmentRawTaskOutput = {
       ...fixture,
       sample: {
@@ -884,21 +935,35 @@ describe("deterministic question-baseline scoring", () => {
           sourceCount: 28,
         },
       ],
-      knowledgeVsAnswers: Array.from({ length: 25 }, (_, index) => ({
+      knowledgeVsAnswers: candidateTopics.map((topic, index) => ({
         ...comparison,
-        id: `acceptance-comparison-${index + 1}`,
-        topic: `验收事实 ${index + 1}`,
+        id: `candidate-comparison-${index + 1}`,
+        topic,
         platform: "doubao" as const,
         runIndex: (index % 5) + 1,
       })),
     };
 
-    const parsed = AssessmentRawTaskOutputSchema.parse(raw);
+    const parsed = parseAssessmentTaskOutput({
+      output: [{ type: "output_text", text: JSON.stringify(raw) }],
+    });
     const assessment = calculateQuestionBaselineAssessment(parsed);
     const dimensions = Object.values(assessment.dimensions);
 
     expect(parsed.sample.successfulResponses).toBe(5);
-    expect(parsed.knowledgeVsAnswers).toHaveLength(25);
+    expect(parsed.knowledgeVsAnswers.map((item) => item.topic)).toEqual([
+      "企业定位",
+      "目标客户",
+      "科研验证方法",
+      "服务范围",
+      "部署方式",
+      "合规能力",
+      "价格边界",
+      "数据安全",
+      "客户案例",
+      "实施周期",
+    ]);
+    expect(assessment.knowledgeVsAnswers).toHaveLength(10);
     expect(parsed.platformBreakdown[0].sourceCount).toBe(28);
     expect(dimensions).toHaveLength(5);
     expect(dimensions.every((dimension) => dimension.score > 0)).toBe(true);
@@ -978,7 +1043,7 @@ describe("deterministic question-baseline scoring", () => {
 });
 
 describe("assessment prompt", () => {
-  it("loads the dedicated skill and confines Base to raw evidence extraction", async () => {
+  it("uses one lightweight evaluator Skill for a single-pass assessment", async () => {
     const prompt = await buildAssessmentPrompt({
       companyName: "FrontMind",
       archiveFilename: "FrontMind-kb.zip",
@@ -993,37 +1058,36 @@ describe("assessment prompt", () => {
       },
     });
 
-    expect(prompt).toContain("始终使用 Base 模型");
-    expect(prompt).toContain(KNOWLEDGE_VERIFIER_SKILL_ARCHIVE_FILENAME);
+    expect(prompt).toContain("此任务使用 Base 模型");
     expect(prompt).toContain(ASSESSMENT_SKILL_ARCHIVE_FILENAME);
-    expect(prompt).toContain("必须先执行 geo-knowledge-answer-verifier");
+    expect(prompt).toContain("任务仅附带一个");
+    expect(prompt).toContain("在一次任务内完成轻量知识对照和现状评估");
+    expect(prompt).toContain("最多 25 个仅含标题的候选主题");
+    expect(prompt).toContain("排序最前的 10 个唯一重点主题");
+    expect(prompt).toContain("不要分析其余候选主题");
+    expect(prompt).toContain("证据引用字段可留空或省略");
+    expect(prompt).toContain("目标 20 分钟内返回");
+    expect(prompt).not.toContain("geo-knowledge-answer-verifier");
+    expect(prompt).not.toContain("bsas-baseline-methodology");
     expect(prompt).not.toContain("# FILE:");
     expect(Buffer.byteLength(prompt, "utf8")).toBeLessThan(4 * 1024);
-    expect(prompt).toContain("不得自行计算或输出最终分数");
-    expect(prompt).toContain("sources 是去重后的唯一来源集合");
-    expect(prompt).toContain("输出 schemaVersion 必须为 2");
+    expect(prompt).toContain("最终分数、等级和来源数量由服务端计算或校正");
+    expect(prompt).toContain("输出 schemaVersion=2");
     expect(prompt).toContain(
       '"monitoringRecordsFile": "FrontMind-monitoring.json"',
     );
   });
 
-  it("packages both assessment Skills with their complete reference contracts", async () => {
-    const [verifier, evaluator] = await Promise.all([
-      buildGeoKnowledgeAnswerVerifierSkillArchive(),
-      buildGeoCurrentStateEvaluatorSkillArchive(),
-    ]);
-    const verifierZip = await JSZip.loadAsync(verifier);
+  it("packages only the evaluator Skill and its output schema", async () => {
+    const evaluator = await buildGeoCurrentStateEvaluatorSkillArchive();
     const evaluatorZip = await JSZip.loadAsync(evaluator);
-    expect(Object.keys(verifierZip.files).sort()).toEqual([
-      "MANIFEST.json",
-      "SKILL.md",
-      "references/comparison-contract.json",
-    ]);
     expect(Object.keys(evaluatorZip.files).sort()).toEqual([
       "MANIFEST.json",
       "SKILL.md",
-      "references/bsas-baseline-methodology.md",
       "references/raw-output-schema.json",
     ]);
+    expect(evaluatorZip.file("references/bsas-baseline-methodology.md")).toBe(
+      null,
+    );
   });
 });

@@ -237,6 +237,34 @@ describe("geo-current-state-evaluator model output contract", () => {
     validate = compileSchema(schema);
   });
 
+  it("caps model-authored knowledge comparisons at 10 topics", () => {
+    const tenTopics = canonicalIneligibleOutput();
+    const comparison = tenTopics.knowledgeVsAnswers[0];
+    tenTopics.knowledgeVsAnswers = Array.from({ length: 10 }, (_, index) => ({
+      ...comparison,
+      id: `comparison-${index + 1}`,
+      topic: `Priority topic ${index + 1}`,
+    }));
+
+    expect(validate(tenTopics), validationErrors(validate)).toBe(true);
+    expect(validateProductionContract(tenTopics)).toMatchObject({
+      success: true,
+    });
+
+    const elevenTopics = structuredClone(tenTopics);
+    elevenTopics.knowledgeVsAnswers.push({
+      ...comparison,
+      id: "comparison-11",
+      topic: "Priority topic 11",
+    });
+
+    expect(validate(elevenTopics)).toBe(false);
+    expect(validationErrors(validate)).toContain("/knowledgeVsAnswers");
+    expect(validateProductionContract(elevenTopics)).toMatchObject({
+      success: false,
+    });
+  });
+
   const parityCases = [
     {
       name: "canonical v2 output with genuine measured zeros",
@@ -322,11 +350,31 @@ describe("geo-current-state-evaluator model output contract", () => {
       expected: false,
     },
     {
-      name: "successful platform without evidence",
+      name: "successful platform with empty evidence",
       output: changedOutput(canonicalIneligibleOutput, (output) => {
         output.platformBreakdown[0].evidenceRefs = [];
       }),
-      expected: false,
+      expected: true,
+    },
+    {
+      name: "omitted optional evidence fields",
+      output: changedOutput(canonicalIneligibleOutput, (output) => {
+        delete (
+          output.dimensions.semanticVisibility.aiSearchVisibility as {
+            evidenceRefs?: string[];
+          }
+        ).evidenceRefs;
+        delete (output.platformBreakdown[0] as { evidenceRefs?: string[] })
+          .evidenceRefs;
+        delete (
+          output.knowledgeVsAnswers[0] as {
+            kbEvidenceRefs?: string[];
+          }
+        ).kbEvidenceRefs;
+        delete (output.priorityActions[0] as { evidenceRefs?: string[] })
+          .evidenceRefs;
+      }),
+      expected: true,
     },
     {
       name: "platform source count above its upper bound",

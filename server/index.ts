@@ -29,10 +29,7 @@ import {
   loadGeoQuestionRecommenderSkill,
   loadWebsiteKnowledgeBaseSkill,
 } from "./geo/skills";
-import {
-  loadGeoCurrentStateEvaluatorSkill,
-  loadGeoKnowledgeAnswerVerifierSkill,
-} from "./geo/assessment";
+import { loadGeoCurrentStateEvaluatorSkill } from "./geo/assessment";
 import { loadGeoOptimizationOutcomeForecasterSkill } from "./geo/forecast";
 import { assertGeoPaymentConfigurationFromEnv } from "./geo/payment";
 import { createGeoCustomQuestionValidationStore } from "./geo/custom-question-validation-store";
@@ -46,8 +43,7 @@ const GEO_RUNTIME_SKILLS = [
   { name: "website-one-shot-kb-builder", version: 6 },
   { name: "geo-question-recommender", version: 1 },
   { name: "geo-custom-question-classifier", version: 1 },
-  { name: "geo-knowledge-answer-verifier", version: 1 },
-  { name: "geo-current-state-evaluator", version: 1 },
+  { name: "geo-current-state-evaluator", version: 3 },
   { name: "geo-optimization-outcome-forecaster", version: 1 },
 ] as const;
 
@@ -56,7 +52,6 @@ async function getGeoRuntimeSkillReadiness() {
     loadWebsiteKnowledgeBaseSkill(),
     loadGeoQuestionRecommenderSkill(),
     loadGeoCustomQuestionClassifierSkill(),
-    loadGeoKnowledgeAnswerVerifierSkill(),
     loadGeoCurrentStateEvaluatorSkill(),
     loadGeoOptimizationOutcomeForecasterSkill(),
   ]);

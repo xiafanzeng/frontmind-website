@@ -86,7 +86,7 @@ current/previous。
 ## 运行时探针
 
 - `GET /healthz` 只返回进程存活、服务名、构建 SHA 和镜像 digest，不访问上游或持久卷。
-- `GET /readyz` 检查六个运行时 Skill、Agent/项目订单/支付回执依赖、自定义问题持久卷和访问统计
+- `GET /readyz` 检查五个运行时 Skill、Agent/项目订单/支付回执依赖、自定义问题持久卷和访问统计
   持久卷；失败返回 503。响应同时携带 `buildSha` 和 `imageDigest`。两个持久卷都执行无损读写探针。
 - 生产进程在监听端口前执行与 `/readyz` 相同的深度 preflight，因此新容器依赖不完整时不会
   被部署控制器接纳。
