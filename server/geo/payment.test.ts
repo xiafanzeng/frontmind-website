@@ -513,7 +513,7 @@ describe("ZPAY GEO gateway", () => {
       const providerJson =
         `{"code":1,"status":1,"pid":${merchantPid},` +
         `"out_trade_no":${orderId},"trade_no":${tradeNo},` +
-        `"type":"wxpay","name":${JSON.stringify(productName)},` +
+        `"type":"wxpay2","name":${JSON.stringify(productName)},` +
         '"money":"4.00","addtime":"2026-08-03 12:40:00",' +
         '"endtime":"2026-08-03 12:41:00"}';
       const fetchMock = vi
@@ -1168,7 +1168,7 @@ describe("ZPAY GEO gateway", () => {
     });
   });
 
-  it("records and replays a signed callback backed by oversized numeric provider IDs", async () => {
+  it("records and replays a signed wxpay2 callback backed by oversized numeric provider IDs", async () => {
     const merchantPid = "201901151314084206659771";
     const orderId = "10031293871242279000307640737676";
     const tradeNo = "20260803124100123456789012345678";
@@ -1179,7 +1179,7 @@ describe("ZPAY GEO gateway", () => {
         new Response(
           `{"code":1,"status":1,"pid":${merchantPid},` +
             `"out_trade_no":${orderId},"trade_no":${tradeNo},` +
-            `"type":"wxpay","name":${JSON.stringify(productName)},` +
+            `"type":"wxpay2","name":${JSON.stringify(productName)},` +
             '"money":"4.00","addtime":"2026-08-03 12:40:00",' +
             '"endtime":"2026-08-03 12:41:00"}',
           { headers: { "content-type": "application/json" } },
@@ -1213,7 +1213,7 @@ describe("ZPAY GEO gateway", () => {
       trade_no: tradeNo,
       param: checkout.authorization,
       trade_status: "TRADE_SUCCESS",
-      type: "wxpay",
+      type: "wxpay2",
       sign_type: "MD5",
     };
     callback.sign = signZpayParameters(callback, "merchant-secret");
@@ -1234,6 +1234,15 @@ describe("ZPAY GEO gateway", () => {
     });
     expect(fetchMock).toHaveBeenCalledTimes(1);
     expect(receiptStore.record).toHaveBeenCalledTimes(1);
+
+    const unsupportedType = { ...callback, type: "wxpay3" };
+    unsupportedType.sign = signZpayParameters(
+      unsupportedType,
+      "merchant-secret",
+    );
+    await expect(
+      paymentGateway.verifyCallback(unsupportedType),
+    ).rejects.toMatchObject({ code: "PAYMENT_CALLBACK_MISMATCH" });
   });
 
   it("never acknowledges a paid callback until its receipt is durably recorded", async () => {

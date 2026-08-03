@@ -587,7 +587,7 @@ export class ZpayGeoPaymentGateway implements GeoPaymentGateway {
     if (
       params.out_trade_no !== payment.outTradeNo ||
       moneyToFen(params.money) !== payment.amountFen ||
-      params.type !== payment.method
+      normalizeZpayPaymentMethod(params.type) !== payment.method
     ) {
       throw new GeoPaymentVerificationError(
         "支付通知与原订单不匹配",
@@ -1156,7 +1156,8 @@ function assertOrderMatchesPayment(
     textValue(order.out_trade_no) !== payment.outTradeNo ||
     moneyToFen(textValue(order.money)) !== payment.amountFen ||
     textValue(order.pid) !== pid ||
-    (providerType !== undefined && !["alipay", "wxpay"].includes(providerType))
+    (providerType !== undefined &&
+      normalizeZpayPaymentMethod(providerType) === undefined)
   ) {
     throw new GeoPaymentVerificationError(
       "支付平台返回的订单范围不匹配",
@@ -1170,6 +1171,18 @@ function assertOrderMatchesPayment(
   // may be normalized or truncated; `type` may be omitted by compatible query
   // implementations, so neither can turn a settled, identity-matched order
   // into an unrecoverable false negative.
+}
+
+function normalizeZpayPaymentMethod(
+  providerType: string | undefined,
+): GeoPaymentMethod | undefined {
+  if (providerType === "alipay") return "alipay";
+  // ZPAY may expose the selected physical WeChat route as `wxpay2` in both
+  // signed callbacks and order queries even though checkout was submitted with
+  // the documented logical `wxpay` type. Keep the compatibility mapping exact
+  // so unrelated or future payment channels remain rejected.
+  if (providerType === "wxpay" || providerType === "wxpay2") return "wxpay";
+  return undefined;
 }
 
 function normalizedPlatforms(platformIds: GeoMonitorPlatformId[]) {
