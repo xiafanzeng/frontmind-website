@@ -1841,6 +1841,74 @@ describe("custom-question validation persistence", () => {
       await expect(store.listActive()).resolves.toEqual([
         expect.objectContaining({ clientRequestId: CLIENT_REQUEST_ID }),
       ]);
+      await expect(
+        store.fenceProjectDeletion(reservation().projectId, { force: true }),
+      ).resolves.toBeUndefined();
+      await expect(store.listActive()).resolves.toEqual([]);
+      await expect(store.reserve(reservation())).rejects.toMatchObject({
+        code: "PROJECT_DELETION_FENCED",
+      });
+    }
+  });
+
+  it("force-fences active leases and leaves temporary files for garbage collection", async () => {
+    const stores = [
+      new MemoryGeoCustomQuestionValidationStore(),
+      new FileGeoCustomQuestionValidationStore(await makeStoreDirectory()),
+    ];
+
+    for (const store of stores) {
+      const created = await store.reserve(reservation());
+      const lease = await store.tryAcquireLease(
+        created.record.projectId,
+        created.record.clientRequestId,
+      );
+      expect(lease).toBeDefined();
+      const prepared = await store.update(
+        {
+          ...created.record,
+          state: "prepared",
+          taskId: "retained-audit-task",
+          archiveAttachment: {
+            fileId: "temporary-archive-file",
+            filename: "Acme.zip",
+            temporary: true,
+          },
+        },
+        lease!,
+      );
+
+      await store.fenceProjectDeletion(created.record.projectId, {
+        force: true,
+      });
+
+      await expect(store.listActive()).resolves.toEqual([]);
+      await expect(store.renewLease(lease!)).rejects.toMatchObject({
+        code: "PROJECT_DELETION_FENCED",
+      });
+      await expect(
+        store.update({ ...prepared, state: "submitted" }, lease!),
+      ).rejects.toMatchObject({ code: "PROJECT_DELETION_FENCED" });
+      const cancelled = await store.get(
+        created.record.projectId,
+        created.record.clientRequestId,
+      );
+      expect(cancelled).toMatchObject({
+        state: "failed",
+        error: { code: "PROJECT_DELETED", retryable: false },
+      });
+      expect(cancelled?.activeLease).toBeUndefined();
+
+      const cleanupTargets: unknown[] = [];
+      await store.collectGarbage({
+        cleanup: async (target) => {
+          cleanupTargets.push(target);
+        },
+      });
+      expect(cleanupTargets).toEqual([
+        { temporaryFileIds: ["temporary-archive-file"] },
+      ]);
+      expect(cleanupTargets[0]).not.toHaveProperty("taskId");
     }
   });
 

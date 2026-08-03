@@ -224,6 +224,10 @@ export type GeoCustomQuestionValidationCleanupTarget = z.infer<
   typeof CleanupTargetSchema
 >;
 
+export type GeoProjectDeletionFenceOptions = {
+  force?: boolean;
+};
+
 export interface GeoCustomQuestionValidationStore {
   assertReady(): Promise<void>;
   persistenceIdentity(): Promise<string>;
@@ -245,7 +249,10 @@ export interface GeoCustomQuestionValidationStore {
     projectId: string,
     clientRequestId: string,
   ): Promise<GeoCustomQuestionValidationRecord>;
-  fenceProjectDeletion(projectId: string): Promise<void>;
+  fenceProjectDeletion(
+    projectId: string,
+    options?: GeoProjectDeletionFenceOptions,
+  ): Promise<void>;
   acknowledgeTerminal(
     projectId: string,
     clientRequestId: string,
@@ -571,6 +578,29 @@ function nextRecord(
   });
 }
 
+function cancelledForProjectDeletion(
+  current: GeoCustomQuestionValidationRecord,
+  nowMs: number,
+) {
+  return parseRecord({
+    ...current,
+    storeVersion: current.storeVersion + 1,
+    commitId: crypto.randomUUID(),
+    fencingToken: current.fencingToken + 1,
+    activeLease: undefined,
+    state: "failed",
+    result: undefined,
+    completionMode: undefined,
+    error: {
+      code: "PROJECT_DELETED",
+      message: "项目已确认删除，自定义问题验证已终止",
+      status: 410,
+      retryable: false,
+    },
+    updatedAt: new Date(nowMs).toISOString(),
+  });
+}
+
 export class MemoryGeoCustomQuestionValidationStore
   implements GeoCustomQuestionValidationStore
 {
@@ -862,7 +892,19 @@ export class MemoryGeoCustomQuestionValidationStore
     return cloneRecord(winner);
   }
 
-  async fenceProjectDeletion(projectId: string) {
+  async fenceProjectDeletion(
+    projectId: string,
+    options: GeoProjectDeletionFenceOptions = {},
+  ) {
+    if (options.force) {
+      this.deletionFences.add(projectId);
+      this.activeByProject.delete(projectId);
+      for (const [key, current] of Array.from(this.records.entries())) {
+        if (current.projectId !== projectId || isTerminal(current)) continue;
+        this.records.set(key, cancelledForProjectDeletion(current, this.now()));
+      }
+      return;
+    }
     if (this.deletionFences.has(projectId)) return;
     const activeKey = this.activeByProject.get(projectId);
     const active = activeKey ? this.records.get(activeKey) : undefined;
@@ -1044,6 +1086,9 @@ export class MemoryGeoCustomQuestionValidationStore
   ) {
     const current = this.records.get(lease.key);
     if (!current) throw this.leaseLost();
+    if (this.deletionFences.has(current.projectId)) {
+      throw this.projectDeletionFenced();
+    }
     assertLeaseOwner(current, lease, this.now());
     const renewed = {
       ...lease,
@@ -1073,6 +1118,9 @@ export class MemoryGeoCustomQuestionValidationStore
   ) {
     const current = this.records.get(record.key);
     if (!current) throw this.leaseLost();
+    if (this.deletionFences.has(current.projectId)) {
+      throw this.projectDeletionFenced();
+    }
     assertLeaseOwner(current, lease, this.now());
     const parsed = nextRecord(current, record, this.now());
     await this.hooks.beforeRecordCommit?.({
@@ -1504,11 +1552,25 @@ export class FileGeoCustomQuestionValidationStore
     );
   }
 
-  async fenceProjectDeletion(projectId: string) {
+  async fenceProjectDeletion(
+    projectId: string,
+    options: GeoProjectDeletionFenceOptions = {},
+  ) {
     await this.assertDirectory();
     const hash = projectHash(projectId);
     for (let attempt = 0; attempt < 16; attempt += 1) {
       const slot = await this.readCurrentProjectSlot(hash);
+      if (options.force) {
+        if (!slot?.deletionFence) {
+          const fenced = await this.commitProjectSlot(hash, slot, undefined, {
+            token: crypto.randomUUID(),
+            createdAt: new Date(this.now()).toISOString(),
+          });
+          if (!fenced) continue;
+        }
+        await this.cancelProjectRecordsForDeletion(projectId);
+        return;
+      }
       if (slot?.active) {
         const current = await this.readCurrentRecord(slot.active.key);
         if (current && !(await this.hasLiveTombstone(current.key))) {
@@ -1722,6 +1784,7 @@ export class FileGeoCustomQuestionValidationStore
   ) {
     const current = await this.readCurrentRecord(lease.key);
     if (!current) throw this.leaseLost();
+    await this.assertProjectNotDeletionFenced(current.projectId);
     assertLeaseOwner(current, lease, this.now());
     const renewed = {
       ...lease,
@@ -1749,6 +1812,7 @@ export class FileGeoCustomQuestionValidationStore
   ) {
     const current = await this.readCurrentRecord(record.key);
     if (!current) throw this.leaseLost();
+    await this.assertProjectNotDeletionFenced(current.projectId);
     assertLeaseOwner(current, lease, this.now());
     const parsed = nextRecord(current, record, this.now());
     await this.hooks.beforeRecordCommit?.({
@@ -2141,6 +2205,33 @@ export class FileGeoCustomQuestionValidationStore
       const slot = await this.readCurrentProjectSlot(hash);
       if (!slot?.active || slot.active.key !== record.key) return;
       if (await this.commitProjectSlot(hash, slot, undefined)) return;
+    }
+  }
+
+  private async cancelProjectRecordsForDeletion(projectId: string) {
+    const records = await this.readProjectRecords(projectId);
+    for (const record of records) {
+      for (let attempt = 0; attempt < 16; attempt += 1) {
+        const current = await this.readCurrentRecord(record.key);
+        if (
+          !current ||
+          isTerminal(current) ||
+          (await this.hasLiveTombstone(record.key))
+        ) {
+          break;
+        }
+        if (
+          await this.commitRecord(
+            current,
+            cancelledForProjectDeletion(current, this.now()),
+          )
+        ) {
+          break;
+        }
+        if (attempt === 15) {
+          throw this.storeCorrupt("自定义问题验证删除终止状态竞争未能收敛");
+        }
+      }
     }
   }
 

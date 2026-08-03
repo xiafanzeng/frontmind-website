@@ -2316,6 +2316,26 @@ describe("GEO API", () => {
     );
   });
 
+  it("treats resources hidden by a rotated API Key as already deleted", async () => {
+    const ready = await createReadyProject();
+    broker.deleteFile = async () => {
+      throw new GeoBrokerError(
+        "resource is not visible to the current credential",
+        404,
+        "FILE_NOT_FOUND",
+      );
+    };
+
+    const deleted = await jsonRequest(
+      `/projects/${encodeURIComponent(ready.projectToken)}`,
+      ready.cookie,
+      { method: "DELETE" },
+    );
+
+    expect(deleted.response.status).toBe(200);
+    expect(deleted.body).toMatchObject({ ok: true });
+  });
+
   it("blocks deletion for a pending monitoring order and until paid monitoring is fulfilled", async () => {
     const ready = await createReadyProject();
     const checkout = await jsonRequest(
@@ -2457,6 +2477,54 @@ describe("GEO API", () => {
     );
     expect(removed.response.status).toBe(200);
     expect(removed.body).toMatchObject({
+      ok: true,
+      deletedMonitorRuns: 1,
+    });
+  });
+
+  it("allows deletion when a completed order's old monitor history is no longer visible", async () => {
+    const ready = await createReadyProject();
+    const monitored = await startOnePlatformMonitor(ready);
+    const projectId = new GeoTokenCodec(
+      "test-session-secret-at-least-16-characters",
+    ).open<{ projectId: string }>(monitored.projectToken, "project").value
+      .projectId;
+    const fulfilledAt = new Date().toISOString();
+    for (const [orderId, order] of Array.from(projectOrders.entries())) {
+      if (
+        order.projectId === projectId &&
+        order.purchaseType === "monitoring"
+      ) {
+        projectOrders.set(orderId, {
+          ...order,
+          state: "fulfilled",
+          fulfilledAt,
+          eventAt: fulfilledAt,
+        });
+      }
+    }
+    broker.getMonitorRun = async () => {
+      throw new GeoBrokerError(
+        "run belongs to a retired credential",
+        404,
+        "MONITOR_RUN_NOT_FOUND",
+      );
+    };
+    broker.deleteMonitorRun = async () => {
+      throw new GeoBrokerError(
+        "run belongs to a retired credential",
+        404,
+        "MONITOR_RUN_NOT_FOUND",
+      );
+    };
+
+    const deleted = await jsonRequest(
+      `/projects/${encodeURIComponent(monitored.projectToken)}`,
+      ready.cookie,
+      { method: "DELETE" },
+    );
+    expect(deleted.response.status).toBe(200);
+    expect(deleted.body).toMatchObject({
       ok: true,
       deletedMonitorRuns: 1,
     });
@@ -3434,17 +3502,6 @@ describe("GEO API", () => {
     });
     expect(first.response.status).toBe(202);
 
-    const blockedDeletion = await jsonRequest(
-      `/projects/${encodeURIComponent(ready.projectToken)}`,
-      ready.cookie,
-      { method: "DELETE" },
-    );
-    expect(blockedDeletion.response.status).toBe(409);
-    expect(blockedDeletion.body).toMatchObject({
-      error: { code: "CUSTOM_QUESTION_VALIDATION_DELETE_BLOCKED" },
-    });
-    expect(broker.customQuestionClassifierTaskCount).toBe(1);
-
     const competingRequestId = "99999999-9999-4999-8999-999999999999";
     const competing = await jsonRequest(pathname, ready.cookie, {
       method: "POST",
@@ -3552,7 +3609,60 @@ describe("GEO API", () => {
     expect(broker.customQuestionClassifierTaskCount).toBe(2);
   });
 
-  it("recovers a record-only crash and refuses project deletion before remote cleanup", async () => {
+  it("allows confirmed deletion to terminate an active custom-question validation", async () => {
+    const ready = await createReadyProject();
+    broker.customQuestionClassifierPendingPolls = 99;
+    const pathname = `/projects/${encodeURIComponent(
+      ready.projectToken,
+    )}/questions/custom`;
+    const started = await jsonRequest(pathname, ready.cookie, {
+      method: "POST",
+      body: {
+        question: "Acme 在高校科研场景中能解决什么问题？",
+        clientRequestId: CUSTOM_QUESTION_CLIENT_REQUEST_ID,
+      },
+    });
+    expect(started.response.status).toBe(202);
+    expect(broker.customQuestionClassifierTaskCount).toBe(1);
+
+    const deleted = await jsonRequest(
+      `/projects/${encodeURIComponent(ready.projectToken)}`,
+      ready.cookie,
+      { method: "DELETE" },
+    );
+    expect(deleted.response.status).toBe(200);
+    expect(deleted.body).toMatchObject({ ok: true });
+
+    const projectId = new GeoTokenCodec(
+      "test-session-secret-at-least-16-characters",
+    ).open<{ projectId: string }>(ready.projectToken, "project").value
+      .projectId;
+    await expect(
+      customQuestionValidationStore.getActive(projectId),
+    ).resolves.toBeUndefined();
+    await expect(customQuestionValidationStore.listActive()).resolves.toEqual(
+      [],
+    );
+
+    const preciseStatus = await jsonRequest(
+      `${pathname}/${CUSTOM_QUESTION_CLIENT_REQUEST_ID}`,
+      ready.cookie,
+    );
+    expect(preciseStatus.response.status).toBe(409);
+    expect(preciseStatus.body).toMatchObject({
+      error: { code: "CUSTOM_QUESTION_PROJECT_DELETION_FENCED" },
+    });
+
+    const worker = createGeoCustomQuestionRecoveryWorker({
+      broker,
+      store: customQuestionValidationStore,
+      now: () => customQuestionValidationNowMs,
+    });
+    await worker.runOnce();
+    expect(broker.customQuestionClassifierTaskCount).toBe(1);
+  });
+
+  it("force-fences a record-only validation crash and still deletes the project", async () => {
     const ready = await createReadyProject();
     let crashOnce = true;
     const crashedStore = new MemoryGeoCustomQuestionValidationStore({
@@ -3576,28 +3686,27 @@ describe("GEO API", () => {
     });
     expect(interrupted.response.status).toBe(500);
 
-    const blockedDeletion = await jsonRequest(
+    const deleted = await jsonRequest(
       `/projects/${encodeURIComponent(ready.projectToken)}`,
       ready.cookie,
       { method: "DELETE" },
     );
-    expect(blockedDeletion.response.status).toBe(409);
-    expect(blockedDeletion.body).toMatchObject({
-      error: { code: "CUSTOM_QUESTION_VALIDATION_DELETE_BLOCKED" },
-      activeOperation: { clientRequestId: CUSTOM_QUESTION_CLIENT_REQUEST_ID },
-    });
+    expect(deleted.response.status).toBe(200);
+    expect(deleted.body).toMatchObject({ ok: true });
     const project = new GeoTokenCodec(
       "test-session-secret-at-least-16-characters",
-    ).open<{ knowledgeBaseTaskId: string }>(
+    ).open<{ knowledgeBaseTaskId: string; projectId: string }>(
       ready.projectToken,
       "project",
     ).value;
     expect(broker.tasks.has(project.knowledgeBaseTaskId)).toBe(true);
-    await expect(crashedStore.listActive()).resolves.toEqual([
-      expect.objectContaining({
-        clientRequestId: CUSTOM_QUESTION_CLIENT_REQUEST_ID,
-      }),
-    ]);
+    await expect(crashedStore.listActive()).resolves.toEqual([]);
+    await expect(
+      crashedStore.get(project.projectId, CUSTOM_QUESTION_CLIENT_REQUEST_ID),
+    ).resolves.toMatchObject({
+      state: "failed",
+      error: { code: "PROJECT_DELETED", retryable: false },
+    });
   });
 
   it("bridges a cached client without clientRequestId to one deterministic upstream task", async () => {
@@ -4610,38 +4719,13 @@ describe("GEO API", () => {
     expect(broker.customQuestionClassifierTaskCount).toBe(1);
     expect(paymentCheckoutCalls).toHaveLength(0);
 
-    const blocked = await jsonRequest(
-      `/projects/${encodeURIComponent(ready.projectToken)}`,
-      ready.cookie,
-      { method: "DELETE" },
-    );
-    expect(blocked.response.status).toBe(409);
-    expect(blocked.body).toMatchObject({
-      error: { code: "CUSTOM_QUESTION_VALIDATION_DELETE_BLOCKED" },
-    });
-
-    const acknowledged = await jsonRequest(
-      `/projects/${encodeURIComponent(
-        ready.projectToken,
-      )}/questions/custom/${CUSTOM_QUESTION_CLIENT_REQUEST_ID}/ack`,
-      ready.cookie,
-      { method: "POST", body: {} },
-    );
-    expect(acknowledged.response.status).toBe(200);
-    expect(acknowledged.body).toMatchObject({
-      validation: {
-        clientRequestId: CUSTOM_QUESTION_CLIENT_REQUEST_ID,
-        state: "rejected",
-        acknowledged: true,
-      },
-    });
-
     const deleted = await jsonRequest(
       `/projects/${encodeURIComponent(ready.projectToken)}`,
       ready.cookie,
       { method: "DELETE" },
     );
     expect(deleted.response.status).toBe(200);
+    expect(deleted.body).toMatchObject({ ok: true });
   });
 
   it("fails closed when a classifier accepts a question without a verified enterprise or offering anchor", async () => {

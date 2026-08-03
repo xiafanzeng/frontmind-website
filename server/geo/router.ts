@@ -1372,7 +1372,8 @@ export function createGeoRouter(options: GeoRouterOptions = {}): Router {
         monitorRun = await getResolvedMonitorRun(broker, monitorRunId, {
           platforms: value.monitorPlatformIds,
         });
-      } catch {
+      } catch (error) {
+        if (isAlreadyDeletedGeoResource(error)) return;
         throw new GeoHttpError(
           "暂时无法确认监控订单已经完成或明确终止，已阻止删除",
           409,
@@ -5427,11 +5428,21 @@ export function createGeoRouter(options: GeoRouterOptions = {}): Router {
     requireSessionRate("project-delete", 20),
     asyncHandler(async (req, res) => {
       let value = openOwnedProject(req, res);
-      const terminalMonitorRun = value.monitorRunId
-        ? await getResolvedMonitorRun(broker, value.monitorRunId, {
-            platforms: value.monitorPlatformIds,
-          })
-        : undefined;
+      let terminalMonitorRun: BrokerMonitorRun | undefined;
+      if (value.monitorRunId) {
+        try {
+          terminalMonitorRun = await getResolvedMonitorRun(
+            broker,
+            value.monitorRunId,
+            { platforms: value.monitorPlatformIds },
+          );
+        } catch (error) {
+          // A rotated credential can no longer see historical runs. Deletion
+          // must still be able to proceed; the durable order registry below
+          // remains the authority for paid or unfinished fulfillment.
+          if (!isAlreadyDeletedGeoResource(error)) throw error;
+        }
+      }
       value = await syncMonitoringOrder(value, terminalMonitorRun);
       value = await syncServiceOrder(value);
       const projectOrders = await readProjectOrders(value.projectId);
@@ -5446,7 +5457,10 @@ export function createGeoRouter(options: GeoRouterOptions = {}): Router {
       // This is the final local authorization gate before destructive remote
       // cleanup. The persistent fence makes retries idempotent and prevents a
       // new reservation or an old recovery worker from racing the cleanup.
-      await customQuestionValidationStore.fenceProjectDeletion(value.projectId);
+      await customQuestionValidationStore.fenceProjectDeletion(
+        value.projectId,
+        { force: true },
+      );
       const protectedMonitorRunId = projectOrderProtections.get(value.projectId)
         ?.monitoring?.runId;
       const taskIds = [
@@ -5480,10 +5494,12 @@ export function createGeoRouter(options: GeoRouterOptions = {}): Router {
           broker.deleteMonitorRun(runId),
         ),
       ]);
-      const deleted = results.filter(
-        (result) => result.status === "fulfilled",
+      const failed = results.filter(
+        (result) =>
+          result.status === "rejected" &&
+          !isAlreadyDeletedGeoResource(result.reason),
       ).length;
-      const failed = results.length - deleted;
+      const deleted = results.length - failed;
       if (failed > 0) {
         throw new GeoHttpError(
           `远端项目清理未完成（成功 ${deleted}/${operations.length}），请重试删除`,
@@ -7572,7 +7588,7 @@ async function cleanupCustomQuestionValidation(
   const failed = results.filter(
     (result) =>
       result.status === "rejected" &&
-      !isAlreadyDeletedCustomQuestionResource(result.reason),
+      !isAlreadyDeletedGeoResource(result.reason),
   );
   if (failed.length > 0) {
     return persist({
@@ -7584,7 +7600,7 @@ async function cleanupCustomQuestionValidation(
   return persist({ ...record, cleanupCompleted: true });
 }
 
-function isAlreadyDeletedCustomQuestionResource(error: unknown) {
+function isAlreadyDeletedGeoResource(error: unknown) {
   return error instanceof GeoBrokerError && error.status === 404;
 }
 
@@ -7665,7 +7681,7 @@ export function createGeoCustomQuestionRecoveryWorker(input: {
           const failed = results.filter(
             (result) =>
               result.status === "rejected" &&
-              !isAlreadyDeletedCustomQuestionResource(result.reason),
+              !isAlreadyDeletedGeoResource(result.reason),
           );
           if (failed.length > 0) {
             throw new Error(

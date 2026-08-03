@@ -72,6 +72,7 @@ import {
 } from "@/components/ui/dialog";
 import {
   authoritativeGeoCustomQuestionValidationTerminal,
+  clearPendingGeoCustomQuestionValidation,
   createGeoServiceAccount,
   createGeoCustomQuestion,
   createGeoPaymentCheckout,
@@ -2979,17 +2980,10 @@ function GeoBuildExperienceZh() {
       pendingPayment?.projectId,
     );
     const fulfillmentProtected = isGeoProjectFulfillmentProtected(project);
-    const pendingCustomQuestion = readPendingGeoCustomQuestionValidation(
-      project.id,
-    );
-    if (paymentProtected || fulfillmentProtected || pendingCustomQuestion) {
+    if (paymentProtected || fulfillmentProtected) {
       setProjectMenuOpen(false);
       setDeleteTarget(undefined);
-      if (pendingCustomQuestion) {
-        setStorageNotice(
-          `自定义问题「${pendingCustomQuestion.question}」仍在验证或等待持久化；请先完成恢复或确认后再删除项目。`,
-        );
-      } else if (paymentProtected) {
+      if (paymentProtected) {
         setPaymentPurpose(pendingPayment?.kind ?? "monitoring");
         setPaymentDialogOpen(true);
         setStorageNotice(
@@ -3065,6 +3059,7 @@ function GeoBuildExperienceZh() {
       );
     }
     await removeGeoProject(project.id);
+    clearPendingGeoCustomQuestionValidation(project.id);
     setProjects((current) => current.filter((item) => item.id !== project.id));
     if (activeProjectId === project.id) {
       const next = projects.find((item) => item.id !== project.id);

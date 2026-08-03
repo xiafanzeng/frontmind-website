@@ -6,6 +6,7 @@ import {
   createGeoPaymentCheckout,
   createGeoServiceAccount,
   createGeoServicePaymentCheckout,
+  deleteGeoProject,
   downloadGeoArchive,
   getGeoPaymentStatus,
   getGeoServiceProvisioningStatus,
@@ -1547,6 +1548,46 @@ describe("monitoring and assessment API", () => {
     selectedQuestionId: "reputation-01",
     selectedPlatformIds: ["doubao", "kimi"],
   };
+
+  it("treats a missing remote project as an idempotent delete", async () => {
+    const fetchMock = vi.fn<typeof fetch>().mockResolvedValueOnce(
+      new Response(
+        JSON.stringify({
+          ok: false,
+          error: { code: "PROJECT_NOT_FOUND", message: "项目不存在" },
+        }),
+        { status: 404, headers: { "content-type": "application/json" } },
+      ),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    await expect(deleteGeoProject(project)).resolves.toBeUndefined();
+    expect(fetchMock).toHaveBeenCalledWith(
+      "/api/geo/projects/signed-project-token",
+      expect.objectContaining({ method: "DELETE" }),
+    );
+  });
+
+  it("does not hide non-404 project deletion failures", async () => {
+    const fetchMock = vi.fn<typeof fetch>().mockResolvedValueOnce(
+      new Response(
+        JSON.stringify({
+          ok: false,
+          error: {
+            code: "PROJECT_ORDER_DELETE_BLOCKED",
+            message: "仍有待履约订单",
+          },
+        }),
+        { status: 409, headers: { "content-type": "application/json" } },
+      ),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    await expect(deleteGeoProject(project)).rejects.toMatchObject({
+      status: 409,
+      code: "PROJECT_ORDER_DELETE_BLOCKED",
+    });
+  });
 
   it("creates and checks a server-priced ZPAY checkout", async () => {
     const checkoutPayload = {

@@ -4116,7 +4116,15 @@ export async function downloadGeoArchive(
 }
 
 export async function deleteGeoProject(project: GeoProject): Promise<void> {
-  await requestJson(`/projects/${encodeURIComponent(project.remoteToken)}`, {
-    method: "DELETE",
-  });
+  try {
+    await requestJson(`/projects/${encodeURIComponent(project.remoteToken)}`, {
+      method: "DELETE",
+    });
+  } catch (error) {
+    // DELETE is idempotent from the user's perspective. A missing project or
+    // a resource already removed under a retired API Key is the desired end
+    // state, so the device copy can be removed after the existing confirmation.
+    if (error instanceof GeoApiError && error.status === 404) return;
+    throw error;
+  }
 }
