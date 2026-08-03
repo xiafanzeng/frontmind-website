@@ -16,9 +16,7 @@ const PAYMENT_AUTOMATIC_FULFILLMENT_GRACE_MS = 30 * 60 * 1000;
 // long enough to record a late signed callback, while routing late payments to
 // human review instead of automatic fulfillment.
 const PAYMENT_CALLBACK_RECORDING_GRACE_MS = 365 * 24 * 60 * 60 * 1000;
-const EARLIEST_SUPPORTED_PAYMENT_MS = Date.parse(
-  "2020-01-01T00:00:00.000Z",
-);
+const EARLIEST_SUPPORTED_PAYMENT_MS = Date.parse("2020-01-01T00:00:00.000Z");
 const MAX_PROVIDER_CLOCK_SKEW_MS = 5 * 60 * 1000;
 const MAX_ZPAY_RESPONSE_BYTES = 64 * 1024;
 
@@ -486,10 +484,7 @@ export class ZpayGeoPaymentGateway implements GeoPaymentGateway {
     }
 
     const tradeNo = textValue(order.trade_no);
-    if (
-      !tradeNo ||
-      !/^[A-Za-z0-9][A-Za-z0-9._:-]{7,127}$/.test(tradeNo)
-    ) {
+    if (!tradeNo || !/^[A-Za-z0-9][A-Za-z0-9._:-]{7,127}$/.test(tradeNo)) {
       throw new GeoPaymentVerificationError(
         "已支付订单缺少有效的平台交易号",
         "PAYMENT_QUERY_INVALID",
@@ -592,8 +587,7 @@ export class ZpayGeoPaymentGateway implements GeoPaymentGateway {
     if (
       params.out_trade_no !== payment.outTradeNo ||
       moneyToFen(params.money) !== payment.amountFen ||
-      params.type !== payment.method ||
-      params.name !== payment.productName
+      params.type !== payment.method
     ) {
       throw new GeoPaymentVerificationError(
         "支付通知与原订单不匹配",
@@ -601,6 +595,10 @@ export class ZpayGeoPaymentGateway implements GeoPaymentGateway {
         400,
       );
     }
+    // `name` is signed provider display metadata, but compatible gateways may
+    // normalize or truncate it. The verified signature, exact merchant/order,
+    // amount, channel, and sealed `param` token already bind this callback to
+    // the original purchase, so display text must not block durable recovery.
 
     if (params.trade_status !== "TRADE_SUCCESS") {
       return {
@@ -877,13 +875,9 @@ export function createGeoPaymentGatewayFromEnv(
     return new UnconfiguredGeoPaymentGateway();
   }
   try {
-    return new ZpayGeoPaymentGateway(
-      config,
-      codec,
-      {
-        receiptStore: createGeoPaymentReceiptStore({ env }),
-      },
-    );
+    return new ZpayGeoPaymentGateway(config, codec, {
+      receiptStore: createGeoPaymentReceiptStore({ env }),
+    });
   } catch {
     return new UnconfiguredGeoPaymentGateway(
       "在线支付服务暂不可用，请联系技术人员",
@@ -944,9 +938,7 @@ export async function verifyGeoPaymentProviderFromEnv(
 
   let result: Record<string, unknown>;
   try {
-    result = parseZpayResponseRecord(
-      await readBoundedResponseText(response),
-    );
+    result = parseZpayResponseRecord(await readBoundedResponseText(response));
   } catch (error) {
     if (error instanceof GeoPaymentVerificationError) throw error;
     throw paymentProviderReadinessError();
@@ -1159,12 +1151,12 @@ function assertOrderMatchesPayment(
   payment: ZpayPaymentTokenValue,
   pid: string,
 ) {
+  const providerType = textValue(order.type);
   if (
     textValue(order.out_trade_no) !== payment.outTradeNo ||
     moneyToFen(textValue(order.money)) !== payment.amountFen ||
     textValue(order.pid) !== pid ||
-    !["alipay", "wxpay"].includes(textValue(order.type) || "") ||
-    textValue(order.name) !== payment.productName
+    (providerType !== undefined && !["alipay", "wxpay"].includes(providerType))
   ) {
     throw new GeoPaymentVerificationError(
       "支付平台返回的订单范围不匹配",
@@ -1172,6 +1164,12 @@ function assertOrderMatchesPayment(
       402,
     );
   }
+  // The order ID is an HMAC-derived binding to the complete purchase scope.
+  // Together with the exact merchant and amount checks above it is the durable
+  // transaction identity. `name` is provider-controlled display metadata and
+  // may be normalized or truncated; `type` may be omitted by compatible query
+  // implementations, so neither can turn a settled, identity-matched order
+  // into an unrecoverable false negative.
 }
 
 function normalizedPlatforms(platformIds: GeoMonitorPlatformId[]) {
@@ -1325,13 +1323,29 @@ function asRecord(value: unknown): Record<string, unknown> {
 }
 
 function parseZpayResponseRecord(body: string) {
-  const parsed = JSON.parse(body) as unknown;
+  const parsed = parseZpayJsonValue(body);
   // Some live ZPAY merchant responses are JSON strings whose contents are the
   // documented JSON object. Accept exactly one compatibility wrapper while
   // keeping every subsequent field and scope check unchanged.
   const unwrapped =
-    typeof parsed === "string" ? (JSON.parse(parsed) as unknown) : parsed;
+    typeof parsed === "string" ? parseZpayJsonValue(parsed) : parsed;
   return asRecord(unwrapped);
+}
+
+function parseZpayJsonValue(body: string): unknown {
+  // ZPAY documents `pid` as an integer and some compatible deployments also
+  // serialize order identifiers as JSON numbers. Merchant and order IDs can be
+  // longer than Number.MAX_SAFE_INTEGER, so native JSON.parse would round them
+  // before the scope comparison and reject the paid order. Quote only the
+  // documented identifier fields at the JSON boundary; JSON.parse still
+  // validates the complete provider payload and every existing scope check
+  // continues to compare the exact decimal text.
+  const losslessIdentifiers = body.replace(
+    /("(?:pid|out_trade_no|trade_no)"\s*:\s*)(\d+)(?=\s*[,}])/g,
+    (_match, prefix: string, value: string) =>
+      `${prefix}${JSON.stringify(value)}`,
+  );
+  return JSON.parse(losslessIdentifiers) as unknown;
 }
 
 function textValue(value: unknown) {

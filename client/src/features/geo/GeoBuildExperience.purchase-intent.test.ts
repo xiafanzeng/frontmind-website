@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 
 import {
   clearGeoPurchaseIntentFromUrl,
+  geoPaymentRecoveryStatusForError,
   geoPaidStartNotice,
   isGeoDeleteProtectionError,
   isGeoProjectFulfillmentProtected,
@@ -143,15 +144,44 @@ describe("GEO pending-payment persistence contract", () => {
   });
 });
 
+describe("GEO payment-query recovery state", () => {
+  it("moves terminal verification failures out of the misleading pending state", () => {
+    expect(
+      geoPaymentRecoveryStatusForError(
+        new GeoApiError(
+          "支付平台返回的订单范围不匹配",
+          402,
+          "PAYMENT_SCOPE_MISMATCH",
+        ),
+      ),
+    ).toBe("reconciliation_required");
+    expect(
+      geoPaymentRecoveryStatusForError(
+        new GeoApiError("查询被拒绝", 502, "PAYMENT_QUERY_REJECTED"),
+      ),
+    ).toBe("reconciliation_required");
+  });
+
+  it("keeps transient failures retryable and separates paid activation failures", () => {
+    expect(
+      geoPaymentRecoveryStatusForError(
+        new GeoApiError("网关超时", 502, "PAYMENT_QUERY_FAILED"),
+      ),
+    ).toBeUndefined();
+    expect(
+      geoPaymentRecoveryStatusForError(
+        new GeoApiError("自动窗口结束", 410, "PAYMENT_RECONCILIATION_EXPIRED"),
+        true,
+      ),
+    ).toBe("activation_support_required");
+  });
+});
+
 describe("GEO irreversible-scope guards", () => {
   it("recognizes server order guards that must never offer local-only deletion", () => {
     expect(
       isGeoDeleteProtectionError(
-        new GeoApiError(
-          "blocked",
-          409,
-          "PROJECT_ORDER_DELETE_BLOCKED",
-        ),
+        new GeoApiError("blocked", 409, "PROJECT_ORDER_DELETE_BLOCKED"),
       ),
     ).toBe(true);
     expect(

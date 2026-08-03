@@ -503,6 +503,160 @@ describe("ZPAY GEO gateway", () => {
     });
   });
 
+  it.each(["direct", "wrapped"] as const)(
+    "preserves oversized numeric ZPAY identifiers in a %s order response",
+    async (responseShape) => {
+      const merchantPid = "201901151314084206659771";
+      const orderId = "10031293871242279000307640737676";
+      const tradeNo = "20260803124100123456789012345678";
+      const productName = "FrontMind GEO 问题现状监控（2个平台，每平台5次）";
+      const providerJson =
+        `{"code":1,"status":1,"pid":${merchantPid},` +
+        `"out_trade_no":${orderId},"trade_no":${tradeNo},` +
+        `"type":"wxpay","name":${JSON.stringify(productName)},` +
+        '"money":"4.00","addtime":"2026-08-03 12:40:00",' +
+        '"endtime":"2026-08-03 12:41:00"}';
+      const fetchMock = vi
+        .fn<typeof fetch>()
+        .mockResolvedValue(
+          new Response(
+            responseShape === "wrapped"
+              ? JSON.stringify(providerJson)
+              : providerJson,
+            { headers: { "content-type": "application/json" } },
+          ),
+        );
+      const paymentGateway = new ZpayGeoPaymentGateway(
+        {
+          pid: merchantPid,
+          key: "merchant-secret",
+          publicBaseUrl: "https://www.frontmind.net",
+        },
+        codec,
+        {
+          receiptStore: inMemoryReceiptStore(),
+          fetchImpl: fetchMock,
+          now: () => new Date("2026-08-03T04:45:00.000Z"),
+          orderId: () => orderId,
+        },
+      );
+      const checkout = await paymentGateway.createCheckout({
+        ...scope,
+        method: "wxpay",
+        platformIds: [...scope.platformIds],
+      });
+
+      await expect(
+        paymentGateway.getStatus({
+          authorization: checkout.authorization,
+          ownerSessionId: scope.ownerSessionId,
+          projectId: scope.projectId,
+          questionId: scope.questionId,
+          platformIds: [...scope.platformIds],
+          expectedAmountFen: scope.expectedAmountFen,
+        }),
+      ).resolves.toMatchObject({
+        status: "paid",
+        orderId,
+        tradeNo,
+        paidAt: "2026-08-03T04:41:00.000Z",
+      });
+    },
+  );
+
+  it("does not round an oversized numeric order ID into a false match", async () => {
+    const merchantPid = "201901151314084206659771";
+    const orderId = "10031293871242279000307640737676";
+    const differentOrderId = "10031293871242279000307640737677";
+    const productName = "FrontMind GEO 问题现状监控（2个平台，每平台5次）";
+    const fetchMock = vi
+      .fn<typeof fetch>()
+      .mockResolvedValue(
+        new Response(
+          `{"code":1,"status":1,"pid":${merchantPid},` +
+            `"out_trade_no":${differentOrderId},` +
+            '"trade_no":20260803124100123456789012345678,' +
+            `"type":"wxpay","name":${JSON.stringify(productName)},` +
+            '"money":"4.00","addtime":"2026-08-03 12:40:00",' +
+            '"endtime":"2026-08-03 12:41:00"}',
+          { headers: { "content-type": "application/json" } },
+        ),
+      );
+    const paymentGateway = new ZpayGeoPaymentGateway(
+      {
+        pid: merchantPid,
+        key: "merchant-secret",
+        publicBaseUrl: "https://www.frontmind.net",
+      },
+      codec,
+      {
+        receiptStore: inMemoryReceiptStore(),
+        fetchImpl: fetchMock,
+        now: () => new Date("2026-08-03T04:45:00.000Z"),
+        orderId: () => orderId,
+      },
+    );
+    const checkout = await paymentGateway.createCheckout({
+      ...scope,
+      method: "wxpay",
+      platformIds: [...scope.platformIds],
+    });
+
+    await expect(
+      paymentGateway.getStatus({
+        authorization: checkout.authorization,
+        ownerSessionId: scope.ownerSessionId,
+        projectId: scope.projectId,
+        questionId: scope.questionId,
+        platformIds: [...scope.platformIds],
+        expectedAmountFen: scope.expectedAmountFen,
+      }),
+    ).rejects.toMatchObject({
+      code: "PAYMENT_SCOPE_MISMATCH",
+      status: 402,
+    });
+  });
+
+  it("accepts identity-matched orders when provider display metadata is normalized", async () => {
+    const fetchMock = vi.fn<typeof fetch>().mockResolvedValue(
+      new Response(
+        JSON.stringify({
+          code: 1,
+          status: 1,
+          pid: "merchant123",
+          out_trade_no: "202607221800001234567890",
+          trade_no: "zpay-trade-normalized-metadata",
+          name: "FrontMind GEO 问题现状监控",
+          money: "4.00",
+          addtime: "2026-07-22 18:00:00",
+          endtime: "2026-07-22 18:05:00",
+        }),
+        { headers: { "content-type": "application/json" } },
+      ),
+    );
+    const paymentGateway = gateway(fetchMock);
+    const checkout = await paymentGateway.createCheckout({
+      ...scope,
+      method: "wxpay",
+      platformIds: [...scope.platformIds],
+    });
+
+    await expect(
+      paymentGateway.getStatus({
+        authorization: checkout.authorization,
+        ownerSessionId: scope.ownerSessionId,
+        projectId: scope.projectId,
+        questionId: scope.questionId,
+        platformIds: [...scope.platformIds],
+        expectedAmountFen: scope.expectedAmountFen,
+      }),
+    ).resolves.toMatchObject({
+      status: "paid",
+      orderId: checkout.orderId,
+      tradeNo: "zpay-trade-normalized-metadata",
+    });
+  });
+
   it("recovers a paid order from the ledger after recreating its randomized checkout token", async () => {
     const fetchMock = vi.fn<typeof fetch>().mockResolvedValue(
       new Response(
@@ -612,13 +766,17 @@ describe("ZPAY GEO gateway", () => {
       expectedAmountFen: scope.expectedAmountFen,
     };
 
-    await expect(paymentGateway.getStatus(verification)).resolves.toMatchObject({
-      status: "pending",
-    });
-    await expect(paymentGateway.getStatus(verification)).resolves.toMatchObject({
-      status: "paid",
-      tradeNo: "zpay-trade-original-method",
-    });
+    await expect(paymentGateway.getStatus(verification)).resolves.toMatchObject(
+      {
+        status: "pending",
+      },
+    );
+    await expect(paymentGateway.getStatus(verification)).resolves.toMatchObject(
+      {
+        status: "paid",
+        tradeNo: "zpay-trade-original-method",
+      },
+    );
     expect(fetchMock).toHaveBeenCalledTimes(2);
     expect(receiptStore.record).toHaveBeenCalledTimes(1);
   });
@@ -745,11 +903,7 @@ describe("ZPAY GEO gateway", () => {
   });
 
   it.each([
-    [
-      "creation after settlement",
-      "2026-07-22 18:06:00",
-      "2026-07-22 18:05:00",
-    ],
+    ["creation after settlement", "2026-07-22 18:06:00", "2026-07-22 18:05:00"],
     [
       "settlement beyond clock skew",
       "2026-07-22 18:00:00",
@@ -1014,6 +1168,74 @@ describe("ZPAY GEO gateway", () => {
     });
   });
 
+  it("records and replays a signed callback backed by oversized numeric provider IDs", async () => {
+    const merchantPid = "201901151314084206659771";
+    const orderId = "10031293871242279000307640737676";
+    const tradeNo = "20260803124100123456789012345678";
+    const productName = "FrontMind GEO 问题现状监控（2个平台，每平台5次）";
+    const fetchMock = vi
+      .fn<typeof fetch>()
+      .mockResolvedValue(
+        new Response(
+          `{"code":1,"status":1,"pid":${merchantPid},` +
+            `"out_trade_no":${orderId},"trade_no":${tradeNo},` +
+            `"type":"wxpay","name":${JSON.stringify(productName)},` +
+            '"money":"4.00","addtime":"2026-08-03 12:40:00",' +
+            '"endtime":"2026-08-03 12:41:00"}',
+          { headers: { "content-type": "application/json" } },
+        ),
+      );
+    const receiptStore = inMemoryReceiptStore();
+    const paymentGateway = new ZpayGeoPaymentGateway(
+      {
+        pid: merchantPid,
+        key: "merchant-secret",
+        publicBaseUrl: "https://www.frontmind.net",
+      },
+      codec,
+      {
+        receiptStore,
+        fetchImpl: fetchMock,
+        now: () => new Date("2026-08-03T04:45:00.000Z"),
+        orderId: () => orderId,
+      },
+    );
+    const checkout = await paymentGateway.createCheckout({
+      ...scope,
+      method: "wxpay",
+      platformIds: [...scope.platformIds],
+    });
+    const callback: Record<string, string> = {
+      pid: merchantPid,
+      name: "FrontMind GEO 问题现状监控",
+      money: checkout.fields.money,
+      out_trade_no: orderId,
+      trade_no: tradeNo,
+      param: checkout.authorization,
+      trade_status: "TRADE_SUCCESS",
+      type: "wxpay",
+      sign_type: "MD5",
+    };
+    callback.sign = signZpayParameters(callback, "merchant-secret");
+
+    await expect(
+      paymentGateway.verifyCallback(callback),
+    ).resolves.toMatchObject({
+      status: "paid",
+      orderId,
+      tradeNo,
+    });
+    await expect(
+      paymentGateway.verifyCallback(callback),
+    ).resolves.toMatchObject({
+      status: "paid",
+      orderId,
+      tradeNo,
+    });
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(receiptStore.record).toHaveBeenCalledTimes(1);
+  });
+
   it("never acknowledges a paid callback until its receipt is durably recorded", async () => {
     const fetchMock = vi.fn<typeof fetch>().mockResolvedValue(
       new Response(
@@ -1054,10 +1276,12 @@ describe("ZPAY GEO gateway", () => {
     };
     callback.sign = signZpayParameters(callback, "merchant-secret");
 
-    await expect(paymentGateway.verifyCallback(callback)).rejects.toMatchObject({
-      code: "PAYMENT_LEDGER_UNAVAILABLE",
-      status: 503,
-    });
+    await expect(paymentGateway.verifyCallback(callback)).rejects.toMatchObject(
+      {
+        code: "PAYMENT_LEDGER_UNAVAILABLE",
+        status: 503,
+      },
+    );
     expect(receiptStore.record).toHaveBeenCalledTimes(1);
   });
 

@@ -297,6 +297,25 @@ export function isGeoDeleteProtectionError(error: unknown) {
   );
 }
 
+export function geoPaymentRecoveryStatusForError(
+  error: unknown,
+  paymentConfirmed = false,
+):
+  | Extract<
+      PendingGeoPayment["status"],
+      "reconciliation_required" | "activation_support_required"
+    >
+  | undefined {
+  if (!(error instanceof GeoApiError)) return undefined;
+  const terminal =
+    [400, 401, 402, 403, 409, 410].includes(error.status) ||
+    error.code === "PAYMENT_QUERY_REJECTED";
+  if (!terminal) return undefined;
+  return paymentConfirmed
+    ? "activation_support_required"
+    : "reconciliation_required";
+}
+
 export function isGeoProjectFulfillmentProtected(
   project: Pick<GeoProject, "monitoring" | "serviceActivation">,
 ) {
@@ -2818,10 +2837,11 @@ function GeoBuildExperienceZh() {
         }
       } catch (error) {
         if (cancelled) return;
-        const terminal =
-          error instanceof GeoApiError &&
-          ([400, 401, 402, 403, 409, 410].includes(error.status) ||
-            error.code === "PAYMENT_QUERY_REJECTED");
+        const recoveryStatus = geoPaymentRecoveryStatusForError(
+          error,
+          paymentConfirmed,
+        );
+        const terminal = recoveryStatus !== undefined;
         if (
           error instanceof GeoApiError &&
           (error.status === 410 ||
@@ -2837,6 +2857,21 @@ function GeoBuildExperienceZh() {
                   status: paymentConfirmed
                     ? "activation_support_required"
                     : "reconciliation_required",
+                  statusMessage: message,
+                  lastCheckedAt: new Date().toISOString(),
+                }
+              : current,
+          );
+          setStorageNotice(message);
+        } else if (recoveryStatus) {
+          const message = paymentConfirmed
+            ? `付款已确认，但后续处理需要人工支持：${errorMessage(error)}。请联系技术支持并提供订单号。`
+            : `${errorMessage(error)}。订单已保留，请勿重复支付；您可以再次核对或联系技术支持。`;
+          setPendingPayment((current) =>
+            current?.checkout.authorization === payment.checkout.authorization
+              ? {
+                  ...current,
+                  status: recoveryStatus,
                   statusMessage: message,
                   lastCheckedAt: new Date().toISOString(),
                 }
