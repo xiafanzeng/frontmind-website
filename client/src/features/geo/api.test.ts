@@ -87,6 +87,40 @@ describe("normalizeGeoProject", () => {
     ).toSatisfy((ranking) => ranking.every((question) => !question.selectable));
   });
 
+  it("treats a completed partial recommendation set as ready", () => {
+    const project = normalizeGeoProject({
+      project: {
+        id: "partial-recommendations",
+        status: "completed",
+        questionTask: { status: "completed", progress: 100 },
+        questions: [
+          {
+            id: "reputation-01",
+            category: "reputation",
+            question: "Acme 靠谱吗？",
+            selectable: true,
+          },
+          {
+            id: "product-scenario-01",
+            category: "product_scenario",
+            question: "Acme 的产品适合哪些场景？",
+            selectable: true,
+          },
+          {
+            id: "competitor-comparison-01",
+            category: "competitor_comparison",
+            question: "Acme 和其他方案相比有什么区别？",
+            selectable: true,
+          },
+        ],
+      },
+    });
+
+    expect(project.status).toBe("ready");
+    expect(project.progress).toBe(100);
+    expect(project.questions).toHaveLength(3);
+  });
+
   it("uses a neutral archive filename when the API omits one", () => {
     const project = normalizeGeoProject({
       project: {
@@ -658,20 +692,19 @@ describe("normalizeGeoProject", () => {
     });
   });
 
-  it("surfaces a rejected question structure as a retryable failure", () => {
+  it("surfaces a result with no renderable questions as a failure", () => {
     const project = normalizeGeoProject({
       projectToken: "signed-token",
       project: {
         id: "project-1",
         status: "completed",
         questionTask: { status: "completed", progress: 100 },
-        questionValidationError:
-          "推荐结果未通过题目格式或语义校验，请联系技术支持",
+        questionValidationError: "推荐任务未返回可展示的问题，请联系技术支持",
       },
     });
 
     expect(project.status).toBe("failed");
-    expect(project.error).toContain("格式或语义校验");
+    expect(project.error).toContain("未返回可展示的问题");
   });
 
   it("normalizes real monitoring answers and scoped assessment output", () => {

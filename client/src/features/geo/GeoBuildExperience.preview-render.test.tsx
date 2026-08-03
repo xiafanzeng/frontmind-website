@@ -279,6 +279,28 @@ describe("GEO style preview rendering", () => {
     expect(html).toContain("/geo-builder/channels/tencent-news.png");
   });
 
+  it("shows partial recommendations without presenting them as an unfinished error", () => {
+    const fixture = createGeoStylePreviewProject();
+    const project = {
+      ...fixture,
+      questions: fixture.questions.slice(0, 3),
+    };
+    const html = renderToStaticMarkup(
+      <QuestionRecommendation
+        project={project}
+        selectionLocked={false}
+        onSelect={vi.fn()}
+        onCreateCustom={vi.fn()}
+        onContact={vi.fn()}
+      />,
+    );
+
+    expect(html).toContain("已优先展示本次生成的 3 道问题");
+    expect(html).toContain("仍会正常展示，符合条件的问题可继续选择");
+    expect(html).toContain("本分类本次暂无可展示问题");
+    expect(html).not.toContain("推荐结果正在完成");
+  });
+
   it("does not invent crawl scope or evidence claims when the archive omits them", () => {
     const fixture = createGeoStylePreviewProject();
     const project = {
@@ -739,9 +761,7 @@ describe("GEO style preview rendering", () => {
 
     expect(html).toContain("核验主体、方案边界与服务承诺");
     expect(html).toContain("形成可公开与待核验口径清单");
-    expect(html).toContain(
-      "验收标准：六类核心事实均有负责人确认和证据锚点。",
-    );
+    expect(html).toContain("验收标准：六类核心事实均有负责人确认和证据锚点。");
     expect(html).not.toContain("验收标准：验收标准：");
     expect(html).toContain("路线执行条件");
     expect(html).not.toContain("目标适用限制");

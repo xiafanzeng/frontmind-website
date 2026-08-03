@@ -35,6 +35,22 @@ describe("GeoQuestionSetSchema", () => {
     );
   });
 
+  it("accepts comparison evaluation wording after both named brands", () => {
+    const questions = validQuestions();
+    const comparison = questions.find(
+      (question) => question.id === "competitor-comparison-04",
+    );
+    if (!comparison) throw new Error("missing comparison fixture");
+    comparison.question =
+      "硅基流动和腾讯云TokenHub的多模型调用计费结构应如何评估？";
+    comparison.enterpriseAnchor = "硅基流动";
+    comparison.competitorAnchor = "腾讯云TokenHub";
+
+    expect(GeoQuestionSetSchema.parse({ questions }).questions).toHaveLength(
+      20,
+    );
+  });
+
   it("rejects selectable industry-ranking questions", () => {
     const questions = validQuestions();
     questions[10] = { ...questions[10], selectable: true };
@@ -215,6 +231,17 @@ describe("custom GEO question policy", () => {
     "中国 AI 推理基础设施头部厂商有哪些？",
     "科研仪器行业排\u200b名有哪些？",
     "2026 年行业 TOP 10 是谁？",
+    "哪些大模型平台值得优先考虑？",
+    "做大模型平台该考虑谁？",
+    "Acme 与哪些服务商相比更好？",
+    "Acme 和什么品牌相比更适合企业？",
+    "Acme 和哪些平台哪个好？",
+    "Acme 与市场上的哪些服务商相比更好？",
+    "Acme 和其他平台哪个最好？",
+    "Acme 和主流平台哪个好？",
+    "Acme 和几个主流平台相比哪个更好？",
+    "Acme 和其他几家平台哪个更好？",
+    "Acme 与某些服务商哪个更适合？",
   ])(
     "rejects industry ranking and open recommendation intent: %s",
     (question) => {
@@ -226,6 +253,12 @@ describe("custom GEO question policy", () => {
     "FrontMind 好不好？",
     "FrontMind 和竞争产品相比有哪些优势？",
     "FrontMind 与 Acme 哪个更适合科研企业？",
+    "Acme 与腾讯云哪个平台更好？",
+    "硅基流动和腾讯云TokenHub哪个平台更适合？",
+    "Acme 与腾讯云相比谁更好？",
+    "Acme 和腾讯云哪个最好？",
+    "Acme 与腾讯云哪家最好？",
+    "Acme 与腾讯云哪一个平台最好？",
     "FrontMind 在高校科研场景中能解决什么问题？",
   ])("keeps non-ranking questions selectable: %s", (question) => {
     expect(isIndustryRankingQuestion(question)).toBe(false);

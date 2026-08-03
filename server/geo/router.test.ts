@@ -128,6 +128,7 @@ class MockBroker implements GeoPresalesBroker {
   completeAssessmentImmediately = false;
   completeForecastImmediately = false;
   invalidFirstQuestionTask = false;
+  questionTaskOutput?: unknown;
   idempotentTasks = new Map<string, BrokerTask>();
   idempotentFiles = new Map<string, BrokerFile>();
   fileCredentialVersions = new Map<string, number>();
@@ -313,10 +314,12 @@ class MockBroker implements GeoPresalesBroker {
                 content: [
                   {
                     text:
-                      this.invalidFirstQuestionTask &&
-                      this.questionTaskCount === 1
-                        ? JSON.stringify({ questions: [] })
-                        : JSON.stringify(validQuestionSet()),
+                      this.questionTaskOutput !== undefined
+                        ? (JSON.stringify(this.questionTaskOutput) ?? "")
+                        : this.invalidFirstQuestionTask &&
+                            this.questionTaskCount === 1
+                          ? JSON.stringify({ questions: [] })
+                          : JSON.stringify(validQuestionSet()),
                   },
                 ],
               },
@@ -4925,6 +4928,39 @@ describe("GEO API", () => {
     expect(broker.monitorCreates).toBe(0);
   });
 
+  it("rejects an open comparison target even when generated as a selectable competitor question", async () => {
+    const generated = validQuestionSet();
+    generated.questions[15] = {
+      ...generated.questions[15],
+      question: "Acme 和几个主流平台相比哪个更好？",
+      competitorAnchor: "几个主流平台",
+      category: "competitor_comparison",
+      selectable: true,
+    };
+    broker.questionTaskOutput = generated;
+
+    const ready = await createReadyProject();
+    const rejected = await jsonRequest(
+      `/projects/${encodeURIComponent(ready.projectToken)}/monitoring`,
+      ready.cookie,
+      {
+        method: "POST",
+        body: {
+          questionId: "competitor-comparison-01",
+          platformIds: ["kimi"],
+          paymentAuthorization: "zpay-signed-authorization-placeholder",
+        },
+      },
+    );
+
+    expect(rejected.response.status).toBe(403);
+    expect(rejected.body).toMatchObject({
+      error: { code: "QUESTION_NOT_SELECTABLE" },
+    });
+    expect(paymentCalls).toHaveLength(0);
+    expect(broker.monitorCreates).toBe(0);
+  });
+
   it("starts Base assessment only after complete real monitor records", async () => {
     const ready = await createReadyProject();
     const startedPayload = await startOnePlatformMonitor(ready);
@@ -6798,12 +6834,161 @@ describe("GEO API", () => {
       project: {
         status: "failed",
         questionRetryAvailable: false,
-        questionValidationError:
-          "推荐结果未通过题目格式或语义校验，请联系技术支持",
+        questionValidationError: "推荐任务未返回可展示的问题，请联系技术支持",
       },
     });
     expect(broker.questionTaskCount).toBe(1);
     expect(broker.prompts).toHaveLength(2);
+  });
+
+  it("publishes renderable recommendations when only quality checks fail", async () => {
+    const ready = await createReadyProject();
+    const relaxed = validQuestionSet() as Record<string, any>;
+    relaxed.questions[5].question =
+      "Acme 服务模块 1 所在行业 Top 10 服务商有哪些？";
+    relaxed.questions[5].selectable = true;
+    delete relaxed.questions[15].competitorAnchor;
+    delete relaxed.questions[15].rationale;
+    delete relaxed.questions[15].evidenceRefs;
+    relaxed.questions[16].id = relaxed.questions[15].id;
+
+    broker.tasks.set("question-1", {
+      id: "question-1",
+      status: "completed",
+      output: [
+        {
+          role: "assistant",
+          content: [{ text: JSON.stringify(relaxed) }],
+        },
+      ],
+    });
+
+    const refreshed = await jsonRequest(
+      `/projects/${encodeURIComponent(ready.projectToken)}`,
+      ready.cookie,
+    );
+    const project = (refreshed.body as Record<string, any>).project;
+
+    expect(refreshed.response.status).toBe(200);
+    expect(project).toMatchObject({
+      status: "completed",
+      stage: "question_recommendation",
+    });
+    expect(project.questions).toHaveLength(20);
+    expect(project.questionValidationError).toBeUndefined();
+    expect(new Set(project.questions.map((item: any) => item.id)).size).toBe(
+      20,
+    );
+    expect(project.questions[5]).toMatchObject({
+      category: "industry_ranking",
+      selectable: false,
+    });
+    expect(broker.questionTaskCount).toBe(1);
+  });
+
+  it("completes the first recommendation request with a partial question set", async () => {
+    broker.questionTaskOutput = {
+      questions: [
+        {
+          id: "reputation-01",
+          category: "reputation",
+          question: "Acme 靠谱吗？",
+        },
+        {
+          id: "product-scenario-01",
+          category: "product_scenario",
+          question: "Acme 的企业知识库适合哪些使用场景？",
+        },
+        {
+          id: "competitor-comparison-01",
+          category: "competitor_comparison",
+          question: "Acme 和 BetaCloud 方案相比有什么区别？",
+        },
+      ],
+    };
+    const { cookie } = await verifyInvite();
+    const created = await jsonRequest("/projects", cookie, {
+      method: "POST",
+      body: { input: "Acme", attachments: [] },
+    });
+    const initial = created.body as Record<string, any>;
+    const initialProject = new GeoTokenCodec(
+      "test-session-secret-at-least-16-characters",
+    ).open<{ knowledgeBaseTaskId: string }>(
+      initial.projectToken,
+      "project",
+    ).value;
+    broker.tasks.set(initialProject.knowledgeBaseTaskId, {
+      id: initialProject.knowledgeBaseTaskId,
+      status: "completed",
+      output: [
+        {
+          role: "assistant",
+          content: [
+            {
+              type: "output_file",
+              file_id: "archive-1",
+              filename: "Acme.zip",
+            },
+          ],
+        },
+      ],
+    });
+
+    const recommended = await jsonRequest(
+      `/projects/${encodeURIComponent(initial.projectToken)}/questions`,
+      cookie,
+      { method: "POST", body: {} },
+    );
+    const project = (recommended.body as Record<string, any>).project;
+
+    expect(recommended.response.status).toBe(201);
+    expect(project).toMatchObject({
+      status: "completed",
+      stage: "question_recommendation",
+    });
+    expect(project.questions).toHaveLength(3);
+    expect(project.questionValidationError).toBeUndefined();
+    expect(
+      project.questions.every((question: any) => question.selectable),
+    ).toBe(true);
+    expect(broker.questionTaskCount).toBe(1);
+
+    const projectToken = (recommended.body as Record<string, any>)
+      .projectToken as string;
+    const checkout = await jsonRequest(
+      `/projects/${encodeURIComponent(projectToken)}/payments`,
+      cookie,
+      {
+        method: "POST",
+        body: {
+          questionId: "product-scenario-01",
+          platformIds: ["doubao"],
+          method: "alipay",
+        },
+      },
+    );
+    expect(checkout.response.status).toBe(201);
+
+    const monitoring = await jsonRequest(
+      `/projects/${encodeURIComponent(projectToken)}/monitoring`,
+      cookie,
+      {
+        method: "POST",
+        body: {
+          questionId: "product-scenario-01",
+          platformIds: ["doubao"],
+          paymentAuthorization: (checkout.body as any).payment.authorization,
+        },
+      },
+    );
+    expect(monitoring.response.status).toBe(201);
+    expect(monitoring.body).toMatchObject({
+      project: {
+        selectedQuestionId: "product-scenario-01",
+        monitoring: { status: "submitted", expectedRecords: 5 },
+      },
+    });
   });
 
   it("never creates a second task for an invalid question result", async () => {

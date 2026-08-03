@@ -3627,6 +3627,14 @@
 .geo-question-list > button > svg {
   color: var(--geo-category-accent);
 }
+.geo-question-empty {
+  display: grid;
+  min-height: 62px;
+  place-items: center;
+  color: #8a838d;
+  font-size: 13px;
+  text-align: center;
+}
 .geo-question-skeleton {
   height: 53px;
   border-bottom: 1px solid #ece9ee;

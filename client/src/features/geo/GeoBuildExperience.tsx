@@ -5026,9 +5026,11 @@ export function QuestionRecommendation({
         </div>
       )}
       {!countsValid && (
-        <div className="geo-validation-notice">
-          <CircleAlert size={14} /> 推荐结果正在完成 4 类 × 5
-          题的生成与结构校验，完成后将在下方显示。
+        <div className="geo-validation-notice" role="status">
+          <CircleAlert size={14} />
+          已优先展示本次生成的 {recommendedQuestions.length}{" "}
+          道问题；题目数量或分类未达到 4 类 × 5
+          题时仍会正常展示，符合条件的问题可继续选择。
         </div>
       )}
 
@@ -5096,10 +5098,11 @@ export function QuestionRecommendation({
                     </button>
                   );
                 })}
-                {questions.length === 0 &&
-                  Array.from({ length: 5 }, (_, index) => (
-                    <div key={index} className="geo-question-skeleton" />
-                  ))}
+                {questions.length === 0 && (
+                  <div className="geo-question-empty">
+                    本分类本次暂无可展示问题
+                  </div>
+                )}
               </div>
             </section>
           );

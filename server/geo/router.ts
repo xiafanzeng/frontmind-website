@@ -1429,7 +1429,11 @@ export function createGeoRouter(options: GeoRouterOptions = {}): Router {
         "QUESTION_NOT_OWNED",
       );
     }
-    if (!question.selectable || question.category === "industry_ranking") {
+    if (
+      !question.selectable ||
+      question.category === "industry_ranking" ||
+      isIndustryRankingQuestion(question.question)
+    ) {
       throw new GeoHttpError(
         "行业排名类问题需要全域营销权限，不能在当前流程中购买监控",
         403,
@@ -6393,7 +6397,7 @@ async function buildProjectView(
               }
             : undefined,
     questionValidationError: invalidQuestionResult
-      ? "推荐结果未通过题目格式或语义校验，请联系技术支持"
+      ? "推荐任务未返回可展示的问题，请联系技术支持"
       : undefined,
     error: knowledgeBaseFinalizationFailure
       ? KNOWLEDGE_BASE_FINALIZATION_PUBLIC_ERROR
