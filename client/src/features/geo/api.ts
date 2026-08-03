@@ -38,6 +38,7 @@ import { localizedUserFacingError } from "./error-localization";
 const GEO_API_ROOT = "/api/geo";
 const DEFAULT_REQUEST_TIMEOUT_MS = 30_000;
 const UPLOAD_REQUEST_TIMEOUT_MS = 5 * 60_000;
+const GEO_CUSTOM_QUESTION_POLL_RECOVERY_MAX_MS = 2 * 60_000;
 
 type JsonRecord = Record<string, unknown>;
 type TimedRequestInit = RequestInit & { timeoutMs?: number };
@@ -303,12 +304,19 @@ async function acknowledgeNonRetryableGeoCustomQuestionTerminal(
   // If the ACK response is lost, the UUID remains and exact GET recovery can
   // repeat the idempotent ACK. The compare-before-remove helper cannot clear a
   // newer operation written by another tab.
-  await acknowledgeGeoCustomQuestionValidation(
-    project,
-    terminal.clientRequestId,
-    options,
-  );
-  acknowledgeGeoCustomQuestionCommitted(project.id, terminal.clientRequestId);
+  try {
+    await acknowledgeGeoCustomQuestionValidation(
+      project,
+      terminal.clientRequestId,
+      options,
+    );
+    acknowledgeGeoCustomQuestionCommitted(project.id, terminal.clientRequestId);
+  } catch {
+    // The authoritative business decision is more important than a secondary
+    // ACK transport failure. Keep the exact UUID so refresh/recovery can retry
+    // the idempotent ACK, but never replace a known rejection with a generic
+    // network or rate-limit message.
+  }
   return true;
 }
 
@@ -3674,22 +3682,70 @@ async function pollGeoCustomQuestionValidation(
   options: { signal?: AbortSignal; pollIntervalMs?: number },
 ) {
   let payload = initialPayload;
+  let transientFailureCount = 0;
+  let transientFailureStartedAt: number | undefined;
+  let retryDelayMs: number | undefined;
   while (isPendingCustomQuestionValidation(payload)) {
     const validation = asRecord(asRecord(payload).validation);
     const requestedDelay = numberValue(validation.nextPollMs);
     await waitForGeoCustomQuestionPoll(
-      options.pollIntervalMs ??
+      retryDelayMs ??
+        options.pollIntervalMs ??
         (requestedDelay && requestedDelay >= 200 && requestedDelay <= 10_000
           ? requestedDelay
           : 1_500),
       options.signal,
     );
-    payload = await requestJson(
-      `${basePath}/${encodeURIComponent(clientRequestId)}`,
-      { signal: options.signal },
-    );
+    try {
+      payload = await requestJson(
+        `${basePath}/${encodeURIComponent(clientRequestId)}`,
+        { signal: options.signal },
+      );
+      transientFailureCount = 0;
+      transientFailureStartedAt = undefined;
+      retryDelayMs = undefined;
+    } catch (error) {
+      if (!recoverableGeoCustomQuestionPollError(error)) throw error;
+      const now = Date.now();
+      transientFailureStartedAt ??= now;
+      if (
+        now - transientFailureStartedAt >=
+        GEO_CUSTOM_QUESTION_POLL_RECOVERY_MAX_MS
+      ) {
+        // Keep the durable UUID for an explicit resume, but do not leave the
+        // form disabled forever when the status endpoint is continuously down.
+        throw error;
+      }
+      transientFailureCount += 1;
+      retryDelayMs = geoCustomQuestionPollRecoveryDelay(
+        transientFailureCount,
+        options.pollIntervalMs,
+      );
+    }
   }
   return payload;
+}
+
+function recoverableGeoCustomQuestionPollError(error: unknown) {
+  if (authoritativeGeoCustomQuestionValidationTerminal(error)) return false;
+  if (error instanceof TypeError) return true;
+  return (
+    error instanceof GeoApiError &&
+    ([408, 425, 429].includes(error.status) || error.status >= 500)
+  );
+}
+
+function geoCustomQuestionPollRecoveryDelay(
+  failureCount: number,
+  pollIntervalMs?: number,
+) {
+  if (pollIntervalMs !== undefined) {
+    return Math.min(
+      10_000,
+      Math.max(1, pollIntervalMs * 2 ** Math.min(failureCount, 10)),
+    );
+  }
+  return [3_000, 5_000, 10_000][Math.min(failureCount - 1, 2)]!;
 }
 
 function normalizeCompletedGeoCustomQuestion(

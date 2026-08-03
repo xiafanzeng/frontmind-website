@@ -2182,7 +2182,7 @@ function GeoBuildExperienceZh() {
         activeProject.knowledgeBase?.companyName || activeProject.title;
       if (!explicitlyReferencesProjectCompany(questionText, companyName)) {
         throw new Error(
-          `该问题与「${companyName}」没有明确关系，请在问题中写出企业或品牌名称。`,
+          `该问题与「${companyName}」没有明确关系，请重新输入与当前企业相关的非行业排名类问题。`,
         );
       }
       const normalized = `${questionText.trim().replace(/[?？]+$/, "")}？`;
@@ -5556,7 +5556,7 @@ export function QuestionRecommendation({
                   : customRetryTerminalError
                     ? "可点击上方按钮确认旧终态后，以新的请求重新发起一次验证。"
                     : "可点击上方按钮恢复同一验证任务。"
-                : "请修改问题后重新提交。"}
+                : null}
             </p>
           )}
         </form>

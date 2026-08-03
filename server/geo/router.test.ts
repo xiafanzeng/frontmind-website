@@ -3156,6 +3156,68 @@ describe("GEO API", () => {
     expect(broker.customQuestionClassifierTaskCount).toBe(1);
   });
 
+  it("returns an async enterprise rejection without reloading unrelated task results on every status poll", async () => {
+    const ready = await createReadyProject();
+    broker.customQuestionClassifierPendingPolls = 2;
+    broker.customQuestionClassifierOutput = {
+      decision: "reject",
+      category: "unrelated",
+      enterpriseRelated: false,
+      reasonCode: "enterprise_unrelated",
+      reason: "知识库未提供将 FrontMind 与 Acme 关联的事实证据。",
+      enterpriseAnchor: null,
+      offeringAnchor: null,
+      evidenceRefs: [],
+    };
+    const pathname = `/projects/${encodeURIComponent(
+      ready.projectToken,
+    )}/questions/custom`;
+    const started = await jsonRequest(pathname, ready.cookie, {
+      method: "POST",
+      body: {
+        question: "FrontMind是什么企业？",
+        clientRequestId: CUSTOM_QUESTION_CLIENT_REQUEST_ID,
+      },
+    });
+    expect(started.response.status).toBe(202);
+
+    // A status observation must depend on the frozen reservation and its
+    // classifier task, not re-fetch the already completed KB/question tasks.
+    // This reproduces the production 502 that interrupted the browser before
+    // the background worker persisted the authoritative rejection.
+    broker.taskResultErrors.set(
+      "kb-1",
+      new GeoBrokerError("Too Many Requests", 429, "AGENT_RATE_LIMITED"),
+    );
+    broker.taskResultErrors.set(
+      "question-1",
+      new GeoBrokerError("Too Many Requests", 429, "AGENT_RATE_LIMITED"),
+    );
+
+    const statusPath = `${pathname}/${CUSTOM_QUESTION_CLIENT_REQUEST_ID}`;
+    const stillRunning = await jsonRequest(statusPath, ready.cookie);
+    expect(stillRunning.response.status).toBe(202);
+    expect(stillRunning.body).toMatchObject({
+      validation: { state: "submitted" },
+    });
+
+    const rejected = await jsonRequest(statusPath, ready.cookie);
+    expect(rejected.response.status).toBe(422);
+    expect(rejected.body).toMatchObject({
+      error: {
+        code: "CUSTOM_QUESTION_ENTERPRISE_UNRELATED",
+        message:
+          "该问题与「Acme」没有明确关系，请重新输入与当前企业相关的非行业排名类问题。",
+      },
+      validation: {
+        clientRequestId: CUSTOM_QUESTION_CLIENT_REQUEST_ID,
+        state: "rejected",
+        error: { retryable: false },
+      },
+    });
+    expect(broker.customQuestionClassifierTaskCount).toBe(1);
+  });
+
   it("keeps a terminal validation discoverable until owner ACK and makes a lost-response ACK retry idempotent", async () => {
     const ready = await createReadyProject();
     broker.customQuestionClassifierPendingPolls = 1;

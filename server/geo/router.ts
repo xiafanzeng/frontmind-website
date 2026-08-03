@@ -3092,8 +3092,11 @@ export function createGeoRouter(options: GeoRouterOptions = {}): Router {
     res: Response;
     projectToken: string;
     value: ProjectTokenValue;
-    knowledgeBaseTask: BrokerTask;
-    questionTask: BrokerTask;
+    context?: {
+      trackedValue: ProjectTokenValue;
+      knowledgeBaseTask: BrokerTask;
+      questionTask: BrokerTask;
+    };
     record: GeoCustomQuestionValidationRecord;
     completedStatus?: number;
   }) => {
@@ -3118,10 +3121,16 @@ export function createGeoRouter(options: GeoRouterOptions = {}): Router {
       ...(input.record.error ? { error: input.record.error } : {}),
     };
     if (input.record.state === "completed" && input.record.result) {
+      // Pending and rejected observations are fully described by the durable
+      // reservation. Only a successful result needs the heavier project view.
+      // Deferring these reads prevents every 1.5-second status poll from
+      // reloading the knowledge-base and recommendation task results.
+      const context =
+        input.context ?? (await loadCustomQuestionContext(input.value));
       const nextValue: ProjectTokenValue = isExistingRecommendedQuestion
-        ? input.value
+        ? context.trackedValue
         : {
-            ...input.value,
+            ...context.trackedValue,
             customQuestion: input.record.result,
           };
       const projectToken = isExistingRecommendedQuestion
@@ -3131,8 +3140,8 @@ export function createGeoRouter(options: GeoRouterOptions = {}): Router {
         broker,
         nextValue,
         projectToken,
-        input.knowledgeBaseTask,
-        input.questionTask,
+        context.knowledgeBaseTask,
+        context.questionTask,
       );
       input.res.status(input.completedStatus ?? 200).json({
         validation,
@@ -3312,8 +3321,7 @@ export function createGeoRouter(options: GeoRouterOptions = {}): Router {
           res,
           projectToken: req.params.projectToken,
           value: trackedValue,
-          knowledgeBaseTask,
-          questionTask,
+          context: { trackedValue, knowledgeBaseTask, questionTask },
           record: receipt.record,
         });
         return;
@@ -3366,8 +3374,7 @@ export function createGeoRouter(options: GeoRouterOptions = {}): Router {
         res,
         projectToken: req.params.projectToken,
         value: trackedValue,
-        knowledgeBaseTask,
-        questionTask,
+        context: { trackedValue, knowledgeBaseTask, questionTask },
         record,
         completedStatus: 201,
       });
@@ -3409,14 +3416,15 @@ export function createGeoRouter(options: GeoRouterOptions = {}): Router {
           "CUSTOM_QUESTION_VALIDATION_FORBIDDEN",
         );
       }
-      const { knowledgeBaseTask, questionTask, trackedValue } =
-        await loadCustomQuestionContext(value);
       const expectedRequestHash = geoCustomQuestionRequestHash({
-        projectId: trackedValue.projectId,
-        knowledgeBaseTaskId: trackedValue.knowledgeBaseTaskId,
+        projectId: value.projectId,
+        knowledgeBaseTaskId: value.knowledgeBaseTaskId,
         question: stored.question,
       });
-      if (stored.requestHash !== expectedRequestHash) {
+      if (
+        stored.knowledgeBaseTaskId !== value.knowledgeBaseTaskId ||
+        stored.requestHash !== expectedRequestHash
+      ) {
         throw new GeoHttpError(
           "项目状态已变化，不能继续旧的问题验证请求",
           409,
@@ -3431,15 +3439,19 @@ export function createGeoRouter(options: GeoRouterOptions = {}): Router {
         broker,
         store: customQuestionValidationStore,
         record: authoritative,
-        knowledgeBaseTask,
+        // v1 reservations freeze a durable knowledge-base artifact. This is
+        // the same context used by the recovery worker and avoids two remote
+        // task-result reads on every browser poll.
+        knowledgeBaseTask: {
+          id: authoritative.knowledgeBaseTaskId,
+          status: "completed",
+        },
         now: customQuestionValidationNow,
       });
       await sendCustomQuestionValidationObservation({
         res,
         projectToken: req.params.projectToken,
-        value: trackedValue,
-        knowledgeBaseTask,
-        questionTask,
+        value,
         record,
       });
     }),
@@ -3532,21 +3544,35 @@ export function createGeoRouter(options: GeoRouterOptions = {}): Router {
           "CUSTOM_QUESTION_VALIDATION_FORBIDDEN",
         );
       }
-      const { knowledgeBaseTask, questionTask, trackedValue } =
-        await loadCustomQuestionContext(value);
+      const expectedRequestHash = geoCustomQuestionRequestHash({
+        projectId: value.projectId,
+        knowledgeBaseTaskId: value.knowledgeBaseTaskId,
+        question: stored.question,
+      });
+      if (
+        stored.knowledgeBaseTaskId !== value.knowledgeBaseTaskId ||
+        stored.requestHash !== expectedRequestHash
+      ) {
+        throw new GeoHttpError(
+          "项目状态已变化，不能继续旧的问题验证请求",
+          409,
+          "CUSTOM_QUESTION_VALIDATION_PROJECT_CHANGED",
+        );
+      }
       const record = await advanceCustomQuestionValidation({
         broker,
         store: customQuestionValidationStore,
         record: stored,
-        knowledgeBaseTask,
+        knowledgeBaseTask: {
+          id: stored.knowledgeBaseTaskId,
+          status: "completed",
+        },
         now: customQuestionValidationNow,
       });
       await sendCustomQuestionValidationObservation({
         res,
         projectToken: req.params.projectToken,
-        value: trackedValue,
-        knowledgeBaseTask,
-        questionTask,
+        value,
         record,
       });
     }),
@@ -7711,7 +7737,7 @@ async function advanceCustomQuestionValidation(input: {
               }
             : {
                 code: "CUSTOM_QUESTION_ENTERPRISE_UNRELATED",
-                message: `无法确认该问题与「${record.companyName}」的关系，请明确写出企业、品牌或知识库中的具体产品名称`,
+                message: `该问题与「${record.companyName}」没有明确关系，请重新输入与当前企业相关的非行业排名类问题。`,
                 status: 422,
                 retryable: false,
               },
@@ -7943,7 +7969,7 @@ function rejectedCustomQuestionError(category: string, companyName: string) {
   }
   return {
     code: "CUSTOM_QUESTION_ENTERPRISE_UNRELATED",
-    message: `该问题与「${companyName}」的企业、产品或服务没有明确关系，请修改后重试`,
+    message: `该问题与「${companyName}」没有明确关系，请重新输入与当前企业相关的非行业排名类问题。`,
     status: 422,
     retryable: false,
   } as const;

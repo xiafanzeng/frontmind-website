@@ -1952,6 +1952,270 @@ describe("monitoring and assessment API", () => {
     });
   });
 
+  it("keeps polling the same UUID across a transient status failure and surfaces the later enterprise rejection", async () => {
+    vi.useFakeTimers();
+    const storage = new Map<string, string>();
+    vi.stubGlobal("localStorage", {
+      getItem: (key: string) => storage.get(key) ?? null,
+      setItem: (key: string, value: string) => storage.set(key, value),
+      removeItem: (key: string) => storage.delete(key),
+    });
+    const clientRequestId = "47474747-4747-4747-8747-474747474747";
+    const question = "FrontMind是什么企业？";
+    const rejectionMessage =
+      "该问题与「硅基流动」没有明确关系，请重新输入与当前企业相关的非行业排名类问题。";
+    const terminalBody = {
+      ok: false,
+      validation: {
+        schemaVersion: 1,
+        clientRequestId,
+        question,
+        state: "rejected",
+        error: {
+          code: "CUSTOM_QUESTION_ENTERPRISE_UNRELATED",
+          message: rejectionMessage,
+          status: 422,
+          retryable: false,
+        },
+      },
+      error: {
+        code: "CUSTOM_QUESTION_ENTERPRISE_UNRELATED",
+        message: rejectionMessage,
+      },
+    };
+    const fetchMock = vi
+      .fn<typeof fetch>()
+      .mockResolvedValueOnce(
+        new Response(
+          JSON.stringify({
+            validation: {
+              clientRequestId,
+              question,
+              state: "submitted",
+              nextPollMs: 1,
+            },
+          }),
+          { status: 202, headers: { "content-type": "application/json" } },
+        ),
+      )
+      .mockResolvedValueOnce(
+        new Response(
+          JSON.stringify({
+            ok: false,
+            error: {
+              code: "AGENT_UNAVAILABLE",
+              message: "Too Many Requests",
+            },
+          }),
+          { status: 502, headers: { "content-type": "application/json" } },
+        ),
+      )
+      .mockResolvedValueOnce(
+        new Response(JSON.stringify(terminalBody), {
+          status: 422,
+          headers: { "content-type": "application/json" },
+        }),
+      )
+      .mockResolvedValueOnce(
+        new Response(
+          JSON.stringify({
+            ok: true,
+            validation: {
+              schemaVersion: 1,
+              clientRequestId,
+              state: "rejected",
+              acknowledged: true,
+            },
+          }),
+          { status: 200, headers: { "content-type": "application/json" } },
+        ),
+      );
+    vi.stubGlobal("fetch", fetchMock);
+
+    const outcome = createGeoCustomQuestion(project, question, {
+      clientRequestId,
+      pollIntervalMs: 1,
+    }).catch((error: unknown) => error);
+    await vi.runAllTimersAsync();
+
+    await expect(outcome).resolves.toMatchObject({
+      status: 422,
+      code: "CUSTOM_QUESTION_ENTERPRISE_UNRELATED",
+      message: rejectionMessage,
+    });
+    expect(fetchMock.mock.calls.map(([url]) => url)).toEqual([
+      "/api/geo/projects/signed-project-token/questions/custom",
+      `/api/geo/projects/signed-project-token/questions/custom/${clientRequestId}`,
+      `/api/geo/projects/signed-project-token/questions/custom/${clientRequestId}`,
+      `/api/geo/projects/signed-project-token/questions/custom/${clientRequestId}/ack`,
+    ]);
+    expect(readPendingGeoCustomQuestionValidation(project.id)).toBeUndefined();
+  });
+
+  it("does not hide an authoritative retryable terminal 502 behind automatic polling", async () => {
+    vi.useFakeTimers();
+    const clientRequestId = "48484848-4848-4848-8848-484848484848";
+    const question = "FrontMind 超前智能适合哪些企业使用？";
+    const terminalBody = {
+      ok: false,
+      validation: {
+        schemaVersion: 1,
+        clientRequestId,
+        question,
+        state: "failed",
+        error: {
+          code: "CUSTOM_QUESTION_CLASSIFIER_RESULT_UNAVAILABLE",
+          message: "问题验证结果持续无法读取，请重试当前问题",
+          status: 502,
+          retryable: true,
+        },
+      },
+      error: {
+        code: "CUSTOM_QUESTION_CLASSIFIER_RESULT_UNAVAILABLE",
+        message: "问题验证结果持续无法读取，请重试当前问题",
+      },
+    };
+    const fetchMock = vi
+      .fn<typeof fetch>()
+      .mockResolvedValueOnce(
+        new Response(
+          JSON.stringify({
+            validation: {
+              clientRequestId,
+              question,
+              state: "submitted",
+              nextPollMs: 1,
+            },
+          }),
+          { status: 202, headers: { "content-type": "application/json" } },
+        ),
+      )
+      .mockResolvedValueOnce(
+        new Response(JSON.stringify(terminalBody), {
+          status: 502,
+          headers: { "content-type": "application/json" },
+        }),
+      );
+    vi.stubGlobal("fetch", fetchMock);
+
+    const outcome = createGeoCustomQuestion(project, question, {
+      clientRequestId,
+      pollIntervalMs: 1,
+    }).catch((error: unknown) => error);
+    await vi.runAllTimersAsync();
+
+    await expect(outcome).resolves.toMatchObject({
+      status: 502,
+      code: "CUSTOM_QUESTION_CLASSIFIER_RESULT_UNAVAILABLE",
+    });
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+  });
+
+  it("aborts immediately while backing off from a transient status failure", async () => {
+    vi.useFakeTimers();
+    const clientRequestId = "49494949-4949-4949-8949-494949494949";
+    const question = "FrontMind 超前智能适合哪些企业使用？";
+    const fetchMock = vi
+      .fn<typeof fetch>()
+      .mockResolvedValueOnce(
+        new Response(
+          JSON.stringify({
+            validation: {
+              clientRequestId,
+              question,
+              state: "submitted",
+              nextPollMs: 1,
+            },
+          }),
+          { status: 202, headers: { "content-type": "application/json" } },
+        ),
+      )
+      .mockResolvedValueOnce(
+        new Response(
+          JSON.stringify({
+            ok: false,
+            error: {
+              code: "AGENT_UNAVAILABLE",
+              message: "Too Many Requests",
+            },
+          }),
+          { status: 502, headers: { "content-type": "application/json" } },
+        ),
+      );
+    vi.stubGlobal("fetch", fetchMock);
+    const controller = new AbortController();
+    const abortReason = new DOMException("view unmounted", "AbortError");
+    const pending = createGeoCustomQuestion(project, question, {
+      clientRequestId,
+      pollIntervalMs: 1,
+      signal: controller.signal,
+    });
+    const rejected = expect(pending).rejects.toBe(abortReason);
+
+    await vi.advanceTimersByTimeAsync(1);
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    controller.abort(abortReason);
+
+    await rejected;
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+  });
+
+  it("returns control with the same recovery UUID after two minutes of continuous status failures", async () => {
+    vi.useFakeTimers();
+    const storage = new Map<string, string>();
+    vi.stubGlobal("localStorage", {
+      getItem: (key: string) => storage.get(key) ?? null,
+      setItem: (key: string, value: string) => storage.set(key, value),
+      removeItem: (key: string) => storage.delete(key),
+    });
+    const clientRequestId = "50505050-5050-4050-8050-505050505050";
+    const question = "FrontMind 超前智能适合哪些企业使用？";
+    const fetchMock = vi
+      .fn<typeof fetch>()
+      .mockResolvedValueOnce(
+        new Response(
+          JSON.stringify({
+            validation: {
+              clientRequestId,
+              question,
+              state: "submitted",
+              nextPollMs: 200,
+            },
+          }),
+          { status: 202, headers: { "content-type": "application/json" } },
+        ),
+      )
+      .mockImplementation(
+        async () =>
+          new Response(
+            JSON.stringify({
+              ok: false,
+              error: {
+                code: "AGENT_UNAVAILABLE",
+                message: "Too Many Requests",
+              },
+            }),
+            { status: 502, headers: { "content-type": "application/json" } },
+          ),
+      );
+    vi.stubGlobal("fetch", fetchMock);
+
+    const outcome = createGeoCustomQuestion(project, question, {
+      clientRequestId,
+    }).catch((error: unknown) => error);
+    await vi.runAllTimersAsync();
+
+    await expect(outcome).resolves.toMatchObject({
+      status: 502,
+      code: "AGENT_UNAVAILABLE",
+    });
+    expect(fetchMock.mock.calls.length).toBeGreaterThan(10);
+    expect(fetchMock.mock.calls.length).toBeLessThan(30);
+    expect(
+      readPendingGeoCustomQuestionValidation(project.id)?.clientRequestId,
+    ).toBe(clientRequestId);
+  });
+
   it("reuses the same clientRequestId after a disconnected response", async () => {
     const storage = new Map<string, string>();
     vi.stubGlobal("localStorage", {
@@ -2336,7 +2600,7 @@ describe("monitoring and assessment API", () => {
     ).toBe(newClientRequestId);
   });
 
-  it("keeps a legacy v5 non-retryable terminal UUID when ACK is unknown, then releases it on refresh recovery", async () => {
+  it("keeps the authoritative business rejection when its ACK is rate-limited, then releases the UUID on recovery", async () => {
     const storage = new Map<string, string>();
     vi.stubGlobal("localStorage", {
       getItem: (key: string) => storage.get(key) ?? null,
@@ -2372,7 +2636,18 @@ describe("monitoring and assessment API", () => {
     const fetchMock = vi
       .fn<typeof fetch>()
       .mockResolvedValueOnce(terminalResponse())
-      .mockRejectedValueOnce(new TypeError("ACK response unknown"))
+      .mockResolvedValueOnce(
+        new Response(
+          JSON.stringify({
+            ok: false,
+            error: {
+              code: "SESSION_RATE_LIMITED",
+              message: "Too Many Requests",
+            },
+          }),
+          { status: 429, headers: { "content-type": "application/json" } },
+        ),
+      )
       .mockResolvedValueOnce(terminalResponse())
       .mockResolvedValueOnce(
         new Response(
@@ -2392,7 +2667,11 @@ describe("monitoring and assessment API", () => {
 
     await expect(
       createGeoCustomQuestion(project, question, { clientRequestId }),
-    ).rejects.toThrow(/ACK response unknown/);
+    ).rejects.toMatchObject({
+      status: 422,
+      code: "CUSTOM_QUESTION_ENTERPRISE_UNRELATED",
+      message: "问题与企业无关。",
+    });
     expect(
       readPendingGeoCustomQuestionValidation(project.id)?.clientRequestId,
     ).toBe(clientRequestId);
@@ -2410,6 +2689,82 @@ describe("monitoring and assessment API", () => {
       `/api/geo/projects/signed-project-token/questions/custom/${clientRequestId}/ack`,
     ]);
     expect(readPendingGeoCustomQuestionValidation(project.id)).toBeUndefined();
+  });
+
+  it("preserves a recovered enterprise rejection when the recovery ACK is rate-limited", async () => {
+    const storage = new Map<string, string>();
+    vi.stubGlobal("localStorage", {
+      getItem: (key: string) => storage.get(key) ?? null,
+      setItem: (key: string, value: string) => storage.set(key, value),
+      removeItem: (key: string) => storage.delete(key),
+    });
+    const clientRequestId = "59595959-5959-4959-8959-595959595959";
+    const question = "FrontMind是什么企业？";
+    const message =
+      "该问题与「硅基流动」没有明确关系，请重新输入与当前企业相关的非行业排名类问题。";
+    globalThis.localStorage.setItem(
+      `frontmind-geo-custom-question-validation:${project.id}`,
+      JSON.stringify({
+        projectId: project.id,
+        clientRequestId,
+        question,
+        updatedAt: new Date().toISOString(),
+      }),
+    );
+    const fetchMock = vi
+      .fn<typeof fetch>()
+      .mockResolvedValueOnce(
+        new Response(
+          JSON.stringify({
+            ok: false,
+            validation: {
+              schemaVersion: 1,
+              clientRequestId,
+              question,
+              state: "rejected",
+              error: {
+                code: "CUSTOM_QUESTION_ENTERPRISE_UNRELATED",
+                message,
+                status: 422,
+                retryable: false,
+              },
+            },
+            error: {
+              code: "CUSTOM_QUESTION_ENTERPRISE_UNRELATED",
+              message,
+            },
+          }),
+          { status: 422, headers: { "content-type": "application/json" } },
+        ),
+      )
+      .mockResolvedValueOnce(
+        new Response(
+          JSON.stringify({
+            ok: false,
+            error: {
+              code: "SESSION_RATE_LIMITED",
+              message: "Too Many Requests",
+            },
+          }),
+          { status: 429, headers: { "content-type": "application/json" } },
+        ),
+      );
+    vi.stubGlobal("fetch", fetchMock);
+
+    await expect(
+      resumeGeoCustomQuestionValidation(project),
+    ).rejects.toMatchObject({
+      status: 422,
+      code: "CUSTOM_QUESTION_ENTERPRISE_UNRELATED",
+      message,
+    });
+    expect(
+      readPendingGeoCustomQuestionValidation(project.id)?.clientRequestId,
+    ).toBe(clientRequestId);
+    expect(fetchMock.mock.calls.map(([url]) => url)).toEqual([
+      `/api/geo/projects/signed-project-token/questions/custom/${clientRequestId}`,
+      `/api/geo/projects/signed-project-token/questions/custom/${clientRequestId}/ack`,
+    ]);
   });
 
   it("retires a superseded loser after exact recovery and uses a fresh UUID on explicit retry", async () => {
