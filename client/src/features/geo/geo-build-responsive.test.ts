@@ -41,6 +41,16 @@ describe("GEO assessment and onboarding responsive contracts", () => {
     );
   });
 
+  it("stacks the contract-code dialog above the movable workbench", () => {
+    expect(stylesheet).toMatch(/\.geo-workbench\s*\{[^}]*z-index:\s*80/s);
+    expect(stylesheet).toMatch(
+      /\.geo-dialog-overlay\s*\{[^}]*z-index:\s*99\s*!important/s,
+    );
+    expect(stylesheet).toMatch(
+      /\.geo-contract-code-dialog\s*\{[^}]*z-index:\s*100\s*!important/s,
+    );
+  });
+
   it("keeps priority actions full-width with a compact scope note below", () => {
     expect(stylesheet).toMatch(
       /\.geo-assessment-detail-grid\s*\{[^}]*grid-template-columns:\s*minmax\(0,\s*1fr\)/s,

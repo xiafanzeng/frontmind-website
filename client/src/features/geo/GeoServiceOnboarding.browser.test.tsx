@@ -119,6 +119,9 @@ describe("GeoServiceOnboarding contract-code dialog", () => {
     completeProfile();
 
     expect(await screen.findByRole("dialog")).toBeTruthy();
+    expect(
+      document.querySelector('[data-slot="dialog-overlay"]')?.className,
+    ).toContain("geo-dialog-overlay");
     expect(screen.getByAltText("FrontMind 管理员企业微信二维码")).toBeTruthy();
     const codeInput = screen.getByLabelText(
       "请输入管理员授权的合同码",

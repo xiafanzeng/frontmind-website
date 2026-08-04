@@ -735,6 +735,64 @@ describe("GEO style preview rendering", () => {
     expect(html).not.toContain("可持续更新");
   });
 
+  it("keeps only the last repeated knowledge-section title closest to the body", () => {
+    const fixture = createGeoStylePreviewProject();
+    const firstSection = fixture.knowledgeBase!.sections[0]!;
+    const project = {
+      ...fixture,
+      knowledgeBase: {
+        ...fixture.knowledgeBase!,
+        sections: [
+          {
+            ...firstSection,
+            id: "team",
+            title: "团队与组织",
+            markdown: [
+              "# 团队与组织",
+              "## 团队与组织",
+              "### 团队与组织",
+              "#### 团队与组织",
+              "官网称，团队由多学科成员组成。",
+            ].join("\n\n"),
+          },
+        ],
+      },
+    };
+    const html = renderToStaticMarkup(
+      <KnowledgePanel project={project} view="knowledge-display" />,
+    );
+
+    expect(html).toMatch(/<strong[^>]*>团队与组织<\/strong>/);
+    expect(html.match(/<h[1-6][^>]*>团队与组织<\/h[1-6]>/g)).toHaveLength(1);
+    expect(html).toMatch(/<h4[^>]*>团队与组织<\/h4>/);
+    expect(html).toContain("官网称，团队由多学科成员组成。");
+  });
+
+  it("retains the detail heading when knowledge markdown starts with body text", () => {
+    const fixture = createGeoStylePreviewProject();
+    const firstSection = fixture.knowledgeBase!.sections[0]!;
+    const project = {
+      ...fixture,
+      knowledgeBase: {
+        ...fixture.knowledgeBase!,
+        sections: [
+          {
+            ...firstSection,
+            id: "team",
+            title: "团队与组织",
+            markdown: "正文直接开始，没有内嵌标题。",
+          },
+        ],
+      },
+    };
+    const html = renderToStaticMarkup(
+      <KnowledgePanel project={project} view="knowledge-display" />,
+    );
+
+    expect(html).toMatch(/<h4[^>]*>团队与组织<\/h4>/);
+    expect(html).toContain("正文直接开始，没有内嵌标题。");
+  });
+
   it("renders roadmap actions and folds execution conditions into the roadmap", () => {
     const fixture = createGeoStylePreviewProject();
     const project = {

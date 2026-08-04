@@ -12448,6 +12448,7 @@
 }
 
 .geo-contract-code-dialog {
+  z-index: 100 !important;
   width: min(520px, calc(100vw - 32px));
   max-width: 520px;
   max-height: calc(100dvh - 2rem);

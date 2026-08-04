@@ -36,6 +36,7 @@ import {
   type GeoQuestionCategory,
 } from "./types";
 import { KnowledgeCompletenessDialog } from "./KnowledgeCompletenessDialog";
+import { prepareKnowledgeSectionMarkdown } from "./knowledge-section-markdown";
 import { MonitoringMarkdown } from "./MonitoringMarkdown";
 
 type DashboardSection = "service" | "brand" | "intent" | "progress" | "assets";
@@ -770,6 +771,14 @@ export function KnowledgePanel({
     sections.find((section) => section.id === selectedSectionId) ||
     filteredSections[0] ||
     sections[0];
+  const selectedSectionMarkdown = selectedSection
+    ? prepareKnowledgeSectionMarkdown(
+        selectedSection.markdown ||
+          selectedSection.summary ||
+          "该知识主题正在整理。",
+        selectedSection.title,
+      )
+    : undefined;
   const buildSteps = [
     {
       title: "资料接入与范围确认",
@@ -978,7 +987,9 @@ export function KnowledgePanel({
                   <header>
                     <div>
                       <span>知识主题</span>
-                      <h4>{selectedSection.title}</h4>
+                      {!selectedSectionMarkdown?.rendersSectionTitle && (
+                        <h4>{selectedSection.title}</h4>
+                      )}
                       <p>{selectedSection.summary}</p>
                     </div>
                     <small
@@ -997,11 +1008,7 @@ export function KnowledgePanel({
                   </header>
                   <div className="geo-agent-knowledge-markdown">
                     <MonitoringMarkdown
-                      markdown={
-                        selectedSection.markdown ||
-                        selectedSection.summary ||
-                        "该知识主题正在整理。"
-                      }
+                      markdown={selectedSectionMarkdown?.markdown}
                     />
                   </div>
                   <div className="geo-agent-related-assets">

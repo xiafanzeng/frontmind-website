@@ -1292,6 +1292,7 @@ export function GeoServiceOnboarding({
       >
         <DialogContent
           className="geo-contract-code-dialog"
+          overlayClassName="geo-dialog-overlay"
           showCloseButton={!profileSubmitting}
           onEscapeKeyDown={(event) => {
             if (profileSubmitting) event.preventDefault();
