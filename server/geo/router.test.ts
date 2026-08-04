@@ -37,7 +37,9 @@ import type { GeoQuestion } from "./schemas";
 import { GeoTokenCodec } from "./tokens";
 import { GeoAccountProvisioningError } from "./provisioning";
 import {
+  type GeoPaymentCheckout,
   type GeoPaymentCheckoutInput,
+  type GeoPaymentCheckoutSwitchInput,
   GeoPaymentVerificationError,
   type GeoPaymentVerificationInput,
   type GeoPaymentGateway,
@@ -469,6 +471,7 @@ let baseUrl: string;
 let broker: MockBroker;
 let paymentCalls: GeoPaymentVerificationInput[];
 let paymentCheckoutCalls: GeoPaymentCheckoutInput[];
+let paymentSwitchCalls: GeoPaymentCheckoutSwitchInput[];
 let paymentStatusCalls: GeoPaymentVerificationInput[];
 let servicePaymentCalls: GeoServicePaymentVerificationInput[];
 let servicePaymentCheckoutCalls: GeoServicePaymentCheckoutInput[];
@@ -522,6 +525,7 @@ beforeEach(async () => {
   broker.archive = await fixtureCandidateArchive();
   paymentCalls = [];
   paymentCheckoutCalls = [];
+  paymentSwitchCalls = [];
   paymentStatusCalls = [];
   servicePaymentCalls = [];
   servicePaymentCheckoutCalls = [];
@@ -614,6 +618,33 @@ beforeEach(async () => {
           type: input.method,
           money: (input.expectedAmountFen / 100).toFixed(2),
           sign: "test-signature",
+          sign_type: "MD5",
+        },
+      };
+    },
+    async switchCheckoutMethod(input) {
+      paymentSwitchCalls.push(input);
+      if (paymentAccepted) {
+        throw new GeoPaymentVerificationError(
+          "付款已确认，不能再更换支付方式",
+          "PAYMENT_ALREADY_CONFIRMED",
+          409,
+        );
+      }
+      return {
+        authorization: input.authorization,
+        orderId: "zpay-order-001",
+        amountFen: input.expectedAmountFen,
+        expiresAt: input.checkoutExpiresAt,
+        action: "https://zpayz.cn/submit.php",
+        method: "POST",
+        fields: {
+          pid: "merchant-test",
+          type: input.method,
+          out_trade_no: "zpay-order-001",
+          money: (input.expectedAmountFen / 100).toFixed(2),
+          param: input.authorization,
+          sign: "test-switch-signature",
           sign_type: "MD5",
         },
       };
@@ -2876,6 +2907,40 @@ describe("GEO API", () => {
     expect(paymentCheckoutCalls).toHaveLength(1);
 
     paymentAccepted = false;
+    const switchedCheckout = await jsonRequest(
+      `/projects/${encodeURIComponent(ready.projectToken)}/payments/switch`,
+      ready.cookie,
+      {
+        method: "POST",
+        body: {
+          ...scope,
+          authorization: "zpay-signed-authorization-placeholder",
+          method: "alipay",
+        },
+      },
+    );
+    expect(switchedCheckout.response.status).toBe(200);
+    expect(switchedCheckout.body).toMatchObject({
+      payment: {
+        authorization: "zpay-signed-authorization-placeholder",
+        orderId: "zpay-order-001",
+        amountFen: 400,
+        unitPriceFen: 200,
+        answersPerPlatform: 5,
+        fields: { type: "alipay" },
+      },
+    });
+    expect(paymentSwitchCalls).toHaveLength(1);
+    expect(paymentSwitchCalls[0]).toMatchObject({
+      authorization: "zpay-signed-authorization-placeholder",
+      projectId: paymentCheckoutCalls[0].projectId,
+      questionId: scope.questionId,
+      platformIds: scope.platformIds,
+      expectedAmountFen: 400,
+      method: "alipay",
+      checkoutExpiresAt: "2027-07-23T10:00:00.000Z",
+    });
+
     const status = await jsonRequest(
       `/projects/${encodeURIComponent(ready.projectToken)}/payments/status`,
       ready.cookie,
@@ -2899,6 +2964,200 @@ describe("GEO API", () => {
     });
     expect(paymentStatusCalls[0].ownerSessionId).toBeTruthy();
     expect(broker.monitorCreates).toBe(0);
+  });
+
+  it("rejects stale or already-paid authorizations before switching channels", async () => {
+    const ready = await createReadyProject();
+    const scope = {
+      questionId: "product-scenario-01",
+      platformIds: ["doubao"],
+    };
+    const created = await jsonRequest(
+      `/projects/${encodeURIComponent(ready.projectToken)}/payments`,
+      ready.cookie,
+      {
+        method: "POST",
+        body: { ...scope, method: "alipay" },
+      },
+    );
+    expect(created.response.status).toBe(201);
+
+    const stale = await jsonRequest(
+      `/projects/${encodeURIComponent(ready.projectToken)}/payments/switch`,
+      ready.cookie,
+      {
+        method: "POST",
+        body: {
+          ...scope,
+          authorization: "stale-payment-authorization",
+          method: "wxpay",
+        },
+      },
+    );
+    expect(stale.response.status).toBe(409);
+    expect(stale.body).toMatchObject({
+      error: { code: "PAYMENT_CHECKOUT_NOT_FOUND" },
+    });
+    expect(paymentSwitchCalls).toHaveLength(0);
+
+    const paid = await jsonRequest(
+      `/projects/${encodeURIComponent(ready.projectToken)}/payments/switch`,
+      ready.cookie,
+      {
+        method: "POST",
+        body: {
+          ...scope,
+          authorization: "zpay-signed-authorization-placeholder",
+          method: "wxpay",
+        },
+      },
+    );
+    expect(paid.response.status).toBe(409);
+    expect(paid.body).toMatchObject({
+      error: { code: "PAYMENT_ALREADY_CONFIRMED" },
+    });
+    expect(paymentSwitchCalls).toHaveLength(1);
+    expect(paymentStatusCalls).toHaveLength(1);
+    expect(projectOrders.get("zpay-order-001")).toMatchObject({
+      state: "paid",
+      paidAt: "2026-07-22T10:05:00.000Z",
+    });
+  });
+
+  it("single-flights concurrent payment switches for one monitoring scope", async () => {
+    const ready = await createReadyProject();
+    const scope = {
+      questionId: "product-scenario-01",
+      platformIds: ["doubao"] as GeoMonitorPlatformId[],
+    };
+    paymentAccepted = false;
+    const created = await jsonRequest(
+      `/projects/${encodeURIComponent(ready.projectToken)}/payments`,
+      ready.cookie,
+      {
+        method: "POST",
+        body: { ...scope, method: "alipay" },
+      },
+    );
+    expect(created.response.status).toBe(201);
+
+    let signalSwitchStarted!: () => void;
+    const switchStarted = new Promise<void>((resolve) => {
+      signalSwitchStarted = resolve;
+    });
+    let resolveSwitch!: (checkout: GeoPaymentCheckout) => void;
+    const switchResult = new Promise<GeoPaymentCheckout>((resolve) => {
+      resolveSwitch = resolve;
+    });
+    paymentGateway.switchCheckoutMethod = async (input) => {
+      paymentSwitchCalls.push(input);
+      signalSwitchStarted();
+      return switchResult;
+    };
+
+    const switchPath = `/projects/${encodeURIComponent(
+      ready.projectToken,
+    )}/payments/switch`;
+    const switchBody = {
+      ...scope,
+      authorization: "zpay-signed-authorization-placeholder",
+    };
+    const first = jsonRequest(switchPath, ready.cookie, {
+      method: "POST",
+      body: { ...switchBody, method: "wxpay" },
+    });
+    await switchStarted;
+    const replayed = jsonRequest(switchPath, ready.cookie, {
+      method: "POST",
+      body: { ...switchBody, method: "wxpay" },
+    });
+    const conflicting = await jsonRequest(switchPath, ready.cookie, {
+      method: "POST",
+      body: { ...switchBody, method: "alipay" },
+    });
+
+    expect(conflicting.response.status).toBe(409);
+    expect(conflicting.body).toMatchObject({
+      error: { code: "PAYMENT_SWITCH_IN_PROGRESS" },
+    });
+    expect(paymentSwitchCalls).toHaveLength(1);
+
+    resolveSwitch({
+      authorization: "zpay-signed-authorization-placeholder",
+      orderId: "zpay-order-001",
+      amountFen: 200,
+      expiresAt: "2027-07-23T10:00:00.000Z",
+      action: "https://zpayz.cn/submit.php",
+      method: "POST",
+      fields: {
+        pid: "merchant-test",
+        type: "wxpay",
+        out_trade_no: "zpay-order-001",
+        money: "2.00",
+        param: "zpay-signed-authorization-placeholder",
+        sign: "test-switch-signature",
+        sign_type: "MD5",
+      },
+    });
+    const [firstResult, replayedResult] = await Promise.all([first, replayed]);
+    expect(firstResult.response.status).toBe(200);
+    expect(replayedResult.response.status).toBe(200);
+    expect(firstResult.body).toEqual(replayedResult.body);
+    expect(firstResult.body).toMatchObject({
+      payment: {
+        orderId: "zpay-order-001",
+        fields: { type: "wxpay" },
+      },
+    });
+    expect(paymentSwitchCalls).toHaveLength(1);
+  });
+
+  it("rejects a switched checkout whose signed form no longer matches the authorization", async () => {
+    const ready = await createReadyProject();
+    const scope = {
+      questionId: "product-scenario-01",
+      platformIds: ["doubao"],
+    };
+    paymentAccepted = false;
+    const created = await jsonRequest(
+      `/projects/${encodeURIComponent(ready.projectToken)}/payments`,
+      ready.cookie,
+      {
+        method: "POST",
+        body: { ...scope, method: "alipay" },
+      },
+    );
+    expect(created.response.status).toBe(201);
+
+    const switchCheckoutMethod =
+      paymentGateway.switchCheckoutMethod.bind(paymentGateway);
+    paymentGateway.switchCheckoutMethod = async (input) => {
+      const checkout = await switchCheckoutMethod(input);
+      return {
+        ...checkout,
+        fields: {
+          ...checkout.fields,
+          param: "tampered-payment-authorization",
+        },
+      };
+    };
+    const switched = await jsonRequest(
+      `/projects/${encodeURIComponent(ready.projectToken)}/payments/switch`,
+      ready.cookie,
+      {
+        method: "POST",
+        body: {
+          ...scope,
+          authorization: "zpay-signed-authorization-placeholder",
+          method: "wxpay",
+        },
+      },
+    );
+
+    expect(switched.response.status).toBe(502);
+    expect(switched.body).toMatchObject({
+      error: { code: "PAYMENT_SWITCH_INVALID" },
+    });
   });
 
   it("blocks checkout before charging when the dedicated monitor API is not ready", async () => {

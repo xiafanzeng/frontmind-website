@@ -3902,6 +3902,25 @@ export async function getGeoPaymentStatus(
   return normalizePaymentStatus(payload);
 }
 
+export async function switchGeoPaymentCheckout(
+  project: GeoProject,
+  input: {
+    questionId: string;
+    platformIds: GeoPlatformId[];
+    authorization: string;
+    method: GeoPaymentMethod;
+  },
+): Promise<GeoPaymentCheckout> {
+  const payload = await requestJson(
+    `/projects/${encodeURIComponent(project.remoteToken)}/payments/switch`,
+    {
+      method: "POST",
+      body: JSON.stringify(input),
+    },
+  );
+  return normalizePaymentCheckout(payload);
+}
+
 export async function createGeoServicePaymentCheckout(
   project: GeoProject,
   method: GeoPaymentMethod,

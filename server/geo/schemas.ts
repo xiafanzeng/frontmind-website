@@ -648,6 +648,11 @@ export const PaymentStatusRequestSchema = GeoPaymentScopeSchema.safeExtend({
   authorization: z.string().trim().min(16).max(4096),
 }).strict();
 
+export const SwitchPaymentRequestSchema = GeoPaymentScopeSchema.safeExtend({
+  authorization: z.string().trim().min(16).max(4096),
+  method: GeoPaymentMethodSchema,
+}).strict();
+
 export const CreateServicePaymentRequestSchema = z
   .object({
     method: GeoPaymentMethodSchema,

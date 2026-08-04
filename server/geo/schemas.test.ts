@@ -11,6 +11,7 @@ import {
   ServicePaymentAuthorizationSchema,
   ServiceStatusRequestSchema,
   StartMonitoringRequestSchema,
+  SwitchPaymentRequestSchema,
 } from "./schemas";
 import { buildValidQuestionSet } from "./question-set.test-fixture";
 
@@ -331,6 +332,27 @@ describe("CreatePaymentRequestSchema", () => {
         questionId: "product-scenario-01",
         platformIds: ["doubao"],
         method: "qqpay",
+      }),
+    ).toThrow();
+  });
+
+  it("requires the existing authorization when switching payment methods", () => {
+    expect(
+      SwitchPaymentRequestSchema.parse({
+        questionId: "product-scenario-01",
+        platformIds: ["doubao", "kimi"],
+        authorization: "signed-zpay-authorization",
+        method: "wxpay",
+      }),
+    ).toMatchObject({
+      authorization: "signed-zpay-authorization",
+      method: "wxpay",
+    });
+    expect(() =>
+      SwitchPaymentRequestSchema.parse({
+        questionId: "product-scenario-01",
+        platformIds: ["doubao", "kimi"],
+        method: "alipay",
       }),
     ).toThrow();
   });

@@ -248,6 +248,94 @@ describe("ZPAY GEO gateway", () => {
     expect(anotherMethod.orderId).toBe(first.orderId);
   });
 
+  it("switches an unpaid checkout by re-signing the same authorization and order", async () => {
+    const fetchMock = vi.fn<typeof fetch>().mockResolvedValue(
+      new Response(
+        JSON.stringify({
+          code: 1,
+          status: 0,
+          pid: "merchant123",
+          out_trade_no: "202607221800001234567890",
+          type: "alipay",
+          money: "4.00",
+        }),
+        { headers: { "content-type": "application/json" } },
+      ),
+    );
+    const paymentGateway = gateway(fetchMock);
+    const first = await paymentGateway.createCheckout({
+      ...scope,
+      platformIds: [...scope.platformIds],
+    });
+    const switched = await paymentGateway.switchCheckoutMethod({
+      authorization: first.authorization,
+      ownerSessionId: scope.ownerSessionId,
+      projectId: scope.projectId,
+      questionId: scope.questionId,
+      platformIds: [...scope.platformIds],
+      expectedAmountFen: scope.expectedAmountFen,
+      method: "wxpay",
+      checkoutExpiresAt: first.expiresAt,
+    });
+
+    expect(switched).toMatchObject({
+      authorization: first.authorization,
+      orderId: first.orderId,
+      amountFen: first.amountFen,
+      expiresAt: first.expiresAt,
+      fields: {
+        type: "wxpay",
+        param: first.authorization,
+        out_trade_no: first.orderId,
+      },
+    });
+    expect(switched.fields.sign).not.toBe(first.fields.sign);
+    expect(switched.fields.sign).toBe(
+      signZpayParameters(switched.fields, "merchant-secret"),
+    );
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("blocks a payment-method switch once the provider has confirmed payment", async () => {
+    const fetchMock = vi.fn<typeof fetch>().mockResolvedValue(
+      new Response(
+        JSON.stringify({
+          code: 1,
+          status: 1,
+          pid: "merchant123",
+          out_trade_no: "202607221800001234567890",
+          trade_no: "zpay-trade-already-paid",
+          type: "alipay",
+          money: "4.00",
+          addtime: "2026-07-22 18:00:00",
+          endtime: "2026-07-22 18:05:00",
+        }),
+        { headers: { "content-type": "application/json" } },
+      ),
+    );
+    const paymentGateway = gateway(fetchMock);
+    const first = await paymentGateway.createCheckout({
+      ...scope,
+      platformIds: [...scope.platformIds],
+    });
+
+    await expect(
+      paymentGateway.switchCheckoutMethod({
+        authorization: first.authorization,
+        ownerSessionId: scope.ownerSessionId,
+        projectId: scope.projectId,
+        questionId: scope.questionId,
+        platformIds: [...scope.platformIds],
+        expectedAmountFen: scope.expectedAmountFen,
+        method: "wxpay",
+        checkoutExpiresAt: first.expiresAt,
+      }),
+    ).rejects.toMatchObject({
+      code: "PAYMENT_ALREADY_CONFIRMED",
+      status: 409,
+    });
+  });
+
   it("keeps service and monitoring orders stable across payment methods", async () => {
     const paymentGateway = new ZpayGeoPaymentGateway(
       {
@@ -1166,6 +1254,118 @@ describe("ZPAY GEO gateway", () => {
     await expect(paymentGateway.verifyCallback(altered)).rejects.toMatchObject({
       code: "PAYMENT_CALLBACK_MISMATCH",
     });
+  });
+
+  it("accepts a signed callback from the server-switched payment channel", async () => {
+    const providerResponses = [
+      {
+        code: 1,
+        status: 0,
+        pid: "merchant123",
+        out_trade_no: "202607221800001234567890",
+        type: "alipay",
+        money: "4.00",
+      },
+      {
+        code: 1,
+        status: 1,
+        pid: "merchant123",
+        out_trade_no: "202607221800001234567890",
+        trade_no: "zpay-trade-switched-channel",
+        type: "wxpay",
+        money: "4.00",
+        addtime: "2026-07-22 18:00:00",
+        endtime: "2026-07-22 18:05:00",
+      },
+    ];
+    const fetchMock = vi.fn<typeof fetch>().mockImplementation(
+      async () =>
+        new Response(JSON.stringify(providerResponses.shift()), {
+          headers: { "content-type": "application/json" },
+        }),
+    );
+    const paymentGateway = gateway(fetchMock);
+    const checkout = await paymentGateway.createCheckout({
+      ...scope,
+      platformIds: [...scope.platformIds],
+    });
+    const switched = await paymentGateway.switchCheckoutMethod({
+      authorization: checkout.authorization,
+      ownerSessionId: scope.ownerSessionId,
+      projectId: scope.projectId,
+      questionId: scope.questionId,
+      platformIds: [...scope.platformIds],
+      expectedAmountFen: scope.expectedAmountFen,
+      method: "wxpay",
+      checkoutExpiresAt: checkout.expiresAt,
+    });
+    const callback: Record<string, string> = {
+      pid: switched.fields.pid,
+      name: switched.fields.name,
+      money: switched.fields.money,
+      out_trade_no: switched.orderId,
+      trade_no: "zpay-trade-switched-channel",
+      param: switched.authorization,
+      trade_status: "TRADE_SUCCESS",
+      type: "wxpay",
+      sign_type: "MD5",
+    };
+    callback.sign = signZpayParameters(callback, "merchant-secret");
+
+    await expect(
+      paymentGateway.verifyCallback(callback),
+    ).resolves.toMatchObject({
+      status: "paid",
+      orderId: checkout.orderId,
+      tradeNo: "zpay-trade-switched-channel",
+    });
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+  });
+
+  it("rejects a signed callback when the provider query reports another payment channel", async () => {
+    const fetchMock = vi.fn<typeof fetch>().mockResolvedValue(
+      new Response(
+        JSON.stringify({
+          code: 1,
+          status: 1,
+          pid: "merchant123",
+          out_trade_no: "202607221800001234567890",
+          trade_no: "zpay-trade-channel-mismatch",
+          type: "wxpay",
+          money: "4.00",
+          addtime: "2026-07-22 18:00:00",
+          endtime: "2026-07-22 18:05:00",
+        }),
+        { headers: { "content-type": "application/json" } },
+      ),
+    );
+    const receiptStore = inMemoryReceiptStore();
+    const paymentGateway = gateway(fetchMock, receiptStore);
+    const checkout = await paymentGateway.createCheckout({
+      ...scope,
+      platformIds: [...scope.platformIds],
+    });
+    const callback: Record<string, string> = {
+      pid: checkout.fields.pid,
+      name: checkout.fields.name,
+      money: checkout.fields.money,
+      out_trade_no: checkout.orderId,
+      trade_no: "zpay-trade-channel-mismatch",
+      param: checkout.authorization,
+      trade_status: "TRADE_SUCCESS",
+      type: "alipay",
+      sign_type: "MD5",
+    };
+    callback.sign = signZpayParameters(callback, "merchant-secret");
+
+    await expect(paymentGateway.verifyCallback(callback)).rejects.toMatchObject(
+      {
+        code: "PAYMENT_CALLBACK_NOT_SETTLED",
+        status: 502,
+      },
+    );
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(receiptStore.record).not.toHaveBeenCalled();
   });
 
   it("records and replays a signed wxpay2 callback backed by oversized numeric provider IDs", async () => {

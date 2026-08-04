@@ -58,7 +58,7 @@ import {
   useRef,
   useState,
 } from "react";
-import { createPortal } from "react-dom";
+import { createPortal, flushSync } from "react-dom";
 import { useLang } from "@/contexts/LanguageContext";
 import { FRONTMIND_WECHAT_QR_PATH } from "@/lib/frontmind-contact";
 import {
@@ -101,6 +101,7 @@ import {
   startGeoQuestionRecommendation,
   startGeoService,
   submitGeoServiceContractProfile,
+  switchGeoPaymentCheckout,
   verifyGeoInvitation,
 } from "./api";
 import {
@@ -2645,6 +2646,76 @@ function GeoBuildExperienceZh() {
     submitPaymentCheckout(activePendingPayment.checkout, paymentWindow.target);
   };
 
+  const switchPaymentCheckout = async (method: GeoPaymentMethod) => {
+    const payment = activePendingPayment;
+    if (
+      !activeProject ||
+      !payment ||
+      payment.kind !== "monitoring" ||
+      payment.status !== "pending" ||
+      paymentCreating
+    ) {
+      return;
+    }
+    if (isGeoCheckoutExpired(payment.checkout)) {
+      setPaymentError("当前收银台已过期，请先核对最终支付结果。");
+      return;
+    }
+    if (payment.checkout.fields.type === method) {
+      reopenPaymentCheckout();
+      return;
+    }
+
+    const project = activeProject;
+    const authorization = payment.checkout.authorization;
+    const paymentWindow = preparePaymentWindow();
+    setPaymentCreating(true);
+    setPaymentError("");
+    try {
+      const checkout = await switchGeoPaymentCheckout(project, {
+        questionId: payment.questionId,
+        platformIds: [...payment.platformIds],
+        authorization,
+        method,
+      });
+      let checkoutAccepted = false;
+      flushSync(() => {
+        setPendingPayment((current) => {
+          if (
+            current?.kind !== "monitoring" ||
+            current.status !== "pending" ||
+            current.checkout.authorization !== authorization
+          ) {
+            return current;
+          }
+          checkoutAccepted = true;
+          return {
+            ...current,
+            checkout,
+            statusMessage: `已切换为${method === "wxpay" ? "微信支付" : "支付宝"}，请在新窗口完成付款`,
+          };
+        });
+      });
+      if (!checkoutAccepted) {
+        paymentWindow?.popup.close();
+        setPaymentCheckNonce((value) => value + 1);
+        return;
+      }
+      if (paymentWindow) {
+        submitPaymentCheckout(checkout, paymentWindow.target);
+      } else {
+        setPaymentError(
+          "支付方式已切换，但浏览器阻止了收银台弹窗。请点击“重新打开收银台”。",
+        );
+      }
+    } catch (error) {
+      paymentWindow?.popup.close();
+      setPaymentError(errorMessage(error));
+    } finally {
+      setPaymentCreating(false);
+    }
+  };
+
   const recheckPaymentStatus = () => {
     setPendingPayment((current) => {
       if (
@@ -3595,6 +3666,7 @@ function GeoBuildExperienceZh() {
         error={paymentError}
         onOpenChange={setPaymentDialogOpen}
         onStart={startPaymentCheckout}
+        onSwitch={switchPaymentCheckout}
         onReopen={reopenPaymentCheckout}
         onCheck={recheckPaymentStatus}
         onContact={() => {
@@ -5612,7 +5684,7 @@ function WechatPayBrandMark() {
   );
 }
 
-function PaymentDialog({
+export function PaymentDialog({
   open,
   project,
   pending,
@@ -5621,6 +5693,7 @@ function PaymentDialog({
   error,
   onOpenChange,
   onStart,
+  onSwitch,
   onReopen,
   onCheck,
   onContact,
@@ -5633,6 +5706,7 @@ function PaymentDialog({
   error: string;
   onOpenChange: (open: boolean) => void;
   onStart: (method: GeoPaymentMethod) => void;
+  onSwitch: (method: GeoPaymentMethod) => void;
   onReopen: () => void;
   onCheck: () => void;
   onContact: () => void;
@@ -5811,6 +5885,12 @@ function PaymentDialog({
           </section>
         )}
 
+        {pending && creating && (
+          <span className="geo-payment-creating" role="status">
+            <LoaderCircle size={15} /> 正在切换支付方式…
+          </span>
+        )}
+
         {error && (
           <p className="geo-payment-error" role="alert">
             <CircleAlert size={15} /> <span>{error}</span>
@@ -5828,11 +5908,24 @@ function PaymentDialog({
           </button>
           {pending && pending.status === "pending" && (
             <>
+              {pending.kind === "monitoring" && !checkoutExpired && (
+                <button
+                  type="button"
+                  className="geo-secondary-button"
+                  onClick={() =>
+                    onSwitch(method === "wxpay" ? "alipay" : "wxpay")
+                  }
+                  disabled={creating}
+                >
+                  更换为{method === "wxpay" ? "支付宝" : "微信支付"}
+                </button>
+              )}
               {!checkoutExpired && (
                 <button
                   type="button"
                   className="geo-secondary-button"
                   onClick={onReopen}
+                  disabled={creating}
                 >
                   重新打开收银台 <ExternalLink size={14} />
                 </button>
@@ -5841,6 +5934,7 @@ function PaymentDialog({
                 type="button"
                 className="geo-primary-button"
                 onClick={onCheck}
+                disabled={creating}
               >
                 {checkoutExpired ? "核对最终支付结果" : "我已完成支付"}{" "}
                 <RotateCw size={14} />

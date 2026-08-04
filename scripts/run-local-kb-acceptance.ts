@@ -699,6 +699,10 @@ class LocalPaymentGateway implements GeoPaymentGateway {
     return this.createPaidCheckout(input.expectedAmountFen, input.method);
   }
 
+  async switchCheckoutMethod(): Promise<GeoPaymentCheckout> {
+    throw new Error("本地验收付款会即时完成，不能再更换支付方式");
+  }
+
   async getStatus(
     input: GeoPaymentVerificationInput,
   ): Promise<GeoPaymentStatus> {

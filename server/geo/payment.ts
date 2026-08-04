@@ -50,6 +50,11 @@ export type GeoPaymentCheckoutInput = Omit<
   method: GeoPaymentMethod;
 };
 
+export type GeoPaymentCheckoutSwitchInput = GeoPaymentVerificationInput & {
+  method: GeoPaymentMethod;
+  checkoutExpiresAt: string;
+};
+
 export type GeoServicePaymentVerificationInput = {
   authorization: string;
   projectId: string;
@@ -99,6 +104,9 @@ export interface GeoPaymentVerifier {
 
 export interface GeoPaymentGateway extends GeoPaymentVerifier {
   createCheckout(input: GeoPaymentCheckoutInput): Promise<GeoPaymentCheckout>;
+  switchCheckoutMethod(
+    input: GeoPaymentCheckoutSwitchInput,
+  ): Promise<GeoPaymentCheckout>;
   createServiceCheckout(
     input: GeoServicePaymentCheckoutInput,
   ): Promise<GeoPaymentCheckout>;
@@ -155,6 +163,7 @@ type OpenedZpayPayment = {
 
 type ProviderPaymentStatus = GeoPaymentStatus & {
   providerCreatedAt?: string;
+  providerMethod?: GeoPaymentMethod;
 };
 
 type ZpayGatewayConfig = {
@@ -374,6 +383,74 @@ export class ZpayGeoPaymentGateway implements GeoPaymentGateway {
     };
   }
 
+  async switchCheckoutMethod(
+    input: GeoPaymentCheckoutSwitchInput,
+  ): Promise<GeoPaymentCheckout> {
+    const opened = this.openAndVerifyScope(input);
+    const status = await this.resolvePaymentStatus(opened);
+    if (status.status !== "pending") {
+      throw new GeoPaymentVerificationError(
+        "付款已确认，不能再更换支付方式",
+        "PAYMENT_ALREADY_CONFIRMED",
+        409,
+      );
+    }
+    const checkoutExpiresAt = Date.parse(input.checkoutExpiresAt);
+    const expectedCheckoutExpiresAt =
+      Date.parse(opened.payment.createdAt) + PAYMENT_TOKEN_TTL_MS;
+    if (
+      !Number.isFinite(checkoutExpiresAt) ||
+      !Number.isFinite(expectedCheckoutExpiresAt) ||
+      Math.abs(checkoutExpiresAt - expectedCheckoutExpiresAt) > 60_000
+    ) {
+      throw new GeoPaymentVerificationError(
+        "支付订单过期时间与原收银台不一致",
+        "PAYMENT_SCOPE_MISMATCH",
+        402,
+      );
+    }
+    if (checkoutExpiresAt <= this.now().getTime()) {
+      throw new GeoPaymentVerificationError(
+        "当前收银台已过期，请先核对最终支付结果",
+        "PAYMENT_CHECKOUT_EXPIRED",
+        410,
+      );
+    }
+
+    const payment = opened.payment;
+    const notifyUrl = new URL(
+      "/api/geo/payments/notify",
+      this.publicBaseUrl,
+    ).toString();
+    const returnUrl = new URL(
+      "/api/geo/payments/return",
+      this.publicBaseUrl,
+    ).toString();
+    const fields: Record<string, string> = {
+      pid: this.config.pid,
+      type: input.method,
+      out_trade_no: payment.outTradeNo,
+      notify_url: notifyUrl,
+      return_url: returnUrl,
+      name: payment.productName,
+      money: formatMoney(payment.amountFen),
+      param: input.authorization,
+    };
+    if (this.config.channelIds) fields.cid = this.config.channelIds;
+    fields.sign = signZpayParameters(fields, this.config.key);
+    fields.sign_type = "MD5";
+
+    return {
+      authorization: input.authorization,
+      orderId: payment.outTradeNo,
+      amountFen: payment.amountFen,
+      expiresAt: new Date(checkoutExpiresAt).toISOString(),
+      action: ZPAY_SUBMIT_URL,
+      method: "POST",
+      fields,
+    };
+  }
+
   async getStatus(
     input: GeoPaymentVerificationInput,
   ): Promise<GeoPaymentStatus> {
@@ -474,12 +551,14 @@ export class ZpayGeoPaymentGateway implements GeoPaymentGateway {
       );
     }
     assertOrderMatchesPayment(order, payment, this.config.pid);
+    const providerMethod = normalizeZpayPaymentMethod(textValue(order.type));
     if (String(order.status ?? "") !== "1") {
       return {
         status: "pending",
         orderId: payment.outTradeNo,
         amountFen: payment.amountFen,
         message: "等待支付完成",
+        ...(providerMethod ? { providerMethod } : {}),
       };
     }
 
@@ -511,6 +590,7 @@ export class ZpayGeoPaymentGateway implements GeoPaymentGateway {
       tradeNo,
       paidAt,
       providerCreatedAt,
+      ...(providerMethod ? { providerMethod } : {}),
     };
   }
 
@@ -584,10 +664,15 @@ export class ZpayGeoPaymentGateway implements GeoPaymentGateway {
     if (!authorization) throw callbackError();
     const opened = this.openPaymentToken(authorization);
     const payment = opened.payment;
+    const callbackMethod = normalizeZpayPaymentMethod(params.type);
+    // A pending checkout can be deliberately switched with a server-signed
+    // form while retaining its original authorization. The provider signature
+    // authenticates the selected channel; the sealed token still binds the
+    // merchant order, owner, scope, and amount.
     if (
       params.out_trade_no !== payment.outTradeNo ||
       moneyToFen(params.money) !== payment.amountFen ||
-      normalizeZpayPaymentMethod(params.type) !== payment.method
+      callbackMethod === undefined
     ) {
       throw new GeoPaymentVerificationError(
         "支付通知与原订单不匹配",
@@ -625,7 +710,8 @@ export class ZpayGeoPaymentGateway implements GeoPaymentGateway {
     if (
       providerStatus.status !== "paid" ||
       !providerStatus.paidAt ||
-      providerStatus.tradeNo !== params.trade_no.trim()
+      providerStatus.tradeNo !== params.trade_no.trim() ||
+      providerStatus.providerMethod !== callbackMethod
     ) {
       throw new GeoPaymentVerificationError(
         "支付平台尚未返回可持久化的最终交易结果",
@@ -964,6 +1050,10 @@ export class UnconfiguredGeoPaymentGateway implements GeoPaymentGateway {
   }
 
   async createServiceCheckout(): Promise<GeoPaymentCheckout> {
+    throw this.error();
+  }
+
+  async switchCheckoutMethod(): Promise<GeoPaymentCheckout> {
     throw this.error();
   }
 

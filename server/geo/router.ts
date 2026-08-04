@@ -161,6 +161,7 @@ import {
   ServicePaymentAuthorizationSchema,
   ServiceStatusRequestSchema,
   StartMonitoringRequestSchema,
+  SwitchPaymentRequestSchema,
   UploadInitRequestSchema,
   type CreateProjectRequest,
   type GeoQuestion,
@@ -404,6 +405,13 @@ type ServiceOrderLock = {
   checkoutPromise?: Promise<GeoPaymentCheckout>;
 };
 
+type MonitoringPaymentSwitchFlight = {
+  authorizationDigest: string;
+  method: GeoPaymentMethod;
+  expiresAt: number;
+  promise: Promise<GeoPaymentCheckout>;
+};
+
 type ProjectOrderProtection = {
   expiresAt: number;
   monitoring?: {
@@ -549,6 +557,13 @@ export function createGeoRouter(options: GeoRouterOptions = {}): Router {
   const identityRates = new Map<string, RateWindow>();
   const serviceOrderLocks = new Map<string, ServiceOrderLock>();
   const monitoringOrderLocks = new Map<string, ServiceOrderLock>();
+  // The production release contract currently permits one Website Node
+  // runtime. Replace this process-local flight with a registry-backed CAS
+  // before scaling the payment-switch endpoint across multiple replicas.
+  const monitoringPaymentSwitches = new Map<
+    string,
+    MonitoringPaymentSwitchFlight
+  >();
   // Payment checkout does not currently rotate the project capability token.
   // This registry prevents stale-token deletion within one router lifetime;
   // durable cross-restart enforcement still requires the payment ledger to
@@ -3560,6 +3575,189 @@ export function createGeoRouter(options: GeoRouterOptions = {}): Router {
         );
       }
       res.json({ payment });
+    }),
+  );
+
+  router.post(
+    "/projects/:projectToken/payments/switch",
+    requireConfiguration,
+    requireSession,
+    requireCostRate("payment-switch", 10),
+    asyncHandler(async (req, res) => {
+      const value = openOwnedProject(req, res);
+      const input = SwitchPaymentRequestSchema.parse(req.body);
+      if (value.monitorRunId) {
+        throw new GeoHttpError(
+          "该项目的监控任务已经创建，无需更换支付方式",
+          409,
+          "MONITOR_ALREADY_CREATED",
+        );
+      }
+      await resolveMonitorQuestion(value, input.questionId);
+      await assertMonitorProviderReady();
+
+      const platformIds = input.platformIds as GeoMonitorPlatformId[];
+      const expectedAmountFen = platformIds.length * 200;
+      const authorizationDigest = sha256(input.authorization);
+      const projectOrders = await readProjectOrders(value.projectId);
+      const currentOrder = projectOrders.orders.find(
+        (order) =>
+          order.purchaseType === "monitoring" &&
+          safeSecretEqual(order.authorizationDigest, authorizationDigest),
+      );
+      if (!currentOrder) {
+        throw new GeoHttpError(
+          "未找到可更换支付方式的监控订单，请刷新后重试",
+          409,
+          "PAYMENT_CHECKOUT_NOT_FOUND",
+        );
+      }
+      if (currentOrder.state !== "pending") {
+        throw new GeoHttpError(
+          "当前订单已经进入付款或处理流程，不能再更换支付方式",
+          409,
+          "PAYMENT_ALREADY_CONFIRMED",
+        );
+      }
+      if (currentOrder.amountFen !== expectedAmountFen) {
+        throw new GeoHttpError(
+          "支付订单与本次监控范围不匹配",
+          409,
+          "PAYMENT_SCOPE_MISMATCH",
+        );
+      }
+
+      const ownerSessionId = String(res.locals.geoSessionId || "");
+      const switchInput = {
+        authorization: input.authorization,
+        ownerSessionId,
+        projectId: value.projectId,
+        questionId: input.questionId,
+        platformIds,
+        expectedAmountFen,
+        method: input.method,
+        checkoutExpiresAt: currentOrder.checkoutExpiresAt,
+      };
+      const statusInput = {
+        authorization: input.authorization,
+        ownerSessionId,
+        projectId: value.projectId,
+        questionId: input.questionId,
+        platformIds,
+        expectedAmountFen,
+      };
+      const lockKey = JSON.stringify({
+        ownerSessionId,
+        projectId: value.projectId,
+        questionId: input.questionId,
+        platformIds: [...platformIds].sort(),
+      });
+      const switchStartedAt = Date.now();
+      pruneExpiringMap(monitoringPaymentSwitches, switchStartedAt, 20_000);
+      const activeSwitch = monitoringPaymentSwitches.get(lockKey);
+      let checkout: GeoPaymentCheckout;
+      if (activeSwitch) {
+        if (
+          !safeSecretEqual(
+            activeSwitch.authorizationDigest,
+            authorizationDigest,
+          ) ||
+          activeSwitch.method !== input.method
+        ) {
+          throw new GeoHttpError(
+            "当前支付方式正在切换，请等待完成后重试",
+            409,
+            "PAYMENT_SWITCH_IN_PROGRESS",
+          );
+        }
+        checkout = await activeSwitch.promise;
+      } else {
+        const promise = (async () => {
+          try {
+            return await paymentGateway.switchCheckoutMethod(switchInput);
+          } catch (error) {
+            if (
+              error instanceof GeoPaymentVerificationError &&
+              error.code === "PAYMENT_ALREADY_CONFIRMED"
+            ) {
+              const payment = await paymentGateway.getStatus(statusInput);
+              if (
+                (payment.status === "paid" ||
+                  payment.status === "review_required") &&
+                payment.orderId === currentOrder.orderId &&
+                payment.amountFen === currentOrder.amountFen
+              ) {
+                await transitionProjectOrder(
+                  value.projectId,
+                  currentOrder.orderId,
+                  payment.status,
+                  { paidAt: payment.paidAt },
+                );
+              }
+            }
+            throw error;
+          }
+        })();
+        const switchFlight: MonitoringPaymentSwitchFlight = {
+          authorizationDigest,
+          method: input.method,
+          expiresAt: switchStartedAt + PROJECT_TTL_MS,
+          promise,
+        };
+        monitoringPaymentSwitches.set(lockKey, switchFlight);
+        try {
+          checkout = await promise;
+        } finally {
+          if (monitoringPaymentSwitches.get(lockKey) === switchFlight) {
+            monitoringPaymentSwitches.delete(lockKey);
+          }
+        }
+      }
+      if (
+        !safeSecretEqual(checkout.authorization, input.authorization) ||
+        checkout.orderId !== currentOrder.orderId ||
+        checkout.amountFen !== currentOrder.amountFen ||
+        checkout.expiresAt !== currentOrder.checkoutExpiresAt ||
+        checkout.fields.type !== input.method ||
+        checkout.fields.param !== input.authorization ||
+        checkout.fields.out_trade_no !== currentOrder.orderId
+      ) {
+        throw new GeoHttpError(
+          "支付服务返回了不一致的切换结果，已阻止打开收银台",
+          502,
+          "PAYMENT_SWITCH_INVALID",
+        );
+      }
+
+      const now = Date.now();
+      pruneExpiringMap(monitoringOrderLocks, now, 20_000);
+      const lock = monitoringOrderLocks.get(lockKey);
+      if (
+        lock?.checkout &&
+        !safeSecretEqual(lock.checkout.authorization, input.authorization)
+      ) {
+        throw new GeoHttpError(
+          "当前收银台已被另一项操作更新，请刷新后重试",
+          409,
+          "PAYMENT_CHECKOUT_REPLACED",
+        );
+      }
+      monitoringOrderLocks.set(lockKey, {
+        ...lock,
+        method: input.method,
+        expiresAt: now + PROJECT_TTL_MS,
+        checkout,
+        checkoutCommitted: true,
+        checkoutPromise: undefined,
+      });
+      trackProjectOrder(value, { monitoring: {} });
+      res.status(200).json({
+        payment: {
+          ...checkout,
+          unitPriceFen: 200,
+          answersPerPlatform: 5,
+        },
+      });
     }),
   );
 

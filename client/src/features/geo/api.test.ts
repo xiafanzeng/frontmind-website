@@ -22,6 +22,7 @@ import {
   startGeoOptimizationForecast,
   startGeoService,
   submitGeoServiceContractProfile,
+  switchGeoPaymentCheckout,
   uploadGeoFile,
   verifyGeoInvitation,
 } from "./api";
@@ -1626,6 +1627,21 @@ describe("monitoring and assessment API", () => {
         new Response(
           JSON.stringify({
             payment: {
+              ...checkoutPayload.payment,
+              fields: {
+                ...checkoutPayload.payment.fields,
+                type: "wxpay",
+                sign: "switched-signature",
+              },
+            },
+          }),
+          { headers: { "content-type": "application/json" } },
+        ),
+      )
+      .mockResolvedValueOnce(
+        new Response(
+          JSON.stringify({
+            payment: {
               status: "paid",
               orderId: checkoutPayload.payment.orderId,
               amountFen: 400,
@@ -1652,6 +1668,28 @@ describe("monitoring and assessment API", () => {
       questionId: "reputation-01",
       platformIds: ["doubao", "kimi"],
       method: "alipay",
+    });
+
+    await expect(
+      switchGeoPaymentCheckout(project, {
+        questionId: "reputation-01",
+        platformIds: ["doubao", "kimi"],
+        authorization: checkout.authorization,
+        method: "wxpay",
+      }),
+    ).resolves.toMatchObject({
+      authorization: checkout.authorization,
+      orderId: checkout.orderId,
+      fields: { type: "wxpay" },
+    });
+    expect(fetchMock.mock.calls[1][0]).toBe(
+      "/api/geo/projects/signed-project-token/payments/switch",
+    );
+    expect(JSON.parse(String(fetchMock.mock.calls[1][1]?.body))).toEqual({
+      questionId: "reputation-01",
+      platformIds: ["doubao", "kimi"],
+      authorization: checkout.authorization,
+      method: "wxpay",
     });
 
     await expect(
