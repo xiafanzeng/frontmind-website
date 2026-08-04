@@ -5,7 +5,6 @@ import JSZip from "jszip";
 import sharp from "sharp";
 import { describe, expect, it } from "vitest";
 import {
-  customerFacingNarrativeViolation,
   extractKnowledgeBaseAssetPreviews,
   parseKnowledgeBaseArchive,
 } from "./archive";
@@ -1551,11 +1550,6 @@ describe("knowledge-base ZIP manifest", () => {
       /evidence-bearing document.*has no source IDs/i,
     ],
     [
-      "a raw page-excerpt statement used as formal copy",
-      { rawSnapshotLeafIndex: 0 },
-      /raw snapshot or page excerpt/i,
-    ],
-    [
       "a repeated template paragraph used across formal leaves",
       { repeatedTemplateParagraph: true },
       /formal template paragraph/i,
@@ -1568,20 +1562,6 @@ describe("knowledge-base ZIP manifest", () => {
         validationProfile: "website-lead-v1",
       }),
     ).rejects.toThrow(expectedError);
-  });
-
-  it.each([
-    [
-      "其余荣誉图片因本轮没有形成可逐项核验的证书名称与有效期，不在正文中扩写。采购或合规审查仍应向企业索取证书编号，不能仅凭网页图标替代正式查验。",
-      "任务或采集过程",
-    ],
-    [
-      "这些内容属于企业自我定义，适合说明组织意图与品牌取向，不宜直接转换为已经量化达成的社会影响。对客户而言，可将其落实为开放模型生态。",
-      "客户或采购建议",
-    ],
-    ["补充说明：这是第 3 个内容节点的本轮整理结果。", "过程性或批量填充表达"],
-  ] as const)("detects customer-facing semantic leakage", (text, label) => {
-    expect(customerFacingNarrativeViolation(text)).toBe(label);
   });
 
   it("accepts an honest sparse company with eight leaves and no useful images", async () => {
@@ -1608,12 +1588,6 @@ describe("knowledge-base ZIP manifest", () => {
   });
 
   it("allows neutral negative facts and internal verification gaps", async () => {
-    expect(
-      customerFacingNarrativeViolation(
-        "2025 年毛利率为 -24.0%，公司当期仍处于亏损状态。",
-      ),
-    ).toBeUndefined();
-
     const zip = await JSZip.loadAsync(await buildWebsiteLeadBudgetFixture());
     const completenessPath = "Bounded_knowledge_base/00_completeness.json";
     const completeness = JSON.parse(
@@ -1641,20 +1615,23 @@ describe("knowledge-base ZIP manifest", () => {
     });
   });
 
-  it("rejects customer-facing audit language", async () => {
+  it("does not reject customer-facing prose based on semantic style", async () => {
     const archive = await buildWebsiteLeadBudgetFixture({
       schemaVersion: 2,
       imageCount: 1,
-      customerLeakageLeafIndex: 0,
+      rawSnapshotLeafIndex: 0,
+      customerLeakageLeafIndex: 1,
       v2EvidenceCharactersPerBranch: 120,
       v2OverviewNarrativeCharacters: 140,
     });
     await expect(
       parseKnowledgeBaseArchive(archive, {
-        companyName: "LeakyContentCo",
+        companyName: "SemanticStyleCo",
         validationProfile: "website-lead-v1",
       }),
-    ).rejects.toThrow(/customer-facing audit language or internal reasoning/i);
+    ).resolves.toMatchObject({
+      completeness: { counts: { totalLeaves: 40 } },
+    });
   });
 
   it.each([

@@ -629,6 +629,35 @@ describe("website knowledge-base finalizer", () => {
     );
   });
 
+  it("preserves supported customer prose without a semantic style filter", async () => {
+    const parsed = await parseKnowledgeBaseCandidate(await candidateZip());
+    const semanticProse =
+      "第一方页面摘录显示该服务可用，采购方应先核验供应商资质。";
+    parsed.customerSections.set(
+      "企业与品牌",
+      `${semanticProse}[来源](https://example.com/about)`,
+    );
+
+    const finalized = await finalizeKnowledgeBaseCandidate({
+      candidate: parsed,
+      companyName: "示例企业",
+      evaluatedAt: "2026-07-30T01:00:00.000Z",
+    });
+    const zip = await JSZip.loadAsync(finalized.bytes);
+    const packageManifest = JSON.parse(
+      await zip.file("00_package_manifest.json")!.async("string"),
+    ) as { documents: Array<{ path: string; customerVisible: boolean }> };
+    const customerText = (
+      await Promise.all(
+        packageManifest.documents
+          .filter((document) => document.customerVisible)
+          .map((document) => zip.file(document.path)!.async("string")),
+      )
+    ).join("\n");
+
+    expect(customerText).toContain(semanticProse);
+  });
+
   it("normalizes and packages one traceable first-party logo", async () => {
     const pixels = Buffer.alloc(900 * 500 * 3);
     for (let index = 0; index < pixels.length; index += 1) {

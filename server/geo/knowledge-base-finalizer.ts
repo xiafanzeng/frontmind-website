@@ -3,7 +3,6 @@ import path from "node:path";
 import JSZip from "jszip";
 import sharp from "sharp";
 import {
-  customerFacingNarrativeViolation,
   KnowledgeBaseCompletenessInputSchema,
   parseKnowledgeBaseArchive,
   WebsiteLeadPackageManifestV3InputSchema,
@@ -425,11 +424,7 @@ function removeEvidenceMarkers(value: string) {
 
 function sanitizeSupportedNarrative(value: string) {
   const hasClaim = /\[企业主张]\(/.test(value);
-  const retained = value
-    .split(/\n\s*\n/)
-    .filter((paragraph) => !customerFacingNarrativeViolation(paragraph))
-    .join("\n\n");
-  let narrative = removeEvidenceMarkers(retained);
+  let narrative = removeEvidenceMarkers(value);
   if (
     hasClaim &&
     narrative &&
@@ -441,16 +436,7 @@ function sanitizeSupportedNarrative(value: string) {
 }
 
 function gapNarrative(value: string, title: string) {
-  const retained = removeEvidenceMarkers(value)
-    .split(/\n\s*\n/)
-    .filter(
-      (paragraph) =>
-        paragraph &&
-        !customerFacingNarrativeViolation(paragraph) &&
-        !/\[(?:来源|企业主张|权威来源|第三方来源)]\(/.test(paragraph),
-    )
-    .join("\n\n")
-    .trim();
+  const retained = removeEvidenceMarkers(value).trim();
   if (
     retained &&
     /(?:暂无|尚未|未发现|未提供|待核验|不适用)/.test(retained)
