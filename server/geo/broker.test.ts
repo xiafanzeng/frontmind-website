@@ -32,8 +32,7 @@ describe("HttpGeoPresalesBroker", () => {
       filename: "archive.zip",
       mimeType: "application/zip",
       sizeBytes: 10,
-      idempotencyKey:
-        "geo-custom-question-file:stable-operation:archive:0:v1",
+      idempotencyKey: "geo-custom-question-file:stable-operation:archive:0:v1",
     });
 
     const [url, init] = fetchMock.mock.calls[0];
@@ -44,12 +43,11 @@ describe("HttpGeoPresalesBroker", () => {
       filename: "archive.zip",
       mimeType: "application/zip",
       sizeBytes: 10,
-      idempotencyKey:
-        "geo-custom-question-file:stable-operation:archive:0:v1",
+      idempotencyKey: "geo-custom-question-file:stable-operation:archive:0:v1",
     });
   });
 
-  it("defaults to Base and sends the private service token", async () => {
+  it("defaults to Base, sends the private service token, and rejects redirects", async () => {
     const fetchMock = vi.fn(
       async (_url: string | URL | Request, init?: RequestInit) => {
         return new Response(
@@ -80,6 +78,7 @@ describe("HttpGeoPresalesBroker", () => {
     expect(new Headers(init?.headers).get("x-frontmind-service-token")).toBe(
       "private-token",
     );
+    expect(init?.redirect).toBe("error");
     expect(JSON.parse(String(init?.body))).toMatchObject({
       agentProfile: FRONTMIND_BASE_PROFILE,
       taskMode: "agent",

@@ -148,6 +148,52 @@ describe("GEO execution log", () => {
     });
   });
 
+  it("separates upstream completion from failed server validation", () => {
+    const completedTask: BrokerTask = {
+      status: "completed",
+      completed_at: "2026-08-04T02:03:00.000Z",
+      output: [
+        {
+          type: "message",
+          role: "assistant",
+          content: [
+            {
+              type: "output_text",
+              text: "以下结果已通过格式验证。",
+            },
+          ],
+        },
+      ],
+    };
+
+    const log = buildGeoExecutionLog({
+      knowledgeBaseTask: { status: "completed", output: [] },
+      assessmentTask: completedTask,
+      validated: {
+        assessmentReady: false,
+        assessmentFailureCode: "OUTPUT_FILE_UNAVAILABLE",
+      },
+      now: new Date("2026-08-04T02:03:10.000Z"),
+    });
+    const assessment = log.entries.find(
+      (entry) => entry.id === "current-assessment",
+    );
+
+    expect(assessment?.status).toBe("failed");
+    expect(assessment?.events).toContainEqual({
+      id: "current-assessment-status-completed",
+      kind: "status",
+      message: "现状评估与知识核查上游任务已完成。",
+      createdAt: "2026-08-04T02:03:00.000Z",
+    });
+    expect(assessment?.events).toContainEqual({
+      id: "current-assessment-validation-failed",
+      kind: "error",
+      message: "服务端结果校验未通过（支持码：OUTPUT_FILE_UNAVAILABLE）。",
+      createdAt: "2026-08-04T02:03:00.000Z",
+    });
+  });
+
   it("exposes monitoring counters and the real next poll time", () => {
     const monitorRun: BrokerMonitorRun = {
       runId: "monitor-private-id",

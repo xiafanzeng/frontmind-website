@@ -6,11 +6,13 @@ import {
 } from "./assessment";
 import {
   FORECAST_SKILL_ARCHIVE_FILENAME,
+  ForecastTaskOutputValidationError,
   ForecastRawTaskOutputSchema,
   buildGeoOptimizationOutcomeForecasterSkillArchive,
   buildOptimizationOutcomeForecastPrompt,
   calculateOptimizationOutcomeForecast,
   parseOptimizationOutcomeForecastTaskOutput,
+  resolveOptimizationOutcomeForecastTaskOutput,
   type ForecastIndicator,
   type ForecastRawTaskOutput,
 } from "./forecast";
@@ -500,6 +502,73 @@ describe("GEO optimization forecast schema and parser", () => {
     expect(parsed.roadmap.map((phase) => phase.phase)).toEqual([1, 2, 3, 4]);
   });
 
+  it("resolves a URL-backed trusted JSON output_file", async () => {
+    const raw = rawForecast();
+    const downloads: Array<{
+      taskId: string;
+      url: string;
+      filename?: string;
+    }> = [];
+    const parsed = await resolveOptimizationOutcomeForecastTaskOutput(
+      {
+        async downloadFile() {
+          throw new Error("file endpoint should not be used");
+        },
+        async downloadTaskOutput(taskId, url, filename) {
+          downloads.push({ taskId, url, filename });
+          return new Response(JSON.stringify(raw));
+        },
+      },
+      {
+        output: [
+          { type: "output_text", text: "预测已完成，结果见附件。" },
+          {
+            type: "output_file",
+            file_url: "https://agent.example.test/result/forecast",
+            filename: "forecast.json",
+          },
+        ],
+      },
+      { taskId: "forecast-task" },
+    );
+
+    expect(parsed.forecastType).toBe("conditional_4_week");
+    expect(downloads).toEqual([
+      {
+        taskId: "forecast-task",
+        url: "https://agent.example.test/result/forecast",
+        filename: "forecast.json",
+      },
+    ]);
+  });
+
+  it("returns a safe forecast error code for invalid downloaded JSON", async () => {
+    const promise = resolveOptimizationOutcomeForecastTaskOutput(
+      {
+        async downloadFile() {
+          return new Response(Buffer.from([0xff, 0xfe, 0xfd]));
+        },
+        async downloadTaskOutput() {
+          throw new Error("URL fallback should not be used");
+        },
+      },
+      {
+        output: [
+          {
+            type: "output_file",
+            file_id: "invalid-utf8",
+            filename: "forecast.json",
+          },
+        ],
+      },
+    );
+
+    await expect(promise).rejects.toBeInstanceOf(
+      ForecastTaskOutputValidationError,
+    );
+    await expect(promise).rejects.toMatchObject({ code: "INVALID_JSON" });
+  });
+
   it("accepts typed task.output text but ignores user, metadata, and reasoning payloads", () => {
     const raw = rawForecast();
     const injected = {
@@ -921,6 +990,8 @@ describe("forecast Base prompt and audited skill loader", () => {
       '"executionScenarioAttachment": "FrontMind-full-execution-scenario.json"',
     );
     expect(prompt).toContain(FORECAST_SKILL_ARCHIVE_FILENAME);
+    expect(prompt).toContain("assistant output_text");
+    expect(prompt).toContain("禁止创建、上传或附加结果 JSON 文件");
     expect(prompt).not.toContain("# FILE:");
     expect(Buffer.byteLength(prompt, "utf8")).toBeLessThan(4 * 1024);
 
@@ -933,6 +1004,9 @@ describe("forecast Base prompt and audited skill loader", () => {
       "references/output-schema.json",
       "references/source-manifest.json",
     ]);
+    const skillText = await zip.file("SKILL.md")!.async("string");
+    expect(skillText).toContain("final assistant `output_text`");
+    expect(skillText).toContain("Do not create, upload, attach, link");
     const outputSchema = JSON.parse(
       await zip.file("references/output-schema.json")!.async("string"),
     );

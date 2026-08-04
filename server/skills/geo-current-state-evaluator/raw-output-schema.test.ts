@@ -285,6 +285,13 @@ describe("geo-current-state-evaluator model output contract", () => {
       expected: false,
     },
     {
+      name: "measured v2 indicator with zero confidence",
+      output: changedOutput(canonicalIneligibleOutput, (output) => {
+        output.dimensions.semanticVisibility.webSearchSov.confidence = 0;
+      }),
+      expected: false,
+    },
+    {
       name: "canonical eligible output",
       output: eligibleOutput,
       expected: true,
@@ -451,15 +458,38 @@ describe("geo-current-state-evaluator model output contract", () => {
     expect(production.errors).toContain("exactly once");
   });
 
-  it("packages the same parseable Draft 2020-12 schema in the evaluator Skill", async () => {
+  it("packages the same parseable Draft 2020-12 schema and inline output contract", async () => {
     const archive = await buildGeoCurrentStateEvaluatorSkillArchive();
     const zip = await JSZip.loadAsync(archive);
+    const skillText = await zip.file("SKILL.md")?.async("string");
     const schemaText = await zip
       .file("references/raw-output-schema.json")
       ?.async("string");
 
+    expect(skillText).toBeDefined();
+    expect(skillText).toContain("final assistant `output_text`");
+    expect(skillText).toContain("first non-whitespace character `{`");
+    expect(skillText).toContain(
+      "Do not create, upload, attach, or link a result file",
+    );
+    expect(skillText).toContain("server is the final validation authority");
     expect(schemaText).toBeDefined();
     const packagedSchema = JSON.parse(schemaText ?? "") as AnySchema;
+    expect(
+      (
+        packagedSchema as {
+          $defs: {
+            indicator: {
+              properties: { confidence: Record<string, unknown> };
+            };
+          };
+        }
+      ).$defs.indicator.properties.confidence,
+    ).toEqual({
+      type: "number",
+      exclusiveMinimum: 0,
+      maximum: 1,
+    });
     const validatePackaged = compileSchema(packagedSchema);
     const output = canonicalIneligibleOutput();
     expect(validatePackaged(output), validationErrors(validatePackaged)).toBe(

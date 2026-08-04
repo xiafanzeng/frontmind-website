@@ -422,6 +422,9 @@ export class HttpGeoPresalesBroker implements GeoPresalesBroker {
     try {
       response = await this.fetchImpl(`${this.baseUrl}${pathname}`, {
         ...init,
+        // Never forward the high-privilege service token across a redirect.
+        // Dashboard output URLs are redeemed by its own guarded endpoint.
+        redirect: "error",
         headers: {
           Accept: "application/json, application/octet-stream;q=0.9, */*;q=0.8",
           "x-frontmind-service-token": this.serviceToken,

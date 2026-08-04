@@ -627,6 +627,49 @@ describe("normalizeGeoProject", () => {
     },
   );
 
+  it("preserves the allowlisted assessment validation support code", () => {
+    const project = normalizeGeoProject({
+      project: {
+        id: "project-invalid-assessment-output",
+        assessment: {
+          status: "failed",
+          error: "现状评估结果文件暂时无法读取",
+          failureCode: "OUTPUT_FILE_UNAVAILABLE",
+          dimensions: {},
+          comparisons: [],
+        },
+      },
+    });
+
+    expect(project.assessment).toMatchObject({
+      status: "failed",
+      error: "现状评估结果文件暂时无法读取",
+      failureCode: "OUTPUT_FILE_UNAVAILABLE",
+    });
+  });
+
+  it("preserves the allowlisted forecast validation support code", () => {
+    const project = normalizeGeoProject({
+      project: {
+        id: "project-invalid-forecast-output",
+        optimizationForecast: {
+          status: "failed",
+          error: "优化效果评估结果文件暂时无法读取",
+          failure_code: "OUTPUT_FILE_UNAVAILABLE",
+          dimensions: [],
+          assumptions: [],
+          roadmap: [],
+        },
+      },
+    });
+
+    expect(project.optimizationForecast).toMatchObject({
+      status: "failed",
+      error: "优化效果评估结果文件暂时无法读取",
+      failureCode: "OUTPUT_FILE_UNAVAILABLE",
+    });
+  });
+
   it("normalizes the safe execution log snapshot", () => {
     const project = normalizeGeoProject({
       projectToken: "signed-token",

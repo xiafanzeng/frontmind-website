@@ -27,7 +27,7 @@ import {
   buildAssessmentPrompt,
   calculateQuestionBaselineAssessment,
   determineBsasGrade,
-  parseAssessmentTaskOutput,
+  resolveAssessmentTaskOutput,
 } from "./assessment";
 import {
   buildGeoOptimizationOutcomeForecasterSkillArchive,
@@ -35,7 +35,8 @@ import {
   calculateOptimizationOutcomeForecast,
   FORECAST_SKILL_ARCHIVE_FILENAME,
   FORECAST_HORIZON_WEEKS,
-  parseOptimizationOutcomeForecastTaskOutput,
+  ForecastTaskOutputValidationError,
+  resolveOptimizationOutcomeForecastTaskOutput,
 } from "./forecast";
 import { buildGeoExecutionLog } from "./execution";
 import {
@@ -103,7 +104,10 @@ import {
   type GeoCustomQuestionValidationRecord,
   type GeoCustomQuestionValidationStore,
 } from "./custom-question-validation-store";
-import { trustedAssistantOutputTexts } from "./trusted-task-output";
+import {
+  trustedAssistantOutputFiles,
+  trustedAssistantOutputTexts,
+} from "./trusted-task-output";
 import {
   buildGeoCustomQuestionClassifierPrompt,
   buildGeoQuestionPrompt,
@@ -1506,16 +1510,30 @@ export function createGeoRouter(options: GeoRouterOptions = {}): Router {
         "SERVICE_ASSESSMENT_NOT_READY",
       );
     }
+    let preResolvedOutputs: {
+      assessment: ReturnType<typeof resolveAssessmentTaskOutput>;
+      forecast: ReturnType<typeof resolveOptimizationOutcomeForecastTaskOutput>;
+    };
     try {
-      validateServiceAssessmentOutputs(
+      const validatedOutputs = await validateServiceAssessmentOutputs(
+        broker,
         resolved.question,
         assessmentTask,
         forecastTask,
         monitorRun.platforms,
         monitorRun,
       );
+      preResolvedOutputs = {
+        assessment: Promise.resolve(validatedOutputs.assessmentOutput),
+        forecast: Promise.resolve(validatedOutputs.forecastOutput),
+      };
     } catch (error) {
-      logAssessmentOutputValidation(error);
+      logAssessmentOutputValidation(
+        error,
+        error instanceof ForecastTaskOutputValidationError
+          ? forecastTask
+          : assessmentTask,
+      );
       throw new GeoHttpError(
         "现状评估或优化效果评估结果暂未通过校验，系统未采用不完整结果",
         409,
@@ -1527,6 +1545,7 @@ export function createGeoRouter(options: GeoRouterOptions = {}): Router {
       assessmentTask,
       forecastTask,
       monitorRun,
+      preResolvedOutputs,
       category: category as GeoServiceCategory,
       amountFen: GEO_SERVICE_MONTHLY_PRICE_FEN[category],
     };
@@ -2655,6 +2674,12 @@ export function createGeoRouter(options: GeoRouterOptions = {}): Router {
       currentValue = await syncServiceOrder(currentValue);
       let currentAssessmentTask = initialAssessmentTask;
       let currentOptimizationForecastTask = initialOptimizationForecastTask;
+      let currentAssessmentOutputPromise:
+        | ReturnType<typeof resolveAssessmentTaskOutput>
+        | undefined;
+      let currentForecastOutputPromise:
+        | ReturnType<typeof resolveOptimizationOutcomeForecastTaskOutput>
+        | undefined;
       const question =
         initialQuestionTask && currentValue.monitorQuestionId
           ? findOwnedQuestion(
@@ -2738,13 +2763,15 @@ export function createGeoRouter(options: GeoRouterOptions = {}): Router {
           normalizeTaskStatus(currentAssessmentTask.status) === "completed"
         ) {
           try {
+            currentAssessmentOutputPromise ??= parseScopedAssessmentTaskOutput(
+              broker,
+              currentAssessmentTask,
+              question,
+              rawMonitorRun.platforms,
+              rawMonitorRun,
+            );
             scoredAssessment = calculateQuestionBaselineAssessment(
-              parseScopedAssessmentTaskOutput(
-                currentAssessmentTask,
-                question,
-                rawMonitorRun.platforms,
-                rawMonitorRun,
-              ),
+              await currentAssessmentOutputPromise,
             );
           } catch {
             scoredAssessment = undefined;
@@ -2791,11 +2818,17 @@ export function createGeoRouter(options: GeoRouterOptions = {}): Router {
                     ).error || "上一次优化效果评估任务执行失败";
             } else if (forecastStatus === "completed") {
               try {
+                currentForecastOutputPromise ??=
+                  resolveOptimizationOutcomeForecastTaskOutput(
+                    broker,
+                    currentOptimizationForecastTask,
+                    {
+                      taskId: taskIdFrom(currentOptimizationForecastTask),
+                    },
+                  );
                 calculateOptimizationOutcomeForecast(
                   scoredAssessment,
-                  parseOptimizationOutcomeForecastTaskOutput(
-                    currentOptimizationForecastTask,
-                  ),
+                  await currentForecastOutputPromise,
                 );
               } catch (error) {
                 forecastRetryReason =
@@ -2824,6 +2857,7 @@ export function createGeoRouter(options: GeoRouterOptions = {}): Router {
                 ),
               };
               currentOptimizationForecastTask = undefined;
+              currentForecastOutputPromise = undefined;
             }
           }
           if (!currentValue.optimizationForecastTaskId) {
@@ -2836,6 +2870,7 @@ export function createGeoRouter(options: GeoRouterOptions = {}): Router {
               );
               currentValue = created.value;
               currentOptimizationForecastTask = created.task;
+              currentForecastOutputPromise = undefined;
             } catch (error) {
               console.warn("[GEO forecast automation] Task start deferred", {
                 projectId: currentValue.projectId,
@@ -2873,6 +2908,10 @@ export function createGeoRouter(options: GeoRouterOptions = {}): Router {
         rawMonitorRun,
         currentAssessmentTask,
         currentOptimizationForecastTask,
+        {
+          assessment: currentAssessmentOutputPromise,
+          forecast: currentForecastOutputPromise,
+        },
       );
       res.json({ projectToken: currentToken, project });
     }),
@@ -3977,20 +4016,23 @@ export function createGeoRouter(options: GeoRouterOptions = {}): Router {
             ? getResolvedTask(broker, value.optimizationForecastTaskId)
             : Promise.resolve(undefined),
         ]);
+        let assessmentOutputPromise:
+          | ReturnType<typeof resolveAssessmentTaskOutput>
+          | undefined;
         const assessmentStatus = normalizeTaskStatus(assessmentTask.status);
         let manualRestart = ["failed", "cancelled"].includes(assessmentStatus);
         if (assessmentStatus === "completed") {
           try {
-            calculateQuestionBaselineAssessment(
-              parseScopedAssessmentTaskOutput(
-                assessmentTask,
-                question,
-                monitorRun.platforms,
-                monitorRun,
-              ),
+            assessmentOutputPromise = parseScopedAssessmentTaskOutput(
+              broker,
+              assessmentTask,
+              question,
+              monitorRun.platforms,
+              monitorRun,
             );
+            calculateQuestionBaselineAssessment(await assessmentOutputPromise);
           } catch (error) {
-            logAssessmentOutputValidation(error);
+            logAssessmentOutputValidation(error, assessmentTask);
             manualRestart = true;
           }
         }
@@ -4035,6 +4077,7 @@ export function createGeoRouter(options: GeoRouterOptions = {}): Router {
             monitorRun,
             assessmentTask,
             optimizationForecastTask,
+            { assessment: assessmentOutputPromise },
           );
           res.json({ projectToken: req.params.projectToken, project });
           return;
@@ -4287,20 +4330,22 @@ export function createGeoRouter(options: GeoRouterOptions = {}): Router {
       let scoredAssessment: ReturnType<
         typeof calculateQuestionBaselineAssessment
       >;
+      const assessmentOutputPromise = parseScopedAssessmentTaskOutput(
+        broker,
+        assessmentTask,
+        question,
+        monitorRun?.platforms || value.monitorPlatformIds || [],
+        monitorRun,
+      );
       try {
         scoredAssessment = calculateQuestionBaselineAssessment(
-          parseScopedAssessmentTaskOutput(
-            assessmentTask,
-            question,
-            monitorRun?.platforms || value.monitorPlatformIds || [],
-            monitorRun,
-          ),
+          await assessmentOutputPromise,
         );
         if (scoredAssessment.schemaVersion !== 2) {
           throw new Error("Optimization forecast requires assessment v2");
         }
       } catch (error) {
-        logAssessmentOutputValidation(error);
+        logAssessmentOutputValidation(error, assessmentTask);
         throw new GeoHttpError(
           publicAssessmentValidationMessage(error),
           409,
@@ -4327,6 +4372,9 @@ export function createGeoRouter(options: GeoRouterOptions = {}): Router {
         };
       }
 
+      let existingForecastOutputPromise:
+        | ReturnType<typeof resolveOptimizationOutcomeForecastTaskOutput>
+        | undefined;
       if (value.optimizationForecastTaskId) {
         const optimizationForecastTask = await getResolvedTask(
           broker,
@@ -4343,11 +4391,15 @@ export function createGeoRouter(options: GeoRouterOptions = {}): Router {
                   .error || "上一次优化效果评估任务执行失败";
         } else if (forecastStatus === "completed") {
           try {
+            existingForecastOutputPromise =
+              resolveOptimizationOutcomeForecastTaskOutput(
+                broker,
+                optimizationForecastTask,
+                { taskId: taskIdFrom(optimizationForecastTask) },
+              );
             calculateOptimizationOutcomeForecast(
               scoredAssessment,
-              parseOptimizationOutcomeForecastTaskOutput(
-                optimizationForecastTask,
-              ),
+              await existingForecastOutputPromise,
             );
           } catch (error) {
             forecastRetryReason =
@@ -4388,6 +4440,10 @@ export function createGeoRouter(options: GeoRouterOptions = {}): Router {
             monitorRun,
             assessmentTask,
             optimizationForecastTask,
+            {
+              assessment: assessmentOutputPromise,
+              forecast: existingForecastOutputPromise,
+            },
           );
           res.json({ projectToken: req.params.projectToken, project });
           return;
@@ -4573,6 +4629,7 @@ export function createGeoRouter(options: GeoRouterOptions = {}): Router {
         monitorRun,
         assessmentTask,
         forecastTask,
+        { assessment: assessmentOutputPromise },
       );
       res.status(201).json({ projectToken, project });
     }),
@@ -4757,6 +4814,7 @@ export function createGeoRouter(options: GeoRouterOptions = {}): Router {
         monitorRun,
         scope.assessmentTask,
         scope.forecastTask,
+        scope.preResolvedOutputs,
       );
       res
         .status(value.serviceManualOrderReference ? 200 : 201)
@@ -4807,6 +4865,7 @@ export function createGeoRouter(options: GeoRouterOptions = {}): Router {
         monitorRun,
         scope.assessmentTask,
         scope.forecastTask,
+        scope.preResolvedOutputs,
       );
       res.json({ projectToken, project });
     }),
@@ -4966,6 +5025,7 @@ export function createGeoRouter(options: GeoRouterOptions = {}): Router {
           monitorRun,
           scope.assessmentTask,
           scope.forecastTask,
+          scope.preResolvedOutputs,
         );
         res.json({ projectToken: req.params.projectToken, project });
         return;
@@ -5086,6 +5146,7 @@ export function createGeoRouter(options: GeoRouterOptions = {}): Router {
         monitorRun,
         scope.assessmentTask,
         scope.forecastTask,
+        scope.preResolvedOutputs,
       );
       res.status(201).json({ projectToken, project });
     }),
@@ -5190,6 +5251,7 @@ export function createGeoRouter(options: GeoRouterOptions = {}): Router {
           monitorRun,
           scope.assessmentTask,
           scope.forecastTask,
+          scope.preResolvedOutputs,
         );
         res.status(firstSubmission ? 201 : 200).json({ projectToken, project });
         return;
@@ -5289,6 +5351,7 @@ export function createGeoRouter(options: GeoRouterOptions = {}): Router {
           monitorRun,
           scope.assessmentTask,
           scope.forecastTask,
+          scope.preResolvedOutputs,
         );
         res
           .status(
@@ -5333,6 +5396,7 @@ export function createGeoRouter(options: GeoRouterOptions = {}): Router {
           monitorRun,
           scope.assessmentTask,
           scope.forecastTask,
+          scope.preResolvedOutputs,
         );
         res.json({ projectToken: req.params.projectToken, project });
         return;
@@ -5405,6 +5469,7 @@ export function createGeoRouter(options: GeoRouterOptions = {}): Router {
         monitorRun,
         scope.assessmentTask,
         scope.forecastTask,
+        scope.preResolvedOutputs,
       );
       res.status(201).json({ projectToken, project });
     }),
@@ -5467,6 +5532,7 @@ export function createGeoRouter(options: GeoRouterOptions = {}): Router {
         monitorRun,
         scope.assessmentTask,
         scope.forecastTask,
+        scope.preResolvedOutputs,
       );
       res.json({ projectToken, project });
     }),
@@ -5787,46 +5853,58 @@ function findOwnedQuestion(
   );
 }
 
-function validateServiceAssessmentOutputs(
+async function validateServiceAssessmentOutputs(
+  broker: GeoPresalesBroker,
   question: GeoQuestion,
   assessmentTask: BrokerTask,
   forecastTask: BrokerTask,
   platforms: GeoMonitorPlatformId[],
   monitorRun?: BrokerMonitorRun,
 ) {
-  const assessmentOutput = parseScopedAssessmentTaskOutput(
+  const assessmentOutput = await parseScopedAssessmentTaskOutput(
+    broker,
     assessmentTask,
     question,
     platforms,
     monitorRun,
   );
   const assessment = calculateQuestionBaselineAssessment(assessmentOutput);
-  calculateOptimizationOutcomeForecast(
-    assessment,
-    parseOptimizationOutcomeForecastTaskOutput(forecastTask),
+  const forecastOutput = await resolveOptimizationOutcomeForecastTaskOutput(
+    broker,
+    forecastTask,
+    {
+      taskId: taskIdFrom(forecastTask),
+    },
   );
+  calculateOptimizationOutcomeForecast(assessment, forecastOutput);
+  return { assessmentOutput, forecastOutput };
 }
 
-function parseScopedAssessmentTaskOutput(
+async function parseScopedAssessmentTaskOutput(
+  broker: GeoPresalesBroker,
   task: BrokerTask,
   question: GeoQuestion,
   platforms: GeoMonitorPlatformId[],
   monitorRun?: BrokerMonitorRun,
 ) {
-  const scoped = assertAssessmentOutputScope(parseAssessmentTaskOutput(task), {
-    question: {
-      id: question.id,
-      text: question.question,
-      category: question.category,
-      rankingMetricEligible: question.category !== "reputation",
-    },
-    platforms,
-    ...(monitorRun
-      ? {
-          successfulResponses: monitorRun.completedItems,
-          failedResponses: monitorRun.failedItems,
-        }
-      : {}),
+  const scoped = await resolveAssessmentTaskOutput(broker, task, {
+    taskId: taskIdFrom(task),
+    validate: (output) =>
+      assertAssessmentOutputScope(output, {
+        question: {
+          id: question.id,
+          text: question.question,
+          category: question.category,
+          rankingMetricEligible: question.category !== "reputation",
+        },
+        platforms,
+        ...(monitorRun
+          ? {
+              successfulResponses: monitorRun.completedItems,
+              failedResponses: monitorRun.failedItems,
+            }
+          : {}),
+      }),
   });
   if (!monitorRun) return scoped;
 
@@ -5852,24 +5930,85 @@ function parseScopedAssessmentTaskOutput(
   };
 }
 
-function publicAssessmentValidationMessage(_error: unknown) {
-  return "现状评估结果暂未生成，请点击“重新评估”再试";
+function publicAssessmentFailureCode(
+  error: unknown,
+):
+  | "OUTPUT_FILE_UNAVAILABLE"
+  | "INVALID_JSON"
+  | "SCHEMA_MISMATCH"
+  | "SCOPE_MISMATCH" {
+  if (error instanceof ForecastTaskOutputValidationError) {
+    return error.code;
+  }
+  if (error instanceof AssessmentTaskOutputValidationError) {
+    return error.code === "NO_TRUSTED_OUTPUT" ? "INVALID_JSON" : error.code;
+  }
+  return "SCHEMA_MISMATCH";
 }
 
-function logAssessmentOutputValidation(error: unknown) {
+function publicAssessmentValidationMessage(error: unknown) {
+  switch (publicAssessmentFailureCode(error)) {
+    case "OUTPUT_FILE_UNAVAILABLE":
+      return "现状评估结果文件暂时无法读取，请稍后刷新或重新评估";
+    case "INVALID_JSON":
+      return "现状评估结果不是可识别的 JSON，请重新评估";
+    case "SCOPE_MISMATCH":
+      return "现状评估结果与本次问题或平台范围不一致，请重新评估";
+    default:
+      return "现状评估结果字段未通过校验，请重新评估";
+  }
+}
+
+function publicForecastValidationMessage(error: unknown) {
+  switch (publicAssessmentFailureCode(error)) {
+    case "OUTPUT_FILE_UNAVAILABLE":
+      return "优化效果评估结果文件暂时无法读取，请稍后刷新或重新评估";
+    case "INVALID_JSON":
+      return "优化效果评估结果不是可识别的 JSON，请重新评估";
+    case "SCOPE_MISMATCH":
+      return "优化效果评估结果与本次评估范围不一致，请重新评估";
+    default:
+      return "优化效果评估结果字段未通过校验，请重新评估";
+  }
+}
+
+function logAssessmentOutputValidation(error: unknown, task?: BrokerTask) {
   if (process.env.NODE_ENV === "test") return;
   const diagnosticCode =
-    error instanceof AssessmentTaskOutputValidationError
+    error instanceof AssessmentTaskOutputValidationError ||
+    error instanceof ForecastTaskOutputValidationError
       ? error.code
       : "ASSESSMENT_VALIDATION_FAILED";
   const issuePaths =
     error instanceof AssessmentTaskOutputValidationError
       ? error.issues.map((issue) => issue.path)
       : [];
+  const diagnostics =
+    error instanceof AssessmentTaskOutputValidationError ||
+    error instanceof ForecastTaskOutputValidationError
+      ? error.diagnostics
+      : undefined;
+  const taskId = task ? taskIdFrom(task) : undefined;
   console.warn("[GEO assessment]", {
     event: "assessment_output_validation_failed",
     diagnosticCode,
     issuePaths,
+    ...(taskId
+      ? {
+          taskHash: crypto
+            .createHash("sha256")
+            .update(taskId)
+            .digest("hex")
+            .slice(0, 16),
+        }
+      : {}),
+    ...(diagnostics
+      ? {
+          outputChannel: diagnostics.channel,
+          outputByteCount: diagnostics.byteCount,
+          outputFileCandidateCount: diagnostics.fileCandidateCount,
+        }
+      : {}),
   });
 }
 
@@ -5882,6 +6021,10 @@ async function buildProjectView(
   monitorRun?: BrokerMonitorRun,
   assessmentTask?: BrokerTask,
   optimizationForecastTask?: BrokerTask,
+  preResolvedOutputs?: {
+    assessment?: ReturnType<typeof resolveAssessmentTaskOutput>;
+    forecast?: ReturnType<typeof resolveOptimizationOutcomeForecastTaskOutput>;
+  },
 ) {
   const knowledgeBase = normalizeTask(knowledgeBaseTask, "knowledge-base");
   const questionsTaskView = questionTask
@@ -6013,6 +6156,39 @@ async function buildProjectView(
     serviceQuestion?.category === "competitor_comparison"
       ? serviceQuestion.category
       : undefined;
+  let assessmentOutputPromise = preResolvedOutputs?.assessment;
+  const resolveAssessmentOutputForView =
+    assessmentTask && assessmentTaskView?.status === "completed"
+      ? () => {
+          assessmentOutputPromise ??=
+            serviceQuestion && monitorRun
+              ? parseScopedAssessmentTaskOutput(
+                  broker,
+                  assessmentTask,
+                  serviceQuestion,
+                  monitorRun.platforms,
+                  monitorRun,
+                )
+              : resolveAssessmentTaskOutput(broker, assessmentTask, {
+                  taskId: taskIdFrom(assessmentTask),
+                });
+          return assessmentOutputPromise;
+        }
+      : undefined;
+  let forecastOutputPromise = preResolvedOutputs?.forecast;
+  const resolveForecastOutputForView =
+    optimizationForecastTask &&
+    optimizationForecastTaskView?.status === "completed"
+      ? () => {
+          forecastOutputPromise ??=
+            resolveOptimizationOutcomeForecastTaskOutput(
+              broker,
+              optimizationForecastTask,
+              { taskId: taskIdFrom(optimizationForecastTask) },
+            );
+          return forecastOutputPromise;
+        }
+      : undefined;
   let serviceAssessmentReady = false;
   if (
     knowledgeBaseManifest &&
@@ -6023,15 +6199,17 @@ async function buildProjectView(
     assessmentTask &&
     optimizationForecastTask &&
     assessmentTaskView?.status === "completed" &&
-    optimizationForecastTaskView?.status === "completed"
+    optimizationForecastTaskView?.status === "completed" &&
+    resolveAssessmentOutputForView &&
+    resolveForecastOutputForView
   ) {
     try {
-      validateServiceAssessmentOutputs(
-        serviceQuestion,
-        assessmentTask,
-        optimizationForecastTask,
-        monitorRun?.platforms || value.monitorPlatformIds || [],
-        monitorRun,
+      const assessment = calculateQuestionBaselineAssessment(
+        await resolveAssessmentOutputForView(),
+      );
+      calculateOptimizationOutcomeForecast(
+        assessment,
+        await resolveForecastOutputForView(),
       );
       serviceAssessmentReady = true;
     } catch {
@@ -6160,15 +6338,24 @@ async function buildProjectView(
     ? toPublicMonitorView(monitorRun)
     : undefined;
   const publicAssessment = assessmentTask
-    ? toPublicAssessmentView(assessmentTask, serviceQuestion, monitorRun)
+    ? await toPublicAssessmentView(
+        broker,
+        assessmentTask,
+        serviceQuestion,
+        monitorRun,
+        resolveAssessmentOutputForView,
+      )
     : undefined;
   const publicOptimizationForecast =
     optimizationForecastTask && assessmentTask
-      ? toPublicOptimizationForecastView(
+      ? await toPublicOptimizationForecastView(
+          broker,
           optimizationForecastTask,
           assessmentTask,
           serviceQuestion,
           monitorRun,
+          resolveAssessmentOutputForView,
+          resolveForecastOutputForView,
         )
       : undefined;
   const questionRetryAvailable = false;
@@ -6204,6 +6391,10 @@ async function buildProjectView(
         : undefined,
       questionCount: questions?.length,
       assessmentReady: publicAssessment?.status === "ready",
+      assessmentFailureCode:
+        publicAssessment?.status === "failed"
+          ? publicAssessment.failureCode
+          : undefined,
       assessmentSummary:
         publicAssessment?.status === "ready"
           ? publicAssessment.summary
@@ -6430,10 +6621,12 @@ async function buildProjectView(
   };
 }
 
-function toPublicAssessmentView(
+async function toPublicAssessmentView(
+  broker: GeoPresalesBroker,
   task: BrokerTask,
   question?: GeoQuestion,
   monitorRun?: BrokerMonitorRun,
+  resolveRaw?: () => ReturnType<typeof resolveAssessmentTaskOutput>,
 ) {
   const taskView = normalizeTask(task, "assessment");
   if (taskView.status !== "completed") {
@@ -6446,15 +6639,19 @@ function toPublicAssessmentView(
     };
   }
   try {
-    const raw =
-      question && monitorRun
-        ? parseScopedAssessmentTaskOutput(
+    const raw = resolveRaw
+      ? await resolveRaw()
+      : question && monitorRun
+        ? await parseScopedAssessmentTaskOutput(
+            broker,
             task,
             question,
             monitorRun.platforms,
             monitorRun,
           )
-        : parseAssessmentTaskOutput(task);
+        : await resolveAssessmentTaskOutput(broker, task, {
+            taskId: taskIdFrom(task),
+          });
     if (raw.schemaVersion !== 2) {
       return {
         status: "not_started" as const,
@@ -6617,21 +6814,27 @@ function toPublicAssessmentView(
       ],
     };
   } catch (error) {
-    logAssessmentOutputValidation(error);
+    logAssessmentOutputValidation(error, task);
     return {
       status: "failed",
       dimensions: {},
       comparisons: [],
       error: publicAssessmentValidationMessage(error),
+      failureCode: publicAssessmentFailureCode(error),
     };
   }
 }
 
-function toPublicOptimizationForecastView(
+async function toPublicOptimizationForecastView(
+  broker: GeoPresalesBroker,
   task: BrokerTask,
   assessmentTask: BrokerTask,
   question?: GeoQuestion,
   monitorRun?: BrokerMonitorRun,
+  resolveAssessmentRaw?: () => ReturnType<typeof resolveAssessmentTaskOutput>,
+  resolveForecastRaw?: () => ReturnType<
+    typeof resolveOptimizationOutcomeForecastTaskOutput
+  >,
 ) {
   const taskView = normalizeTask(task, "optimization-forecast");
   if (taskView.status !== "completed") {
@@ -6646,17 +6849,25 @@ function toPublicOptimizationForecastView(
   }
 
   try {
-    const rawAssessment =
-      question && monitorRun
-        ? parseScopedAssessmentTaskOutput(
+    const rawAssessment = resolveAssessmentRaw
+      ? await resolveAssessmentRaw()
+      : question && monitorRun
+        ? await parseScopedAssessmentTaskOutput(
+            broker,
             assessmentTask,
             question,
             monitorRun.platforms,
             monitorRun,
           )
-        : parseAssessmentTaskOutput(assessmentTask);
+        : await resolveAssessmentTaskOutput(broker, assessmentTask, {
+            taskId: taskIdFrom(assessmentTask),
+          });
     const assessment = calculateQuestionBaselineAssessment(rawAssessment);
-    const rawForecast = parseOptimizationOutcomeForecastTaskOutput(task);
+    const rawForecast = resolveForecastRaw
+      ? await resolveForecastRaw()
+      : await resolveOptimizationOutcomeForecastTaskOutput(broker, task, {
+          taskId: taskIdFrom(task),
+        });
     if (rawForecast.schemaVersion !== 2) {
       return {
         status: "not_started" as const,
@@ -6761,13 +6972,19 @@ function toPublicOptimizationForecastView(
       generatedAt: new Date().toISOString(),
     };
   } catch (error) {
-    logAssessmentOutputValidation(error);
+    logAssessmentOutputValidation(
+      error,
+      error instanceof ForecastTaskOutputValidationError
+        ? task
+        : assessmentTask,
+    );
     return {
       status: "failed",
       dimensions: [],
       assumptions: [],
       roadmap: [],
-      error: "优化效果评估结果暂未通过校验，系统未采用不完整结果",
+      error: publicForecastValidationMessage(error),
+      failureCode: publicAssessmentFailureCode(error),
     };
   }
 }
@@ -7002,7 +7219,8 @@ async function getResolvedTask(broker: GeoPresalesBroker, taskId: string) {
 function hasTrustedCompletedTaskOutput(task: BrokerTask): boolean {
   return (
     Boolean(findArchiveDescriptor(task)) ||
-    trustedAssistantOutputTexts(task).length > 0
+    trustedAssistantOutputTexts(task).length > 0 ||
+    trustedAssistantOutputFiles(task).length > 0
   );
 }
 

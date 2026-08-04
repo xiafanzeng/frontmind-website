@@ -1229,7 +1229,8 @@ describe("GEO style preview rendering", () => {
         ...fixture.assessment!,
         status: "failed" as const,
         totalScore: undefined,
-        error: "评估任务失败",
+        error: "评估结果文件暂时无法读取",
+        failureCode: "OUTPUT_FILE_UNAVAILABLE" as const,
       },
       optimizationForecast: {
         ...fixture.optimizationForecast!,
@@ -1238,6 +1239,7 @@ describe("GEO style preview rendering", () => {
         targetLow: undefined,
         targetHigh: undefined,
         error: "预测任务失败",
+        failureCode: "SCHEMA_MISMATCH" as const,
       },
       assessmentRetryAvailable: true,
       optimizationForecastRetryAvailable: true,
@@ -1265,10 +1267,13 @@ describe("GEO style preview rendering", () => {
     expect(assessmentHtml).toContain("联系技术支持");
     expect(assessmentHtml).toContain("重新评估");
     expect(assessmentHtml).toContain("现状评估暂未生成");
+    expect(assessmentHtml).toContain("评估结果文件暂时无法读取");
+    expect(assessmentHtml).toContain("支持码：OUTPUT_FILE_UNAVAILABLE");
     expect(assessmentHtml).not.toContain("知识库对照评估未能完成");
     expect(assessmentHtml).not.toContain("刷新评估");
     expect(assessmentHtml).not.toContain("最后刷新");
     expect(forecastHtml).toContain("联系技术支持");
+    expect(forecastHtml).toContain("支持码：SCHEMA_MISMATCH");
     expect(forecastHtml).not.toContain("重新生成优化评估");
     expect(forecastHtml).not.toContain("正在重试");
   });

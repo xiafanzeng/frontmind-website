@@ -1727,6 +1727,20 @@ function normalizeAssessmentStatus(value: unknown): GeoAssessmentStatus {
   return "running";
 }
 
+function normalizeAssessmentFailureCode(
+  ...values: unknown[]
+): GeoAssessmentResult["failureCode"] {
+  const normalized = textValue(...values)?.toUpperCase();
+  return [
+    "OUTPUT_FILE_UNAVAILABLE",
+    "INVALID_JSON",
+    "SCHEMA_MISMATCH",
+    "SCOPE_MISMATCH",
+  ].includes(normalized ?? "")
+    ? (normalized as NonNullable<GeoAssessmentResult["failureCode"]>)
+    : undefined;
+}
+
 function normalizeAssessmentDimension(
   definition: (typeof ASSESSMENT_DIMENSIONS)[number],
   value: unknown,
@@ -2013,6 +2027,10 @@ function normalizeAssessment(value: unknown): GeoAssessmentResult | undefined {
   const confidence = ["high", "medium", "low"].includes(confidenceRaw ?? "")
     ? (confidenceRaw as GeoAssessmentResult["confidence"])
     : undefined;
+  const failureCode = normalizeAssessmentFailureCode(
+    root.failureCode,
+    root.failure_code,
+  );
   const status = normalizeAssessmentStatus(root.status ?? scorecard.status);
   const rankingSource = asRecord(
     scorecard.rankingDiagnostics ??
@@ -2197,6 +2215,7 @@ function normalizeAssessment(value: unknown): GeoAssessmentResult | undefined {
       undefined,
       "",
     ),
+    failureCode,
   };
 }
 
@@ -2450,6 +2469,12 @@ function normalizeOptimizationForecast(
       textValue(root.error, root.errorMessage, root.error_message),
       undefined,
       "",
+    ),
+    failureCode: normalizeAssessmentFailureCode(
+      root.failureCode,
+      root.failure_code,
+      forecast.failureCode,
+      forecast.failure_code,
     ),
   };
 }

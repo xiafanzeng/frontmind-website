@@ -249,6 +249,12 @@ export type GeoAssessmentMethodology = {
   confidenceScore?: number;
 };
 
+export type GeoAssessmentFailureCode =
+  | "OUTPUT_FILE_UNAVAILABLE"
+  | "INVALID_JSON"
+  | "SCHEMA_MISMATCH"
+  | "SCOPE_MISMATCH";
+
 export type GeoAssessmentResult = {
   schemaVersion?: 2;
   status: GeoAssessmentStatus;
@@ -272,6 +278,7 @@ export type GeoAssessmentResult = {
   methodology?: GeoAssessmentMethodology;
   generatedAt?: string;
   error?: string;
+  failureCode?: GeoAssessmentFailureCode;
 };
 
 export type GeoOptimizationForecastDimension = {
@@ -325,6 +332,7 @@ export type GeoOptimizationForecastResult = {
   limitations?: string[];
   generatedAt?: string;
   error?: string;
+  failureCode?: GeoAssessmentFailureCode;
 };
 
 export type GeoFileReference = {

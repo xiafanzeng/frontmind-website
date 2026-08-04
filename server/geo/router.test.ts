@@ -160,6 +160,7 @@ class MockBroker implements GeoPresalesBroker {
   omitNextKnowledgeTaskStatus = false;
   downloadErrors = new Map<string, Error>();
   downloadOverrides = new Map<string, Buffer>();
+  downloadedFileIds: string[] = [];
   customQuestionClassifierOutput: Record<string, unknown> = {
     decision: "accept",
     category: "product_scenario",
@@ -405,6 +406,7 @@ class MockBroker implements GeoPresalesBroker {
 
   async downloadFile(fileId?: string) {
     if (fileId) {
+      this.downloadedFileIds.push(fileId);
       const error = this.downloadErrors.get(fileId);
       if (error) throw error;
     }
@@ -5424,6 +5426,12 @@ describe("GEO API", () => {
     expect(broker.prompts.at(-1)).toContain(
       "此任务使用 Base 模型，只输出 schema 要求的事实四分类、confidence 与 0-1 原始指标",
     );
+    expect(broker.prompts.at(-1)).toContain(
+      "最终答案必须直接写入 assistant output_text",
+    );
+    expect(broker.prompts.at(-1)).toContain(
+      "禁止创建、上传或附加结果 JSON 文件",
+    );
     expect(broker.prompts.at(-1)).toContain("在单次任务中完成");
     const assessmentAttachments = broker.taskAttachments.at(-1)!;
     expect(
@@ -5491,13 +5499,30 @@ describe("GEO API", () => {
     );
     expect(viewed.response.status).toBe(200);
     expect((viewed.body as any).project).toMatchObject({
-      assessment: { status: "failed" },
+      assessment: {
+        status: "failed",
+        failureCode: "SCHEMA_MISMATCH",
+        error: "现状评估结果字段未通过校验，请重新评估",
+      },
       assessmentRetryAvailable: true,
     });
     expect(broker.assessmentTaskCount).toBe(1);
     expect((viewed.body as any).project.executionLog.currentEntryId).toBe(
       "current-assessment",
     );
+    expect(
+      (viewed.body as any).project.executionLog.entries.find(
+        (entry: any) => entry.id === "current-assessment",
+      ),
+    ).toMatchObject({
+      status: "failed",
+      events: expect.arrayContaining([
+        expect.objectContaining({
+          kind: "error",
+          message: "服务端结果校验未通过（支持码：SCHEMA_MISMATCH）。",
+        }),
+      ]),
+    });
     const repeated = await jsonRequest(
       `/projects/${encodeURIComponent((viewed.body as any).projectToken)}`,
       ready.cookie,
@@ -5520,6 +5545,130 @@ describe("GEO API", () => {
     expect(broker.prompts.at(-1)).not.toContain(
       "geo-knowledge-answer-verifier",
     );
+  });
+
+  it("recovers acknowledgement text plus a trusted JSON output_file without rerunning the assessment", async () => {
+    const ready = await createReadyProject();
+    const monitored = await startOnePlatformMonitor(ready);
+    const run = broker.monitorRuns.get("monitor-1")!;
+    broker.monitorRuns.set("monitor-1", {
+      ...run,
+      status: "completed",
+      completedItems: 5,
+      records: Array.from({ length: 5 }, (_, index) =>
+        monitorRecord(index + 1, `Acme 回答 ${index + 1}`),
+      ),
+    });
+
+    const started = await jsonRequest(
+      `/projects/${encodeURIComponent(monitored.projectToken)}/assessment`,
+      ready.cookie,
+      { method: "POST", body: {} },
+    );
+    expect(started.response.status).toBe(201);
+    expect(broker.assessmentTaskCount).toBe(1);
+
+    const outputFileId = "assessment-json-output";
+    broker.downloadOverrides.set(
+      outputFileId,
+      Buffer.from(JSON.stringify(validAssessmentOutput()), "utf8"),
+    );
+    broker.tasks.set("assessment-1", {
+      id: "assessment-1",
+      status: "completed",
+      output: [
+        {
+          type: "output_text",
+          text: "收到任务，正在解压技能包并读取相关文件，开始执行评估。",
+        },
+        {
+          type: "output_text",
+          text: "以下是符合 raw-output-schema.json 的单个 JSON 对象，已通过格式验证。",
+        },
+        {
+          type: "output_file",
+          file_id: outputFileId,
+          filename: "raw-output.json",
+          mime_type: "application/json",
+        },
+      ],
+    });
+
+    const viewed = await jsonRequest(
+      `/projects/${encodeURIComponent((started.body as any).projectToken)}`,
+      ready.cookie,
+    );
+
+    expect(viewed.response.status).toBe(200);
+    expect((viewed.body as any).project).toMatchObject({
+      assessment: {
+        status: "ready",
+        schemaVersion: 2,
+      },
+      assessmentRetryAvailable: false,
+    });
+    expect(
+      (viewed.body as any).project.assessment.comparisons.length,
+    ).toBeGreaterThan(0);
+    expect(
+      broker.downloadedFileIds.filter((fileId) => fileId === outputFileId),
+    ).toHaveLength(1);
+    expect(broker.assessmentTaskCount).toBe(1);
+    expect(broker.forecastTaskCount).toBe(1);
+  });
+
+  it("reports an unavailable trusted assessment file with a safe retry code", async () => {
+    const ready = await createReadyProject();
+    const monitored = await startOnePlatformMonitor(ready);
+    const run = broker.monitorRuns.get("monitor-1")!;
+    broker.monitorRuns.set("monitor-1", {
+      ...run,
+      status: "completed",
+      completedItems: 5,
+      records: Array.from({ length: 5 }, (_, index) =>
+        monitorRecord(index + 1, `Acme 回答 ${index + 1}`),
+      ),
+    });
+    const started = await jsonRequest(
+      `/projects/${encodeURIComponent(monitored.projectToken)}/assessment`,
+      ready.cookie,
+      { method: "POST", body: {} },
+    );
+    const outputFileId = "expired-assessment-json-output";
+    broker.downloadErrors.set(outputFileId, new Error("upstream expired"));
+    broker.tasks.set("assessment-1", {
+      id: "assessment-1",
+      status: "completed",
+      output: [
+        {
+          type: "output_text",
+          text: "结果已生成并通过格式验证，请查看附件。",
+        },
+        {
+          type: "output_file",
+          file_id: outputFileId,
+          filename: "raw-output.json",
+          mime_type: "application/json",
+        },
+      ],
+    });
+
+    const viewed = await jsonRequest(
+      `/projects/${encodeURIComponent((started.body as any).projectToken)}`,
+      ready.cookie,
+    );
+
+    expect(viewed.response.status).toBe(200);
+    expect((viewed.body as any).project).toMatchObject({
+      assessment: {
+        status: "failed",
+        failureCode: "OUTPUT_FILE_UNAVAILABLE",
+        error: "现状评估结果文件暂时无法读取，请稍后刷新或重新评估",
+      },
+      assessmentRetryAvailable: true,
+    });
+    expect(broker.assessmentTaskCount).toBe(1);
+    expect(broker.forecastTaskCount).toBe(0);
   });
 
   it("reuses a completed v2 reputation assessment without exposing ranking internals", async () => {
@@ -6054,6 +6203,33 @@ describe("GEO API", () => {
       "optimization-forecast",
     );
     expect(broker.prompts.at(-1)).toContain("唯一一次结构校验重试");
+
+    const unavailableFileId = "forecast-output-unavailable";
+    broker.downloadErrors.set(
+      unavailableFileId,
+      new Error("provider file expired"),
+    );
+    broker.tasks.set("forecast-2", {
+      id: "forecast-2",
+      status: "completed",
+      output: [
+        {
+          type: "output_file",
+          file_id: unavailableFileId,
+          filename: "forecast.json",
+          mime_type: "application/json",
+        },
+      ],
+    });
+    const exhausted = await jsonRequest(
+      `/projects/${encodeURIComponent((retried.body as any).projectToken)}`,
+      ready.cookie,
+    );
+    expect((exhausted.body as any).project.optimizationForecast).toMatchObject({
+      status: "failed",
+      failureCode: "OUTPUT_FILE_UNAVAILABLE",
+      error: "优化效果评估结果文件暂时无法读取，请稍后刷新或重新评估",
+    });
   });
 
   it("retries one cancelled optimization forecast with an explicit cancellation reason", async () => {
@@ -6159,6 +6335,70 @@ describe("GEO API", () => {
       error: { code: "SERVICE_ASSESSMENT_REQUIRED" },
     });
     expect(servicePaymentCheckoutCalls).toHaveLength(0);
+  });
+
+  it("reuses assessment and forecast output files across service validation and project rendering", async () => {
+    const ready = await createServiceReadyProject();
+    const assessmentFileId = "service-assessment-output-json";
+    const forecastFileId = "service-forecast-output-json";
+    broker.downloadOverrides.set(
+      assessmentFileId,
+      Buffer.from(
+        JSON.stringify(validAssessmentOutput(ready.question)),
+        "utf8",
+      ),
+    );
+    broker.downloadOverrides.set(
+      forecastFileId,
+      Buffer.from(JSON.stringify(validForecastOutput()), "utf8"),
+    );
+    broker.tasks.set(ready.assessmentTaskId, {
+      id: ready.assessmentTaskId,
+      status: "completed",
+      output: [
+        { type: "output_text", text: "现状评估结果见附件。" },
+        {
+          type: "output_file",
+          file_id: assessmentFileId,
+          filename: "current-assessment.json",
+          mime_type: "application/json",
+        },
+      ],
+    });
+    broker.tasks.set(ready.forecastTaskId, {
+      id: ready.forecastTaskId,
+      status: "completed",
+      output: [
+        { type: "output_text", text: "优化效果评估结果见附件。" },
+        {
+          type: "output_file",
+          file_id: forecastFileId,
+          filename: "optimization-forecast.json",
+          mime_type: "application/json",
+        },
+      ],
+    });
+    broker.downloadedFileIds = [];
+
+    const created = await jsonRequest(
+      `/projects/${encodeURIComponent(ready.projectToken)}/services/contracts`,
+      ready.cookie,
+      {
+        method: "POST",
+        body: {
+          profile: validServiceContractProfile(),
+          contractCode: CONTRACT_AUTH_CODE,
+        },
+      },
+    );
+
+    expect(created.response.status).toBe(201);
+    expect(
+      broker.downloadedFileIds.filter((fileId) => fileId === assessmentFileId),
+    ).toHaveLength(1);
+    expect(
+      broker.downloadedFileIds.filter((fileId) => fileId === forecastFileId),
+    ).toHaveLength(1);
   });
 
   it("rejects a forged payable status that has no contract evidence", async () => {

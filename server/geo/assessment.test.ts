@@ -11,6 +11,7 @@ import {
   clampRawIndicator,
   inspectAssessmentTaskOutput,
   parseAssessmentTaskOutput,
+  resolveAssessmentTaskOutput,
   type AssessmentRawTaskOutput,
 } from "./assessment";
 
@@ -364,6 +365,155 @@ describe("GEO current-state assessment task output", () => {
       "omitted",
       "unverifiable",
     ]);
+  });
+
+  it("resolves a trusted JSON output_file after acknowledgement-only inline text", async () => {
+    const raw = validRawOutput();
+    const downloadedFileIds: string[] = [];
+    const parsed = await resolveAssessmentTaskOutput(
+      {
+        async downloadFile(fileId) {
+          downloadedFileIds.push(fileId);
+          return new Response(
+            Buffer.concat([
+              Buffer.from([0xef, 0xbb, 0xbf]),
+              Buffer.from(JSON.stringify(raw), "utf8"),
+            ]),
+          );
+        },
+        async downloadTaskOutput() {
+          throw new Error("URL fallback should not be used");
+        },
+      },
+      {
+        id: "assessment-task",
+        output: [
+          { type: "output_text", text: "收到任务，正在执行评估。" },
+          {
+            type: "output_text",
+            text: "以下是符合 raw-output-schema.json 的单个 JSON 对象。",
+          },
+          {
+            role: "assistant",
+            type: "message",
+            content: [
+              {
+                type: "output_file",
+                file_id: "assessment-result",
+                filename: "assessment.json",
+              },
+            ],
+          },
+        ],
+      },
+    );
+
+    expect(downloadedFileIds).toEqual(["assessment-result"]);
+    expect(parsed.question).toEqual(raw.question);
+  });
+
+  it("keeps inline priority and does not download when inline JSON fully passes", async () => {
+    const raw = validRawOutput();
+    let downloadCount = 0;
+    const parsed = await resolveAssessmentTaskOutput(
+      {
+        async downloadFile() {
+          downloadCount += 1;
+          return new Response("{}");
+        },
+        async downloadTaskOutput() {
+          downloadCount += 1;
+          return new Response("{}");
+        },
+      },
+      {
+        output: [
+          { type: "output_text", text: JSON.stringify(raw) },
+          {
+            type: "output_file",
+            file_id: "unused-file",
+            filename: "unused.json",
+          },
+        ],
+      },
+    );
+
+    expect(parsed.question.id).toBe(raw.question.id);
+    expect(downloadCount).toBe(0);
+  });
+
+  it("continues to a file when inline JSON passes schema but fails scope", async () => {
+    const raw = validRawOutput();
+    const wrongScope = {
+      ...raw,
+      question: { ...raw.question, id: "wrong-question" },
+    };
+    const validatedQuestionIds: string[] = [];
+    const parsed = await resolveAssessmentTaskOutput(
+      {
+        async downloadFile() {
+          return new Response(JSON.stringify(raw));
+        },
+        async downloadTaskOutput() {
+          throw new Error("URL fallback should not be used");
+        },
+      },
+      {
+        output: [
+          { type: "output_text", text: JSON.stringify(wrongScope) },
+          {
+            type: "output_file",
+            file_id: "scoped-result",
+            filename: "scoped-result.json",
+          },
+        ],
+      },
+      {
+        validate(candidate) {
+          validatedQuestionIds.push(candidate.question.id);
+          if (candidate.question.id !== raw.question.id) {
+            throw new Error("scope mismatch detail must not escape");
+          }
+        },
+      },
+    );
+
+    expect(validatedQuestionIds).toEqual(["wrong-question", raw.question.id]);
+    expect(parsed.question.id).toBe(raw.question.id);
+  });
+
+  it("reports a safe scope classification when no candidate matches scope", async () => {
+    const raw = validRawOutput();
+    await expect(
+      resolveAssessmentTaskOutput(
+        {
+          async downloadFile() {
+            return new Response(JSON.stringify(raw));
+          },
+          async downloadTaskOutput() {
+            throw new Error("URL fallback should not be used");
+          },
+        },
+        {
+          output: [
+            {
+              type: "output_file",
+              file_id: "wrong-scope",
+              filename: "wrong-scope.json",
+            },
+          ],
+        },
+        {
+          validate() {
+            throw new Error("sensitive request scope detail");
+          },
+        },
+      ),
+    ).rejects.toMatchObject({
+      name: "AssessmentTaskOutputValidationError",
+      code: "SCOPE_MISMATCH",
+      issues: [],
+    });
   });
 
   it("accepts legacy ineligible 5/0/0 diagnostics and canonicalizes them for scoring", () => {

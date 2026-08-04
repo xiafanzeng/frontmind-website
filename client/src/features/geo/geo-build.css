@@ -4924,6 +4924,12 @@
   font-size: 14px;
   line-height: 1.6;
 }
+.geo-evaluation-pending small {
+  display: block;
+  margin-top: 6px;
+  color: #918795;
+  font-size: 12px;
+}
 .geo-evaluation-support {
   margin-top: 14px;
 }
@@ -5096,6 +5102,15 @@
   font-size: 14px;
   line-height: 1.6;
   text-align: center;
+}
+.geo-no-derived-data > span,
+.geo-no-derived-data > small {
+  display: block;
+}
+.geo-no-derived-data > small {
+  margin-top: 6px;
+  color: #918795;
+  font-size: 12px;
 }
 .geo-assessment-supporting-results {
   display: grid;

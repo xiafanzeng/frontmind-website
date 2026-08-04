@@ -6691,6 +6691,9 @@ export function AssessmentOverview({
             {assessment?.error ||
               "真实监控答案已开始返回。完整样本就绪后，系统将使用企业知识库进行一致性、权威性与竞争表现评估。"}
           </p>
+          {assessment?.failureCode && (
+            <small>支持码：{assessment.failureCode}</small>
+          )}
         </div>
       </section>
     );
@@ -7049,6 +7052,9 @@ export function OptimizationForecastView({
                 "系统暂时无法生成结果，请联系技术支持协助处理。"
               : "正在生成优化效果评估，通常需要约 5 分钟；完成后会自动显示，无需手动刷新。"}
           </p>
+          {forecast?.failureCode && (
+            <small>支持码：{forecast.failureCode}</small>
+          )}
           {forecast?.status === "failed" &&
             !isGeoStylePreviewProject(project) && (
               <button
@@ -8301,7 +8307,13 @@ export function KnowledgeComparison({ project }: { project: GeoProject }) {
   if (assessment?.status !== "ready" || comparisons.length === 0) {
     return (
       <div className="geo-no-derived-data">
-        知识库对照尚未返回通过校验的结论；不会用示例内容填充。
+        <span>
+          {assessment?.error ||
+            "知识库对照尚未返回通过校验的结论；不会用示例内容填充。"}
+        </span>
+        {assessment?.failureCode && (
+          <small>支持码：{assessment.failureCode}</small>
+        )}
       </div>
     );
   }

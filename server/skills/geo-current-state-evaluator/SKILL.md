@@ -16,7 +16,7 @@ Complete the comparison and assessment in this one Skill. Read `references/raw-o
 5. Classify each selected topic as `supported`, `contradicted`, `omitted`, or `unverifiable`, then write one short explanation and action. Do not analyze the discarded candidate topics.
 6. Fill the thirteen 0-1 indicators from these 10 selected topics. Use conservative estimates when exact counting would require a full archive audit. The server calculates totals, grades, coverage, and canonical source counts.
 7. Return one short platform summary per selected platform, one short finding and action per dimension, and no more than four priority actions.
-8. Validate the object against `references/raw-output-schema.json` and return the JSON object only.
+8. Validate the object against `references/raw-output-schema.json`, then return it inline as the final assistant `output_text`.
 
 ## Lightweight rules
 
@@ -33,4 +33,10 @@ Complete the comparison and assessment in this one Skill. Read `references/raw-o
 
 ## Output
 
-Return exactly one `schemaVersion: 2`, `assessmentType: "question_baseline"` JSON object. Return no Markdown fence or prose outside the JSON.
+Return exactly one `schemaVersion: 2`, `assessmentType: "question_baseline"` JSON object in the final assistant `output_text`.
+
+- Make the first non-whitespace character `{` and the last non-whitespace character `}`.
+- Do not add a Markdown fence, introduction, validation claim, explanation, or closing text before or after the object.
+- Do not create, upload, attach, or link a result file. In particular, never move the final object into a `.json` file or return an `output_file` item.
+- If the response risks exceeding the output limit, shorten customer-facing wording, limitations, and optional evidence-reference arrays while preserving every required field, exact monitoring scope, and the 10 selected comparisons. Keep the result inline.
+- Treat local schema validation as a preflight check only. The server is the final validation authority and decides whether the result is accepted and displayed.

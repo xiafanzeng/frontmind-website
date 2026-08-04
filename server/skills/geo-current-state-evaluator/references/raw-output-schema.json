@@ -265,7 +265,11 @@
         "measurementStatus": {
           "enum": ["measured", "derived"]
         },
-        "confidence": { "type": "number", "minimum": 0, "maximum": 1 },
+        "confidence": {
+          "type": "number",
+          "exclusiveMinimum": 0,
+          "maximum": 1
+        },
         "calculationBasis": {
           "type": "string",
           "minLength": 8,

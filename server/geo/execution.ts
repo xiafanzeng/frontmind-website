@@ -71,6 +71,7 @@ type ValidatedExecutionResults = {
   questionCount?: number;
   assessmentSummary?: string;
   assessmentReady?: boolean;
+  assessmentFailureCode?: string;
   comparisonCount?: number;
   forecastSummary?: string;
   forecastReady?: boolean;
@@ -147,6 +148,7 @@ export function buildGeoExecutionLog(
               input.validated.comparisonCount,
             )
           : undefined,
+        validationFailureCode: input.validated?.assessmentFailureCode,
         fallbackStartedAt: input.submittedAt?.assessment,
       }),
     );
@@ -218,6 +220,7 @@ type TaskEntryInput = {
     | "assessment"
     | "optimization-forecast";
   resultSummary?: string;
+  validationFailureCode?: string;
   artifactName?: string;
   fallbackStartedAt?: string;
   includeCrawlProgress?: boolean;
@@ -225,7 +228,12 @@ type TaskEntryInput = {
 
 function taskEntry(input: TaskEntryInput): GeoExecutionLogEntry {
   const taskView = normalizeTask(input.task, input.publicTaskId);
-  const status = publicTaskStatus(taskView.status);
+  const upstreamStatus = publicTaskStatus(taskView.status);
+  const validationFailureCode =
+    upstreamStatus === "completed"
+      ? safeValidationFailureCode(input.validationFailureCode)
+      : undefined;
+  const status = validationFailureCode ? "failed" : upstreamStatus;
   const startedAt = timestampValue(
     input.task.started_at,
     input.task.startedAt,
@@ -260,19 +268,21 @@ function taskEntry(input: TaskEntryInput): GeoExecutionLogEntry {
       ? (completedAt ?? updatedAt)
       : completedAt;
   const eventTime =
-    status === "completed"
+    upstreamStatus === "completed"
       ? terminalAt
-      : status === "queued"
+      : upstreamStatus === "queued"
         ? startedAt
         : (updatedAt ?? startedAt);
   const events: GeoExecutionEvent[] = [
     {
-      id: `${input.id}-status-${status}`,
-      kind: status === "failed" ? "error" : "status",
+      id: `${input.id}-status-${upstreamStatus}`,
+      kind: upstreamStatus === "failed" ? "error" : "status",
       message:
-        status === "failed" && taskView.error
+        upstreamStatus === "failed" && taskView.error
           ? limitText(taskView.error)
-          : taskStatusMessage(input.title, status),
+          : validationFailureCode
+            ? `${input.title}上游任务已完成。`
+            : taskStatusMessage(input.title, upstreamStatus),
       ...(eventTime ? { createdAt: eventTime } : {}),
     },
   ];
@@ -285,6 +295,14 @@ function taskEntry(input: TaskEntryInput): GeoExecutionLogEntry {
       ...(modelOutput.createdAt ? { createdAt: modelOutput.createdAt } : {}),
     });
   });
+  if (validationFailureCode) {
+    events.push({
+      id: `${input.id}-validation-failed`,
+      kind: "error",
+      message: `服务端结果校验未通过（支持码：${validationFailureCode}）。`,
+      ...(terminalAt ? { createdAt: terminalAt } : {}),
+    });
+  }
   if (crawlProgress) {
     events.push({
       id: `${input.id}-crawl-progress-${crawlProgress.reportedAt}`,
@@ -328,6 +346,18 @@ function taskEntry(input: TaskEntryInput): GeoExecutionLogEntry {
     ...(crawlProgress ? { crawlProgress } : {}),
     events: deduplicateEvents(events),
   };
+}
+
+function safeValidationFailureCode(value: unknown): string | undefined {
+  const code = typeof value === "string" ? value.trim().toUpperCase() : "";
+  return [
+    "OUTPUT_FILE_UNAVAILABLE",
+    "INVALID_JSON",
+    "SCHEMA_MISMATCH",
+    "SCOPE_MISMATCH",
+  ].includes(code)
+    ? code
+    : undefined;
 }
 
 function monitorEntry(run: BrokerMonitorRun): GeoExecutionLogEntry {
