@@ -40,6 +40,18 @@ function assistantTask(value: unknown) {
   };
 }
 
+function assistantTextTask(text: string) {
+  return {
+    status: "completed",
+    output: [
+      {
+        role: "assistant",
+        content: [{ type: "output_text", text }],
+      },
+    ],
+  };
+}
+
 describe("custom GEO question classifier contract", () => {
   it("parses one strict accepted classification", () => {
     const classification = parseCustomQuestionClassificationTaskOutput(
@@ -78,6 +90,48 @@ describe("custom GEO question classifier contract", () => {
         }),
       ),
     ).toBeNull();
+  });
+
+  it("infers an enterprise rejection when explanatory prose breaks JSON quoting", () => {
+    const classification = parseCustomQuestionClassificationTaskOutput(
+      assistantTextTask(
+        `{"decision":"reject","category":"unrelated","enterpriseRelated":false,"reasonCode":"enterprise_unrelated","reason":"问题询问"FrontMind"是什么企业，该名称在硅基流动企业知识库中无任何记录，既非硅基流动的产品、服务、别名，也未与硅基流动存在任何可验证的关联路径，无法将其绑定至被评估企业。","enterpriseAnchor":null,"offeringAnchor":null,"evidenceRefs":[]}`,
+      ),
+    );
+
+    expect(classification).toMatchObject({
+      decision: "reject",
+      category: "unrelated",
+      enterpriseRelated: false,
+      reasonCode: "enterprise_unrelated",
+      enterpriseAnchor: null,
+      offeringAnchor: null,
+      evidenceRefs: [],
+    });
+  });
+
+  it("uses a clear rejection meaning without requiring the full JSON shape", () => {
+    const classification = parseCustomQuestionClassificationTaskOutput(
+      assistantTextTask(
+        "decision: reject\nreasonCode: enterprise_unrelated\n当前问题无法绑定至被评估企业。",
+      ),
+    );
+
+    expect(classification).toMatchObject({
+      decision: "reject",
+      category: "unrelated",
+      reasonCode: "enterprise_unrelated",
+    });
+  });
+
+  it("does not infer a malformed accepted classification", () => {
+    const classification = parseCustomQuestionClassificationTaskOutput(
+      assistantTextTask(
+        `{"decision":"accept","category":"product_scenario","enterpriseRelated":true,"reasonCode":"accepted","reason":"问题询问"企业知识库"的具体能力。","enterpriseAnchor":"超前智能","offeringAnchor":"企业知识库","evidenceRefs":["03_products/knowledge-base.md"]}`,
+      ),
+    );
+
+    expect(classification).toBeNull();
   });
 
   it("accepts an exact company anchor and a real ZIP evidence path", () => {

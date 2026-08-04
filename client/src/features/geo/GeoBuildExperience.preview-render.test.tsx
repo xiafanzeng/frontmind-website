@@ -855,9 +855,12 @@ describe("GEO style preview rendering", () => {
 
     expect(html).toContain("平台评估拆分");
     expect(html).toContain("真实平台拆分结论");
-    expect(html).toContain("情绪判断");
-    expect(html).toContain("中性");
+    expect(html).toContain("事实准确率");
+    expect(html).toContain("主张命中率");
     expect(html).toContain("可追溯来源");
+    expect(html).not.toContain("品牌提及率");
+    expect(html).not.toContain("平均排名");
+    expect(html).not.toContain("情绪判断");
     expect(html).not.toContain("答案引用");
     expect(html).not.toContain("检索参考");
     expect(html).not.toContain("来源线索");
@@ -1050,6 +1053,33 @@ describe("GEO style preview rendering", () => {
     expect(html).not.toContain("刷新评估");
   });
 
+  it("keeps customer-facing Schema terminology when it describes website markup", () => {
+    const fixture = createGeoStylePreviewProject();
+    const project = {
+      ...fixture,
+      optimizationForecast: {
+        ...fixture.optimizationForecast!,
+        dimensions: fixture.optimizationForecast!.dimensions.map((dimension) =>
+          dimension.id === "semantic_authority"
+            ? {
+                ...dimension,
+                summary: "官网 Schema 标记仍不完整，权威信息还有提升空间。",
+                currentFinding:
+                  "官网 Schema 标记仍不完整，权威信息还有提升空间。",
+                nextAction: "完善官网 Schema 标记，并补充独立、可核验的来源。",
+              }
+            : dimension,
+        ),
+      },
+    };
+    const html = renderToStaticMarkup(
+      <OptimizationForecastView project={project} onContact={vi.fn()} />,
+    );
+
+    expect(html).toContain("官网 Schema 标记仍不完整");
+    expect(html).toContain("完善官网 Schema 标记");
+  });
+
   it("keeps the user dashboard tab available in the local preview fixture", () => {
     const project = createGeoStylePreviewProject();
     const html = renderToStaticMarkup(
@@ -1220,7 +1250,7 @@ describe("GEO style preview rendering", () => {
     expect(html).not.toContain("127.0.0.1");
   });
 
-  it("offers a manual assessment retry while keeping forecast support-only", () => {
+  it("offers manual assessment and forecast retries beside technical support", () => {
     const fixture = createGeoStylePreviewProject();
     const project = {
       ...fixture,
@@ -1261,6 +1291,7 @@ describe("GEO style preview rendering", () => {
           },
         }}
         onContact={vi.fn()}
+        onRetryForecast={vi.fn()}
       />,
     );
 
@@ -1273,12 +1304,13 @@ describe("GEO style preview rendering", () => {
     expect(assessmentHtml).not.toContain("刷新评估");
     expect(assessmentHtml).not.toContain("最后刷新");
     expect(forecastHtml).toContain("联系技术支持");
+    expect(forecastHtml).toContain("重新评估");
     expect(forecastHtml).toContain("支持码：SCHEMA_MISMATCH");
     expect(forecastHtml).not.toContain("重新生成优化评估");
     expect(forecastHtml).not.toContain("正在重试");
   });
 
-  it("keeps manual assessment retry available after the legacy retry flag is exhausted", () => {
+  it("keeps only supported retries visible after the server exhausts forecast retries", () => {
     const fixture = createGeoStylePreviewProject();
     const project = {
       ...fixture,
@@ -1317,6 +1349,7 @@ describe("GEO style preview rendering", () => {
           },
         }}
         onContact={vi.fn()}
+        onRetryForecast={vi.fn()}
       />,
     );
 
@@ -1325,7 +1358,43 @@ describe("GEO style preview rendering", () => {
     expect(assessmentHtml).toContain("重新评估");
     expect(assessmentHtml).not.toContain("评估待重试");
     expect(forecastHtml).toContain("联系技术支持");
+    expect(forecastHtml).not.toContain("重新评估");
     expect(forecastHtml).not.toContain("重新生成优化评估");
+  });
+
+  it("disables the forecast retry while a manual request is in flight", () => {
+    const fixture = createGeoStylePreviewProject();
+    const project = {
+      ...fixture,
+      preview: undefined,
+      assessment: {
+        ...fixture.assessment!,
+        status: "ready" as const,
+      },
+      optimizationForecast: {
+        ...fixture.optimizationForecast!,
+        status: "failed" as const,
+        currentScore: undefined,
+        targetLow: undefined,
+        targetHigh: undefined,
+        error: "预测任务失败",
+        failureCode: "SCHEMA_MISMATCH" as const,
+      },
+      optimizationForecastRetryAvailable: true,
+    };
+    const html = renderToStaticMarkup(
+      <OptimizationForecastView
+        project={project}
+        onContact={vi.fn()}
+        onRetryForecast={vi.fn()}
+        retryingForecast
+      />,
+    );
+
+    expect(html).toContain("正在重新评估");
+    expect(html).toContain('aria-busy="true"');
+    expect(html).toContain("disabled");
+    expect(html).toContain("联系技术支持");
   });
 
   it("disables manual assessment retry while a retry request is in flight", () => {

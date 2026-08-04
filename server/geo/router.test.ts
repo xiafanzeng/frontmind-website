@@ -142,6 +142,7 @@ class MockBroker implements GeoPresalesBroker {
   deletedFiles: string[] = [];
   failDeleteFile = false;
   createdFileIds: string[] = [];
+  createdFileMimeTypes = new Map<string, string | undefined>();
   uploadAttempts: string[] = [];
   skillUploadError?: Error;
   regularUploadError?: Error;
@@ -171,6 +172,14 @@ class MockBroker implements GeoPresalesBroker {
     offeringAnchor: null,
     evidenceRefs: ["01_company_overview/overview.md"],
   };
+  customQuestionClassifierRawText?: string;
+
+  private customQuestionClassifierText() {
+    return (
+      this.customQuestionClassifierRawText ??
+      JSON.stringify(this.customQuestionClassifierOutput)
+    );
+  }
 
   async getStatus() {
     return {
@@ -183,6 +192,7 @@ class MockBroker implements GeoPresalesBroker {
 
   async createFile(input: {
     filename: string;
+    mimeType?: string;
     idempotencyKey?: string;
   }): Promise<BrokerFile> {
     if (input.idempotencyKey) {
@@ -205,6 +215,7 @@ class MockBroker implements GeoPresalesBroker {
       };
     }
     this.createdFileIds.push(file.id);
+    this.createdFileMimeTypes.set(file.id, input.mimeType);
     this.fileCredentialVersions.set(file.id, this.currentCredentialVersion);
     if (input.idempotencyKey) {
       this.idempotentFiles.set(input.idempotencyKey, file);
@@ -301,9 +312,7 @@ class MockBroker implements GeoPresalesBroker {
             output: [
               {
                 role: "assistant",
-                content: [
-                  { text: JSON.stringify(this.customQuestionClassifierOutput) },
-                ],
+                content: [{ text: this.customQuestionClassifierText() }],
               },
             ],
           }
@@ -379,9 +388,7 @@ class MockBroker implements GeoPresalesBroker {
           output: [
             {
               role: "assistant",
-              content: [
-                { text: JSON.stringify(this.customQuestionClassifierOutput) },
-              ],
+              content: [{ text: this.customQuestionClassifierText() }],
             },
           ],
         };
@@ -4989,6 +4996,37 @@ describe("GEO API", () => {
     expect(deleted.body).toMatchObject({ ok: true });
   });
 
+  it("maps a quoted malformed enterprise rejection to the actionable user message", async () => {
+    const ready = await createReadyProject();
+    broker.customQuestionClassifierRawText = `{"decision":"reject","category":"unrelated","enterpriseRelated":false,"reasonCode":"enterprise_unrelated","reason":"问题询问"FrontMind"是什么企业，该名称在硅基流动企业知识库中无任何记录，既非硅基流动的产品、服务、别名，也未与硅基流动存在任何可验证的关联路径，无法将其绑定至被评估企业。","enterpriseAnchor":null,"offeringAnchor":null,"evidenceRefs":[]}`;
+
+    const rejected = await jsonRequest(
+      `/projects/${encodeURIComponent(ready.projectToken)}/questions/custom`,
+      ready.cookie,
+      {
+        method: "POST",
+        body: {
+          question: "FrontMind是什么企业？",
+          clientRequestId: CUSTOM_QUESTION_CLIENT_REQUEST_ID,
+        },
+      },
+    );
+
+    expect(rejected.response.status).toBe(422);
+    expect(rejected.body).toMatchObject({
+      error: {
+        code: "CUSTOM_QUESTION_ENTERPRISE_UNRELATED",
+        message:
+          "该问题与「Acme」没有明确关系，请重新输入与当前企业相关的非行业排名类问题。",
+      },
+      validation: {
+        state: "rejected",
+        error: { retryable: false },
+      },
+    });
+    expect(broker.customQuestionClassifierTaskCount).toBe(1);
+  });
+
   it("fails closed when a classifier accepts a question without a verified enterprise or offering anchor", async () => {
     const ready = await createReadyProject();
     broker.customQuestionClassifierOutput = {
@@ -6116,6 +6154,7 @@ describe("GEO API", () => {
     const attachments = broker.taskAttachments.at(-1)!;
     expect(attachments.map((attachment) => attachment.filename)).toEqual([
       "geo-optimization-outcome-forecaster.skill.zip",
+      "optimization-forecast-output-template.json",
       "Acme_website_lead_knowledge_base.zip",
       "Acme-current-assessment.json",
       "frontmind-standard-one-month-scenario.json",
@@ -6123,10 +6162,32 @@ describe("GEO API", () => {
     const assessmentAttachment = attachments.find((attachment) =>
       attachment.filename.endsWith("-current-assessment.json"),
     )!;
+    const templateAttachment = attachments.find(
+      (attachment) =>
+        attachment.filename === "optimization-forecast-output-template.json",
+    )!;
     const scenarioAttachment = attachments.find(
       (attachment) =>
         attachment.filename === "frontmind-standard-one-month-scenario.json",
     )!;
+    expect(
+      JSON.parse(
+        broker.uploads.get(templateAttachment.file_id)!.toString("utf8"),
+      ),
+    ).toMatchObject({
+      schemaVersion: 2,
+      dimensions: {
+        semanticAuthority: {
+          structuredDataCompleteness: {
+            gapClosureLow: null,
+            effectType: "direct_asset",
+          },
+        },
+      },
+    });
+    expect(broker.createdFileMimeTypes.get(templateAttachment.file_id)).toBe(
+      "application/json",
+    );
     expect(
       JSON.parse(
         broker.uploads.get(assessmentAttachment.file_id)!.toString("utf8"),
@@ -6202,7 +6263,7 @@ describe("GEO API", () => {
     expect((retried.body as any).project.executionLog.currentEntryId).toBe(
       "optimization-forecast",
     );
-    expect(broker.prompts.at(-1)).toContain("唯一一次结构校验重试");
+    expect(broker.prompts.at(-1)).toContain("一次结构校验重试");
 
     const unavailableFileId = "forecast-output-unavailable";
     broker.downloadErrors.set(
@@ -6232,7 +6293,7 @@ describe("GEO API", () => {
     });
   });
 
-  it("retries one cancelled optimization forecast with an explicit cancellation reason", async () => {
+  it("keeps one automatic retry and allows a later explicit manual forecast retry", async () => {
     const ready = await createServiceReadyProject();
     broker.tasks.set(ready.forecastTaskId, {
       id: ready.forecastTaskId,
@@ -6247,7 +6308,7 @@ describe("GEO API", () => {
 
     expect(retried.response.status).toBe(200);
     expect(broker.forecastTaskCount).toBe(2);
-    expect(broker.prompts.at(-1)).toContain("唯一一次结构校验重试");
+    expect(broker.prompts.at(-1)).toContain("一次结构校验重试");
     expect(broker.prompts.at(-1)).toContain("上一次优化效果评估任务已取消");
     const retriedPayload = retried.body as Record<string, any>;
     const retriedValue = new GeoTokenCodec(
@@ -6280,17 +6341,75 @@ describe("GEO API", () => {
     );
     expect(
       (exhaustedView.body as any).project.optimizationForecastRetryAvailable,
-    ).toBe(false);
-    const exhausted = await jsonRequest(
+    ).toBe(true);
+    expect(broker.forecastTaskCount).toBe(2);
+    broker.completeForecastImmediately = false;
+    const manuallyRetried = await jsonRequest(
       `/projects/${encodeURIComponent(retriedPayload.projectToken)}/optimization-forecast`,
       ready.cookie,
       { method: "POST", body: {} },
     );
-    expect(exhausted.response.status).toBe(409);
-    expect(exhausted.body).toMatchObject({
+    expect(manuallyRetried.response.status).toBe(201);
+    expect(manuallyRetried.body).toMatchObject({
+      project: { optimizationForecast: { status: "running" } },
+    });
+    expect(broker.forecastTaskCount).toBe(3);
+    const manualValue = new GeoTokenCodec(
+      "test-session-secret-at-least-16-characters",
+    ).open<Record<string, unknown>>(
+      (manuallyRetried.body as any).projectToken,
+      "project",
+    ).value;
+    expect(manualValue).toMatchObject({
+      optimizationForecastTaskId: "forecast-3",
+      optimizationForecastAttempt: 3,
+      previousOptimizationForecastTaskIds: [ready.forecastTaskId, "forecast-2"],
+    });
+  });
+
+  it("caps repeated manual forecast retries before creating more files", async () => {
+    const ready = await createServiceReadyProject();
+    broker.tasks.set(ready.forecastTaskId, {
+      id: ready.forecastTaskId,
+      status: "cancelled",
+      output: [],
+    });
+    const codec = new GeoTokenCodec(
+      "test-session-secret-at-least-16-characters",
+    );
+    const value = codec.open<Record<string, any>>(
+      ready.projectToken,
+      "project",
+    ).value;
+    const cappedToken = codec.seal(
+      "project",
+      {
+        ...value,
+        optimizationForecastAttempt: 5,
+      },
+      60 * 60 * 1000,
+    );
+
+    const view = await jsonRequest(
+      `/projects/${encodeURIComponent(cappedToken)}`,
+      ready.cookie,
+    );
+    expect(view.response.status).toBe(200);
+    expect((view.body as any).project.optimizationForecastRetryAvailable).toBe(
+      false,
+    );
+
+    const filesBeforeRetry = broker.createdFileIds.length;
+    const rejected = await jsonRequest(
+      `/projects/${encodeURIComponent(cappedToken)}/optimization-forecast`,
+      ready.cookie,
+      { method: "POST", body: {} },
+    );
+    expect(rejected.response.status).toBe(409);
+    expect(rejected.body).toMatchObject({
       error: { code: "FORECAST_RETRY_EXHAUSTED" },
     });
-    expect(broker.forecastTaskCount).toBe(2);
+    expect(broker.createdFileIds).toHaveLength(filesBeforeRetry);
   });
 
   it("keeps an unrecognized forecast task running without creating a duplicate", async () => {

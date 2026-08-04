@@ -5,7 +5,10 @@ import {
   type AssessmentRawTaskOutput,
 } from "./assessment";
 import {
+  buildGeoOptimizationOutcomeForecastTemplate,
   FORECAST_SKILL_ARCHIVE_FILENAME,
+  FORECAST_OUTPUT_RESULT_FILENAME,
+  FORECAST_OUTPUT_TEMPLATE_FILENAME,
   ForecastTaskOutputValidationError,
   ForecastRawTaskOutputSchema,
   buildGeoOptimizationOutcomeForecasterSkillArchive,
@@ -439,6 +442,28 @@ describe("GEO optimization forecast schema and parser", () => {
     );
   });
 
+  it("keeps business-facing Schema wording out of structural validation", () => {
+    const raw = rawV2Forecast();
+    raw.dimensionNarratives.semanticAuthority = {
+      currentFinding:
+        "官网 Schema 标记仍不完整，权威信息的可追溯性还有提升空间。",
+      nextAction: "完善官网 Schema 标记，并补充独立、可核验的合规来源。",
+    };
+
+    expect(ForecastRawTaskOutputSchema.safeParse(raw).success).toBe(true);
+  });
+
+  it("still rejects actual internal schema and effect tokens in customer copy", () => {
+    const raw = rawV2Forecast();
+    raw.dimensionNarratives.semanticAuthority.currentFinding =
+      "当前结果仍带有 observed_outcome 内部枚举，不应直接展示给客户。";
+    expect(ForecastRawTaskOutputSchema.safeParse(raw).success).toBe(false);
+
+    raw.dimensionNarratives.semanticAuthority.currentFinding =
+      "当前文案错误提到了 output-schema.json，不应直接展示给客户。";
+    expect(ForecastRawTaskOutputSchema.safeParse(raw).success).toBe(false);
+  });
+
   it("rejects incomplete v2 indicators and action mappings instead of filling defaults", () => {
     const missingIndicator = rawV2Forecast();
     missingIndicator.dimensions.semanticVisibility.aiSearchVisibility =
@@ -480,6 +505,24 @@ describe("GEO optimization forecast schema and parser", () => {
     expect(ForecastRawTaskOutputSchema.safeParse(emptyRange).success).toBe(
       false,
     );
+
+    const missingSignalWindow = rawV2Forecast();
+    missingSignalWindow.dimensions.semanticVisibility.aiSearchVisibility.timeToSignalWeeks =
+      null;
+    expect(
+      ForecastRawTaskOutputSchema.safeParse(missingSignalWindow).success,
+    ).toBe(false);
+
+    const excessiveLimitations = rawV2Forecast();
+    excessiveLimitations.limitations = [
+      "限制一说明",
+      "限制二说明",
+      "限制三说明",
+      "限制四说明",
+    ];
+    expect(
+      ForecastRawTaskOutputSchema.safeParse(excessiveLimitations).success,
+    ).toBe(false);
   });
 
   it("strictly parses a fenced nested Base response", () => {
@@ -540,6 +583,59 @@ describe("GEO optimization forecast schema and parser", () => {
         filename: "forecast.json",
       },
     ]);
+  });
+
+  it("prefers a valid typed output_file and safely falls back to inline JSON", async () => {
+    const inline = rawForecast();
+    inline.summary =
+      "这是 inline 通道中的完整预测摘要，仅用于验证安全回退逻辑。";
+    const fromFile = rawForecast();
+    fromFile.summary =
+      "这是 typed output_file 中的完整预测摘要，应作为首选结果。";
+
+    const preferred = await resolveOptimizationOutcomeForecastTaskOutput(
+      {
+        async downloadFile() {
+          return new Response(JSON.stringify(fromFile));
+        },
+        async downloadTaskOutput() {
+          throw new Error("URL fallback should not be used");
+        },
+      },
+      {
+        output: [
+          { type: "output_text", text: JSON.stringify(inline) },
+          {
+            type: "output_file",
+            file_id: "forecast-result",
+            filename: FORECAST_OUTPUT_RESULT_FILENAME,
+          },
+        ],
+      },
+    );
+    expect(preferred.summary).toBe(fromFile.summary);
+
+    const fallback = await resolveOptimizationOutcomeForecastTaskOutput(
+      {
+        async downloadFile() {
+          throw new Error("provider file expired");
+        },
+        async downloadTaskOutput() {
+          throw new Error("URL fallback should not be used");
+        },
+      },
+      {
+        output: [
+          { type: "output_text", text: JSON.stringify(inline) },
+          {
+            type: "output_file",
+            file_id: "expired-forecast-result",
+            filename: FORECAST_OUTPUT_RESULT_FILENAME,
+          },
+        ],
+      },
+    );
+    expect(fallback.summary).toBe(inline.summary);
   });
 
   it("returns a safe forecast error code for invalid downloaded JSON", async () => {
@@ -965,7 +1061,7 @@ describe("deterministic GEO optimization forecast scoring", () => {
 });
 
 describe("forecast Base prompt and audited skill loader", () => {
-  it("loads all four skill files and keeps final scoring on the server", async () => {
+  it("loads the audited skill and invalid-by-default output template", async () => {
     const prompt = await buildOptimizationOutcomeForecastPrompt({
       currentAssessmentFilename: "FrontMind-current-assessment.json",
       knowledgeBaseArchiveFilename: "FrontMind-kb.zip",
@@ -990,23 +1086,41 @@ describe("forecast Base prompt and audited skill loader", () => {
       '"executionScenarioAttachment": "FrontMind-full-execution-scenario.json"',
     );
     expect(prompt).toContain(FORECAST_SKILL_ARCHIVE_FILENAME);
-    expect(prompt).toContain("assistant output_text");
-    expect(prompt).toContain("禁止创建、上传或附加结果 JSON 文件");
+    expect(prompt).toContain(FORECAST_OUTPUT_TEMPLATE_FILENAME);
+    expect(prompt).toContain(FORECAST_OUTPUT_RESULT_FILENAME);
+    expect(prompt).toContain("typed output_file");
+    expect(prompt).toContain("才把同一个完整 JSON 对象直接写入");
     expect(prompt).not.toContain("# FILE:");
-    expect(Buffer.byteLength(prompt, "utf8")).toBeLessThan(4 * 1024);
+    expect(Buffer.byteLength(prompt, "utf8")).toBeLessThan(6 * 1024);
 
     const archive = await buildGeoOptimizationOutcomeForecasterSkillArchive();
     const zip = await JSZip.loadAsync(archive);
     expect(Object.keys(zip.files).sort()).toEqual([
       "MANIFEST.json",
       "SKILL.md",
+      "assets/output-template.json",
       "references/impact-forecast-methodology.md",
       "references/output-schema.json",
       "references/source-manifest.json",
     ]);
     const skillText = await zip.file("SKILL.md")!.async("string");
-    expect(skillText).toContain("final assistant `output_text`");
-    expect(skillText).toContain("Do not create, upload, attach, link");
+    expect(skillText).toContain("typed assistant `output_file`");
+    expect(skillText).toContain(FORECAST_OUTPUT_RESULT_FILENAME);
+    const archivedTemplate = JSON.parse(
+      await zip.file("assets/output-template.json")!.async("string"),
+    );
+    const directTemplate = JSON.parse(
+      (await buildGeoOptimizationOutcomeForecastTemplate()).toString("utf8"),
+    );
+    expect(directTemplate).toEqual(archivedTemplate);
+    expect(ForecastRawTaskOutputSchema.safeParse(directTemplate).success).toBe(
+      false,
+    );
+    expect(
+      Object.values(directTemplate.dimensions).flatMap((dimension) =>
+        Object.values(dimension as Record<string, unknown>),
+      ),
+    ).toHaveLength(13);
     const outputSchema = JSON.parse(
       await zip.file("references/output-schema.json")!.async("string"),
     );

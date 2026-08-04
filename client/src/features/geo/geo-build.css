@@ -4933,6 +4933,15 @@
 .geo-evaluation-support {
   margin-top: 14px;
 }
+.geo-forecast-pending-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  margin-top: 14px;
+}
+.geo-forecast-pending-actions .geo-evaluation-support {
+  margin-top: 0;
+}
 .geo-score-hero {
   display: grid;
   grid-template-columns: 190px minmax(0, 1fr);
@@ -12408,6 +12417,7 @@
 
 @media (prefers-reduced-motion: reduce) {
   .geo-workbench,
+  .is-spinning,
   .geo-spinner,
   .geo-live-dot,
   .geo-orbit,

@@ -206,6 +206,74 @@ describe("trusted task JSON output files", () => {
     expect(result).toEqual({ valid: true, id: 2 });
   });
 
+  it("does not inspect inline output before a preferred valid file", async () => {
+    let inspectedInline = false;
+    const result = await resolveTrustedTaskJsonOutput(
+      {
+        async downloadFile() {
+          return new Response('{"valid":true,"id":7}');
+        },
+        async downloadTaskOutput() {
+          throw new Error("URL fallback should not be used");
+        },
+      },
+      {
+        output: [
+          { type: "output_text", text: "x".repeat(1024 * 1024) },
+          {
+            type: "output_file",
+            file_id: "preferred",
+            filename: "preferred.json",
+          },
+        ],
+      },
+      {
+        preferredChannel: "output_file",
+        inspectInline: () => {
+          inspectedInline = true;
+          throw new Error("preferred file should resolve first");
+        },
+        inspectParsed: inspectTestOutput,
+      },
+    );
+
+    expect(result).toEqual({ valid: true, id: 7 });
+    expect(inspectedInline).toBe(false);
+  });
+
+  it("shares the three-candidate budget across inline and file output", async () => {
+    const downloads: string[] = [];
+    const promise = resolveTrustedTaskJsonOutput(
+      {
+        async downloadFile(fileId) {
+          downloads.push(fileId);
+          return new Response("{}");
+        },
+        async downloadTaskOutput() {
+          throw new Error("URL fallback should not be used");
+        },
+      },
+      {
+        output: [1, 2, 3].map((id) => ({
+          type: "output_file",
+          file_id: `file-${id}`,
+          filename: `candidate-${id}.json`,
+        })),
+      },
+      {
+        inspectInline: (_task, context) => {
+          expect(context.takeCandidate('{"valid":false,"id":1}')).toBe(true);
+          expect(context.takeCandidate('{"valid":false,"id":2}')).toBe(true);
+          return { success: false, code: "SCHEMA_MISMATCH" };
+        },
+        inspectParsed: inspectTestOutput,
+      },
+    );
+
+    await expect(promise).rejects.toMatchObject({ code: "SCHEMA_MISMATCH" });
+    expect(downloads).toEqual(["file-1"]);
+  });
+
   it("falls back from file_id to the provider URL for the same descriptor", async () => {
     const urlDownloads: string[] = [];
     const result = await resolveTrustedTaskJsonOutput(

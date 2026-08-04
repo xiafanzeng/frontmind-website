@@ -369,4 +369,29 @@ describe("refreshGeoProjectOnce", () => {
     ).rejects.toThrow("offline");
     expect(inFlight.has(current.id)).toBe(false);
   });
+
+  it("keeps the refresh fenced until an async observation commit finishes", async () => {
+    let releaseCommit: (() => void) | undefined;
+    const current = project();
+    const updated = project({ updatedAt: "2026-07-22T08:02:00.000Z" });
+    const inFlight = new Map<string, Promise<GeoProject>>();
+    const onSuccess = vi.fn(
+      () =>
+        new Promise<void>((resolve) => {
+          releaseCommit = resolve;
+        }),
+    );
+
+    const request = refreshGeoProjectOnce(current, {
+      fetchProject: vi.fn().mockResolvedValue(updated),
+      inFlight,
+      onSuccess,
+    });
+    await vi.waitFor(() => expect(onSuccess).toHaveBeenCalledTimes(1));
+    expect(inFlight.has(current.id)).toBe(true);
+
+    releaseCommit?.();
+    await expect(request).resolves.toBe(updated);
+    expect(inFlight.has(current.id)).toBe(false);
+  });
 });

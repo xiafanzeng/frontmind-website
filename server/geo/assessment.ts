@@ -6,6 +6,7 @@ import { GeoQuestionCategorySchema } from "./schemas";
 import {
   resolveTrustedTaskJsonOutput,
   TrustedTaskJsonOutputError,
+  type TrustedTaskJsonInlineInspectionContext,
   type TrustedTaskJsonOutputDiagnostics,
 } from "./trusted-task-json-output";
 import {
@@ -879,6 +880,7 @@ function inspectParsedAssessmentTaskOutput(
 export function inspectAssessmentTaskOutput(
   value: unknown,
   validate?: AssessmentTaskOutputValidator,
+  candidateContext?: TrustedTaskJsonInlineInspectionContext,
 ): AssessmentTaskOutputInspection {
   const trustedItems = trustedAssistantOutputItems(value);
   const trustedTexts = trustedAssistantOutputTexts(value);
@@ -913,12 +915,15 @@ export function inspectAssessmentTaskOutput(
   };
 
   for (const item of structuredItems) {
+    if (candidateContext && !candidateContext.takeCandidate(item)) break;
     const parsed = inspectParsedValue(item);
     if (parsed) return { success: true, data: parsed };
   }
 
   for (const candidate of trustedTexts) {
+    if (candidateContext && !candidateContext.canInspectText(candidate)) break;
     for (const jsonText of possibleJsonObjects(candidate)) {
+      if (candidateContext && !candidateContext.takeCandidate(jsonText)) break;
       try {
         const parsed = inspectParsedValue(JSON.parse(jsonText));
         if (parsed) return { success: true, data: parsed };
@@ -997,8 +1002,12 @@ export async function resolveAssessmentTaskOutput(
   try {
     return await resolveTrustedTaskJsonOutput(broker, value, {
       taskId: options.taskId,
-      inspectInline: (task) => {
-        const inspection = inspectAssessmentTaskOutput(task, options.validate);
+      inspectInline: (task, context) => {
+        const inspection = inspectAssessmentTaskOutput(
+          task,
+          options.validate,
+          context,
+        );
         if (inspection.success) return inspection;
         if (inspection.error.code === "NO_TRUSTED_OUTPUT") return undefined;
         return {

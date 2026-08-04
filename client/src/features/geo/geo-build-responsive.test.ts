@@ -49,4 +49,16 @@ describe("GEO assessment and onboarding responsive contracts", () => {
       /\.geo-assessment-scope-note\s*\{[^}]*min-height:\s*0[^}]*border-left:\s*3px solid[^}]*padding:\s*10px 14px/s,
     );
   });
+
+  it("keeps the three visible platform metrics on one row", () => {
+    expect(stylesheet).toMatch(
+      /\.geo-assessment-platform-grid dl,[\s\S]*?\{[^}]*grid-template-columns:\s*repeat\(3,\s*minmax\(0,\s*1fr\)\)/s,
+    );
+  });
+
+  it("disables retry spinner motion when reduced motion is requested", () => {
+    expect(stylesheet).toMatch(
+      /@media \(prefers-reduced-motion: reduce\)[\s\S]*?\.is-spinning,[\s\S]*?animation:\s*none !important/s,
+    );
+  });
 });

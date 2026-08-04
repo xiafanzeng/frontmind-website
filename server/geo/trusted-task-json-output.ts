@@ -6,7 +6,9 @@ import {
   type TrustedAssistantOutputFile,
 } from "./trusted-task-output";
 
-export const TRUSTED_TASK_JSON_MAX_FILE_CANDIDATES = 3;
+export const TRUSTED_TASK_JSON_MAX_CANDIDATES = 3;
+export const TRUSTED_TASK_JSON_MAX_FILE_CANDIDATES =
+  TRUSTED_TASK_JSON_MAX_CANDIDATES;
 export const TRUSTED_TASK_JSON_MAX_TOTAL_BYTES = 4 * 1024 * 1024;
 
 export type TrustedTaskJsonOutputValidationCode =
@@ -68,10 +70,17 @@ type TrustedTaskOutputDownloader = Pick<
   "downloadFile" | "downloadTaskOutput"
 >;
 
+export type TrustedTaskJsonInlineInspectionContext = Readonly<{
+  canInspectText: (value: string) => boolean;
+  takeCandidate: (value: unknown) => boolean;
+}>;
+
 export type ResolveTrustedTaskJsonOutputOptions<T> = Readonly<{
   taskId?: string;
+  preferredChannel?: "inline" | "output_file";
   inspectInline: (
     task: unknown,
+    context: TrustedTaskJsonInlineInspectionContext,
   ) => TrustedTaskJsonCandidateInspection<T> | undefined;
   inspectParsed: (value: unknown) => TrustedTaskJsonCandidateInspection<T>;
 }>;
@@ -189,10 +198,23 @@ async function readResponseWithinSharedBudget(
   return Buffer.concat(chunks, received);
 }
 
+function candidateByteLength(value: unknown) {
+  if (typeof value === "string") return Buffer.byteLength(value, "utf8");
+  try {
+    const serialized = JSON.stringify(value);
+    return typeof serialized === "string"
+      ? Buffer.byteLength(serialized, "utf8")
+      : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
 /**
- * Resolves a task's inline JSON first, then at most three trusted output_file
- * candidates. File bodies share one four-MiB budget and must be complete,
- * strict UTF-8 JSON. The first candidate passing schema and scope wins.
+ * Resolves a task's preferred channel first, with a safe fallback to the
+ * other channel. Inline JSON and trusted output_file candidates share a
+ * three-candidate, four-MiB budget. Files must be complete strict UTF-8 JSON.
+ * The first candidate in channel order passing schema and scope wins.
  */
 export async function resolveTrustedTaskJsonOutput<T>(
   downloader: TrustedTaskOutputDownloader,
@@ -200,14 +222,51 @@ export async function resolveTrustedTaskJsonOutput<T>(
   options: ResolveTrustedTaskJsonOutputOptions<T>,
 ): Promise<T> {
   const failures: CandidateFailure[] = [];
-  const inline = options.inspectInline(task);
-  if (inline?.success) return inline.data;
-  if (inline && !inline.success) {
-    failures.push({
-      code: inline.code,
-      validation: inline.validation,
-      channel: "inline",
-    });
+  const preferOutputFile = options.preferredChannel === "output_file";
+  const budget = {
+    remaining: TRUSTED_TASK_JSON_MAX_TOTAL_BYTES,
+    remainingCandidates: TRUSTED_TASK_JSON_MAX_CANDIDATES,
+  };
+  const inlineContext: TrustedTaskJsonInlineInspectionContext = {
+    canInspectText(value) {
+      if (budget.remainingCandidates <= 0) return false;
+      if (Buffer.byteLength(value, "utf8") <= budget.remaining) return true;
+      budget.remainingCandidates -= 1;
+      budget.remaining = 0;
+      return false;
+    },
+    takeCandidate(value) {
+      if (budget.remainingCandidates <= 0) return false;
+      budget.remainingCandidates -= 1;
+      const byteLength = candidateByteLength(value);
+      if (byteLength === undefined || byteLength > budget.remaining) {
+        budget.remaining = 0;
+        return false;
+      }
+      budget.remaining -= byteLength;
+      return true;
+    },
+  };
+  let inlineInspected = false;
+  let inline: TrustedTaskJsonCandidateInspection<T> | undefined;
+  const resolveInline = () => {
+    if (!inlineInspected) {
+      inlineInspected = true;
+      inline = options.inspectInline(task, inlineContext);
+    }
+    if (inline?.success) return inline.data;
+    if (inline && !inline.success) {
+      failures.push({
+        code: inline.code,
+        validation: inline.validation,
+        channel: "inline",
+      });
+    }
+    return undefined;
+  };
+  if (!preferOutputFile) {
+    const resolvedInline = resolveInline();
+    if (resolvedInline !== undefined) return resolvedInline;
   }
 
   const descriptors = trustedAssistantOutputFiles(task).slice(
@@ -215,10 +274,13 @@ export async function resolveTrustedTaskJsonOutput<T>(
     TRUSTED_TASK_JSON_MAX_FILE_CANDIDATES,
   );
   const resolvedTaskId = taskIdFrom(task, options.taskId);
-  const budget = { remaining: TRUSTED_TASK_JSON_MAX_TOTAL_BYTES };
   let readableFileCandidates = 0;
+  let attemptedFileCandidates = 0;
 
   for (const descriptor of descriptors) {
+    if (budget.remainingCandidates <= 0) break;
+    budget.remainingCandidates -= 1;
+    attemptedFileCandidates += 1;
     const downloaders = trustedOutputFileDownloaders(
       downloader,
       descriptor,
@@ -273,13 +335,18 @@ export async function resolveTrustedTaskJsonOutput<T>(
     });
   }
 
+  if (preferOutputFile) {
+    const resolvedInline = resolveInline();
+    if (resolvedInline !== undefined) return resolvedInline;
+  }
+
   const semanticFailure = bestFailure(
     failures.filter(
       (failure) =>
         failure.code === "SCOPE_MISMATCH" || failure.code === "SCHEMA_MISMATCH",
     ),
   );
-  const failure = (descriptors.length > 0 && readableFileCandidates === 0
+  const failure = (attemptedFileCandidates > 0 && readableFileCandidates === 0
     ? (bestFailure(
         failures.filter(
           (candidate) =>

@@ -134,6 +134,7 @@ import {
   saveGeoProject,
   saveGeoProjectObservationIfCurrent,
 } from "./storage";
+import { commitRemoteProjectObservation as commitRemoteObservation } from "./remote-observation";
 import {
   geoLocalArchiveAssetRefreshKey,
   loadLocalGeoAssetBlobs,
@@ -1363,6 +1364,9 @@ function GeoBuildExperienceZh() {
     useState<string>();
   const [retryingAssessmentProjectId, setRetryingAssessmentProjectId] =
     useState<string>();
+  const [retryingForecastProjectIds, setRetryingForecastProjectIds] = useState<
+    Record<string, boolean>
+  >({});
   const [projects, setProjects] = useState<GeoProject[]>([]);
   const [projectsHydrated, setProjectsHydrated] = useState(false);
   const [activeProjectId, setActiveProjectId] = useState<string | undefined>();
@@ -1568,6 +1572,22 @@ function GeoBuildExperienceZh() {
     [],
   );
 
+  const commitRemoteProjectObservation = useCallback(
+    (operationProject: GeoProject, updated: GeoProject) =>
+      commitRemoteObservation({
+        operationProject,
+        updated,
+        persistIfCurrent: saveGeoProjectObservationIfCurrent,
+        commit: commitProject,
+        onPersistenceFailure: () => {
+          setStorageNotice(
+            "当前浏览器无法持久保存最新项目状态；新任务已保留在本页面，请勿关闭或刷新，并尽快下载备份。",
+          );
+        },
+      }),
+    [commitProject],
+  );
+
   const refreshProject = useCallback(
     (project: GeoProject) =>
       refreshGeoProjectOnce(project, {
@@ -1591,8 +1611,12 @@ function GeoBuildExperienceZh() {
             ...current,
             [projectId]: true,
           })),
-        onSuccess: (updated, refreshedAt) => {
-          commitProject(updated);
+        onSuccess: async (updated, refreshedAt) => {
+          const committed = await commitRemoteProjectObservation(
+            project,
+            updated,
+          );
+          if (!committed) return;
           setLastRefreshedAtByProject((current) => ({
             ...current,
             [updated.id]: refreshedAt,
@@ -1604,7 +1628,7 @@ function GeoBuildExperienceZh() {
             [projectId]: false,
           })),
       }),
-    [commitProject],
+    [commitRemoteProjectObservation],
   );
 
   const refreshActiveProject = useCallback(async () => {
@@ -1648,7 +1672,12 @@ function GeoBuildExperienceZh() {
     setStorageNotice("");
     try {
       const updated = await startGeoCurrentAssessment(project);
-      commitProject(updated);
+      const committed = await commitRemoteProjectObservation(project, updated);
+      if (!committed) {
+        setStorageNotice(
+          "项目已被删除或已由更新的操作推进，已忽略本次迟到的现状评估结果。",
+        );
+      }
     } catch (error) {
       setStorageNotice(`现状评估未能重新启动：${errorMessage(error)}`);
     } finally {
@@ -1657,7 +1686,47 @@ function GeoBuildExperienceZh() {
         current === projectId ? undefined : current,
       );
     }
-  }, [activeProject, commitProject]);
+  }, [activeProject, commitRemoteProjectObservation]);
+
+  const retryOptimizationForecast = useCallback(async () => {
+    const project = activeProject;
+    if (
+      !project ||
+      isGeoStylePreviewProject(project) ||
+      isGeoDraftProject(project) ||
+      !project.remoteToken ||
+      project.assessment?.status !== "ready" ||
+      project.optimizationForecast?.status !== "failed" ||
+      project.optimizationForecastRetryAvailable === false ||
+      forecastStartInFlight.current.has(project.id)
+    )
+      return;
+
+    const projectId = project.id;
+    forecastStartInFlight.current.add(projectId);
+    setRetryingForecastProjectIds((current) => ({
+      ...current,
+      [projectId]: true,
+    }));
+    setStorageNotice("");
+    try {
+      const updated = await startGeoOptimizationForecast(project);
+      const committed = await commitRemoteProjectObservation(project, updated);
+      if (!committed) {
+        setStorageNotice(
+          "项目已被删除或已由更新的操作推进，已忽略本次迟到的优化效果评估结果。",
+        );
+      }
+    } catch (error) {
+      setStorageNotice(`优化效果评估未能重新启动：${errorMessage(error)}`);
+    } finally {
+      forecastStartInFlight.current.delete(projectId);
+      setRetryingForecastProjectIds((current) => ({
+        ...current,
+        [projectId]: false,
+      }));
+    }
+  }, [activeProject, commitRemoteProjectObservation]);
 
   useEffect(() => {
     if (!import.meta.env.DEV || !stylePreviewEnabled) return;
@@ -1912,15 +1981,26 @@ function GeoBuildExperienceZh() {
       return;
     if (forecastStartInFlight.current.has(activeProject.id)) return;
     forecastStartInFlight.current.add(activeProject.id);
-    void startGeoOptimizationForecast(activeProject)
-      .then(commitProject)
+    const operationProject = activeProject;
+    void startGeoOptimizationForecast(operationProject)
+      .then(async (updated) => {
+        const committed = await commitRemoteProjectObservation(
+          operationProject,
+          updated,
+        );
+        if (!committed) {
+          setStorageNotice(
+            "项目已被删除或已由更新的操作推进，已忽略本次迟到的优化效果评估结果。",
+          );
+        }
+      })
       .catch((error) => {
         setStorageNotice(
           `现状评估已生成，优化效果评估将稍后继续：${errorMessage(error)}`,
         );
       })
-      .finally(() => forecastStartInFlight.current.delete(activeProject.id));
-  }, [activeProject, commitProject]);
+      .finally(() => forecastStartInFlight.current.delete(operationProject.id));
+  }, [activeProject, commitRemoteProjectObservation]);
 
   useEffect(() => {
     if (isGeoStylePreviewProject(activeProject)) return;
@@ -1933,15 +2013,28 @@ function GeoBuildExperienceZh() {
       return;
     if (assessmentStartInFlight.current.has(activeProject.id)) return;
     assessmentStartInFlight.current.add(activeProject.id);
-    void startGeoCurrentAssessment(activeProject)
-      .then(commitProject)
+    const operationProject = activeProject;
+    void startGeoCurrentAssessment(operationProject)
+      .then(async (updated) => {
+        const committed = await commitRemoteProjectObservation(
+          operationProject,
+          updated,
+        );
+        if (!committed) {
+          setStorageNotice(
+            "项目已被删除或已由更新的操作推进，已忽略本次迟到的现状评估结果。",
+          );
+        }
+      })
       .catch((error) => {
         setStorageNotice(
           `监控已完成，但现状评估尚未启动：${errorMessage(error)}`,
         );
       })
-      .finally(() => assessmentStartInFlight.current.delete(activeProject.id));
-  }, [activeProject, commitProject]);
+      .finally(() =>
+        assessmentStartInFlight.current.delete(operationProject.id),
+      );
+  }, [activeProject, commitRemoteProjectObservation]);
 
   useEffect(() => {
     if (isGeoStylePreviewProject(activeProject)) return;
@@ -3084,6 +3177,18 @@ function GeoBuildExperienceZh() {
       );
       return true;
     }
+    if (
+      refreshInFlight.current.has(project.id) ||
+      assessmentStartInFlight.current.has(project.id) ||
+      forecastStartInFlight.current.has(project.id)
+    ) {
+      setProjectMenuOpen(false);
+      setDeleteTarget(undefined);
+      setStorageNotice(
+        "项目状态正在刷新或评估任务正在启动；为避免新任务与临时文件失去项目令牌，完成或失败前不能删除项目。",
+      );
+      return true;
+    }
     return false;
   };
 
@@ -4015,6 +4120,10 @@ function GeoBuildExperienceZh() {
                     retryingAssessment={
                       retryingAssessmentProjectId === activeProject.id
                     }
+                    onRetryForecast={retryOptimizationForecast}
+                    retryingForecast={Boolean(
+                      retryingForecastProjectIds[activeProject.id],
+                    )}
                     onStartService={() => {
                       setActiveStage("service_activation");
                     }}
@@ -6193,6 +6302,8 @@ type CurrentAssessmentProps = {
   onContact: () => void;
   onRetryAssessment?: () => void | Promise<void>;
   retryingAssessment?: boolean;
+  onRetryForecast?: () => void | Promise<void>;
+  retryingForecast?: boolean;
   onStartService?: () => void;
 };
 
@@ -6219,6 +6330,8 @@ export function CurrentAssessment({
   onContact,
   onRetryAssessment,
   retryingAssessment = false,
+  onRetryForecast,
+  retryingForecast = false,
   onStartService,
 }: CurrentAssessmentProps) {
   const [view, setView] = useState<AssessmentView>("overview");
@@ -6332,7 +6445,12 @@ export function CurrentAssessment({
           assessmentReady={assessmentReady}
         />
       ) : (
-        <OptimizationForecastView project={project} onContact={onContact} />
+        <OptimizationForecastView
+          project={project}
+          onContact={onContact}
+          onRetryForecast={onRetryForecast}
+          retryingForecast={retryingForecast}
+        />
       )}
 
       {assessmentReady &&
@@ -6809,19 +6927,8 @@ function formatAssessmentRate(value: number | null) {
   return value === null ? "不适用" : `${Math.round(value * 1000) / 10}%`;
 }
 
-const ASSESSMENT_SENTIMENT_LABELS: Record<
-  GeoAssessmentPlatformBreakdown["sentiment"],
-  string
-> = {
-  positive: "正向",
-  neutral: "中性",
-  negative: "负向",
-  mixed: "混合",
-  unknown: "未判定",
-};
-
 const INTERNAL_CUSTOMER_TERM_PATTERN =
-  /\b(?:unavailable|unknown|question_baseline(?:_v2)?|citationList|referenceList|evidenceRefs|calculationBasis|measurementStatus|sourceCount|rationale|observed_outcome|direct_asset|not_applicable|schema)\b|\b(?:[a-z][a-z0-9_-]*\/)?run[-_ ]?[0-9]+\b|来源线索|答案引用|检索参考/i;
+  /\b(?:unavailable|unknown|question_baseline(?:_v2)?|citationList|referenceList|evidenceRefs|calculationBasis|measurementStatus|sourceCount|rationale|observed_outcome|direct_asset|not_applicable|schemaVersion|(?:raw-)?output-schema(?:\.json)?)\b|\b(?:[a-z][a-z0-9_-]*\/)?run[-_ ]?[0-9]+\b|来源线索|答案引用|检索参考/i;
 
 const CUSTOMER_DIMENSION_COPY: Record<
   GeoAssessmentDimension["id"],
@@ -6860,7 +6967,11 @@ const CUSTOMER_DIMENSION_LABELS: Record<GeoAssessmentDimension["id"], string> =
 
 function customerFacingText(value: string | undefined, fallback: string) {
   const normalized = value?.trim();
-  if (!normalized || INTERNAL_CUSTOMER_TERM_PATTERN.test(normalized)) {
+  if (
+    !normalized ||
+    normalized.toLowerCase() === "schema" ||
+    INTERNAL_CUSTOMER_TERM_PATTERN.test(normalized)
+  ) {
     return fallback;
   }
   return normalized;
@@ -6868,7 +6979,9 @@ function customerFacingText(value: string | undefined, fallback: string) {
 
 function optionalCustomerFacingText(value: string | undefined) {
   const normalized = value?.trim();
-  return normalized && !INTERNAL_CUSTOMER_TERM_PATTERN.test(normalized)
+  return normalized &&
+    normalized.toLowerCase() !== "schema" &&
+    !INTERNAL_CUSTOMER_TERM_PATTERN.test(normalized)
     ? normalized
     : undefined;
 }
@@ -6931,10 +7044,6 @@ function AssessmentSupportingResults({
                   </div>
                   <dl>
                     <div>
-                      <dt>品牌提及率</dt>
-                      <dd>{formatAssessmentRate(item.brandMentionRate)}</dd>
-                    </div>
-                    <div>
                       <dt>事实准确率</dt>
                       <dd>{formatAssessmentRate(item.factAccuracy)}</dd>
                     </div>
@@ -6943,16 +7052,8 @@ function AssessmentSupportingResults({
                       <dd>{formatAssessmentRate(item.propositionHitRate)}</dd>
                     </div>
                     <div>
-                      <dt>平均排名</dt>
-                      <dd>{item.averageRank ?? "不适用"}</dd>
-                    </div>
-                    <div>
                       <dt>可追溯来源</dt>
                       <dd>{sourceCount}</dd>
-                    </div>
-                    <div>
-                      <dt>情绪判断</dt>
-                      <dd>{ASSESSMENT_SENTIMENT_LABELS[item.sentiment]}</dd>
                     </div>
                   </dl>
                   {item.verdict && (
@@ -7021,9 +7122,13 @@ function AssessmentSupportingResults({
 export function OptimizationForecastView({
   project,
   onContact,
+  onRetryForecast,
+  retryingForecast = false,
 }: {
   project: GeoProject;
   onContact: () => void;
+  onRetryForecast?: () => void | Promise<void>;
+  retryingForecast?: boolean;
 }) {
   const forecast = project.optimizationForecast;
   const horizonWeeks = forecast?.horizonWeeks ?? 4;
@@ -7057,13 +7162,31 @@ export function OptimizationForecastView({
           )}
           {forecast?.status === "failed" &&
             !isGeoStylePreviewProject(project) && (
-              <button
-                type="button"
-                className="geo-assessment-refresh geo-evaluation-support"
-                onClick={onContact}
-              >
-                联系技术支持
-              </button>
+              <div className="geo-forecast-pending-actions">
+                {onRetryForecast &&
+                  project.optimizationForecastRetryAvailable !== false && (
+                    <button
+                      type="button"
+                      className="geo-assessment-refresh is-retry"
+                      onClick={() => void onRetryForecast()}
+                      disabled={retryingForecast}
+                      aria-busy={retryingForecast}
+                    >
+                      <RotateCw
+                        size={14}
+                        className={retryingForecast ? "is-spinning" : undefined}
+                      />
+                      {retryingForecast ? "正在重新评估" : "重新评估"}
+                    </button>
+                  )}
+                <button
+                  type="button"
+                  className="geo-assessment-refresh geo-evaluation-support"
+                  onClick={onContact}
+                >
+                  联系技术支持
+                </button>
+              </div>
             )}
         </div>
       </section>

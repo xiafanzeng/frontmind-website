@@ -3154,7 +3154,9 @@ export function normalizeGeoProject(
       project.assessmentUpdatingToVersion2 === true ||
       project.assessment_updating_to_version_2 === true,
     optimizationForecastRetryAvailable:
-      project.optimizationForecastRetryAvailable === true,
+      typeof project.optimizationForecastRetryAvailable === "boolean"
+        ? project.optimizationForecastRetryAvailable
+        : undefined,
     files: hasOwnField(project, "attachments", "files")
       ? files
       : files.length > 0

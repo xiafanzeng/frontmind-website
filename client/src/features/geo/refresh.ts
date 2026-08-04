@@ -86,7 +86,10 @@ type RefreshGeoProjectOptions = {
   inFlight: Map<string, Promise<GeoProject>>;
   now?: () => string;
   onStart?: (projectId: string) => void;
-  onSuccess?: (project: GeoProject, refreshedAt: string) => void;
+  onSuccess?: (
+    project: GeoProject,
+    refreshedAt: string,
+  ) => void | Promise<void>;
   onFinish?: (projectId: string) => void;
 };
 
@@ -100,8 +103,11 @@ export function refreshGeoProjectOnce(
   options.onStart?.(project.id);
   const request = Promise.resolve()
     .then(() => options.fetchProject(project))
-    .then((updated) => {
-      options.onSuccess?.(updated, options.now?.() ?? new Date().toISOString());
+    .then(async (updated) => {
+      await options.onSuccess?.(
+        updated,
+        options.now?.() ?? new Date().toISOString(),
+      );
       return updated;
     })
     .finally(() => {

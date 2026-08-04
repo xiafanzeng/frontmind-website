@@ -1,0 +1,275 @@
+{
+  "schemaVersion": 2,
+  "forecastType": "conditional_4_week",
+  "horizonWeeks": 4,
+  "scenario": {
+    "name": "full_execution",
+    "actionIds": [
+      "GEO_A1_entity_facts",
+      "GEO_A2_ai_visibility",
+      "GEO_A3_qa_assets",
+      "GEO_A4_positioning_language",
+      "GEO_A5_site_schema",
+      "GEO_A6_distribution_citations"
+    ],
+    "assumptions": [],
+    "verificationWeeks": [2, 4]
+  },
+  "dimensions": {
+    "semanticVisibility": {
+      "aiSearchVisibility": {
+        "measurementStatus": "projectable",
+        "gapClosureLow": null,
+        "gapClosureHigh": null,
+        "effectType": "observed_outcome",
+        "confidence": null,
+        "actionIds": [
+          "GEO_A2_ai_visibility",
+          "GEO_A3_qa_assets",
+          "GEO_A6_distribution_citations"
+        ],
+        "rationale": null,
+        "dependencies": [],
+        "evidenceRefs": [],
+        "timeToSignalWeeks": null,
+        "verificationMetric": null
+      },
+      "webSearchSov": {
+        "measurementStatus": "projectable",
+        "gapClosureLow": null,
+        "gapClosureHigh": null,
+        "effectType": "observed_outcome",
+        "confidence": null,
+        "actionIds": [
+          "GEO_A2_ai_visibility",
+          "GEO_A3_qa_assets",
+          "GEO_A6_distribution_citations"
+        ],
+        "rationale": null,
+        "dependencies": [],
+        "evidenceRefs": [],
+        "timeToSignalWeeks": null,
+        "verificationMetric": null
+      },
+      "multiPlatformCoverage": {
+        "measurementStatus": "projectable",
+        "gapClosureLow": null,
+        "gapClosureHigh": null,
+        "effectType": "observed_outcome",
+        "confidence": null,
+        "actionIds": ["GEO_A3_qa_assets", "GEO_A6_distribution_citations"],
+        "rationale": null,
+        "dependencies": [],
+        "evidenceRefs": [],
+        "timeToSignalWeeks": null,
+        "verificationMetric": null
+      }
+    },
+    "semanticCoherence": {
+      "corePropositionHitRate": {
+        "measurementStatus": "projectable",
+        "gapClosureLow": null,
+        "gapClosureHigh": null,
+        "effectType": "observed_outcome",
+        "confidence": null,
+        "actionIds": [
+          "GEO_A1_entity_facts",
+          "GEO_A3_qa_assets",
+          "GEO_A4_positioning_language"
+        ],
+        "rationale": null,
+        "dependencies": [],
+        "evidenceRefs": [],
+        "timeToSignalWeeks": null,
+        "verificationMetric": null
+      },
+      "toneConsistency": {
+        "measurementStatus": "projectable",
+        "gapClosureLow": null,
+        "gapClosureHigh": null,
+        "effectType": "direct_asset",
+        "confidence": null,
+        "actionIds": ["GEO_A4_positioning_language"],
+        "rationale": null,
+        "dependencies": [],
+        "evidenceRefs": [],
+        "timeToSignalWeeks": null,
+        "verificationMetric": null
+      }
+    },
+    "semanticRichness": {
+      "questionStageCoverage": {
+        "measurementStatus": "projectable",
+        "gapClosureLow": null,
+        "gapClosureHigh": null,
+        "effectType": "direct_asset",
+        "confidence": null,
+        "actionIds": ["GEO_A3_qa_assets", "GEO_A5_site_schema"],
+        "rationale": null,
+        "dependencies": [],
+        "evidenceRefs": [],
+        "timeToSignalWeeks": null,
+        "verificationMetric": null
+      },
+      "semanticEntityRichness": {
+        "measurementStatus": "projectable",
+        "gapClosureLow": null,
+        "gapClosureHigh": null,
+        "effectType": "direct_asset",
+        "confidence": null,
+        "actionIds": ["GEO_A1_entity_facts", "GEO_A3_qa_assets"],
+        "rationale": null,
+        "dependencies": [],
+        "evidenceRefs": [],
+        "timeToSignalWeeks": null,
+        "verificationMetric": null
+      },
+      "contentFormatDiversity": {
+        "measurementStatus": "projectable",
+        "gapClosureLow": null,
+        "gapClosureHigh": null,
+        "effectType": "direct_asset",
+        "confidence": null,
+        "actionIds": ["GEO_A3_qa_assets", "GEO_A6_distribution_citations"],
+        "rationale": null,
+        "dependencies": [],
+        "evidenceRefs": [],
+        "timeToSignalWeeks": null,
+        "verificationMetric": null
+      }
+    },
+    "semanticAuthority": {
+      "authoritativeSourceRatio": {
+        "measurementStatus": "projectable",
+        "gapClosureLow": null,
+        "gapClosureHigh": null,
+        "effectType": "observed_outcome",
+        "confidence": null,
+        "actionIds": ["GEO_A6_distribution_citations"],
+        "rationale": null,
+        "dependencies": [],
+        "evidenceRefs": [],
+        "timeToSignalWeeks": null,
+        "verificationMetric": null
+      },
+      "structuredDataCompleteness": {
+        "measurementStatus": "projectable",
+        "gapClosureLow": null,
+        "gapClosureHigh": null,
+        "effectType": "direct_asset",
+        "confidence": null,
+        "actionIds": ["GEO_A5_site_schema"],
+        "rationale": null,
+        "dependencies": [],
+        "evidenceRefs": [],
+        "timeToSignalWeeks": null,
+        "verificationMetric": null
+      },
+      "thirdPartyEndorsement": {
+        "measurementStatus": "projectable",
+        "gapClosureLow": null,
+        "gapClosureHigh": null,
+        "effectType": "observed_outcome",
+        "confidence": null,
+        "actionIds": ["GEO_A6_distribution_citations"],
+        "rationale": null,
+        "dependencies": [],
+        "evidenceRefs": [],
+        "timeToSignalWeeks": null,
+        "verificationMetric": null
+      }
+    },
+    "competitiveAdvantage": {
+      "firstMentionRate": {
+        "measurementStatus": "projectable",
+        "gapClosureLow": null,
+        "gapClosureHigh": null,
+        "effectType": "observed_outcome",
+        "confidence": null,
+        "actionIds": ["GEO_A2_ai_visibility", "GEO_A6_distribution_citations"],
+        "rationale": null,
+        "dependencies": [],
+        "evidenceRefs": [],
+        "timeToSignalWeeks": null,
+        "verificationMetric": null
+      },
+      "exclusiveSemanticSpace": {
+        "measurementStatus": "projectable",
+        "gapClosureLow": null,
+        "gapClosureHigh": null,
+        "effectType": "observed_outcome",
+        "confidence": null,
+        "actionIds": [
+          "GEO_A3_qa_assets",
+          "GEO_A4_positioning_language",
+          "GEO_A6_distribution_citations"
+        ],
+        "rationale": null,
+        "dependencies": [],
+        "evidenceRefs": [],
+        "timeToSignalWeeks": null,
+        "verificationMetric": null
+      }
+    }
+  },
+  "roadmap": [
+    {
+      "phase": 1,
+      "weeks": "第 1 周",
+      "title": null,
+      "actions": [],
+      "verificationGate": null
+    },
+    {
+      "phase": 2,
+      "weeks": "第 2 周",
+      "title": null,
+      "actions": [],
+      "verificationGate": null
+    },
+    {
+      "phase": 3,
+      "weeks": "第 3 周",
+      "title": null,
+      "actions": [],
+      "verificationGate": null
+    },
+    {
+      "phase": 4,
+      "weeks": "第 4 周",
+      "title": null,
+      "actions": [],
+      "verificationGate": null
+    }
+  ],
+  "summary": null,
+  "executiveSummary": null,
+  "dimensionNarratives": {
+    "semanticVisibility": {
+      "currentFinding": null,
+      "nextAction": null
+    },
+    "semanticCoherence": {
+      "currentFinding": null,
+      "nextAction": null
+    },
+    "semanticRichness": {
+      "currentFinding": null,
+      "nextAction": null
+    },
+    "semanticAuthority": {
+      "currentFinding": null,
+      "nextAction": null
+    },
+    "competitiveAdvantage": {
+      "currentFinding": null,
+      "nextAction": null
+    }
+  },
+  "limitations": [],
+  "claimGuardrails": {
+    "isGuarantee": false,
+    "planningAssumptionOnly": true,
+    "requiresSameScopeRemeasurement": true
+  }
+}

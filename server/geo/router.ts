@@ -30,11 +30,13 @@ import {
   resolveAssessmentTaskOutput,
 } from "./assessment";
 import {
+  buildGeoOptimizationOutcomeForecastTemplate,
   buildGeoOptimizationOutcomeForecasterSkillArchive,
   buildOptimizationOutcomeForecastPrompt,
   calculateOptimizationOutcomeForecast,
-  FORECAST_SKILL_ARCHIVE_FILENAME,
   FORECAST_HORIZON_WEEKS,
+  FORECAST_OUTPUT_TEMPLATE_FILENAME,
+  FORECAST_SKILL_ARCHIVE_FILENAME,
   ForecastTaskOutputValidationError,
   resolveOptimizationOutcomeForecastTaskOutput,
 } from "./forecast";
@@ -196,6 +198,7 @@ const MAX_ARCHIVE_COPY_BYTES = 150 * 1024 * 1024;
 const MAX_VALIDATED_ARCHIVE_BYTES = MAX_KNOWLEDGE_ARCHIVE_CANDIDATE_BYTES;
 const MAX_ASSESSMENT_INPUT_BYTES = 12 * 1024 * 1024;
 const MAX_FORECAST_INPUT_BYTES = 12 * 1024 * 1024;
+const MAX_OPTIMIZATION_FORECAST_ATTEMPTS = 5;
 // Keep two tabs below the shared 120/minute session status limit.
 const CUSTOM_QUESTION_CLASSIFIER_CLIENT_POLL_MS = 1_500;
 const CUSTOM_QUESTION_CLASSIFIER_UNKNOWN_MAX_OBSERVATIONS = 3;
@@ -322,7 +325,7 @@ type ProjectTokenValue = {
   previousAssessmentTaskIds?: string[];
   optimizationForecastTaskId?: string;
   optimizationForecastSubmittedAt?: string;
-  optimizationForecastAttempt?: 1 | 2;
+  optimizationForecastAttempt?: number;
   optimizationForecastVersion?: 2;
   previousOptimizationForecastTaskIds?: string[];
   serviceOrderId?: string;
@@ -2587,12 +2590,17 @@ export function createGeoRouter(options: GeoRouterOptions = {}): Router {
               filename: scenarioFile.filename || scenarioFilename,
             },
           ],
-          idempotencyKey: `geo:${value.projectId}:optimization-forecast:${value.assessmentTaskId}:planning-target-4w-v4:${value.optimizationForecastAttempt || 1}`,
+          idempotencyKey: `geo:${value.projectId}:optimization-forecast:${value.assessmentTaskId}:planning-target-4w-v5:${value.optimizationForecastAttempt || 1}`,
         },
         [
           {
             filename: FORECAST_SKILL_ARCHIVE_FILENAME,
             body: await buildGeoOptimizationOutcomeForecasterSkillArchive(),
+          },
+          {
+            filename: FORECAST_OUTPUT_TEMPLATE_FILENAME,
+            body: await buildGeoOptimizationOutcomeForecastTemplate(),
+            mimeType: "application/json",
           },
         ],
       );
@@ -4408,29 +4416,34 @@ export function createGeoRouter(options: GeoRouterOptions = {}): Router {
                 : "上一次优化效果评估输出未通过结构校验";
           }
         }
-        if (
-          forecastRetryReason &&
-          (value.optimizationForecastAttempt || 1) < 2
-        ) {
-          value = {
-            ...value,
-            optimizationForecastTaskId: undefined,
-            optimizationForecastAttempt: 2,
-            previousOptimizationForecastTaskIds: Array.from(
-              new Set([
-                ...(value.previousOptimizationForecastTaskIds || []),
-                value.optimizationForecastTaskId,
-              ]),
-            ),
-          };
-        } else {
-          if (forecastRetryReason) {
+        if (forecastRetryReason) {
+          if (
+            (value.optimizationForecastAttempt || 1) >=
+            MAX_OPTIMIZATION_FORECAST_ATTEMPTS
+          ) {
             throw new GeoHttpError(
-              "优化效果评估自动重试次数已用完，请联系技术支持",
+              "优化效果评估重新评估次数已用完，请联系技术支持",
               409,
               "FORECAST_RETRY_EXHAUSTED",
             );
           }
+          const previousForecastTaskId = value.optimizationForecastTaskId;
+          value = {
+            ...value,
+            optimizationForecastTaskId: undefined,
+            optimizationForecastSubmittedAt: undefined,
+            optimizationForecastAttempt: Math.max(
+              2,
+              Math.floor(value.optimizationForecastAttempt || 1) + 1,
+            ),
+            previousOptimizationForecastTaskIds: Array.from(
+              new Set([
+                ...(value.previousOptimizationForecastTaskIds || []),
+                previousForecastTaskId,
+              ]),
+            ),
+          };
+        } else {
           const project = await buildProjectView(
             broker,
             value,
@@ -4579,12 +4592,17 @@ export function createGeoRouter(options: GeoRouterOptions = {}): Router {
                   filename: scenarioFile.filename || scenarioFilename,
                 },
               ],
-              idempotencyKey: `geo:${value.projectId}:optimization-forecast:${value.assessmentTaskId}:planning-target-4w-v4:${value.optimizationForecastAttempt || 1}`,
+              idempotencyKey: `geo:${value.projectId}:optimization-forecast:${value.assessmentTaskId}:planning-target-4w-v5:${value.optimizationForecastAttempt || 1}`,
             },
             [
               {
                 filename: FORECAST_SKILL_ARCHIVE_FILENAME,
                 body: await buildGeoOptimizationOutcomeForecasterSkillArchive(),
+              },
+              {
+                filename: FORECAST_OUTPUT_TEMPLATE_FILENAME,
+                body: await buildGeoOptimizationOutcomeForecastTemplate(),
+                mimeType: "application/json",
               },
             ],
           );
@@ -5982,7 +6000,9 @@ function logAssessmentOutputValidation(error: unknown, task?: BrokerTask) {
   const issuePaths =
     error instanceof AssessmentTaskOutputValidationError
       ? error.issues.map((issue) => issue.path)
-      : [];
+      : error instanceof ForecastTaskOutputValidationError
+        ? error.issues.map((issue) => issue.path)
+        : [];
   const diagnostics =
     error instanceof AssessmentTaskOutputValidationError ||
     error instanceof ForecastTaskOutputValidationError
@@ -6366,7 +6386,8 @@ async function buildProjectView(
       ["failed", "cancelled"].includes(assessmentTaskView?.status || ""));
   const optimizationForecastRetryAvailable =
     Boolean(optimizationForecastTask) &&
-    (value.optimizationForecastAttempt || 1) < 2 &&
+    (value.optimizationForecastAttempt || 1) <
+      MAX_OPTIMIZATION_FORECAST_ATTEMPTS &&
     optimizationForecastTaskView?.status !== "unknown" &&
     (publicOptimizationForecast?.status === "failed" ||
       ["failed", "cancelled"].includes(
@@ -8201,6 +8222,7 @@ function safeCustomQuestionDiagnostic(error: unknown) {
 type GeoTaskSkillPackage = {
   filename: string;
   body: Buffer;
+  mimeType?: string;
 };
 
 async function createGeoTaskWithSkillPackages(
@@ -8217,9 +8239,10 @@ async function createGeoTaskWithSkillPackages(
   const skillAttachments: Array<{ file_id: string; filename: string }> = [];
   try {
     for (const skillPackage of skillPackages) {
+      const mimeType = skillPackage.mimeType || "application/zip";
       const file = await broker.createFile({
         filename: skillPackage.filename,
-        mimeType: "application/zip",
+        mimeType,
         sizeBytes: skillPackage.body.length,
       });
       skillAttachments.push({
@@ -8229,7 +8252,7 @@ async function createGeoTaskWithSkillPackages(
       await broker.uploadFile(
         file.id,
         skillPackage.body,
-        "application/zip",
+        mimeType,
         file.proxy_upload_ticket,
       );
     }
@@ -8505,12 +8528,13 @@ function assertServiceContractEvidence(value: ProjectTokenValue) {
 }
 
 const PUBLIC_ASSESSMENT_INTERNAL_PATTERN =
-  /\b(?:unavailable|unknown|question_baseline(?:_v2)?|citationlist|referencelist|evidencerefs|calculationbasis|observed_outcome|direct_asset|not_applicable|measurementstatus|sourcecount|rationale|schema)\b|\b(?:[a-z][a-z0-9_-]*\/)?run[-_ ]?\d+\b/i;
+  /\b(?:unavailable|unknown|question_baseline(?:_v2)?|citationlist|referencelist|evidencerefs|calculationbasis|observed_outcome|direct_asset|not_applicable|measurementstatus|sourcecount|rationale|schemaversion|(?:raw-)?output-schema(?:\.json)?)\b|\b(?:[a-z][a-z0-9_-]*\/)?run[-_ ]?\d+\b/i;
 
 function publicAssessmentText(value: unknown, fallback: string) {
   if (typeof value !== "string" || !value.trim()) return fallback;
   const normalized = value.trim();
-  return PUBLIC_ASSESSMENT_INTERNAL_PATTERN.test(normalized)
+  return normalized.toLowerCase() === "schema" ||
+    PUBLIC_ASSESSMENT_INTERNAL_PATTERN.test(normalized)
     ? fallback
     : normalized;
 }

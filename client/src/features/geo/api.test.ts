@@ -293,7 +293,7 @@ describe("normalizeGeoProject", () => {
     expect(omitted.knowledgeBaseSupportRequired).toBe(false);
     expect(omitted.questionRetryAvailable).toBe(false);
     expect(omitted.assessmentRetryAvailable).toBe(false);
-    expect(omitted.optimizationForecastRetryAvailable).toBe(false);
+    expect(omitted.optimizationForecastRetryAvailable).toBeUndefined();
   });
 
   it.each([

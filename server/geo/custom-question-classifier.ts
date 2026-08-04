@@ -119,17 +119,69 @@ export function parseCustomQuestionClassificationTaskOutput(
   }
   for (const text of trustedAssistantOutputTexts(task)) {
     for (const candidate of possibleJsonObjects(text)) {
-      try {
-        const parsed = CustomQuestionClassificationSchema.safeParse(
-          JSON.parse(candidate),
-        );
-        if (parsed.success) return parsed.data;
-      } catch {
-        // Try the next trusted assistant text candidate.
-      }
+      const parsed = parseClassificationJsonCandidate(candidate);
+      if (parsed) return parsed;
     }
   }
   return null;
+}
+
+function parseClassificationJsonCandidate(
+  candidate: string,
+): CustomQuestionClassification | undefined {
+  try {
+    const parsed = CustomQuestionClassificationSchema.safeParse(
+      JSON.parse(candidate),
+    );
+    if (parsed.success) return parsed.data;
+  } catch {
+    // A clearly rejected result can still be useful when prose or optional
+    // fields do not form the full JSON contract. The semantic fallback below
+    // never accepts a question or grants access to payment/monitoring.
+  }
+  return inferRejectedClassification(candidate);
+}
+
+function inferRejectedClassification(
+  candidate: string,
+): CustomQuestionClassification | undefined {
+  if (candidate.length > 32 * 1024) return undefined;
+  if (!/\breject\b/i.test(candidate)) return undefined;
+
+  const category = /enterprise[_-]?unrelated/i.test(candidate)
+    ? "unrelated"
+    : /industry[_-]?ranking/i.test(candidate)
+      ? "industry_ranking"
+      : /\bambiguous\b/i.test(candidate)
+        ? "ambiguous"
+        : undefined;
+  if (!category) return undefined;
+
+  const reasonCode =
+    category === "unrelated"
+      ? "enterprise_unrelated"
+      : category === "industry_ranking"
+        ? "industry_ranking"
+        : "ambiguous";
+  const reason =
+    category === "unrelated"
+      ? "模型判定该问题无法绑定至当前企业知识库。"
+      : category === "industry_ranking"
+        ? "模型判定该问题属于行业排名或开放推荐方向。"
+        : "模型无法确认该问题与当前企业知识库的明确关系。";
+
+  return CustomQuestionClassificationSchema.parse({
+    decision: "reject",
+    category,
+    enterpriseRelated:
+      category === "industry_ranking" &&
+      /enterpriseRelated\s*["']?\s*:\s*true/i.test(candidate),
+    reasonCode,
+    reason,
+    enterpriseAnchor: null,
+    offeringAnchor: null,
+    evidenceRefs: [],
+  });
 }
 
 export function validateAcceptedCustomQuestionGrounding(
