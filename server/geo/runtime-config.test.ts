@@ -9,11 +9,10 @@ const secureProductionEnv = {
   NODE_ENV: "production",
   FRONTMIND_GEO_INVITE_CODE: "invite-code-that-is-long-enough",
   FRONTMIND_GEO_SESSION_SECRET: "s".repeat(32),
-  FRONTMIND_GEO_CONTRACT_AUTH_CODE: "c".repeat(32),
 } as NodeJS.ProcessEnv;
 
 describe("GEO runtime configuration", () => {
-  it("accepts a production configuration with independent high-entropy values", () => {
+  it("accepts production with a secure invite code and session secret", () => {
     expect(() =>
       assertGeoRuntimeConfigurationFromEnv(secureProductionEnv),
     ).not.toThrow();
@@ -21,17 +20,28 @@ describe("GEO runtime configuration", () => {
 
   it.each([
     ["missing", undefined],
-    ["short", "short-contract-code"],
-    ["known development default", "frontmind666"],
-    ["placeholder", "replace-with-production-contract-code"],
-  ])("rejects a %s production contract authorization code", (_label, value) => {
-    expect(() =>
-      assertGeoRuntimeConfigurationFromEnv({
+    ["empty", ""],
+    ["stale", "previous-production-contract-code"],
+  ])(
+    "uses the fixed business contract code when the legacy environment value is %s",
+    (_label, value) => {
+      const configuration = resolveGeoRuntimeConfiguration({
         ...secureProductionEnv,
         FRONTMIND_GEO_CONTRACT_AUTH_CODE: value,
-      }),
-    ).toThrow("GEO_RUNTIME_CONFIGURATION_INVALID");
-  });
+      });
+
+      expect(configuration).toMatchObject({
+        contractAuthCode: "frontmind666",
+        configurationError: "",
+      });
+      expect(() =>
+        assertGeoRuntimeConfigurationFromEnv({
+          ...secureProductionEnv,
+          FRONTMIND_GEO_CONTRACT_AUTH_CODE: value,
+        }),
+      ).not.toThrow();
+    },
+  );
 
   it("keeps the public development fallback outside production only", () => {
     expect(resolveGeoRuntimeConfiguration({ NODE_ENV: "test" })).toMatchObject({

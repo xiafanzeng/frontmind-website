@@ -525,7 +525,7 @@ let customQuestionValidationNowMs: number;
 
 const CUSTOM_QUESTION_CLIENT_REQUEST_ID =
   "11111111-1111-4111-8111-111111111111";
-const CONTRACT_AUTH_CODE = "contract-code-from-server-env";
+const CONTRACT_AUTH_CODE = "frontmind666";
 
 beforeEach(async () => {
   broker = new MockBroker();
@@ -1154,14 +1154,9 @@ describe("GEO API", () => {
     },
   );
 
-  it.each([
-    "",
-    "frontmind666",
-    "short-contract-code",
-    "replace-with-contract-auth-code",
-  ])(
-    "fails closed when production uses an unsafe contract authorization code: %s",
-    async (unsafeContractCode) => {
+  it.each(["", "previous-production-contract-code"])(
+    "keeps the fixed contract code when production has a legacy override: %s",
+    async (legacyContractCode) => {
       const app = express();
       app.use(
         "/api/geo",
@@ -1175,16 +1170,16 @@ describe("GEO API", () => {
             FRONTMIND_GEO_INVITE_CODE: "secure-production-invite-20260802",
             FRONTMIND_GEO_SESSION_SECRET:
               "production-session-secret-with-enough-entropy-20260802",
-            FRONTMIND_GEO_CONTRACT_AUTH_CODE: unsafeContractCode,
+            FRONTMIND_GEO_CONTRACT_AUTH_CODE: legacyContractCode,
           },
         }),
       );
-      const unsafeContractServer = app.listen(0);
+      const contractServer = app.listen(0);
       await new Promise<void>((resolve) =>
-        unsafeContractServer.once("listening", resolve),
+        contractServer.once("listening", resolve),
       );
       try {
-        const port = (unsafeContractServer.address() as AddressInfo).port;
+        const port = (contractServer.address() as AddressInfo).port;
         const response = await fetch(
           `http://127.0.0.1:${port}/api/geo/invite/verify`,
           {
@@ -1195,15 +1190,13 @@ describe("GEO API", () => {
             }),
           },
         );
-        expect(response.status).toBe(503);
+        expect(response.status).toBe(200);
         expect(await response.json()).toMatchObject({
-          error: { code: "GEO_NOT_CONFIGURED" },
+          ok: true,
         });
       } finally {
         await new Promise<void>((resolve, reject) =>
-          unsafeContractServer.close((error) =>
-            error ? reject(error) : resolve(),
-          ),
+          contractServer.close((error) => (error ? reject(error) : resolve())),
         );
       }
     },
