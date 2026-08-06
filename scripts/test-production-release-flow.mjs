@@ -13,6 +13,7 @@ import {
 import { tmpdir } from "node:os";
 import path from "node:path";
 
+import { releaseProfile } from "../config/release-profile.mjs";
 import { trackedDistPaths } from "./assert-clean-build-source.mjs";
 
 const projectRoot = path.resolve(import.meta.dirname, "..");
@@ -26,6 +27,33 @@ if (trackedDist.length > 0) {
 }
 const testRoot = await mkdtemp(path.join(tmpdir(), "frontmind-image-release-"));
 const sourceRepository = path.join(testRoot, "source");
+
+if (
+  releaseProfile.channel !== "production" ||
+  releaseProfile.siteUrl !== "https://www.frontmind.net" ||
+  releaseProfile.clientPortalUrl !== "https://dashboard.frontmind.net/login" ||
+  releaseProfile.publishSearchIndexes !== true ||
+  releaseProfile.requireAgentCredential !== true ||
+  !releaseProfile.robotsDirective.includes("index") ||
+  releaseProfile.robotsDirective.includes("noindex")
+) {
+  throw new Error("PRODUCTION_RELEASE_PROFILE_INVALID");
+}
+
+const expectedRuntimeEnvironment = {
+  FRONTMIND_PUBLIC_BASE_URL: "https://www.frontmind.net",
+  FRONTMIND_PRESALES_AGENT_URL:
+    "http://frontmind-dashboard:3001/api/internal/presales",
+  FRONTMIND_AGENT_PROVISIONING_URL:
+    "http://frontmind-dashboard:3001/api/internal/provisioning",
+  FRONTMIND_AGENT_INTERNAL_HTTP_HOSTS: "frontmind-dashboard",
+};
+if (
+  JSON.stringify(releaseProfile.expectedRuntimeEnvironment) !==
+  JSON.stringify(expectedRuntimeEnvironment)
+) {
+  throw new Error("PRODUCTION_RELEASE_PROFILE_ENDPOINTS_INVALID");
+}
 
 execFileSync(
   process.execPath,

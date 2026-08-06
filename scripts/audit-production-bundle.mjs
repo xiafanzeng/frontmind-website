@@ -4,10 +4,18 @@ import {
   readBuildArtifactIdentity,
   verifyBuildArtifactManifest,
 } from "./build-artifact-identity.mjs";
+import { releaseProfile } from "../config/release-profile.mjs";
 import { resolveProductionBuildSource } from "./assert-clean-build-source.mjs";
 
 const projectRoot = resolve(import.meta.dirname, "..");
 const buildRoot = resolve(projectRoot, process.argv[2] || "dist");
+if (
+  releaseProfile.channel !== "production" ||
+  !releaseProfile.publishSearchIndexes ||
+  !releaseProfile.requireAgentCredential
+) {
+  throw new Error("PRODUCTION_RELEASE_PROFILE_INVALID");
+}
 const buildIdentity = await readBuildArtifactIdentity(buildRoot);
 const buildSourceSha = buildIdentity.buildSourceSha;
 if (
@@ -337,6 +345,37 @@ for (const rule of requiredPatterns) {
       label: `missing required ${rule.label}`,
     });
   }
+}
+
+const [publicIndex, publicRobots, publicSitemap, publicLlms] =
+  await Promise.all(
+    ["index.html", "robots.txt", "sitemap.xml", "llms.txt"].map((filename) =>
+      readFile(join(buildRoot, "public", filename), "utf8"),
+    ),
+  );
+if (
+  !publicIndex.includes(`href="${releaseProfile.siteUrl}/"`) ||
+  !publicIndex.includes(
+    `name="robots" content="${releaseProfile.robotsDirective}"`,
+  )
+) {
+  violations.push({
+    file: "dist/public/index.html",
+    label: "production canonical or robots profile",
+  });
+}
+if (
+  !publicRobots.includes("Allow: /") ||
+  !publicRobots.includes(`Sitemap: ${releaseProfile.siteUrl}/sitemap.xml`) ||
+  !publicSitemap.includes(`<loc>${releaseProfile.siteUrl}/</loc>`) ||
+  !publicLlms.includes(
+    `Canonical domain / 规范域名: ${releaseProfile.siteUrl}/`,
+  )
+) {
+  violations.push({
+    file: "dist/public",
+    label: "production search-index profile",
+  });
 }
 
 if (violations.length > 0) {
