@@ -27,6 +27,20 @@ if (trackedDist.length > 0) {
 const testRoot = await mkdtemp(path.join(tmpdir(), "frontmind-image-release-"));
 const sourceRepository = path.join(testRoot, "source");
 
+execFileSync(
+  process.execPath,
+  ["--test", path.join(projectRoot, "scripts/promotion-prebuild-gate.node-test.mjs")],
+  { cwd: projectRoot, stdio: "inherit" },
+);
+execFileSync(
+  process.execPath,
+  [
+    "--test",
+    path.join(projectRoot, "scripts/promotion-prebuild-gate-runtime.node-test.mjs"),
+  ],
+  { cwd: projectRoot, stdio: "inherit" },
+);
+
 function git(repositoryRoot, args) {
   return execFileSync("git", args, {
     cwd: repositoryRoot,
@@ -177,7 +191,7 @@ try {
     "GHCR_USERNAME: ${{ github.actor }}",
     "GHCR_TOKEN: ${{ secrets.GITHUB_TOKEN }}",
     `printf '%s\\n%s\\n' "$GHCR_USERNAME" "$GHCR_TOKEN" |`,
-    "${IMAGE_NAME}@${IMAGE_DIGEST} ${GITHUB_SHA}",
+    "${IMAGE_NAME}@${IMAGE_DIGEST} ${{ needs.promotion-gate.outputs.source_sha }}",
   ]) {
     if (!workflow.includes(required)) {
       throw new Error(`WEBSITE_WORKFLOW_CONTRACT_MISSING:${required}`);
