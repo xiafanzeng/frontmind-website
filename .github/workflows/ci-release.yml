@@ -4,7 +4,6 @@ on:
   pull_request:
   push:
     branches: [main]
-  workflow_dispatch:
 
 concurrency:
   group: website-${{ github.workflow }}-${{ github.ref }}
@@ -18,6 +17,32 @@ env:
   IMAGE_NAME: ghcr.io/${{ github.repository }}
 
 jobs:
+  promotion-gate:
+    name: Verify exact production source before build
+    if: github.event_name == 'push'
+    runs-on: ubuntu-latest
+    permissions:
+      actions: read
+      contents: read
+      pull-requests: read
+    outputs:
+      source_sha: ${{ steps.verify.outputs.source_sha }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+          ref: ${{ github.sha }}
+      - id: verify
+        name: Verify PR, merge tree and exact successful PR workflow
+        shell: bash
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          bash .github/scripts/verify-promotion-main-push.sh
+          echo "source_sha=$GITHUB_SHA" >>"$GITHUB_OUTPUT"
+
   verify:
     name: Verify (${{ matrix.command }})
     runs-on: ubuntu-latest
@@ -42,10 +67,45 @@ jobs:
       - run: pnpm install --frozen-lockfile
       - run: pnpm ${{ matrix.command }}
 
+  promotion-merge-proof:
+    name: Bind successful PR run to its exact test merge
+    if: github.event_name == 'pull_request'
+    needs: verify
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Create canonical PR merge proof
+        shell: bash
+        run: |
+          set -euo pipefail
+          node .github/scripts/write-promotion-merge-proof.mjs \
+            --repository "$GITHUB_REPOSITORY" \
+            --workflow-name "Website CI and release" \
+            --workflow-path ".github/workflows/ci-release.yml" \
+            --output "$RUNNER_TEMP/promotion-merge-proof.json"
+      - name: Upload exact PR merge proof
+        uses: actions/upload-artifact@v4
+        with:
+          name: frontmind-production-merge-proof-attempt-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/promotion-merge-proof.json
+          if-no-files-found: error
+          retention-days: 90
+          compression-level: 0
+
   build:
     name: Build, push and sign image
-    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
-    needs: verify
+    if: >-
+      github.event_name == 'push' &&
+      github.ref == 'refs/heads/main' &&
+      needs.promotion-gate.result == 'success'
+    needs: [verify, promotion-gate]
+    env:
+      FRONTMIND_RELEASE_SOURCE_SHA: ${{ needs.promotion-gate.outputs.source_sha }}
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -53,15 +113,19 @@ jobs:
       id-token: write
     outputs:
       digest: ${{ steps.image.outputs.digest }}
+      source_sha: ${{ needs.promotion-gate.outputs.source_sha }}
     steps:
       - uses: actions/checkout@v4
         with:
+          fetch-depth: 0
           persist-credentials: false
+          ref: ${{ needs.promotion-gate.outputs.source_sha }}
       - name: Verify immutable source checkout
         shell: bash
         run: |
           set -euo pipefail
-          test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
+          test "$(git rev-parse HEAD)" = "$FRONTMIND_RELEASE_SOURCE_SHA"
+          test "$GITHUB_SHA" = "$FRONTMIND_RELEASE_SOURCE_SHA"
           test -z "$(git status --porcelain=v1 --untracked-files=all)"
       - uses: docker/setup-buildx-action@v3
       - uses: docker/login-action@v3
@@ -74,9 +138,9 @@ jobs:
         with:
           context: .
           push: true
-          tags: ${{ env.IMAGE_NAME }}:sha-${{ github.sha }}
+          tags: ${{ env.IMAGE_NAME }}:sha-${{ needs.promotion-gate.outputs.source_sha }}
           build-args: |
-            FRONTMIND_BUILD_SHA=${{ github.sha }}
+            FRONTMIND_BUILD_SHA=${{ needs.promotion-gate.outputs.source_sha }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
           provenance: true
@@ -91,8 +155,9 @@ jobs:
     name: Deploy signed website digest
     if: >-
       github.event_name == 'push' &&
-      github.ref == 'refs/heads/main'
-    needs: [verify, build]
+      github.ref == 'refs/heads/main' &&
+      needs.promotion-gate.result == 'success'
+    needs: [verify, promotion-gate, build]
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -100,7 +165,9 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
+          fetch-depth: 0
           persist-credentials: false
+          ref: ${{ needs.promotion-gate.outputs.source_sha }}
       - uses: docker/setup-buildx-action@v3
       - uses: docker/login-action@v3
         with:
@@ -136,7 +203,7 @@ jobs:
               -o IdentitiesOnly=yes \
               -o StrictHostKeyChecking=yes \
               "$DEPLOY_USER@$DEPLOY_HOST" \
-              "${IMAGE_NAME}@${IMAGE_DIGEST} ${GITHUB_SHA}"
+              "${IMAGE_NAME}@${IMAGE_DIGEST} ${{ needs.promotion-gate.outputs.source_sha }}"
       - name: Record immutable successful-deployment marker
         env:
           IMAGE_DIGEST: ${{ needs.build.outputs.digest }}
