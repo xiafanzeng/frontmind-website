@@ -20,6 +20,7 @@ import type {
   GeoKnowledgeSection,
   GeoKnowledgeSource,
   GeoMonitoringAnswer,
+  GeoMonitoringEdition,
   GeoMonitoringResult,
   GeoMonitoringStatus,
   GeoOptimizationForecastResult,
@@ -33,10 +34,13 @@ import type {
   GeoServiceContractProfile,
   GeoStage,
 } from "./types";
+import { resolveGeoMonitoringEdition } from "./types";
 import { localizedUserFacingError } from "./error-localization";
+import { visibleKnowledgeSectionSummary } from "./knowledge-section-markdown";
 
 const GEO_API_ROOT = "/api/geo";
 const DEFAULT_REQUEST_TIMEOUT_MS = 30_000;
+const GEO_MONITOR_START_TIMEOUT_MS = 75_000;
 const UPLOAD_REQUEST_TIMEOUT_MS = 5 * 60_000;
 const GEO_CUSTOM_QUESTION_POLL_RECOVERY_MAX_MS = 2 * 60_000;
 
@@ -49,6 +53,8 @@ export type GeoUploadedFile = GeoFileReference & {
 };
 
 export type GeoPaymentMethod = "alipay" | "wxpay";
+
+export type GeoServicePaymentMethod = GeoPaymentMethod | "bank_transfer";
 
 export type GeoPaymentCheckout = {
   authorization: string;
@@ -90,6 +96,7 @@ const GEO_PLATFORM_IDS: GeoPlatformId[] = [
   "baiduai",
   "qianwen",
   "kimi",
+  "chatgpt",
 ];
 
 const ASSESSMENT_DIMENSIONS: Array<{
@@ -1056,11 +1063,13 @@ function normalizeSections(value: unknown): GeoKnowledgeSection[] {
       record.content,
       record.body,
     );
-    const overviewSummary = textValue(
-      overviewRecord.summary,
-      overviewRecord.description,
-      record.summary,
-      record.description,
+    const overviewSummary = visibleKnowledgeSectionSummary(
+      textValue(
+        overviewRecord.summary,
+        overviewRecord.description,
+        record.summary,
+        record.description,
+      ),
     );
     const sectionAssetIds = normalizeAssetIds(
       record.assetIds,
@@ -1095,7 +1104,9 @@ function normalizeSections(value: unknown): GeoKnowledgeSection[] {
         {
           id,
           title: leafTitle,
-          summary: textValue(leafRecord.summary, leafRecord.description),
+          summary: visibleKnowledgeSectionSummary(
+            textValue(leafRecord.summary, leafRecord.description),
+          ),
           markdown: textValue(
             leafRecord.markdown,
             leafRecord.content,
@@ -1135,6 +1146,12 @@ function normalizeSections(value: unknown): GeoKnowledgeSection[] {
         evidenceCount: numberValue(record.evidenceCount, record.sourceCount),
         status,
         contentAvailability,
+        titleInjected:
+          typeof record.titleInjected === "boolean"
+            ? record.titleInjected
+            : typeof record.title_injected === "boolean"
+              ? record.title_injected
+              : undefined,
         overview: {
           summary: overviewSummary,
           markdown: overviewMarkdown,
@@ -1281,6 +1298,15 @@ function normalizeKnowledgeBase(
         },
       ]
     : metricsWithoutUntrustedCompleteness;
+  const rawArchiveContractVersion = numberValue(
+    manifest.archiveContractVersion,
+    manifest.archive_contract_version,
+  );
+  const archiveContractVersion = [1, 2, 3, 4].includes(
+    rawArchiveContractVersion ?? 0,
+  )
+    ? (rawArchiveContractVersion as 1 | 2 | 3 | 4)
+    : undefined;
   return {
     companyName: textValue(
       manifest.companyName,
@@ -1302,6 +1328,7 @@ function normalizeKnowledgeBase(
       manifest.packageManifestSha256,
       manifest.package_manifest_sha256,
     ),
+    archiveContractVersion,
     archiveName:
       textValue(archive.filename, archive.name, manifest.archiveName) ??
       "企业知识库.zip",
@@ -1359,6 +1386,7 @@ function normalizePlatformId(value: unknown): GeoPlatformId | undefined {
     tongyiqianwen: "qianwen",
     通义千问: "qianwen",
     kimi: "kimi",
+    chatgpt: "chatgpt",
   };
   return aliases[normalized];
 }
@@ -3175,6 +3203,15 @@ export function normalizeGeoProject(
     )
       ? textValue(project.selectedQuestionId, project.selected_question_id)
       : textValue(fallback?.selectedQuestionId),
+    monitoringEdition: hasOwnField(
+      project,
+      "monitoringEdition",
+      "monitoring_edition",
+    )
+      ? resolveGeoMonitoringEdition(
+          project.monitoringEdition ?? project.monitoring_edition,
+        )
+      : resolveGeoMonitoringEdition(fallback?.monitoringEdition),
     selectedPlatformIds: (() => {
       const normalized = normalizePlatformIds(
         project.selectedPlatformIds ?? project.selected_platform_ids,
@@ -3898,6 +3935,7 @@ export async function createGeoPaymentCheckout(
   input: {
     questionId: string;
     platformIds: GeoPlatformId[];
+    monitoringEdition: GeoMonitoringEdition;
     method: GeoPaymentMethod;
   },
 ): Promise<GeoPaymentCheckout> {
@@ -3916,6 +3954,7 @@ export async function getGeoPaymentStatus(
   input: {
     questionId: string;
     platformIds: GeoPlatformId[];
+    monitoringEdition: GeoMonitoringEdition;
     authorization: string;
   },
 ): Promise<GeoPaymentStatus> {
@@ -3934,6 +3973,7 @@ export async function switchGeoPaymentCheckout(
   input: {
     questionId: string;
     platformIds: GeoPlatformId[];
+    monitoringEdition: GeoMonitoringEdition;
     authorization: string;
     method: GeoPaymentMethod;
   },
@@ -3960,6 +4000,47 @@ export async function createGeoServicePaymentCheckout(
     },
   );
   return normalizeServicePaymentCheckout(payload);
+}
+
+export async function switchGeoServicePaymentCheckout(
+  project: GeoProject,
+  input: {
+    authorization: string;
+    method: GeoPaymentMethod;
+  },
+): Promise<GeoServicePaymentCheckout> {
+  const payload = await requestJson(
+    `/projects/${encodeURIComponent(project.remoteToken)}/services/payments/switch`,
+    {
+      method: "POST",
+      body: JSON.stringify(input),
+    },
+  );
+  return normalizeServicePaymentCheckout(payload);
+}
+
+export async function confirmGeoServiceBankTransfer(
+  project: GeoProject,
+  input: {
+    confirmationCode: string;
+    authorization?: string;
+    purchaseIntent?: string;
+  },
+): Promise<GeoProject> {
+  const payload = await requestJson(
+    `/projects/${encodeURIComponent(project.remoteToken)}/services/payments/bank-transfer/confirm`,
+    {
+      method: "POST",
+      body: JSON.stringify({
+        confirmationCode: input.confirmationCode,
+        ...(input.authorization ? { authorization: input.authorization } : {}),
+        ...(input.purchaseIntent
+          ? { purchaseIntent: input.purchaseIntent }
+          : {}),
+      }),
+    },
+  );
+  return normalizeRequiredProjectResponse(payload, project);
 }
 
 export async function submitGeoServiceContractProfile(
@@ -4067,6 +4148,7 @@ export async function startGeoMonitoring(
   input: {
     questionId: string;
     platformIds: GeoPlatformId[];
+    monitoringEdition: GeoMonitoringEdition;
     paymentAuthorization: string;
   },
 ): Promise<GeoProject> {
@@ -4074,9 +4156,11 @@ export async function startGeoMonitoring(
     `/projects/${encodeURIComponent(project.remoteToken)}/monitoring`,
     {
       method: "POST",
+      timeoutMs: GEO_MONITOR_START_TIMEOUT_MS,
       body: JSON.stringify({
         questionId: input.questionId,
         platformIds: input.platformIds,
+        monitoringEdition: input.monitoringEdition,
         paymentAuthorization: input.paymentAuthorization,
       }),
     },
@@ -4162,15 +4246,41 @@ export async function downloadGeoArchive(
 }
 
 export async function deleteGeoProject(project: GeoProject): Promise<void> {
-  try {
-    await requestJson(`/projects/${encodeURIComponent(project.remoteToken)}`, {
-      method: "DELETE",
-    });
-  } catch (error) {
-    // DELETE is idempotent from the user's perspective. A missing project or
-    // a resource already removed under a retired API Key is the desired end
-    // state, so the device copy can be removed after the existing confirmation.
-    if (error instanceof GeoApiError && error.status === 404) return;
-    throw error;
+  for (let attempt = 0; attempt < 120; attempt += 1) {
+    try {
+      const payload = asRecord(
+        await requestJson(
+          `/projects/${encodeURIComponent(project.remoteToken)}`,
+          { method: "DELETE" },
+        ),
+      );
+      if (payload.ok === true) return;
+      if (payload.status === "deleting") {
+        const retryAfterMs = Math.max(
+          250,
+          Math.min(2_000, numberValue(payload.retryAfterMs) ?? 1_000),
+        );
+        await new Promise((resolve) =>
+          globalThis.setTimeout(resolve, retryAfterMs),
+        );
+        continue;
+      }
+      throw new GeoApiError(
+        "项目删除响应无效，请稍后重试。",
+        502,
+        "PROJECT_DELETE_INVALID_RESPONSE",
+      );
+    } catch (error) {
+      // DELETE is idempotent from the user's perspective. A missing project or
+      // a resource already removed under a retired API Key is the desired end
+      // state, so the device copy can be removed after the existing confirmation.
+      if (error instanceof GeoApiError && error.status === 404) return;
+      throw error;
+    }
   }
+  throw new GeoApiError(
+    "项目仍在终止并清理远端任务，请稍后重试。",
+    504,
+    "PROJECT_DELETE_TIMEOUT",
+  );
 }

@@ -138,6 +138,27 @@ describe("GEO task output normalization", () => {
     );
   });
 
+  it("recovers unescaped ASCII quotes in a trusted generated question", () => {
+    const generated = questionSet();
+    generated.questions[0] = {
+      ...generated.questions[0],
+      question: '企业的"API 网关"能力是否可靠？',
+    };
+    const malformed = JSON.stringify(generated).replace(
+      '\\"API 网关\\"',
+      '"API 网关"',
+    );
+    expect(() => JSON.parse(malformed)).toThrow();
+
+    const parsed = parseQuestionSetFromTask({
+      output: [{ type: "output_text", text: malformed }],
+    });
+
+    expect(parsed?.questions[0].question).toBe(
+      '企业的"API 网关"能力是否可靠？',
+    );
+  });
+
   it("keeps comparisons when optional competitor metadata is missing", () => {
     const genericComparisons = questionSet();
     for (const item of genericComparisons.questions.filter(
@@ -325,6 +346,7 @@ describe("GEO task output normalization", () => {
                     id: "custom-hidden",
                     category: "product",
                     question: "这个产品适合哪些客户？",
+                    questionEnglish: "Which customers is this product for?",
                     selectable: false,
                     ignoredField: "ignored",
                   },
@@ -353,6 +375,7 @@ describe("GEO task output normalization", () => {
     expect(parsed?.questions[0]).toMatchObject({
       id: "product-scenario-01",
       category: "product_scenario",
+      questionEnglish: "Which customers is this product for?",
       selectable: false,
       evidenceRefs: [],
     });

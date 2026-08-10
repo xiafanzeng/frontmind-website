@@ -445,12 +445,37 @@ export const WebsiteLeadPackageManifestV3InputSchema =
     schemaVersion: z.literal(3),
   }).strict();
 
+const PackageArchivePathSchema = z
+  .string()
+  .min(1)
+  .max(600)
+  .refine((value) => value === value.trim(), {
+    message: "archive paths must not contain leading or trailing whitespace",
+  });
+
+/**
+ * Consumer-first path inventory contract. The current finalizer deliberately
+ * continues to emit schema v3; schema v4 is accepted here so a future provider
+ * can distinguish the complete ZIP inventory from paths that may ground model
+ * evidence without changing the legacy evidencePaths meaning in place.
+ */
+export const WebsiteLeadPackageManifestV4InputSchema =
+  WebsiteLeadPackageManifestV3InputSchema.extend({
+    schemaVersion: z.literal(4),
+    allPaths: z.array(PackageArchivePathSchema).min(1).max(MAX_ENTRY_COUNT),
+    evidencePaths: z
+      .array(PackageArchivePathSchema)
+      .min(1)
+      .max(MAX_ENTRY_COUNT),
+  }).strict();
+
 const WebsiteLeadPackageManifestInputSchema = z.discriminatedUnion(
   "schemaVersion",
   [
     WebsiteLeadPackageManifestV1InputSchema,
     WebsiteLeadPackageManifestV2InputSchema,
     WebsiteLeadPackageManifestV3InputSchema,
+    WebsiteLeadPackageManifestV4InputSchema,
   ],
 );
 
@@ -804,7 +829,7 @@ export type KnowledgeBaseManifest = {
   generatedAt: string;
   reportMarkdown: string;
   packageManifestSha256?: string;
-  archiveContractVersion?: 1 | 2 | 3;
+  archiveContractVersion?: 1 | 2 | 3 | 4;
   completeness?: KnowledgeBaseCompleteness;
   metrics: Array<{
     key: string;
@@ -822,6 +847,8 @@ export type KnowledgeBaseManifest = {
     overviewAssetIds?: string[];
     assetIds?: string[];
     leaves?: KnowledgeBaseSectionLeaf[];
+    /** True only for historical DTOs that still contain duplicate injected H2s. */
+    titleInjected?: boolean;
     evidenceCount: number;
     status: "verified" | "inferred" | "needs_verification" | "not_applicable";
     contentAvailability?:
@@ -858,6 +885,11 @@ export type KnowledgeBaseManifest = {
     sourceAssetUrl?: string;
     ownership?: "first_party" | "third_party" | "unknown";
   }>;
+  /**
+   * Server-only complete ZIP inventory. Present only for the explicit v4 path
+   * contract; legacy archives retain evidencePaths=all paths unchanged.
+   */
+  allPaths?: string[];
   /** Server-only allowlist used to bind downstream evidence references. */
   evidencePaths: string[];
 };
@@ -1218,17 +1250,25 @@ async function parseKnowledgeBaseArchiveInternal(
             [
               document.path,
               customerDisplayMarkdown(markdownFiles.get(document.path) || ""),
+              document.title,
             ] as const,
         )
-      : Array.from(markdownFiles.entries()).filter(([filename]) =>
-          branch.prefixes.some((prefix) => filename.startsWith(prefix)),
-        );
+      : Array.from(markdownFiles.entries())
+          .filter(([filename]) =>
+            branch.prefixes.some((prefix) => filename.startsWith(prefix)),
+          )
+          .map(
+            ([filename, content]) => [filename, content, undefined] as const,
+          );
     const markdown = branchFiles
-      .map(([filename, content]) => {
+      .map(([filename, content, documentTitle]) => {
         const publicMarkdown = stripLeadingMarkdownFrontmatter(content).trim();
-        return `## ${
-          titleFromMarkdown(publicMarkdown) || humanizeFilename(filename)
-        }\n\n${publicMarkdown}`;
+        return markdownWithStructuredDocumentTitle(
+          publicMarkdown,
+          documentTitle ||
+            titleFromMarkdown(publicMarkdown) ||
+            humanizeFilename(filename),
+        );
       })
       .join("\n\n---\n\n")
       .slice(0, MAX_SECTION_MARKDOWN_CHARS);
@@ -1285,6 +1325,10 @@ async function parseKnowledgeBaseArchiveInternal(
         : {}),
       ...(assetIds ? { assetIds } : {}),
       ...(leaves ? { leaves } : {}),
+      // This parser no longer introduces the historical duplicate-title shape.
+      // Explicit false prevents authored H2s from being heuristically deleted
+      // by clients handling an otherwise legacy archive contract.
+      titleInjected: false,
       evidenceCount,
       status: aggregateEvidenceStatus(leafStatuses),
       ...(branchEvidence
@@ -1461,7 +1505,13 @@ async function parseKnowledgeBaseArchiveInternal(
     sections,
     sources,
     assets,
-    evidencePaths: files.map((file) => file.path),
+    ...(packageManifest?.schemaVersion === 4
+      ? { allPaths: files.map((file) => file.path) }
+      : {}),
+    evidencePaths:
+      packageManifest?.schemaVersion === 4
+        ? packageManifest.evidencePaths
+        : files.map((file) => file.path),
   };
 }
 
@@ -1500,6 +1550,28 @@ async function parseWebsiteLeadPackageManifest(
           ...asset,
           path: normalizeZipPath(asset.path),
         })),
+        ...(parsed.schemaVersion === 4
+          ? {
+              allPaths: parsed.allPaths.map((entryPath) => {
+                const normalized = normalizeZipPath(entryPath);
+                if (normalized !== entryPath) {
+                  throw new Error(
+                    "Knowledge-base allPaths must use canonical ZIP paths",
+                  );
+                }
+                return normalized;
+              }),
+              evidencePaths: parsed.evidencePaths.map((entryPath) => {
+                const normalized = normalizeZipPath(entryPath);
+                if (normalized !== entryPath) {
+                  throw new Error(
+                    "Knowledge-base evidencePaths must use canonical ZIP paths",
+                  );
+                }
+                return normalized;
+              }),
+            }
+          : {}),
       } as WebsiteLeadPackageManifest,
     };
   } catch (error) {
@@ -2269,6 +2341,61 @@ async function validateWebsiteLeadPackageBudgets(
       "New website knowledge-base package manifest totalFiles does not match the ZIP",
     );
   }
+  if (packageManifest.schemaVersion === 4) {
+    if (
+      new Set(packageManifest.allPaths).size !== packageManifest.allPaths.length
+    ) {
+      throw new Error(
+        "New website knowledge-base path inventory contains duplicate allPaths",
+      );
+    }
+    if (
+      new Set(packageManifest.evidencePaths).size !==
+      packageManifest.evidencePaths.length
+    ) {
+      throw new Error(
+        "New website knowledge-base path inventory contains duplicate evidencePaths",
+      );
+    }
+    const actualPaths = new Set(files.map((file) => file.path));
+    const declaredPaths = new Set(packageManifest.allPaths);
+    if (
+      declaredPaths.size !== actualPaths.size ||
+      Array.from(actualPaths).some((entryPath) => !declaredPaths.has(entryPath))
+    ) {
+      throw new Error(
+        "New website knowledge-base allPaths does not match the ZIP inventory",
+      );
+    }
+    if (
+      packageManifest.evidencePaths.some(
+        (entryPath) => !declaredPaths.has(entryPath),
+      )
+    ) {
+      throw new Error(
+        "New website knowledge-base evidencePaths contains a path absent from allPaths",
+      );
+    }
+    const evidenceDocumentPaths = new Set(
+      packageManifest.documents
+        .filter(
+          (document) =>
+            document.kind === "evidence" && !document.customerVisible,
+        )
+        .map((document) => document.path),
+    );
+    const declaredEvidencePaths = new Set(packageManifest.evidencePaths);
+    if (
+      declaredEvidencePaths.size !== evidenceDocumentPaths.size ||
+      Array.from(evidenceDocumentPaths).some(
+        (entryPath) => !declaredEvidencePaths.has(entryPath),
+      )
+    ) {
+      throw new Error(
+        "New website knowledge-base evidencePaths must match its non-customer evidence documents",
+      );
+    }
+  }
 
   const documentIds = new Set<string>();
   const documentPaths = new Set<string>();
@@ -2409,7 +2536,7 @@ async function validateWebsiteLeadPackageBudgets(
             !evidenceDocument ||
             evidenceDocument.kind !== "evidence" ||
             evidenceDocument.customerVisible ||
-            (packageManifest.schemaVersion !== 3
+            (packageManifest.schemaVersion < 3
               ? evidenceDocument.branchId !== document.branchId
               : Boolean(evidenceDocument.branchId) &&
                 evidenceDocument.branchId !== document.branchId) ||
@@ -2516,7 +2643,7 @@ async function validateWebsiteLeadPackageBudgets(
         evidenceCharacters === undefined ||
         declaredMinimum === undefined ||
         declaredMinimum !==
-          (packageManifest.schemaVersion === 3
+          (packageManifest.schemaVersion >= 3
             ? 8
             : websiteLeadV2LeafMinimum(evidenceCharacters))
       ) {
@@ -2637,7 +2764,7 @@ async function validateWebsiteLeadPackageBudgets(
         );
       }
       const expectedMinimum =
-        packageManifest.schemaVersion === 3
+        packageManifest.schemaVersion >= 3
           ? 0
           : websiteLeadV2OverviewMinimum(
               actualBranchEvidenceCharacters,
@@ -2956,7 +3083,7 @@ async function validateWebsiteLeadPackageBudgets(
         );
       }
       if (
-        packageManifest.schemaVersion === 3 &&
+        packageManifest.schemaVersion >= 3 &&
         (dimensions.alphaCoverage < 0.15 ||
           (!isBadgeType && dimensions.entropy < 0.5))
       ) {
@@ -3318,13 +3445,48 @@ function websiteLeadNarrativeCharacters(
       ),
     )
     .reduce(
-      (total, [, markdown]) => total + narrativeCharacterCountForLeaf(markdown),
+      (total, [, markdown]) =>
+        total + websiteLeadNarrativeCharacterCountForLeaf(markdown),
       0,
     );
 }
 
-function narrativeCharacterCountForLeaf(markdown: string) {
-  return meaningfulCharacterCount(narrativeTextForLeaf(markdown));
+export function websiteLeadNarrativeCharacterCountForLeaf(markdown: string) {
+  return meaningfulCharacterCount(
+    narrativeTextForLeaf(markdown).normalize("NFKC"),
+  );
+}
+
+const sourceInventoryTableHeaderPattern =
+  /^(?:(?:原始|证据|引用|参考|数据)?来源(?:链接|网址|url)?|出处|证据链接|参考资料|链接|网址|sources?|references?|source(?:url|link|page)?|reference(?:url|link)?|url)$/i;
+const sourceInventorySectionHeadingPattern =
+  /(?:^(?:(?:原始|证据|引用|参考|数据|官方|公开|第一方|第三方)来源(?:清单|索引|链接|网址|url)?|来源(?:清单|索引|链接|网址|url|与证据|和证据)?|出处|证据链接|参考资料|素材清单|展示素材|机器清单|证据状态|状态头|sources?|references?|sources? and references?|references? and sources?|asset inventory)$)|(?:来源(?:清单|索引)|原始来源|素材清单|展示素材|机器清单|source index|reference list|asset inventory)$/i;
+
+function markdownTableHeaderCells(tableLines: readonly string[]) {
+  const header = tableLines[0]?.trim();
+  if (!header?.startsWith("|")) return [];
+  return header
+    .slice(1, header.endsWith("|") ? -1 : undefined)
+    .split("|")
+    .map((cell) =>
+      cell.normalize("NFKC").replace(/[*_`]/g, "").replace(/\s+/g, "").trim(),
+    )
+    .filter(Boolean);
+}
+
+function tableIsSourceInventory(tableLines: readonly string[]) {
+  return markdownTableHeaderCells(tableLines).some((cell) =>
+    sourceInventoryTableHeaderPattern.test(cell),
+  );
+}
+
+export function websiteLeadHeadingIsSourceInventory(value: string) {
+  const normalized = value
+    .normalize("NFKC")
+    .replace(/[*_`]/g, "")
+    .replace(/\s+/g, " ")
+    .trim();
+  return sourceInventorySectionHeadingPattern.test(normalized);
 }
 
 function customerDisplayMarkdown(markdown: string) {
@@ -3338,11 +3500,7 @@ function customerDisplayMarkdown(markdown: string) {
       if (excludedSectionDepth !== undefined && depth <= excludedSectionDepth) {
         excludedSectionDepth = undefined;
       }
-      if (
-        /(?:原始|证据|引用|参考)?来源|素材清单|展示素材|机器清单|证据状态|状态头|sources?|references?|asset inventory/i.test(
-          heading[2] || "",
-        )
-      ) {
+      if (websiteLeadHeadingIsSourceInventory(heading[2] || "")) {
         excludedSectionDepth = depth;
         continue;
       }
@@ -3379,11 +3537,7 @@ function narrativeTextForLeaf(markdown: string) {
         excludedSectionDepth = undefined;
       }
       const title = heading[2] || "";
-      if (
-        /(?:原始|证据|引用|参考)?来源|素材清单|展示素材|机器清单|证据状态|状态头|sources?|references?|asset inventory/i.test(
-          title,
-        )
-      ) {
+      if (websiteLeadHeadingIsSourceInventory(title)) {
         excludedSectionDepth = depth;
       }
       // Headings organize the display but are not narrative copy.
@@ -3413,9 +3567,8 @@ function narrativeTextForLeaf(markdown: string) {
         tableIndex += 1;
       }
       index = tableIndex - 1;
-      const tableText = tableLines.join("\n");
-      if (!/(?:来源|出处|证据链接|source|url)/i.test(tableText)) {
-        retainedLines.push(tableText);
+      if (!tableIsSourceInventory(tableLines)) {
+        retainedLines.push(tableLines.join("\n"));
       }
       continue;
     }
@@ -3734,6 +3887,65 @@ function findByBasename(files: Map<string, string>, basename: string) {
 
 function titleFromMarkdown(markdown: string) {
   return markdown.match(/^#\s+(.+)$/m)?.[1]?.trim() || "";
+}
+
+const documentMarkdownHeadingPattern =
+  /^\s{0,3}#{1,6}[\t ]+(.+?)(?:[\t ]+#+[\t ]*)?$/;
+
+function normalizeDocumentMarkdownTitle(value: string) {
+  return value
+    .normalize("NFKC")
+    .trim()
+    .replace(/^[*_~`]+|[*_~`]+$/g, "")
+    .replace(/\s+/g, " ");
+}
+
+function firstVisibleDocumentMarkdownHeading(markdown: string) {
+  let insideLeadingComment = false;
+  for (const rawLine of markdown.split(/\r?\n/)) {
+    let line = rawLine;
+    while (true) {
+      if (insideLeadingComment) {
+        const commentEnd = line.indexOf("-->");
+        if (commentEnd < 0) {
+          line = "";
+          break;
+        }
+        insideLeadingComment = false;
+        line = line.slice(commentEnd + 3);
+      }
+      const visible = line.trimStart();
+      if (!visible) {
+        line = "";
+        break;
+      }
+      if (!/^ {0,3}<!--/.test(line)) {
+        return line.match(documentMarkdownHeadingPattern)?.[1];
+      }
+      const commentEnd = visible.indexOf("-->", 4);
+      if (commentEnd < 0) {
+        insideLeadingComment = true;
+        line = "";
+        break;
+      }
+      line = visible.slice(commentEnd + 3);
+    }
+  }
+  return undefined;
+}
+
+function markdownWithStructuredDocumentTitle(
+  publicMarkdown: string,
+  documentTitle: string,
+) {
+  const normalizedTitle = normalizeDocumentMarkdownTitle(documentTitle);
+  const normalizedFirstHeading = normalizeDocumentMarkdownTitle(
+    firstVisibleDocumentMarkdownHeading(publicMarkdown) || "",
+  );
+  if (normalizedTitle && normalizedFirstHeading === normalizedTitle) {
+    return publicMarkdown;
+  }
+  return [`## ${documentTitle}`, publicMarkdown].filter(Boolean).join("\n\n");
 }
 
 function archiveCompanyName(commonRoot: string, readme: string) {

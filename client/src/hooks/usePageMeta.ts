@@ -15,22 +15,17 @@ type MetaInput = {
 };
 
 const SITE_NAME = "FrontMind";
-const DEFAULT_SITE_URL = "https://www.frontmind.net";
+const SITE_URL = __FRONTMIND_SITE_URL__.replace(/\/+$/, "");
 const DEFAULT_IMAGE = "/home/agent-methodology-wide.webp";
 const LOGO_IMAGE = "/brand/frontmind-logo.svg";
 const AUTHOR = "FrontMind 超前智能";
 const KEYWORDS =
   "FrontMind, 超前智能, GEO, Generative Engine Optimization, AI 搜索优化, AI 品牌可见度, 企业 AI 化, 智能体增长, FDE";
 
-function siteUrl() {
-  const fromEnv = import.meta.env.VITE_SITE_URL || DEFAULT_SITE_URL;
-  return String(fromEnv).replace(/\/+$/, "");
-}
-
 function absoluteUrl(pathOrUrl: string) {
   if (/^https?:\/\//i.test(pathOrUrl)) return pathOrUrl;
   const normalizedPath = pathOrUrl.startsWith("/") ? pathOrUrl : `/${pathOrUrl}`;
-  return `${siteUrl()}${normalizedPath}`;
+  return `${SITE_URL}${normalizedPath}`;
 }
 
 function upsertMeta(name: string, content: string, attribute: "name" | "property" = "name") {
@@ -78,10 +73,10 @@ function buildStructuredData({
   const graph: JsonLd[] = [
     {
       "@type": "Organization",
-      "@id": `${siteUrl()}/#organization`,
+      "@id": `${SITE_URL}/#organization`,
       name: "FrontMind 超前智能",
       alternateName: ["FrontMind", "FrontMind AI"],
-      url: siteUrl(),
+      url: SITE_URL,
       logo: absoluteUrl(LOGO_IMAGE),
       description:
         lang === "zh"
@@ -91,10 +86,10 @@ function buildStructuredData({
     },
     {
       "@type": "WebSite",
-      "@id": `${siteUrl()}/#website`,
-      url: siteUrl(),
+      "@id": `${SITE_URL}/#website`,
+      url: SITE_URL,
       name: SITE_NAME,
-      publisher: { "@id": `${siteUrl()}/#organization` },
+      publisher: { "@id": `${SITE_URL}/#organization` },
       inLanguage: lang === "zh" ? "zh-CN" : "en",
     },
     {
@@ -104,8 +99,8 @@ function buildStructuredData({
       name: title,
       description,
       image: imageUrl,
-      isPartOf: { "@id": `${siteUrl()}/#website` },
-      about: { "@id": `${siteUrl()}/#organization` },
+      isPartOf: { "@id": `${SITE_URL}/#website` },
+      about: { "@id": `${SITE_URL}/#organization` },
       inLanguage: lang === "zh" ? "zh-CN" : "en",
     },
   ];
@@ -147,7 +142,7 @@ export function usePageMeta({
     upsertMeta("description", description);
     upsertMeta("keywords", KEYWORDS);
     upsertMeta("author", AUTHOR);
-    upsertMeta("robots", "index, follow, max-image-preview:large, max-snippet:-1, max-video-preview:-1");
+    upsertMeta("robots", __FRONTMIND_ROBOTS_DIRECTIVE__);
     upsertMeta("theme-color", "#3D1560");
     upsertMeta("og:type", type, "property");
     upsertMeta("og:title", title, "property");

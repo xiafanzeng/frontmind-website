@@ -6,6 +6,7 @@ import {
   AssessmentTaskOutputValidationError,
   assertAssessmentOutputScope,
   buildAssessmentPrompt,
+  buildAssessmentTaskInput,
   buildGeoCurrentStateEvaluatorSkillArchive,
   calculateQuestionBaselineAssessment,
   clampRawIndicator,
@@ -365,6 +366,59 @@ describe("GEO current-state assessment task output", () => {
       "omitted",
       "unverifiable",
     ]);
+  });
+
+  it("recovers unescaped ASCII quotes inside trusted assessment strings", () => {
+    const raw = validV2RawOutput();
+    raw.dimensions.semanticCoherence.toneConsistency.calculationBasis =
+      '五轮回答基调一致为"有优势但有风险"的中立评价。';
+    raw.platformBreakdown[0].verdict =
+      '整体呈现"技术有优势但商业风险显著"的中立评价。';
+    raw.knowledgeVsAnswers[0].kbClaimText =
+      '公司预期达到港交所"已商业化公司"的收入要求。';
+    raw.priorityActions[0].action = '纠正回答中"缺乏企业级管控"的错误认知。';
+    raw.summary =
+      '回答大量强调"商业风险显著"，同时把企业级能力描述为"较弱"，需要依据知识库纠正。';
+
+    const malformed = JSON.stringify(raw).replaceAll('\\"', '"');
+    expect(Buffer.byteLength(malformed, "utf8")).toBeGreaterThan(5_000);
+    expect(() => JSON.parse(malformed)).toThrow();
+
+    const parsed = parseAssessmentTaskOutput({
+      output: [{ type: "output_text", text: malformed }],
+    });
+
+    expect(parsed).toEqual(raw);
+  });
+
+  it("canonicalizes non-core v2 transport fields without inventing core assessment content", () => {
+    const raw = structuredClone(validV2RawOutput()) as Record<string, unknown>;
+    delete raw.limitations;
+    const platformBreakdown = raw.platformBreakdown as Array<
+      Record<string, unknown>
+    >;
+    for (const platform of platformBreakdown) delete platform.sourceCount;
+
+    const inspection = inspectAssessmentTaskOutput({
+      output: [{ type: "output_text", text: JSON.stringify(raw) }],
+    });
+    expect(inspection.success).toBe(true);
+    if (inspection.success) {
+      expect(inspection.data.limitations).toEqual([]);
+      expect(
+        inspection.data.platformBreakdown.map((item) => item.sourceCount),
+      ).toEqual([0, 0]);
+    }
+
+    delete raw.summary;
+    expect(
+      inspectAssessmentTaskOutput({
+        output: [{ type: "output_text", text: JSON.stringify(raw) }],
+      }),
+    ).toMatchObject({
+      success: false,
+      error: { code: "SCHEMA_MISMATCH" },
+    });
   });
 
   it("resolves a trusted JSON output_file after acknowledgement-only inline text", async () => {
@@ -1224,8 +1278,28 @@ describe("assessment prompt", () => {
     expect(prompt).toContain("最终分数、等级和来源数量由服务端计算或校正");
     expect(prompt).toContain("输出 schemaVersion=2");
     expect(prompt).toContain(
-      '"monitoringRecordsFile": "FrontMind-monitoring.json"',
+      "frontmind-current-state-assessment-task-input.json",
     );
+    expect(prompt).not.toContain("FrontMind-monitoring.json");
+    const taskInput = JSON.parse(
+      buildAssessmentTaskInput({
+        companyName: "FrontMind",
+        archiveFilename: "FrontMind-kb.zip",
+        monitoringFilename: "FrontMind-monitoring.json",
+        question: validRawOutput().question,
+        monitoring: {
+          platforms: ["deepseek"],
+          repeatPerPlatform: 5,
+          expectedResponses: 5,
+          successfulResponses: 5,
+          failedResponses: 0,
+        },
+      }).body.toString("utf8"),
+    );
+    expect(taskInput.data.monitoringRecordsFile).toBe(
+      "FrontMind-monitoring.json",
+    );
+    expect(Array.from(prompt).length).toBeLessThanOrEqual(3_000);
   });
 
   it("packages only the evaluator Skill and its output schema", async () => {

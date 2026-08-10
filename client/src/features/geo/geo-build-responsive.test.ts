@@ -8,6 +8,15 @@ const stylesheet = readFileSync(
 );
 
 describe("GEO assessment and onboarding responsive contracts", () => {
+  it("uses two columns for execution steps after removing progress text", () => {
+    expect(stylesheet).toMatch(
+      /\.geo-execution-steps button\s*\{[^}]*grid-template-columns:\s*12px minmax\(0,\s*1fr\);/s,
+    );
+    expect(stylesheet).not.toMatch(
+      /\.geo-execution-steps button\s*\{[^}]*grid-template-columns:[^;}]*\bauto\s*;/s,
+    );
+  });
+
   it("keeps three onboarding steps and the compact 839px navigation", () => {
     expect(stylesheet).toMatch(
       /\.geo-onboarding-steps\s*\{[^}]*grid-template-columns:\s*repeat\(3,/s,

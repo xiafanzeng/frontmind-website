@@ -16,6 +16,7 @@ import {
   communityPostsCn,
   type CommunityPostCn,
 } from "@/data/geoCommunity/communityPostsCn";
+import { secureCommunityArticleLinks } from "@/data/geoCommunity/secureArticleLinks";
 
 const BLOG_IMAGE_BASE = "/geo-community-blogs-cn/images";
 const BLOG_PAGE_SIZE = 8;
@@ -513,21 +514,24 @@ function clampPage(value: number) {
 }
 
 function articleHtmlFor(post: CommunityPostCn) {
-  return post.htmlCn
-    .replace(/^<h2>[\s\S]*?<\/h2>\s*/, "")
-    .replace(/src="\/images\//g, `src="${BLOG_IMAGE_BASE}/`)
-    .replace(
-      /href="\/blogs\/generative-engine-optimization\/([^"/]+)\/?"/g,
-      (_match, slug) => `href="${communityPathToFrontMind(postPath(slug))}"`,
-    )
-    .replace(
-      /href="\/blogs\/([^"/]+)\/?"/g,
-      (_match, slug) => `href="${communityPathToFrontMind(`/blogs/${slug}`)}"`,
-    )
-    .replace(
-      /href="\/blogs\/?"/g,
-      `href="${communityPathToFrontMind("/blogs")}"`,
-    );
+  return secureCommunityArticleLinks(
+    post.htmlCn
+      .replace(/^<h2>[\s\S]*?<\/h2>\s*/, "")
+      .replace(/src="\/images\//g, `src="${BLOG_IMAGE_BASE}/`)
+      .replace(
+        /href="\/blogs\/generative-engine-optimization\/([^"/]+)\/?"/g,
+        (_match, slug) => `href="${communityPathToFrontMind(postPath(slug))}"`,
+      )
+      .replace(
+        /href="\/blogs\/([^"/]+)\/?"/g,
+        (_match, slug) =>
+          `href="${communityPathToFrontMind(`/blogs/${slug}`)}"`,
+      )
+      .replace(
+        /href="\/blogs\/?"/g,
+        `href="${communityPathToFrontMind("/blogs")}"`,
+      ),
+  );
 }
 
 function canonicalBlogCommunityPath(path: string) {

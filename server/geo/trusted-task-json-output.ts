@@ -10,6 +10,7 @@ export const TRUSTED_TASK_JSON_MAX_CANDIDATES = 3;
 export const TRUSTED_TASK_JSON_MAX_FILE_CANDIDATES =
   TRUSTED_TASK_JSON_MAX_CANDIDATES;
 export const TRUSTED_TASK_JSON_MAX_TOTAL_BYTES = 4 * 1024 * 1024;
+export const TRUSTED_TASK_JSON_MAX_QUOTE_REPAIRS = 128;
 
 export type TrustedTaskJsonOutputValidationCode =
   | "OUTPUT_FILE_UNAVAILABLE"
@@ -156,7 +157,200 @@ function trustedOutputFileDownloaders(
   return sources;
 }
 
-function parseStrictUtf8Json(bytes: Buffer) {
+/**
+ * Returns bounded object candidates from one trusted assistant text item.
+ * Callers remain responsible for enforcing the assistant-output trust boundary
+ * and validating the parsed value against their complete schema and scope.
+ */
+export function trustedTaskJsonObjectCandidates(value: string) {
+  if (Buffer.byteLength(value, "utf8") > TRUSTED_TASK_JSON_MAX_TOTAL_BYTES) {
+    return [];
+  }
+  const stripped = value
+    .trim()
+    .replace(/^```(?:json)?\s*/i, "")
+    .replace(/\s*```$/, "")
+    .trim();
+  if (!stripped) return [];
+
+  const balancedCandidates: string[] = [];
+  const firstBrace = stripped.indexOf("{");
+  const lastBrace = stripped.lastIndexOf("}");
+  const outerCandidate =
+    firstBrace >= 0 && lastBrace > firstBrace
+      ? stripped.slice(firstBrace, lastBrace + 1)
+      : undefined;
+
+  let start = -1;
+  let depth = 0;
+  let inString = false;
+  let escaped = false;
+  for (
+    let index = 0;
+    index < stripped.length && balancedCandidates.length < 8;
+    index += 1
+  ) {
+    const character = stripped[index];
+    if (inString) {
+      if (escaped) escaped = false;
+      else if (character === "\\") escaped = true;
+      else if (character === '"') inString = false;
+      continue;
+    }
+    if (character === '"') {
+      inString = true;
+      continue;
+    }
+    if (character === "{") {
+      if (depth === 0) start = index;
+      depth += 1;
+      continue;
+    }
+    if (character !== "}" || depth === 0) continue;
+    depth -= 1;
+    if (depth === 0 && start >= 0) {
+      balancedCandidates.push(stripped.slice(start, index + 1));
+      start = -1;
+    }
+  }
+
+  const results = new Set<string>([stripped]);
+  for (const candidate of balancedCandidates) {
+    if (parseTrustedTaskJsonCandidate(candidate) !== undefined) {
+      results.add(candidate);
+    }
+  }
+  if (outerCandidate) results.add(outerCandidate);
+  for (const candidate of balancedCandidates) results.add(candidate);
+  return Array.from(results).slice(0, TRUSTED_TASK_JSON_MAX_CANDIDATES);
+}
+
+/**
+ * Parses one already-bounded trusted JSON candidate. Strict JSON is always
+ * preferred. Recovery is limited to unescaped ASCII quotes inside strings;
+ * no keys, values, delimiters, or missing content are invented.
+ */
+export function parseTrustedTaskJsonCandidate(
+  value: string,
+): unknown | undefined {
+  if (Buffer.byteLength(value, "utf8") > TRUSTED_TASK_JSON_MAX_TOTAL_BYTES) {
+    return undefined;
+  }
+  try {
+    return JSON.parse(value) as unknown;
+  } catch {
+    const repaired = repairUnescapedJsonStringQuotes(value);
+    if (!repaired) return undefined;
+    try {
+      return JSON.parse(repaired) as unknown;
+    } catch {
+      return undefined;
+    }
+  }
+}
+
+function repairUnescapedJsonStringQuotes(value: string) {
+  let result = "";
+  let inString = false;
+  let escaped = false;
+  let repairCount = 0;
+  let stringIsObjectKey = false;
+  let stringContainerType: "object" | "array" | undefined;
+  const containers: Array<{
+    type: "object" | "array";
+    expectsKey: boolean;
+  }> = [];
+
+  for (let index = 0; index < value.length; index += 1) {
+    const character = value[index];
+    if (!inString) {
+      result += character;
+      const container = containers.at(-1);
+      if (character === '"') {
+        inString = true;
+        stringIsObjectKey =
+          container?.type === "object" && container.expectsKey;
+        stringContainerType = container?.type;
+      } else if (character === "{") {
+        containers.push({ type: "object", expectsKey: true });
+      } else if (character === "[") {
+        containers.push({ type: "array", expectsKey: false });
+      } else if (character === ":" && container?.type === "object") {
+        container.expectsKey = false;
+      } else if (character === "," && container?.type === "object") {
+        container.expectsKey = true;
+      } else if (
+        (character === "}" && container?.type === "object") ||
+        (character === "]" && container?.type === "array")
+      ) {
+        containers.pop();
+      }
+      continue;
+    }
+    if (escaped) {
+      result += character;
+      escaped = false;
+      continue;
+    }
+    if (character === "\\") {
+      result += character;
+      escaped = true;
+      continue;
+    }
+    if (character !== '"') {
+      result += character;
+      continue;
+    }
+
+    let nextIndex = index + 1;
+    while (
+      nextIndex < value.length &&
+      [" ", "\t", "\n", "\r"].includes(value[nextIndex])
+    ) {
+      nextIndex += 1;
+    }
+    const nextCharacter = value[nextIndex];
+    let characterAfterComma = "";
+    if (nextCharacter === ",") {
+      let afterCommaIndex = nextIndex + 1;
+      while (
+        afterCommaIndex < value.length &&
+        [" ", "\t", "\n", "\r"].includes(value[afterCommaIndex])
+      ) {
+        afterCommaIndex += 1;
+      }
+      characterAfterComma = value[afterCommaIndex] || "";
+    }
+    const commaCanFollowValue =
+      nextCharacter === "," &&
+      (stringContainerType === "object"
+        ? characterAfterComma === '"'
+        : stringContainerType === "array"
+          ? ['"', "{", "[", "-"].includes(characterAfterComma) ||
+            /^\d$/.test(characterAfterComma) ||
+            ["t", "f", "n"].includes(characterAfterComma)
+          : false);
+    const isStructuralQuote = stringIsObjectKey
+      ? nextCharacter === ":"
+      : nextIndex === value.length ||
+        commaCanFollowValue ||
+        (nextCharacter === "}" && stringContainerType === "object") ||
+        (nextCharacter === "]" && stringContainerType === "array");
+    if (isStructuralQuote) {
+      result += character;
+      inString = false;
+      continue;
+    }
+
+    repairCount += 1;
+    if (repairCount > TRUSTED_TASK_JSON_MAX_QUOTE_REPAIRS) return undefined;
+    result += '\\"';
+  }
+
+  return repairCount > 0 && !inString ? result : undefined;
+}
+
+function parseUtf8TrustedJson(bytes: Buffer) {
   const withoutBom =
     bytes.length >= 3 &&
     bytes[0] === 0xef &&
@@ -165,7 +359,9 @@ function parseStrictUtf8Json(bytes: Buffer) {
       ? bytes.subarray(3)
       : bytes;
   const text = new TextDecoder("utf-8", { fatal: true }).decode(withoutBom);
-  return JSON.parse(text) as unknown;
+  const parsed = parseTrustedTaskJsonCandidate(text);
+  if (parsed === undefined) throw new SyntaxError("Invalid JSON output file");
+  return parsed;
 }
 
 async function readResponseWithinSharedBudget(
@@ -213,7 +409,8 @@ function candidateByteLength(value: unknown) {
 /**
  * Resolves a task's preferred channel first, with a safe fallback to the
  * other channel. Inline JSON and trusted output_file candidates share a
- * three-candidate, four-MiB budget. Files must be complete strict UTF-8 JSON.
+ * three-candidate, four-MiB budget. Files must be complete UTF-8 JSON; the
+ * same bounded in-string quote recovery is available to both transport paths.
  * The first candidate in channel order passing schema and scope wins.
  */
 export async function resolveTrustedTaskJsonOutput<T>(
@@ -320,7 +517,7 @@ export async function resolveTrustedTaskJsonOutput<T>(
 
     let parsed: unknown;
     try {
-      parsed = parseStrictUtf8Json(bytes);
+      parsed = parseUtf8TrustedJson(bytes);
     } catch {
       failures.push({ code: "INVALID_JSON", channel: "output_file" });
       continue;

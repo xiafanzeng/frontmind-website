@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   acknowledgeGeoCustomQuestionCommitted,
+  confirmGeoServiceBankTransfer,
   createGeoProject,
   createGeoCustomQuestion,
   createGeoPaymentCheckout,
@@ -23,6 +24,7 @@ import {
   startGeoService,
   submitGeoServiceContractProfile,
   switchGeoPaymentCheckout,
+  switchGeoServicePaymentCheckout,
   uploadGeoFile,
   verifyGeoInvitation,
 } from "./api";
@@ -82,11 +84,36 @@ describe("normalizeGeoProject", () => {
     expect(project.knowledgeBase?.sections[0].title).toBe("企业身份");
     expect(project.knowledgeBase?.assets[0].sectionId).toBe("profile");
     expect(project.questions).toHaveLength(20);
+    expect(project.monitoringEdition).toBe("domestic");
     expect(
       project.questions.filter(
         (question) => question.category === "industry_ranking",
       ),
     ).toSatisfy((ranking) => ranking.every((question) => !question.selectable));
+  });
+
+  it("normalizes overseas monitoring without retaining legacy English question metadata", () => {
+    const project = normalizeGeoProject({
+      project: {
+        id: "overseas-project",
+        status: "completed",
+        monitoring_edition: "overseas",
+        selected_platform_ids: ["chatgpt"],
+        questions: [
+          {
+            id: "reputation-01",
+            category: "reputation",
+            question: "FrontMind 值得信赖吗？",
+            question_english: "Is FrontMind trustworthy?",
+            selectable: true,
+          },
+        ],
+      },
+    });
+
+    expect(project.monitoringEdition).toBe("overseas");
+    expect(project.selectedPlatformIds).toEqual(["chatgpt"]);
+    expect(project.questions[0]).not.toHaveProperty("questionEnglish");
   });
 
   it("treats a completed partial recommendation set as ready", () => {
@@ -185,10 +212,12 @@ describe("normalizeGeoProject", () => {
         status: "completed",
         knowledgeBase: {
           summary: "正式知识体系",
+          archiveContractVersion: 3,
           sections: [
             {
               id: "products-services",
               title: "产品与服务",
+              titleInjected: false,
               summary: "产品族正式综述",
               markdown: "旧版合并正文",
               overviewMarkdown: "## 产品与服务综述\n正式对外正文。",
@@ -229,6 +258,8 @@ describe("normalizeGeoProject", () => {
     });
 
     const section = project.knowledgeBase?.sections[0];
+    expect(project.knowledgeBase?.archiveContractVersion).toBe(3);
+    expect(section?.titleInjected).toBe(false);
     expect(section?.overview).toEqual({
       summary: "产品族正式综述",
       markdown: "## 产品与服务综述\n正式对外正文。",
@@ -253,6 +284,62 @@ describe("normalizeGeoProject", () => {
       previewUrl: undefined,
       url: undefined,
     });
+  });
+
+  it("normalizes the explicit archive contract v4 marker", () => {
+    const project = normalizeGeoProject({
+      project: {
+        id: "archive-contract-v4",
+        status: "completed",
+        knowledgeBase: {
+          summary: "v4 企业知识库",
+          archive_contract_version: 4,
+          sections: [],
+        },
+      },
+    });
+
+    expect(project.knowledgeBase?.archiveContractVersion).toBe(4);
+  });
+
+  it("drops historical unavailable-summary markers while preserving real summaries", () => {
+    const project = normalizeGeoProject({
+      project: {
+        id: "historical-empty-kb-summaries",
+        status: "completed",
+        knowledgeBase: {
+          summary: "企业知识库摘要",
+          sections: [
+            {
+              id: "company",
+              title: "企业与品牌",
+              summary: " 暂无可展示摘要。 ",
+              leaves: [
+                {
+                  id: "company-profile",
+                  title: "企业简介",
+                  summary: "暂无可展示摘要",
+                },
+              ],
+            },
+            {
+              id: "products",
+              title: "产品与服务",
+              summary: "核心产品和服务范围。",
+            },
+          ],
+        },
+      },
+    });
+
+    expect(project.knowledgeBase?.sections[0]).toMatchObject({
+      summary: undefined,
+      overview: { summary: undefined },
+      leaves: [{ summary: undefined }],
+    });
+    expect(project.knowledgeBase?.sections[1]?.summary).toBe(
+      "核心产品和服务范围。",
+    );
   });
 
   it("drops legacy knowledge-base retry fields while preserving other actions", () => {
@@ -1612,25 +1699,58 @@ describe("monitoring and assessment API", () => {
     );
   });
 
-  it("does not hide non-404 project deletion failures", async () => {
+  it("does not hide incomplete physical project deletion failures", async () => {
     const fetchMock = vi.fn<typeof fetch>().mockResolvedValueOnce(
       new Response(
         JSON.stringify({
           ok: false,
           error: {
-            code: "PROJECT_ORDER_DELETE_BLOCKED",
-            message: "仍有待履约订单",
+            code: "PROJECT_DELETE_INCOMPLETE",
+            message: "远端资源尚未全部清理",
           },
         }),
-        { status: 409, headers: { "content-type": "application/json" } },
+        { status: 502, headers: { "content-type": "application/json" } },
       ),
     );
     vi.stubGlobal("fetch", fetchMock);
 
     await expect(deleteGeoProject(project)).rejects.toMatchObject({
-      status: 409,
-      code: "PROJECT_ORDER_DELETE_BLOCKED",
+      status: 502,
+      code: "PROJECT_DELETE_INCOMPLETE",
     });
+  });
+
+  it("retries an in-flight project purge until the server confirms deletion", async () => {
+    vi.useFakeTimers();
+    const fetchMock = vi
+      .fn<typeof fetch>()
+      .mockResolvedValueOnce(
+        new Response(
+          JSON.stringify({
+            schemaVersion: 1,
+            projectId: project.id,
+            status: "deleting",
+            deletedTasks: 1,
+            deletedFiles: 2,
+            pendingReservations: 1,
+            remainingTasks: 1,
+            retryAfterMs: 250,
+          }),
+          { status: 202, headers: { "content-type": "application/json" } },
+        ),
+      )
+      .mockResolvedValueOnce(
+        new Response(JSON.stringify({ ok: true }), {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        }),
+      );
+    vi.stubGlobal("fetch", fetchMock);
+
+    const deletion = deleteGeoProject(project);
+    await vi.advanceTimersByTimeAsync(250);
+    await expect(deletion).resolves.toBeUndefined();
+    expect(fetchMock).toHaveBeenCalledTimes(2);
   });
 
   it("creates and checks a server-priced ZPAY checkout", async () => {
@@ -1700,6 +1820,7 @@ describe("monitoring and assessment API", () => {
     const checkout = await createGeoPaymentCheckout(project, {
       questionId: "reputation-01",
       platformIds: ["doubao", "kimi"],
+      monitoringEdition: "domestic",
       method: "alipay",
     });
     expect(checkout).toMatchObject({
@@ -1710,6 +1831,7 @@ describe("monitoring and assessment API", () => {
     expect(JSON.parse(String(fetchMock.mock.calls[0][1]?.body))).toEqual({
       questionId: "reputation-01",
       platformIds: ["doubao", "kimi"],
+      monitoringEdition: "domestic",
       method: "alipay",
     });
 
@@ -1717,6 +1839,7 @@ describe("monitoring and assessment API", () => {
       switchGeoPaymentCheckout(project, {
         questionId: "reputation-01",
         platformIds: ["doubao", "kimi"],
+        monitoringEdition: "domestic",
         authorization: checkout.authorization,
         method: "wxpay",
       }),
@@ -1731,6 +1854,7 @@ describe("monitoring and assessment API", () => {
     expect(JSON.parse(String(fetchMock.mock.calls[1][1]?.body))).toEqual({
       questionId: "reputation-01",
       platformIds: ["doubao", "kimi"],
+      monitoringEdition: "domestic",
       authorization: checkout.authorization,
       method: "wxpay",
     });
@@ -1739,6 +1863,7 @@ describe("monitoring and assessment API", () => {
       getGeoPaymentStatus(project, {
         questionId: "reputation-01",
         platformIds: ["doubao", "kimi"],
+        monitoringEdition: "domestic",
         authorization: checkout.authorization,
       }),
     ).resolves.toMatchObject({
@@ -1798,6 +1923,7 @@ describe("monitoring and assessment API", () => {
     const input = {
       questionId: "reputation-01",
       platformIds: ["doubao", "kimi"] as ("doubao" | "kimi")[],
+      monitoringEdition: "domestic" as const,
       authorization: "signed-payment-authorization",
     };
 
@@ -3733,6 +3859,7 @@ describe("monitoring and assessment API", () => {
       createGeoPaymentCheckout(project, {
         questionId: "reputation-01",
         platformIds: ["doubao"],
+        monitoringEdition: "domestic",
         method: "wxpay",
       }),
     ).rejects.toMatchObject({ code: "INVALID_PAYMENT_CHECKOUT" });
@@ -3908,6 +4035,113 @@ describe("monitoring and assessment API", () => {
     });
   });
 
+  it("switches a service checkout and sends only bank-confirmation inputs", async () => {
+    const orderId = "202607221800009876543210";
+    const authorization = "signed-service-authorization";
+    const switchedPayment = {
+      payment: {
+        authorization,
+        orderId,
+        amountFen: 200_000,
+        category: "reputation",
+        billingMonths: 1,
+        expiresAt: "2026-07-23T10:00:00.000Z",
+        action: "https://zpayz.cn/submit.php",
+        method: "POST",
+        fields: {
+          pid: "merchant123",
+          type: "alipay",
+          out_trade_no: orderId,
+          notify_url: "https://frontmind.net/api/geo/payments/notify",
+          return_url: "https://frontmind.net/api/geo/payments/return",
+          name: "FrontMind GEO 美誉舆情优化服务（1个问题 / 1个月）",
+          money: "2000.00",
+          param: authorization,
+          sign: "switched-signature",
+          sign_type: "MD5",
+        },
+      },
+    };
+    const bankConfirmedProject = {
+      projectToken: "bank-confirmed-project-token",
+      project: {
+        id: "project-1",
+        stage: "service_activation",
+        serviceActivation: {
+          status: "account_setup_required",
+          questionId: "reputation-01",
+          category: "reputation",
+          amountFen: 200_000,
+          billingMonths: 1,
+          orderId,
+          paidAt: "2026-07-22T10:05:00.000Z",
+        },
+      },
+    };
+    const fetchMock = vi
+      .fn<typeof fetch>()
+      .mockResolvedValueOnce(
+        new Response(JSON.stringify(switchedPayment), {
+          headers: { "content-type": "application/json" },
+        }),
+      )
+      .mockResolvedValueOnce(
+        new Response(JSON.stringify(bankConfirmedProject), {
+          headers: { "content-type": "application/json" },
+        }),
+      )
+      .mockResolvedValueOnce(
+        new Response(JSON.stringify(bankConfirmedProject), {
+          headers: { "content-type": "application/json" },
+        }),
+      );
+    vi.stubGlobal("fetch", fetchMock);
+
+    await expect(
+      switchGeoServicePaymentCheckout(project, {
+        authorization,
+        method: "alipay",
+      }),
+    ).resolves.toMatchObject({
+      authorization,
+      orderId,
+      fields: { type: "alipay" },
+    });
+    expect(fetchMock.mock.calls[0][0]).toBe(
+      "/api/geo/projects/signed-project-token/services/payments/switch",
+    );
+    expect(JSON.parse(String(fetchMock.mock.calls[0][1]?.body))).toEqual({
+      authorization,
+      method: "alipay",
+    });
+
+    await expect(
+      confirmGeoServiceBankTransfer(project, {
+        confirmationCode: "administrator-bank-code",
+        authorization,
+        purchaseIntent: "one-time-purchase-intent-001",
+      }),
+    ).resolves.toMatchObject({
+      remoteToken: "bank-confirmed-project-token",
+      serviceActivation: { status: "account_setup_required" },
+    });
+    expect(fetchMock.mock.calls[1][0]).toBe(
+      "/api/geo/projects/signed-project-token/services/payments/bank-transfer/confirm",
+    );
+    expect(JSON.parse(String(fetchMock.mock.calls[1][1]?.body))).toEqual({
+      confirmationCode: "administrator-bank-code",
+      authorization,
+      purchaseIntent: "one-time-purchase-intent-001",
+    });
+
+    await confirmGeoServiceBankTransfer(project, {
+      confirmationCode: "direct-bank-code",
+    });
+    expect(JSON.parse(String(fetchMock.mock.calls[2][1]?.body))).toEqual({
+      confirmationCode: "direct-bank-code",
+    });
+  });
+
   it("sends only account credentials and display name to the website account endpoint", async () => {
     const fetchMock = vi.fn<typeof fetch>().mockResolvedValue(
       new Response(
@@ -4044,6 +4278,7 @@ describe("monitoring and assessment API", () => {
     const updated = await startGeoMonitoring(project, {
       questionId: "reputation-01",
       platformIds: ["doubao", "kimi"],
+      monitoringEdition: "domestic",
       paymentAuthorization: "paid-order-token",
     });
 
@@ -4053,9 +4288,41 @@ describe("monitoring and assessment API", () => {
     expect(JSON.parse(String(fetchMock.mock.calls[0][1]?.body))).toEqual({
       questionId: "reputation-01",
       platformIds: ["doubao", "kimi"],
+      monitoringEdition: "domestic",
       paymentAuthorization: "paid-order-token",
     });
     expect(updated.monitoring?.runId).toBe("run-1");
+  });
+
+  it("keeps monitor activation alive beyond the default JSON timeout", async () => {
+    vi.useFakeTimers();
+    const fetchMock = vi.fn<typeof fetch>().mockImplementation(
+      (_input, init) =>
+        new Promise<Response>((_resolve, reject) => {
+          init?.signal?.addEventListener(
+            "abort",
+            () => reject(init.signal?.reason),
+            { once: true },
+          );
+        }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    const result = startGeoMonitoring(project, {
+      questionId: "reputation-01",
+      platformIds: ["chatgpt"],
+      monitoringEdition: "overseas",
+      paymentAuthorization: "paid-order-token",
+    }).catch((reason: unknown) => reason);
+    const signal = fetchMock.mock.calls[0]?.[1]?.signal as AbortSignal;
+
+    await vi.advanceTimersByTimeAsync(30_000);
+    expect(signal.aborted).toBe(false);
+    await vi.advanceTimersByTimeAsync(45_000);
+    await expect(result).resolves.toMatchObject({
+      code: "REQUEST_TIMEOUT",
+      status: 408,
+    });
   });
 
   it("starts assessment through an explicit POST without a request body", async () => {

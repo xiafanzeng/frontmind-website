@@ -57,7 +57,7 @@ const CleanupTargetSchema = z
     // before upstream tasks became permanent evidence. The transform strips it
     // so no cleanup callback can request task deletion.
     taskId: z.string().min(1).max(200).optional(),
-    temporaryFileIds: z.array(z.string().min(1).max(200)).max(22).default([]),
+    temporaryFileIds: z.array(z.string().min(1).max(200)).max(26).default([]),
   })
   .strict()
   .transform(({ temporaryFileIds }) => ({ temporaryFileIds }));
@@ -90,8 +90,10 @@ const CustomQuestionValidationRecordSchema = z
     ]),
     archiveAttachment: StoredAttachmentSchema.optional(),
     skillAttachment: StoredAttachmentSchema.optional(),
+    promptInputAttachment: StoredAttachmentSchema.optional(),
     archiveStagingAttachment: StoredAttachmentSchema.optional(),
     skillStagingAttachment: StoredAttachmentSchema.optional(),
+    promptInputStagingAttachment: StoredAttachmentSchema.optional(),
     orphanedTemporaryFileIds: z
       .array(z.string().min(1).max(200))
       .max(20)
@@ -155,6 +157,10 @@ const TombstoneSchema = z
     key: z.string().regex(/^[a-f0-9]{64}$/),
     deletedAt: z.string().datetime({ offset: true }),
     expiresAt: z.string().datetime({ offset: true }),
+    projectHash: z
+      .string()
+      .regex(/^[a-f0-9]{64}$/)
+      .optional(),
     cleanupTarget: CleanupTargetSchema.optional(),
   })
   .strict();
@@ -228,6 +234,11 @@ export type GeoProjectDeletionFenceOptions = {
   force?: boolean;
 };
 
+export type GeoProjectDeletionTargets = {
+  taskIds: string[];
+  temporaryFileIds: string[];
+};
+
 export interface GeoCustomQuestionValidationStore {
   assertReady(): Promise<void>;
   persistenceIdentity(): Promise<string>;
@@ -253,6 +264,11 @@ export interface GeoCustomQuestionValidationStore {
     projectId: string,
     options?: GeoProjectDeletionFenceOptions,
   ): Promise<void>;
+  isProjectDeletionFenced(projectId: string): Promise<boolean>;
+  getProjectDeletionTargets(
+    projectId: string,
+  ): Promise<GeoProjectDeletionTargets>;
+  purgeProjectRecords(projectId: string): Promise<number>;
   acknowledgeTerminal(
     projectId: string,
     clientRequestId: string,
@@ -359,8 +375,10 @@ function isPristineReservationLoser(record: GeoCustomQuestionValidationRecord) {
     !record.activeLease &&
     !record.archiveAttachment &&
     !record.skillAttachment &&
+    !record.promptInputAttachment &&
     !record.archiveStagingAttachment &&
     !record.skillStagingAttachment &&
+    !record.promptInputStagingAttachment &&
     record.orphanedTemporaryFileIds.length === 0 &&
     record.attachmentRebuildCount === 0 &&
     !record.taskId &&
@@ -410,11 +428,17 @@ function cleanupTargetFromRecord(
         ...(record.skillAttachment?.temporary
           ? [record.skillAttachment.fileId]
           : []),
+        ...(record.promptInputAttachment?.temporary
+          ? [record.promptInputAttachment.fileId]
+          : []),
         ...(record.archiveAttachment?.temporary
           ? [record.archiveAttachment.fileId]
           : []),
         ...(record.skillStagingAttachment?.temporary
           ? [record.skillStagingAttachment.fileId]
+          : []),
+        ...(record.promptInputStagingAttachment?.temporary
+          ? [record.promptInputStagingAttachment.fileId]
           : []),
         ...(record.archiveStagingAttachment?.temporary
           ? [record.archiveStagingAttachment.fileId]
@@ -422,6 +446,25 @@ function cleanupTargetFromRecord(
       ]),
     ),
   });
+}
+
+function projectDeletionTargetsFromRecords(
+  records: GeoCustomQuestionValidationRecord[],
+): GeoProjectDeletionTargets {
+  return {
+    taskIds: Array.from(
+      new Set(
+        records.flatMap((record) => (record.taskId ? [record.taskId] : [])),
+      ),
+    ),
+    temporaryFileIds: Array.from(
+      new Set(
+        records.flatMap(
+          (record) => cleanupTargetFromRecord(record).temporaryFileIds,
+        ),
+      ),
+    ),
+  };
 }
 
 function initialRecord(
@@ -613,6 +656,7 @@ export class MemoryGeoCustomQuestionValidationStore
   private readonly tombstones = new Map<
     string,
     {
+      projectId?: string;
       expiresAt: number;
       cleanupTarget?: GeoCustomQuestionValidationCleanupTarget;
       cleanupCompleted: boolean;
@@ -642,6 +686,7 @@ export class MemoryGeoCustomQuestionValidationStore
       current: cloneRecord(current),
       next: cloneRecord(next),
     });
+    if (this.deletionFences.has(current.projectId)) return undefined;
     if (this.records.get(key)?.commitId !== current.commitId) {
       return this.records.get(key);
     }
@@ -670,6 +715,53 @@ export class MemoryGeoCustomQuestionValidationStore
 
   async persistenceIdentity() {
     return this.identity;
+  }
+
+  async isProjectDeletionFenced(projectId: string) {
+    return this.deletionFences.has(projectId);
+  }
+
+  async getProjectDeletionTargets(projectId: string) {
+    const recordTargets = projectDeletionTargetsFromRecords(
+      Array.from(this.records.values()).filter(
+        (record) => record.projectId === projectId,
+      ),
+    );
+    const tombstoneFileIds = Array.from(this.tombstones.values()).flatMap(
+      (tombstone) =>
+        tombstone.projectId === projectId &&
+        !tombstone.cleanupCompleted &&
+        tombstone.cleanupTarget
+          ? tombstone.cleanupTarget.temporaryFileIds
+          : [],
+    );
+    return {
+      taskIds: recordTargets.taskIds,
+      temporaryFileIds: Array.from(
+        new Set([...recordTargets.temporaryFileIds, ...tombstoneFileIds]),
+      ),
+    };
+  }
+
+  async purgeProjectRecords(projectId: string) {
+    if (!this.deletionFences.has(projectId)) {
+      throw new GeoCustomQuestionValidationStoreError(
+        "STORE_CORRUPT",
+        "项目尚未建立删除栅栏，不能清除验证记录",
+      );
+    }
+    const keys = Array.from(this.records.values())
+      .filter((record) => record.projectId === projectId)
+      .map((record) => record.key);
+    for (const key of keys) {
+      this.records.delete(key);
+    }
+    for (const [key, tombstone] of Array.from(this.tombstones.entries())) {
+      if (tombstone.projectId !== projectId) continue;
+      this.tombstones.delete(key);
+    }
+    this.activeByProject.delete(projectId);
+    return keys.length;
   }
 
   async reserve(input: GeoCustomQuestionValidationReservation) {
@@ -792,14 +884,18 @@ export class MemoryGeoCustomQuestionValidationStore
 
   async get(projectId: string, clientRequestId: string) {
     const key = recordKey(projectId, clientRequestId);
+    const record = this.records.get(key);
+    const projectDeletionFenced = this.deletionFences.has(projectId);
+    if (record && projectDeletionFenced) return cloneRecord(record);
     if (this.tombstones.has(key)) {
       throw new GeoCustomQuestionValidationStoreError(
         "RESERVATION_EXPIRED",
         "该自定义问题验证请求已过期",
       );
     }
-    const record = this.records.get(key);
-    return record ? cloneRecord(record) : undefined;
+    if (record) return cloneRecord(record);
+    if (projectDeletionFenced) throw this.projectDeletionFenced();
+    return undefined;
   }
 
   async getActive(projectId: string) {
@@ -984,6 +1080,9 @@ export class MemoryGeoCustomQuestionValidationStore
       current: cloneRecord(current),
       next: cloneRecord(next),
     });
+    if (this.deletionFences.has(current.projectId)) {
+      throw this.projectDeletionFenced();
+    }
     this.records.set(key, next);
     return cloneRecord(next);
   }
@@ -1075,6 +1174,9 @@ export class MemoryGeoCustomQuestionValidationStore
       current: cloneRecord(current),
       next: cloneRecord(next),
     });
+    if (this.deletionFences.has(current.projectId)) {
+      throw this.projectDeletionFenced();
+    }
     if (this.records.get(key)?.commitId !== current.commitId) return undefined;
     this.records.set(key, next);
     return lease;
@@ -1106,6 +1208,9 @@ export class MemoryGeoCustomQuestionValidationStore
       current: cloneRecord(current),
       next: cloneRecord(next),
     });
+    if (this.deletionFences.has(current.projectId)) {
+      throw this.projectDeletionFenced();
+    }
     if (this.records.get(lease.key)?.commitId !== current.commitId)
       throw this.leaseLost();
     this.records.set(lease.key, next);
@@ -1128,6 +1233,9 @@ export class MemoryGeoCustomQuestionValidationStore
       current: cloneRecord(current),
       next: cloneRecord(parsed),
     });
+    if (this.deletionFences.has(current.projectId)) {
+      throw this.projectDeletionFenced();
+    }
     if (this.records.get(record.key)?.commitId !== current.commitId)
       throw this.leaseLost();
     this.records.set(record.key, parsed);
@@ -1155,6 +1263,7 @@ export class MemoryGeoCustomQuestionValidationStore
       current: cloneRecord(current),
       next: cloneRecord(next),
     });
+    if (this.deletionFences.has(current.projectId)) return;
     if (this.records.get(lease.key)?.commitId === current.commitId)
       this.records.set(lease.key, next);
   }
@@ -1176,6 +1285,22 @@ export class MemoryGeoCustomQuestionValidationStore
     const createdTombstones = new Set<string>();
     for (const [key, record] of Array.from(this.records.entries())) {
       result.scanned += 1;
+      if (this.deletionFences.has(record.projectId)) {
+        if (!record.cleanupCompleted) {
+          try {
+            await input.cleanup(cleanupTargetFromRecord(record));
+          } catch {
+            result.retained += 1;
+            continue;
+          }
+        }
+        this.records.delete(key);
+        if (this.activeByProject.get(record.projectId) === key) {
+          this.activeByProject.delete(record.projectId);
+        }
+        result.deleted += 1;
+        continue;
+      }
       const expired = Date.parse(record.expiresAt) <= now;
       const terminalCleanupPending =
         isTerminal(record) && !record.cleanupCompleted;
@@ -1200,6 +1325,14 @@ export class MemoryGeoCustomQuestionValidationStore
       }
       if (this.records.get(key)?.commitId !== record.commitId) {
         result.retained += 1;
+        continue;
+      }
+      if (this.deletionFences.has(record.projectId)) {
+        this.records.delete(key);
+        if (this.activeByProject.get(record.projectId) === key) {
+          this.activeByProject.delete(record.projectId);
+        }
+        result.deleted += 1;
         continue;
       }
       // A completed result is the authority needed to recover a caller whose
@@ -1240,6 +1373,7 @@ export class MemoryGeoCustomQuestionValidationStore
       if (this.activeByProject.get(record.projectId) === key)
         this.activeByProject.delete(record.projectId);
       this.tombstones.set(key, {
+        projectId: record.projectId,
         expiresAt: now + (input.tombstoneTtlMs ?? DEFAULT_TOMBSTONE_TTL_MS),
         cleanupTarget: cleanupCompleted ? undefined : cleanupTarget,
         cleanupCompleted,
@@ -1357,6 +1491,66 @@ export class FileGeoCustomQuestionValidationStore
     return this.persistenceIdentity();
   }
 
+  async isProjectDeletionFenced(projectId: string) {
+    await this.assertDirectory();
+    const slot = await this.readCurrentProjectSlot(projectHash(projectId));
+    return Boolean(slot?.deletionFence);
+  }
+
+  async getProjectDeletionTargets(projectId: string) {
+    await this.assertDirectory();
+    const records = await this.readProjectRecords(projectId);
+    const tombstones = await this.readProjectTombstones(projectId);
+    const recordTargets = projectDeletionTargetsFromRecords(records);
+    const tombstoneFileIds: string[] = [];
+    for (const tombstone of tombstones) {
+      if (
+        tombstone.cleanupTarget &&
+        !(await this.hasCleanupCompleteMarker(tombstone.key))
+      ) {
+        tombstoneFileIds.push(...tombstone.cleanupTarget.temporaryFileIds);
+      }
+    }
+    const orphanFileIds = await this.readOrphanFileIds(
+      new Set([
+        ...records.map((record) => record.key),
+        ...tombstones.map((tombstone) => tombstone.key),
+      ]),
+    );
+    return {
+      taskIds: recordTargets.taskIds,
+      temporaryFileIds: Array.from(
+        new Set([
+          ...recordTargets.temporaryFileIds,
+          ...tombstoneFileIds,
+          ...orphanFileIds,
+        ]),
+      ),
+    };
+  }
+
+  async purgeProjectRecords(projectId: string) {
+    await this.assertDirectory();
+    if (!(await this.isProjectDeletionFenced(projectId))) {
+      throw new GeoCustomQuestionValidationStoreError(
+        "STORE_CORRUPT",
+        "项目尚未建立删除栅栏，不能清除验证记录",
+      );
+    }
+    const records = await this.readProjectRecords(projectId);
+    const existingTombstones = await this.readProjectTombstones(projectId);
+    const keys = new Set([
+      ...records.map((record) => record.key),
+      ...existingTombstones.map((tombstone) => tombstone.key),
+    ]);
+    for (const key of Array.from(keys)) {
+      await this.deleteRecordVersions(key);
+      await this.deleteRecordAuxiliaryFiles(key);
+    }
+    await this.syncDirectory();
+    return records.length;
+  }
+
   async reserve(input: GeoCustomQuestionValidationReservation) {
     await this.assertDirectory();
     const key = recordKey(input.projectId, input.clientRequestId);
@@ -1373,7 +1567,10 @@ export class FileGeoCustomQuestionValidationStore
       const candidate = initialRecord(input, this.now());
       created = await this.commitInitialRecord(candidate);
       record = await this.readCurrentRecord(key);
-      if (!record) throw this.storeCorrupt("自定义问题验证预留未能持久化");
+      if (!record) {
+        await this.assertProjectNotDeletionFenced(input.projectId);
+        throw this.storeCorrupt("自定义问题验证预留未能持久化");
+      }
       if (created) {
         await this.hooks.afterInitialRecordCommit?.(cloneRecord(record));
       }
@@ -1465,7 +1662,10 @@ export class FileGeoCustomQuestionValidationStore
     const candidate = initialCompletedReceipt(input, result, this.now());
     const created = await this.commitInitialRecord(candidate);
     record = await this.readCurrentRecord(key);
-    if (!record) throw this.storeCorrupt("自定义问题验证终态回执未能持久化");
+    if (!record) {
+      await this.assertProjectNotDeletionFenced(input.projectId);
+      throw this.storeCorrupt("自定义问题验证终态回执未能持久化");
+    }
     assertCompletedReceiptMatches(record, input, result);
     await this.assertProjectNotDeletionFenced(input.projectId);
     // The receipt itself never claims project authority. Clear only a stale
@@ -1480,13 +1680,18 @@ export class FileGeoCustomQuestionValidationStore
   async get(projectId: string, clientRequestId: string) {
     await this.assertDirectory();
     const key = recordKey(projectId, clientRequestId);
+    const record = await this.readCurrentRecord(key);
+    const projectDeletionFenced = await this.isProjectDeletionFenced(projectId);
+    if (record && projectDeletionFenced) return record;
     if (await this.hasLiveTombstone(key)) {
       throw new GeoCustomQuestionValidationStoreError(
         "RESERVATION_EXPIRED",
         "该自定义问题验证请求已过期",
       );
     }
-    return this.readCurrentRecord(key);
+    if (record) return record;
+    if (projectDeletionFenced) throw this.projectDeletionFenced();
+    return undefined;
   }
 
   async getActive(projectId: string) {
@@ -1912,6 +2117,24 @@ export class FileGeoCustomQuestionValidationStore
       }
       const record = await this.readCurrentRecord(key);
       if (!record) continue;
+      if (await this.isProjectDeletionFenced(record.projectId)) {
+        if (!record.cleanupCompleted) {
+          try {
+            await input.cleanup(cleanupTargetFromRecord(record));
+          } catch {
+            result.retained += 1;
+            continue;
+          }
+        }
+        try {
+          await this.deleteRecordVersions(key);
+          await this.deleteRecordAuxiliaryFiles(key);
+          result.deleted += 1;
+        } catch {
+          result.retained += 1;
+        }
+        continue;
+      }
       const expired = Date.parse(record.expiresAt) <= now;
       const terminalCleanupPending =
         isTerminal(record) && !record.cleanupCompleted;
@@ -2010,6 +2233,7 @@ export class FileGeoCustomQuestionValidationStore
         expiresAt: new Date(
           now + (input.tombstoneTtlMs ?? DEFAULT_TOMBSTONE_TTL_MS),
         ).toISOString(),
+        projectHash: projectHash(authoritative.projectId),
         cleanupTarget: cleanupCompleted ? undefined : cleanupTarget,
       });
       if (projectSlot?.active?.key === authoritative.key) {
@@ -2035,8 +2259,19 @@ export class FileGeoCustomQuestionValidationStore
   }
 
   private async commitInitialRecord(record: GeoCustomQuestionValidationRecord) {
+    if (await this.isProjectDeletionFenced(record.projectId)) return false;
     const target = this.recordVersionPath(record.key, 0);
-    return this.linkImmutableJson(target, record);
+    const linked = await this.linkImmutableJson(target, record);
+    if (await this.isProjectDeletionFenced(record.projectId)) {
+      if (linked) {
+        await fs.unlink(target).catch((error) => {
+          if (!isFileNotFoundError(error)) throw error;
+        });
+        await this.syncDirectory();
+      }
+      return false;
+    }
+    return linked;
   }
 
   private async readProjectRecords(projectId: string) {
@@ -2152,13 +2387,33 @@ export class FileGeoCustomQuestionValidationStore
   private async commitRecord(
     current: GeoCustomQuestionValidationRecord,
     next: GeoCustomQuestionValidationRecord,
+    allowDuringProjectDeletion = false,
   ) {
+    if (
+      !allowDuringProjectDeletion &&
+      (await this.isProjectDeletionFenced(current.projectId))
+    ) {
+      return false;
+    }
     if (await this.hasLiveTombstone(current.key)) return false;
     const target = this.recordVersionPath(
       current.key,
       current.storeVersion + 1,
     );
     const linked = await this.linkImmutableJson(target, next);
+    if (
+      (!allowDuringProjectDeletion &&
+        (await this.isProjectDeletionFenced(current.projectId))) ||
+      (await this.hasLiveTombstone(current.key))
+    ) {
+      if (linked) {
+        await fs.unlink(target).catch((error) => {
+          if (!isFileNotFoundError(error)) throw error;
+        });
+        await this.syncDirectory();
+      }
+      return false;
+    }
     const authority = await this.readCurrentRecord(current.key);
     const won =
       linked &&
@@ -2224,6 +2479,7 @@ export class FileGeoCustomQuestionValidationStore
           await this.commitRecord(
             current,
             cancelledForProjectDeletion(current, this.now()),
+            true,
           )
         ) {
           break;
@@ -2292,6 +2548,34 @@ export class FileGeoCustomQuestionValidationStore
       if (isFileNotFoundError(error)) return undefined;
       throw this.storeCorrupt("自定义问题验证清理标记无法读取");
     }
+  }
+
+  private async readProjectTombstones(projectId: string) {
+    const expectedProjectHash = projectHash(projectId);
+    const tombstones: Array<z.infer<typeof TombstoneSchema>> = [];
+    for (const name of await fs.readdir(this.directory)) {
+      const identity = /^([a-f0-9]{64})\.tombstone\.json$/.exec(name);
+      if (!identity?.[1]) continue;
+      const tombstone = await this.readTombstone(identity[1]);
+      if (tombstone?.projectHash === expectedProjectHash) {
+        tombstones.push(tombstone);
+      }
+    }
+    return tombstones;
+  }
+
+  private async readOrphanFileIds(recordKeys: Set<string>) {
+    const fileIds: string[] = [];
+    const pattern = /^([a-f0-9]{64})\.([a-f0-9]{64})\.orphan-file\.json$/;
+    for (const name of await fs.readdir(this.directory)) {
+      const identity = pattern.exec(name);
+      if (!identity?.[1] || !recordKeys.has(identity[1])) continue;
+      const marker = OrphanFileMarkerSchema.parse(
+        JSON.parse(await fs.readFile(path.join(this.directory, name), "utf8")),
+      );
+      fileIds.push(marker.fileId);
+    }
+    return fileIds;
   }
 
   private async hasCleanupCompleteMarker(key: string) {
@@ -2394,8 +2678,10 @@ export class FileGeoCustomQuestionValidationStore
             ...current.orphanedTemporaryFileIds,
             current.archiveAttachment?.fileId,
             current.skillAttachment?.fileId,
+            current.promptInputAttachment?.fileId,
             current.archiveStagingAttachment?.fileId,
             current.skillStagingAttachment?.fileId,
+            current.promptInputStagingAttachment?.fileId,
           ].includes(marker.fileId),
       );
       if (tracked) {
@@ -2510,6 +2796,26 @@ export class FileGeoCustomQuestionValidationStore
     );
     if (remaining.length > 0) {
       throw new Error("custom-question record versions remain after cleanup");
+    }
+  }
+
+  private async deleteRecordAuxiliaryFiles(key: string) {
+    const names = await fs.readdir(this.directory);
+    const exact = new Set([
+      `${key}.cleanup-complete.json`,
+      `${key}.tombstone.json`,
+    ]);
+    const orphanPrefix = `${key}.`;
+    for (const name of names) {
+      if (
+        !exact.has(name) &&
+        !(name.startsWith(orphanPrefix) && name.endsWith(".orphan-file.json"))
+      ) {
+        continue;
+      }
+      await fs.unlink(path.join(this.directory, name)).catch((error) => {
+        if (!isFileNotFoundError(error)) throw error;
+      });
     }
   }
 

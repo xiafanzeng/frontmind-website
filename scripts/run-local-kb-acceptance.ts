@@ -26,6 +26,7 @@ import type {
   GeoServicePaymentVerificationInput,
 } from "../server/geo/payment";
 import { createGeoRouter } from "../server/geo/router";
+import { parseGeoTaskInputAttachment } from "../server/geo/prompt-delivery";
 import {
   GeoQuestionSetSchema,
   PRODUCT_QA_INTENTS,
@@ -358,7 +359,22 @@ class LocalAcceptanceBroker implements GeoPresalesBroker {
     );
     if (isCustomQuestionClassifierTask) {
       this.metrics.customQuestionClassifierTaskCount += 1;
-      const question = promptJsonString(input.prompt, "question");
+      const taskInput = input.attachments
+        .map((attachment) => this.uploads.get(attachment.file_id))
+        .filter((body): body is Buffer => Boolean(body))
+        .map((body) =>
+          parseGeoTaskInputAttachment<{ question?: unknown }>(
+            body,
+            "frontmind.geo.custom-question-classifier.task-input",
+          ),
+        )
+        .find((value) => value !== undefined);
+      // Keep inline parsing only for archived acceptance snapshots created by
+      // a pre-attachment Website build.
+      const question =
+        typeof taskInput?.question === "string"
+          ? taskInput.question
+          : promptJsonString(input.prompt, "question");
       const enterpriseRelated = question
         .normalize("NFKC")
         .toLocaleLowerCase("zh-CN")

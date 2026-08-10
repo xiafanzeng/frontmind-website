@@ -1,100 +1,1781 @@
 <!doctype html>
 <html lang="zh-CN">
   <head>
-    <meta charset="UTF-8" />
+    <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <meta name="robots" content="noindex, nofollow" />
-    <title>FrontMind 合同确认说明</title>
+    <meta name="robots" content="noindex,nofollow" />
+    <title>FrontMind 企业 GEO 单问题月度优化服务协议</title>
     <style>
       :root {
-        color-scheme: light;
-        font-family:
-          Inter, "PingFang SC", "Microsoft YaHei", system-ui, sans-serif;
-        color: #25202c;
-        background: #f6f3f8;
+        --purple: #491060;
+        --purple-2: #6a2582;
+        --purple-soft: #f4eef7;
+        --ink: #211b27;
+        --muted: #6f6675;
+        --line: #ded5e3;
+        --paper: #ffffff;
+        --canvas: #eceaf0;
+        --gold: #ad8130;
+        --gold-soft: #fff9ec;
+        --teal: #0d7f80;
+        --teal-soft: #eef9f8;
       }
 
       * {
         box-sizing: border-box;
       }
 
+      html,
       body {
-        min-height: 100vh;
         margin: 0;
-        display: grid;
-        place-items: center;
-        padding: 24px;
+        padding: 0;
       }
 
-      main {
-        width: min(100%, 680px);
-        padding: clamp(28px, 6vw, 54px);
-        border: 1px solid #ded5e5;
-        border-radius: 20px;
-        background: #fff;
-        box-shadow: 0 24px 70px rgb(57 35 72 / 10%);
+      body {
+        background: var(--canvas);
+        color: var(--ink);
+        font-family:
+          "Arial Unicode MS", "Heiti SC", "Hiragino Sans GB", "Microsoft YaHei",
+          Arial, sans-serif;
+        line-height: 1.65;
       }
 
-      img {
-        width: 152px;
-        height: auto;
+      button,
+      a {
+        font: inherit;
+      }
+
+      .screen-toolbar {
+        position: fixed;
+        top: 18px;
+        right: 22px;
+        z-index: 20;
+        display: flex;
+        align-items: center;
+        gap: 10px;
+        border: 1px solid rgba(73, 16, 96, 0.14);
+        background: rgba(255, 255, 255, 0.94);
+        padding: 8px;
+        box-shadow: 0 12px 32px rgba(31, 20, 40, 0.14);
+        backdrop-filter: blur(14px);
+      }
+
+      .screen-toolbar span {
+        padding: 0 7px;
+        color: var(--muted);
+        font-size: 12px;
+      }
+
+      .screen-toolbar button {
+        border: 1px solid var(--purple);
+        background: var(--purple);
+        padding: 8px 13px;
+        color: #fff;
+        cursor: pointer;
+        font-size: 13px;
+        font-weight: 800;
+      }
+
+      .screen-toolbar button:disabled {
+        cursor: wait;
+        opacity: 0.55;
+      }
+
+      .page {
+        position: relative;
+        display: flex;
+        width: 210mm;
+        min-height: 297mm;
+        flex-direction: column;
+        margin: 16px auto;
+        overflow: hidden;
+        background: var(--paper);
+        padding: 13mm 15mm 14mm;
+        box-shadow: 0 14px 42px rgba(26, 18, 34, 0.14);
+        page-break-after: always;
+      }
+
+      .page:last-of-type {
+        page-break-after: auto;
+      }
+
+      .page::before {
+        position: absolute;
+        top: 0;
+        left: 0;
+        width: 100%;
+        height: 4px;
+        background: linear-gradient(
+          90deg,
+          var(--purple) 0 68%,
+          var(--gold) 68% 82%,
+          var(--teal) 82%
+        );
+        content: "";
+      }
+
+      .doc-header {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 18px;
+        border-bottom: 1px solid var(--line);
+        padding-bottom: 10px;
+      }
+
+      .brand-lockup {
+        display: flex;
+        align-items: center;
+        gap: 12px;
+      }
+
+      .brand-lockup img {
+        display: block;
+        width: 39mm;
+        height: 12mm;
+        object-fit: contain;
+      }
+
+      .brand-lockup div {
+        border-left: 1px solid var(--line);
+        padding-left: 12px;
+      }
+
+      .brand-lockup strong {
+        display: block;
+        color: var(--purple);
+        font-size: 10.5pt;
+      }
+
+      .brand-lockup small {
+        display: block;
+        margin-top: 2px;
+        color: var(--muted);
+        font-size: 7.5pt;
+      }
+
+      .doc-meta {
+        color: var(--muted);
+        font-size: 7.5pt;
+        text-align: right;
+      }
+
+      .doc-meta strong {
+        color: var(--ink);
+      }
+
+      .eyebrow {
+        display: inline-flex;
+        align-items: center;
+        gap: 7px;
+        margin-top: 16px;
+        color: var(--purple);
+        font-size: 8pt;
+        font-weight: 900;
+        letter-spacing: 0.14em;
+      }
+
+      .eyebrow::before {
+        width: 19px;
+        height: 2px;
+        background: var(--purple);
+        content: "";
       }
 
       h1 {
-        margin: 32px 0 16px;
-        font-size: clamp(26px, 5vw, 38px);
+        margin: 7px 0 0;
+        color: #18131c;
+        font-family: "Songti SC", "STSong", Georgia, serif;
+        font-size: 27pt;
+        font-weight: 700;
+        letter-spacing: -0.02em;
         line-height: 1.2;
       }
 
-      p {
-        margin: 0 0 14px;
-        color: #655b6c;
-        font-size: 16px;
-        line-height: 1.8;
+      .lead {
+        margin: 8px 0 0;
+        color: var(--muted);
+        font-size: 9.5pt;
       }
 
-      .notice {
-        margin: 26px 0;
-        padding: 18px 20px;
-        border-left: 4px solid #6f2ca2;
-        border-radius: 8px;
-        background: #f7effc;
-        color: #3d274b;
+      .status-row {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 7px;
+        margin-top: 12px;
       }
 
-      a {
-        display: inline-flex;
-        align-items: center;
-        min-height: 44px;
-        padding: 0 20px;
-        border-radius: 10px;
+      .status-row span {
+        border: 1px solid #d9c9e2;
+        background: var(--purple-soft);
+        padding: 4px 8px;
+        color: var(--purple);
+        font-size: 7.5pt;
+        font-weight: 800;
+      }
+
+      .order-hero {
+        display: grid;
+        grid-template-columns: minmax(0, 1.55fr) minmax(48mm, 0.7fr);
+        gap: 10px;
+        margin-top: 15px;
+      }
+
+      .order-question,
+      .order-price {
+        border: 1px solid var(--line);
+        padding: 13px 15px;
+      }
+
+      .order-question {
+        background: linear-gradient(135deg, #fdfcfe, #f6f1f8);
+      }
+
+      .order-question span,
+      .order-price span {
+        display: block;
+        color: var(--muted);
+        font-size: 7.5pt;
+        font-weight: 800;
+        letter-spacing: 0.07em;
+      }
+
+      .order-question strong {
+        display: block;
+        margin-top: 8px;
+        color: #2c2032;
+        font-family: "Songti SC", "STSong", Georgia, serif;
+        font-size: 14pt;
+        line-height: 1.5;
+      }
+
+      .order-question small {
+        display: block;
+        margin-top: 8px;
+        color: var(--muted);
+        font-size: 7.6pt;
+      }
+
+      .order-price {
+        background: var(--purple);
         color: #fff;
-        background: #5e2588;
-        font-weight: 700;
-        text-decoration: none;
       }
 
-      a:focus-visible {
-        outline: 3px solid #b985dd;
-        outline-offset: 3px;
+      .order-price span {
+        color: rgba(255, 255, 255, 0.72);
+      }
+
+      .order-price strong {
+        display: block;
+        margin-top: 7px;
+        font-size: 27pt;
+        line-height: 1;
+      }
+
+      .order-price em {
+        display: block;
+        margin-top: 7px;
+        color: rgba(255, 255, 255, 0.78);
+        font-size: 8pt;
+        font-style: normal;
+      }
+
+      .order-price b {
+        display: inline-block;
+        margin-top: 15px;
+        border-top: 1px solid rgba(255, 255, 255, 0.22);
+        padding-top: 9px;
+        font-size: 8pt;
+      }
+
+      .section-title {
+        display: flex;
+        align-items: center;
+        gap: 9px;
+        margin: 17px 0 8px;
+        color: var(--purple);
+        font-size: 13pt;
+        font-weight: 900;
+      }
+
+      .section-title span {
+        display: grid;
+        width: 25px;
+        height: 25px;
+        place-items: center;
+        background: var(--purple);
+        color: #fff;
+        font-size: 8pt;
+      }
+
+      .section-note {
+        margin: -2px 0 9px 34px;
+        color: var(--muted);
+        font-size: 7.8pt;
+      }
+
+      .workflow {
+        display: grid;
+        grid-template-columns: repeat(5, minmax(0, 1fr));
+        gap: 5px;
+      }
+
+      .workflow article {
+        position: relative;
+        min-height: 90px;
+        border: 1px solid var(--line);
+        background: #fff;
+        padding: 9px 8px;
+      }
+
+      .workflow article:not(:last-child)::after {
+        position: absolute;
+        top: 50%;
+        right: -7px;
+        z-index: 2;
+        width: 9px;
+        color: #9a859f;
+        content: "›";
+        font-size: 16px;
+        transform: translateY(-50%);
+      }
+
+      .workflow b {
+        display: block;
+        color: var(--purple);
+        font-size: 7pt;
+      }
+
+      .workflow strong {
+        display: block;
+        margin-top: 5px;
+        color: var(--ink);
+        font-size: 8.5pt;
+      }
+
+      .workflow p {
+        margin: 4px 0 0;
+        color: var(--muted);
+        font-size: 6.8pt;
+        line-height: 1.45;
+      }
+
+      table {
+        width: 100%;
+        border-collapse: collapse;
+      }
+
+      th,
+      td {
+        border: 1px solid var(--line);
+        padding: 7px 8px;
+        font-size: 7.5pt;
+        text-align: left;
+        vertical-align: top;
+      }
+
+      th {
+        background: var(--purple-soft);
+        color: var(--purple);
+        font-weight: 900;
+      }
+
+      td strong {
+        color: var(--purple);
+      }
+
+      tr.is-current td {
+        background: #fffaf0;
+        box-shadow: inset 3px 0 0 var(--gold);
+      }
+
+      .important {
+        margin-top: 11px;
+        border: 1px solid #d8bd80;
+        border-left: 5px solid var(--gold);
+        background: var(--gold-soft);
+        padding: 10px 12px;
+        color: #4f421f;
+        font-size: 7.7pt;
+        line-height: 1.6;
+      }
+
+      .important strong {
+        color: #6a4a12;
+      }
+
+      .footer {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        margin-top: auto;
+        border-top: 1px solid var(--line);
+        padding-top: 8px;
+        color: #8a818e;
+        font-size: 6.8pt;
+      }
+
+      .scope-summary {
+        display: grid;
+        grid-template-columns: repeat(4, minmax(0, 1fr));
+        gap: 7px;
+        margin-top: 11px;
+      }
+
+      .scope-summary article {
+        border: 1px solid var(--line);
+        background: #fff;
+        padding: 10px;
+      }
+
+      .scope-summary b {
+        display: grid;
+        width: 22px;
+        height: 22px;
+        place-items: center;
+        background: var(--purple-soft);
+        color: var(--purple);
+        font-size: 7pt;
+      }
+
+      .scope-summary strong {
+        display: block;
+        margin-top: 7px;
+        font-size: 8.2pt;
+      }
+
+      .scope-summary p {
+        margin: 4px 0 0;
+        color: var(--muted);
+        font-size: 6.9pt;
+        line-height: 1.45;
+      }
+
+      .plan-grid {
+        display: grid;
+        grid-template-columns: repeat(3, minmax(0, 1fr));
+        gap: 8px;
+      }
+
+      .plan-card {
+        position: relative;
+        border: 1px solid var(--line);
+        background: #fff;
+        padding: 11px;
+      }
+
+      .plan-card.is-active {
+        border: 2px solid var(--purple);
+        background: #fdfaff;
+        padding: 10px;
+        box-shadow: 0 8px 20px rgba(73, 16, 96, 0.08);
+      }
+
+      .plan-card.is-active::after {
+        position: absolute;
+        top: 8px;
+        right: 8px;
+        background: var(--purple);
+        padding: 3px 6px;
+        color: #fff;
+        content: "本订单";
+        font-size: 6.5pt;
+        font-weight: 900;
+      }
+
+      .plan-card > span {
+        color: var(--muted);
+        font-size: 6.8pt;
+        font-weight: 800;
+      }
+
+      .plan-card h3 {
+        margin: 5px 0 0;
+        color: var(--purple);
+        font-size: 10pt;
+      }
+
+      .plan-card .plan-price {
+        margin-top: 5px;
+        color: var(--ink);
+        font-size: 14pt;
+        font-weight: 900;
+      }
+
+      .plan-card ul,
+      .clause-list,
+      .number-list {
+        margin: 7px 0 0;
+        padding-left: 17px;
+      }
+
+      .plan-card li,
+      .clause-list li,
+      .number-list li {
+        margin: 3px 0;
+        color: #504654;
+        font-size: 7pt;
+        line-height: 1.48;
+      }
+
+      .month-plan {
+        display: grid;
+        grid-template-columns: repeat(4, minmax(0, 1fr));
+        gap: 7px;
+      }
+
+      .month-plan article {
+        border-top: 3px solid var(--purple);
+        background: var(--purple-soft);
+        padding: 9px 10px;
+      }
+
+      .month-plan span {
+        color: var(--purple);
+        font-size: 7pt;
+        font-weight: 900;
+      }
+
+      .month-plan strong {
+        display: block;
+        margin-top: 4px;
+        font-size: 8.2pt;
+      }
+
+      .month-plan p {
+        margin: 3px 0 0;
+        color: var(--muted);
+        font-size: 6.7pt;
+      }
+
+      .two-column {
+        display: grid;
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+        gap: 9px;
+      }
+
+      .clause-card {
+        border: 1px solid var(--line);
+        background: #fff;
+        padding: 11px 12px;
+      }
+
+      .clause-card h3 {
+        margin: 0;
+        color: var(--purple);
+        font-size: 9.5pt;
+      }
+
+      .clause-card p {
+        margin: 6px 0 0;
+        color: #504654;
+        font-size: 7.2pt;
+      }
+
+      .signing-flow {
+        display: grid;
+        grid-template-columns: 1fr 28px 1fr 28px 1fr;
+        align-items: center;
+        gap: 4px;
+        margin-top: 10px;
+      }
+
+      .signing-flow article {
+        min-height: 88px;
+        border: 1px solid var(--line);
+        padding: 10px;
+      }
+
+      .signing-flow article:nth-of-type(2) {
+        border-color: #c9e3e1;
+        background: var(--teal-soft);
+      }
+
+      .signing-flow article:nth-of-type(3) {
+        border-color: #d9c9e2;
+        background: var(--purple-soft);
+      }
+
+      .signing-flow > span {
+        color: #8e8094;
+        font-size: 18px;
+        text-align: center;
+      }
+
+      .signing-flow b {
+        display: block;
+        color: var(--purple);
+        font-size: 7pt;
+      }
+
+      .signing-flow strong {
+        display: block;
+        margin-top: 5px;
+        font-size: 9pt;
+      }
+
+      .signing-flow p {
+        margin: 4px 0 0;
+        color: var(--muted);
+        font-size: 6.8pt;
+      }
+
+      .signature-grid {
+        display: grid;
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+        gap: 12px;
+        margin-top: 12px;
+      }
+
+      .signature-card {
+        min-height: 195px;
+        border: 1px solid var(--line);
+        padding: 12px;
+      }
+
+      .signature-card h3 {
+        margin: 0 0 10px;
+        color: var(--purple);
+        font-size: 10pt;
+      }
+
+      .signature-line {
+        display: grid;
+        grid-template-columns: 24mm 1fr;
+        gap: 5px;
+        margin-top: 8px;
+        color: var(--muted);
+        font-size: 7.5pt;
+      }
+
+      .signature-line span:last-child {
+        min-height: 18px;
+        border-bottom: 1px solid #cfc4d4;
+        color: var(--ink);
+      }
+
+      .seal-space {
+        display: grid;
+        height: 52mm;
+        margin-top: 12px;
+        place-items: center;
+        border: 1px dashed #cabbd1;
+        color: #9b8da1;
+        font-size: 8pt;
+      }
+
+      .page-scope .section-title {
+        margin: 14px 0 6px;
+      }
+
+      .page-terms .section-title,
+      .page-legal .section-title,
+      .page-signature .section-title {
+        margin: 11px 0 6px;
+      }
+
+      .page-terms th,
+      .page-terms td {
+        padding: 5px 7px;
+      }
+
+      .page-terms .signing-flow article {
+        min-height: 78px;
+        padding: 8px 9px;
+      }
+
+      .page-terms .important,
+      .page-legal .important,
+      .page-signature .important {
+        margin-top: 8px;
+        padding: 8px 10px;
+      }
+
+      .page-terms .two-column {
+        gap: 7px;
+        margin-top: 7px;
+      }
+
+      .page-terms .clause-card,
+      .page-legal .clause-card,
+      .page-signature .clause-card {
+        padding: 9px 10px;
+      }
+
+      .party-grid {
+        display: grid;
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+        gap: 9px;
+      }
+
+      .party-card {
+        border: 1px solid var(--line);
+        background: #fff;
+        padding: 10px 11px;
+      }
+
+      .party-card h3 {
+        margin: 0 0 7px;
+        color: var(--purple);
+        font-size: 9.5pt;
+      }
+
+      .party-line {
+        display: grid;
+        grid-template-columns: 27mm minmax(0, 1fr);
+        gap: 5px;
+        border-top: 1px solid #eee8f1;
+        padding: 4px 0;
+        font-size: 7.2pt;
+        line-height: 1.45;
+      }
+
+      .party-line span:first-child {
+        color: var(--muted);
+      }
+
+      .party-line span:last-child {
+        min-width: 0;
+        overflow-wrap: anywhere;
+        color: var(--ink);
+        font-weight: 700;
+      }
+
+      .locked-scope {
+        border: 1px solid #d9c9e2;
+        background: var(--purple-soft);
+        padding: 9px 11px;
+      }
+
+      .locked-scope strong {
+        color: var(--purple);
+      }
+
+      .locked-scope p {
+        margin: 4px 0 0;
+        color: #504654;
+        font-size: 7.2pt;
+      }
+
+      .page-signature .seal-space {
+        height: 58mm;
+        margin-top: 9px;
+      }
+
+      .page-signature .signature-card {
+        min-height: 0;
+        padding: 12px;
+      }
+
+      .signature-note {
+        margin-top: 10px;
+        border: 1px solid var(--line);
+        padding: 9px 11px;
+        color: var(--muted);
+        font-size: 7.2pt;
+        line-height: 1.55;
+      }
+
+      @media (max-width: 900px) {
+        .screen-toolbar {
+          top: auto;
+          right: 12px;
+          bottom: 12px;
+        }
+
+        .screen-toolbar span {
+          display: none;
+        }
+
+        .page {
+          width: 100%;
+          min-height: 0;
+          margin: 0 0 10px;
+          padding: 24px 18px 30px;
+          box-shadow: none;
+        }
+
+        .brand-lockup img {
+          width: 130px;
+        }
+
+        .brand-lockup div,
+        .doc-meta {
+          display: none;
+        }
+
+        h1 {
+          font-size: 30px;
+        }
+
+        .order-hero,
+        .plan-grid,
+        .two-column,
+        .party-grid,
+        .signature-grid {
+          grid-template-columns: 1fr;
+        }
+
+        .workflow,
+        .scope-summary,
+        .month-plan {
+          grid-template-columns: repeat(2, minmax(0, 1fr));
+        }
+
+        .signing-flow {
+          grid-template-columns: 1fr;
+        }
+
+        .signing-flow > span {
+          transform: rotate(90deg);
+        }
+      }
+
+      @media print {
+        @page {
+          size: A4;
+          margin: 0;
+        }
+
+        body {
+          background: #fff;
+          print-color-adjust: exact;
+          -webkit-print-color-adjust: exact;
+        }
+
+        .screen-toolbar {
+          display: none !important;
+        }
+
+        .page {
+          width: 210mm;
+          height: 297mm;
+          min-height: 297mm;
+          margin: 0;
+          padding: 13mm 15mm 14mm;
+          box-shadow: none;
+        }
+
+        .brand-lockup img {
+          width: 39mm;
+        }
+
+        .brand-lockup div,
+        .doc-meta {
+          display: block;
+        }
+
+        h1 {
+          font-size: 27pt;
+        }
+
+        .order-hero {
+          grid-template-columns: minmax(0, 1.55fr) minmax(48mm, 0.7fr);
+        }
+
+        .plan-grid {
+          grid-template-columns: repeat(3, minmax(0, 1fr));
+        }
+
+        .two-column,
+        .party-grid,
+        .signature-grid {
+          grid-template-columns: repeat(2, minmax(0, 1fr));
+        }
+
+        .workflow {
+          grid-template-columns: repeat(5, minmax(0, 1fr));
+        }
+
+        .scope-summary,
+        .month-plan {
+          grid-template-columns: repeat(4, minmax(0, 1fr));
+        }
+
+        .signing-flow {
+          grid-template-columns: 1fr 28px 1fr 28px 1fr;
+        }
+
+        .signing-flow > span {
+          transform: none;
+        }
       }
     </style>
   </head>
   <body>
-    <main>
-      <img src="/brand/frontmind-logo.svg" alt="FrontMind" />
-      <h1>合同在企业微信完成确认</h1>
-      <p>
-        FrontMind
-        网站不提供合同在线查看、下载或签署。正式合同由管理员在企业微信发送，双方核对合同版本并完成有效电子签名或盖章文件确认。
+    <aside class="screen-toolbar" aria-label="合同查看工具">
+      <span id="render-status">正在准备合同内容…</span>
+      <button id="print-contract" type="button" disabled>
+        下载 / 保存 PDF
+      </button>
+    </aside>
+
+    <section class="page page-cover">
+      <header class="doc-header">
+        <div class="brand-lockup">
+          <img src="/brand/frontmind-logo.svg" alt="FrontMind" />
+          <div>
+            <strong>企业级 GEO 服务</strong>
+            <small>科研级标准 · 证据驱动 · 全程可追溯</small>
+          </div>
+        </div>
+        <div class="doc-meta">
+          <div>
+            <strong>协议版本</strong>
+            <span data-contract-version>GEO-BASIC-DOMESTIC-2026.08-V3</span>
+          </div>
+          <div>
+            <strong>订单编号</strong>
+            <span data-order-id>提交资料后生成</span>
+          </div>
+          <div><strong>查看日期</strong> <span data-contract-date></span></div>
+        </div>
+      </header>
+
+      <div class="eyebrow">MONTHLY GEO SERVICE AGREEMENT</div>
+      <h1>企业 GEO 单问题月度优化服务协议</h1>
+      <p class="lead">
+        本协议适用于围绕一个已确认 GEO 问题开展的连续 30
+        个自然日基础优化服务。甲方提交签约资料后生成合同，双方通过企业微信核对并确认合同版本，签字或盖章文件由双方留存；管理员确认后进入付款，付款完成后创建项目账号并启动服务。
       </p>
-      <p class="notice">
-        本页面仅用于流程说明，不能作为合同文件、签署页面或付款凭证。
+      <div class="status-row">
+        <span
+          ><b data-market-edition>国内版</b>月度基础服务 / 固定服务范围</span
+        >
+        <span>1 个问题 / 连续 30 日</span>
+        <span>订单与交付记录可追溯</span>
+      </div>
+
+      <div class="order-hero">
+        <div class="order-question">
+          <span
+            >本次服务问题 · <b data-market-edition>国内版</b> ·
+            <b data-order-category>美誉舆情</b></span
+          >
+          <strong data-order-question>以付款确认页所列问题为准</strong>
+          <small>服务对象：<b data-service-client>待提交合同主体</b></small>
+        </div>
+        <div class="order-price">
+          <span>一个月服务费</span>
+          <strong data-order-price>¥2,000</strong>
+          <em>含税价格（税率 1%）· 开票信息在项目启动时确认</em>
+          <b>一次性支付 · 不自动续费</b>
+        </div>
+      </div>
+
+      <h2 class="section-title"><span>01</span>合同确认、付款与执行路径</h2>
+      <p class="section-note">
+        主体资料先进入合同，双方在企业微信确认合同并留存签字或盖章文件后付款，付款完成后开通账号并启动服务。
       </p>
-      <p>
-        请返回服务开通页，提交企业资料并扫码联系管理员。管理员完成合同确认后会提供合同码，用于进入付款步骤。
+      <div class="workflow">
+        <article>
+          <b>STEP 01</b>
+          <strong>提交主体</strong>
+          <p>提交企业全称、统一社会信用代码与授权经办人资料。</p>
+        </article>
+        <article>
+          <b>STEP 02</b>
+          <strong>生成合同</strong>
+          <p>将主体、问题、价格和服务边界写入正式 PDF。</p>
+        </article>
+        <article>
+          <b>STEP 03</b>
+          <strong>企业微信确认</strong>
+          <p>双方核对合同版本，并分别留存签字或盖章文件。</p>
+        </article>
+        <article>
+          <b>STEP 04</b>
+          <strong>完成付款</strong>
+          <p>
+            管理员确认合同后 5 个工作日内一次性支付订单总价的
+            100%；支付记录进入项目档案。
+          </p>
+        </article>
+        <article>
+          <b>STEP 05</b>
+          <strong>账号与执行</strong>
+          <p>
+            付款确认后创建与本合同版本一致的<b data-market-edition>国内版</b
+            >项目账号，启动资料确认、策略与交付排期。
+          </p>
+        </article>
+      </div>
+
+      <h2 class="section-title"><span>02</span>适用服务与固定价格</h2>
+      <table aria-label="FrontMind GEO 月度服务价格表">
+        <thead>
+          <tr>
+            <th>问题类型</th>
+            <th>月度价格</th>
+            <th>核心目标</th>
+            <th>适用边界</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr data-price-row="product_scenario">
+            <td><strong>产品与服务 Q&amp;A</strong></td>
+            <td>
+              <span data-plan-price="product_scenario">¥1,500</span> / 问题 / 30
+              日
+            </td>
+            <td>让具体产品、服务、功能与场景被准确理解和回答</td>
+            <td>须明确关联企业及具体产品、服务、模块或功能</td>
+          </tr>
+          <tr data-price-row="reputation">
+            <td><strong>美誉舆情</strong></td>
+            <td>
+              <span data-plan-price="reputation">¥2,000</span> / 问题 / 30 日
+            </td>
+            <td>校准主体、信任证据、品牌事实与公开口碑表达</td>
+            <td>不含危机公关、法律代理、付费媒体压稿或删稿</td>
+          </tr>
+          <tr data-price-row="competitor_comparison">
+            <td><strong>竞品对比</strong></td>
+            <td>
+              <span data-plan-price="competitor_comparison">¥2,000</span> / 问题
+              / 30 日
+            </td>
+            <td>用可核验事实呈现差异定位、选择依据与优势边界</td>
+            <td>不制作无法核验、贬损竞品或保证排名的表达</td>
+          </tr>
+        </tbody>
+      </table>
+
+      <div class="important">
+        <strong>重要提示：</strong
+        >本合同根据甲方提交的签约主体与授权经办人资料生成；主体、问题类型、问题原文、金额与订单号以双方在企业微信确认并留存的合同文件及订单记录为准。行业排名、榜单、“最佳”及泛化品牌推荐类问题不属于本协议的
+        <span data-price-range>¥1,500/¥2,000</span>
+        月度服务范围，需另行进行全域营销条件评估并签署独立方案。<span
+          data-edition-service-note
+          >国内版按本合同确认的国内平台范围执行监控、评估与交付。</span
+        >
+        AI 平台由第三方运营，乙方承诺按本协议完成专业服务与可核验交付。
+      </div>
+
+      <footer class="footer">
+        <span>FrontMind 企业 GEO 单问题月度优化服务协议</span>
+        <span>第 1 页 / 共 5 页</span>
+      </footer>
+    </section>
+
+    <section class="page page-scope">
+      <header class="doc-header">
+        <div class="brand-lockup">
+          <img src="/brand/frontmind-logo.svg" alt="FrontMind" />
+          <div>
+            <strong>服务范围与交付</strong>
+            <small>围绕一个问题形成可核验、可执行、可复测的闭环</small>
+          </div>
+        </div>
+        <div class="doc-meta">
+          <div><strong data-order-category>美誉舆情</strong></div>
+          <div><span data-order-price>¥2,000</span> / 连续 30 日</div>
+        </div>
+      </header>
+
+      <h2 class="section-title"><span>03</span>共同服务范围</h2>
+      <p class="section-note">
+        不论选择哪一档服务，均围绕订单中唯一确认的问题开展工作。
       </p>
-      <a href="/#geo-builder">返回服务开通页</a>
-    </main>
+      <div class="scope-summary">
+        <article>
+          <b>01</b>
+          <strong>事实与证据校准</strong>
+          <p>确认企业主体、产品事实、公开来源及可用证据边界。</p>
+        </article>
+        <article>
+          <b>02</b>
+          <strong>语义资产设计</strong>
+          <p>形成标准答案、实体关系、表达结构与引用来源清单。</p>
+        </article>
+        <article>
+          <b>03</b>
+          <strong>公开载体落位</strong>
+          <p>提出官网、权威媒体及内容矩阵的发布与更新建议。</p>
+        </article>
+        <article>
+          <b>04</b>
+          <strong>同口径复测</strong>
+          <p>在约定平台与样本条件下记录变化并形成月度报告。</p>
+        </article>
+      </div>
+
+      <h2 class="section-title"><span>04</span>分类专项内容</h2>
+      <div class="plan-grid">
+        <article class="plan-card" data-plan-card="product_scenario">
+          <span
+            ><b data-plan-price="product_scenario">¥1,500</b> / 问题 / 30
+            日</span
+          >
+          <h3>产品与服务 Q&amp;A</h3>
+          <div class="plan-price">产品事实 → 场景回答</div>
+          <ul>
+            <li>梳理一个具体产品、服务、模块或功能的事实口径</li>
+            <li>构建适用对象、使用场景、核心能力与交付边界 Q&amp;A</li>
+            <li>校准官网产品页、FAQ 与可引用公开资料的一致性</li>
+            <li>交付产品场景语义清单、标准回答与月度复测结论</li>
+          </ul>
+        </article>
+        <article class="plan-card" data-plan-card="reputation">
+          <span><b data-plan-price="reputation">¥2,000</b> / 问题 / 30 日</span>
+          <h3>美誉舆情</h3>
+          <div class="plan-price">品牌事实 → 信任证据</div>
+          <ul>
+            <li>核验企业主体、品牌定位、团队、资质、案例与公开口碑</li>
+            <li>识别错误归因、相似品牌混淆和信任证据缺口</li>
+            <li>形成品牌事实口径、权威信源与风险议题处理建议</li>
+            <li>交付品牌语义清单、证据台账与月度复测结论</li>
+          </ul>
+        </article>
+        <article class="plan-card" data-plan-card="competitor_comparison">
+          <span
+            ><b data-plan-price="competitor_comparison">¥2,000</b> / 问题 / 30
+            日</span
+          >
+          <h3>竞品对比</h3>
+          <div class="plan-price">事实矩阵 → 选择依据</div>
+          <ul>
+            <li>默认确认 1 个直接竞品、对比维度与信息使用边界</li>
+            <li>建立可核验的能力、场景、交付与证据对照矩阵</li>
+            <li>形成客观、合规、可引用的差异化表达与标准回答</li>
+            <li>交付竞品事实矩阵、差异口径与月度复测结论</li>
+          </ul>
+        </article>
+      </div>
+
+      <h2 class="section-title"><span>05</span>一个月执行节奏</h2>
+      <div class="month-plan">
+        <article>
+          <span>第 1 周</span>
+          <strong>启动与基线</strong>
+          <p>完成账号开通、资料核验、目标确认和问题基线归档。</p>
+        </article>
+        <article>
+          <span>第 2 周</span>
+          <strong>语义与证据</strong>
+          <p>形成事实口径、语义资产、证据清单与发布优先级。</p>
+        </article>
+        <article>
+          <span>第 3 周</span>
+          <strong>落位与协同</strong>
+          <p>推进双方确认范围内的载体更新、内容协作与风险校验。</p>
+        </article>
+        <article>
+          <span>第 4 周</span>
+          <strong>复测与报告</strong>
+          <p>执行同口径复测，输出变化、差距和下一阶段建议。</p>
+        </article>
+      </div>
+      <p class="section-note" style="margin: 7px 0 0">
+        若约定内容已按期提交或发布，但因索引时延尚无可观测变化，乙方在服务结束后
+        14 日内提供 1
+        次同口径补充复测；该补充仅包含复测与记录，不含新一轮内容制作。
+      </p>
+
+      <h2 class="section-title"><span>06</span>基础交付物与服务边界</h2>
+      <table>
+        <thead>
+          <tr>
+            <th>交付模块</th>
+            <th>基础交付物</th>
+            <th>不包含内容</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td><strong>诊断与策略</strong></td>
+            <td>单问题现状摘要、事实差距、执行优先级与月度排期</td>
+            <td>企业全品牌、全产品线或无限问题咨询</td>
+          </tr>
+          <tr>
+            <td><strong>语义与证据</strong></td>
+            <td>分类专项标准口径、证据/来源清单及落位建议</td>
+            <td>未获授权的第三方素材、虚构案例或不可核验承诺</td>
+          </tr>
+          <tr>
+            <td><strong>监测与复盘</strong></td>
+            <td>约定口径的复测记录、月度变化说明与后续建议</td>
+            <td>第三方平台接口费、广告费、媒体费及账号采购费</td>
+          </tr>
+          <tr>
+            <td><strong>协作支持</strong></td>
+            <td>项目工作台、关键节点确认、问题答疑与交付归档</td>
+            <td>未写入订单的代运营、危机公关、法务或销售服务</td>
+          </tr>
+        </tbody>
+      </table>
+
+      <div class="important">
+        <strong>范围确认：</strong
+        >具体平台、已有监控数据、素材数量、发布权限、需由甲方执行的官网或账号更新，以及第三方费用，均以签约订单、项目启动单和双方书面确认记录为准。新增问题、扩大平台或增加代运营工作，应另行确认费用与排期。
+      </div>
+
+      <footer class="footer">
+        <span>FrontMind 企业 GEO 单问题月度优化服务协议</span>
+        <span>第 2 页 / 共 5 页</span>
+      </footer>
+    </section>
+
+    <section class="page page-terms">
+      <header class="doc-header">
+        <div class="brand-lockup">
+          <img src="/brand/frontmind-logo.svg" alt="FrontMind" />
+          <div>
+            <strong>签约主体与商务条款</strong>
+            <small>主体、订单、费用、周期与验收口径固定写入合同</small>
+          </div>
+        </div>
+        <div class="doc-meta">
+          <div><strong>服务周期</strong> 连续 30 个自然日</div>
+          <div><strong>自动续费</strong> 否</div>
+        </div>
+      </header>
+
+      <h2 class="section-title"><span>07</span>合同双方</h2>
+      <div class="party-grid">
+        <article class="party-card">
+          <h3>甲方（委托方）</h3>
+          <div class="party-line">
+            <span>企业全称</span><span data-client-legal-name>待提交</span>
+          </div>
+          <div class="party-line">
+            <span>统一社会信用代码</span
+            ><span data-client-credit-code>待提交</span>
+          </div>
+          <div class="party-line">
+            <span>联系地址</span><span data-client-address>待提交</span>
+          </div>
+          <div class="party-line">
+            <span>经办人 / 职务</span>
+            <span
+              ><b data-client-signatory-name>待提交</b> /
+              <b data-client-signatory-title>待提交</b></span
+            >
+          </div>
+          <div class="party-line">
+            <span>电话 / 邮箱</span>
+            <span
+              ><b data-client-mobile>待提交</b> /
+              <b data-client-email>待提交</b></span
+            >
+          </div>
+        </article>
+        <article class="party-card">
+          <h3>乙方（服务方）</h3>
+          <div class="party-line">
+            <span>企业全称</span><span>深圳市超前无限科技有限公司</span>
+          </div>
+          <div class="party-line">
+            <span>联系地址</span
+            ><span>香港中文大学（深圳）深港创新创业孵化中心</span>
+          </div>
+          <div class="party-line">
+            <span>开户银行</span><span>中信银行深圳分行</span>
+          </div>
+          <div class="party-line">
+            <span>银行账号</span><span>8110301012600865338</span>
+          </div>
+          <div class="party-line">
+            <span>订单编号</span><span data-order-id>提交资料后生成</span>
+          </div>
+        </article>
+      </div>
+
+      <h2 class="section-title"><span>08</span>本订单锁定范围</h2>
+      <div class="locked-scope">
+        <strong
+          ><span data-order-category>美誉舆情</span> · 1 个问题 · 连续 30 日 ·
+          <span data-order-price>¥2,000</span></strong
+        >
+        <p>锁定问题：<b data-order-question>以付款确认页所列问题为准</b></p>
+      </div>
+      <table style="margin-top: 8px">
+        <thead>
+          <tr>
+            <th>已包含</th>
+            <th>数量 / 口径</th>
+            <th>未包含，须另行确认</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td><strong>诊断与计划</strong></td>
+            <td>1 个目标问题的基线、事实差距、执行优先级与月度排期</td>
+            <td>全品牌、全产品线、无限问题或年度策略</td>
+          </tr>
+          <tr>
+            <td><strong>语义与证据资产</strong></td>
+            <td>对应分类的标准口径、来源清单、落位建议及实施清单</td>
+            <td>虚构背书、未授权素材、保证排名或保证收录</td>
+          </tr>
+          <tr>
+            <td><strong>复测与结项</strong></td>
+            <td>约定口径复测、月度变化说明、后续建议及 1 轮范围内修订</td>
+            <td>扩平台、换问题、代运营、媒体/广告/接口及认证费用</td>
+          </tr>
+        </tbody>
+      </table>
+
+      <h2 class="section-title"><span>09</span>合同确认、付款与服务生效</h2>
+      <div class="signing-flow">
+        <article>
+          <b>CONTRACT</b><strong>合同生成并确认</strong>
+          <p>
+            主体、问题、金额与条款进入同一合同，双方通过企业微信确认并留存签字或盖章文件。
+          </p>
+        </article>
+        <span>→</span>
+        <article>
+          <b>PAYMENT</b><strong>一次性付清（100%）</strong>
+          <p>合同确认后 5 个工作日内在线支付或对公转账；本服务不自动续费。</p>
+        </article>
+        <span>→</span>
+        <article>
+          <b>ACTIVATION</b><strong>账号开通并启动</strong>
+          <p>付款确认后创建账号，确认目标问题与必要资料后计期。</p>
+        </article>
+      </div>
+      <p class="section-note" style="margin: 7px 0 0">
+        发票安排：乙方收到合同全部款项后，按实际收款金额向甲方开具 1%
+        税率的增值税普通发票；开票抬头与税务信息由甲方在项目启动时提供。服务周期自项目账号开通且双方确认目标问题与必要资料之日起连续计算
+        30 个自然日；因甲方资料、审核或授权延迟，相关排期相应顺延。
+      </p>
+
+      <h2 class="section-title"><span>10</span>交付确认、验收与变更</h2>
+      <div class="two-column">
+        <article class="clause-card">
+          <h3>确认与验收</h3>
+          <ul class="clause-list">
+            <li>
+              以项目工作台、来源记录、确认记录、交付文件和复测记录为依据。
+            </li>
+            <li>甲方应在收到阶段成果后 3 个工作日内集中提出具体异议。</li>
+            <li>反馈期内无具体异议的，阶段成果进入下一环节或结项。</li>
+          </ul>
+        </article>
+        <article class="clause-card">
+          <h3>范围变更</h3>
+          <ul class="clause-list">
+            <li>更换问题、扩大平台、增加产品线或代运营均属于范围变更。</li>
+            <li>变更须书面确认新增费用、排期和交付标准后执行。</li>
+            <li>第三方费用仅在甲方书面授权后发生，由双方另行结算。</li>
+          </ul>
+        </article>
+      </div>
+
+      <footer class="footer">
+        <span>FrontMind 企业 GEO 单问题月度优化服务协议</span>
+        <span>第 3 页 / 共 5 页</span>
+      </footer>
+    </section>
+
+    <section class="page page-legal">
+      <header class="doc-header">
+        <div class="brand-lockup">
+          <img src="/brand/frontmind-logo.svg" alt="FrontMind" />
+          <div>
+            <strong>权利义务与法律条款</strong>
+            <small>保护企业资料、专业方法与双方合法权益</small>
+          </div>
+        </div>
+        <div class="doc-meta">
+          <div>
+            <strong>合同版本</strong>
+            <span data-contract-version>GEO-BASIC-DOMESTIC-2026.08-V3</span>
+          </div>
+          <div><strong>确认方式</strong> 企业微信确认及签字或盖章文件留存</div>
+        </div>
+      </header>
+
+      <h2 class="section-title"><span>11</span>双方权利义务</h2>
+      <div class="two-column">
+        <article class="clause-card">
+          <h3>甲方义务</h3>
+          <ol class="number-list">
+            <li>
+              提供真实、合法、完整的主体、产品、案例、资质、公开来源及必要授权。
+            </li>
+            <li>指定项目联系人，按排期完成资料、内容、权限与事实口径确认。</li>
+            <li>
+              不得要求乙方制作虚假、误导、侵权、商业诋毁或规避平台规则的内容。
+            </li>
+            <li>对甲方指定发布且经甲方确认的事实材料与授权范围承担责任。</li>
+          </ol>
+        </article>
+        <article class="clause-card">
+          <h3>乙方义务</h3>
+          <ol class="number-list">
+            <li>
+              按照订单和本协议提供 GEO 策略、语义资产、执行协作与复测报告。
+            </li>
+            <li>对重要事实、来源和风险表达进行核验，并保留必要项目记录。</li>
+            <li>
+              在对外发布前取得甲方对品牌事实、商标、案例与授权范围的确认。
+            </li>
+            <li>对甲方非公开资料承担保密义务，及时报告影响交付的重大风险。</li>
+          </ol>
+        </article>
+      </div>
+
+      <h2 class="section-title"><span>12</span>知识产权、保密与数据</h2>
+      <div class="two-column">
+        <article class="clause-card">
+          <h3>知识产权</h3>
+          <p>
+            甲方既有商标、资料、案例和数据归甲方或原权利人所有。乙方既有方法论、软件、模型、模板、监测体系和通用能力归乙方所有。甲方付清订单款后，可为自身经营目的持续使用本订单定制交付成果；未经书面同意，不得转售乙方底层工具或通用模板。
+          </p>
+        </article>
+        <article class="clause-card">
+          <h3>保密与数据处理</h3>
+          <p>
+            双方对合作中获知的商业秘密、未公开经营数据、客户信息和技术资料承担保密义务，保密期为协议终止后
+            5
+            年。乙方仅在履约必要范围内处理甲方资料，并采取合理的权限、留痕和访问控制措施；依法或依监管要求披露的除外。
+          </p>
+        </article>
+      </div>
+
+      <h2 class="section-title"><span>13</span>平台边界与结果责任</h2>
+      <div class="important">
+        <strong>双方确认：</strong>AI
+        平台算法、索引、政策、接口与第三方内容不由乙方控制；验收以约定专业过程、交付物、事实准确性和同口径复测记录为依据。该边界不免除乙方因未按约履行、故意或重大过失依法应承担的责任。
+      </div>
+
+      <h2 class="section-title"><span>14</span>暂停、终止与退款结算</h2>
+      <table aria-label="服务阶段结算比例">
+        <thead>
+          <tr>
+            <th>服务里程碑</th>
+            <th>结算比例</th>
+            <th>完成标志</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td><strong>范围确认与基线</strong></td>
+            <td>25%</td>
+            <td>问题、事实边界、基线与排期进入工作台</td>
+          </tr>
+          <tr>
+            <td><strong>语义资产与实施清单</strong></td>
+            <td>50%</td>
+            <td>分类专项资产、证据来源与实施清单完成交付</td>
+          </tr>
+          <tr>
+            <td><strong>复测与结项</strong></td>
+            <td>25%</td>
+            <td>同口径复测、变化说明与结项建议完成交付</td>
+          </tr>
+        </tbody>
+      </table>
+      <p class="section-note" style="margin: 7px 0 0">
+        付款后乙方尚未启动定制工作，甲方可书面申请取消；双方核验后原路退还未发生费用。项目启动后按已完成里程碑及甲方书面授权的必要第三方成本结算，未履行部分原路退还。甲方逾期提供资料、确认或授权，或项目存在合规风险时，乙方可暂停相关工作并书面说明。
+      </p>
+
+      <h2 class="section-title"><span>15</span>违约、不可抗力与争议解决</h2>
+      <ol class="number-list">
+        <li>
+          一方实质违约且在书面催告后 5
+          个工作日内未补救，对方可解除协议，并依法主张直接损失。
+        </li>
+        <li>
+          因提供虚假资料、超越授权或侵犯第三方权益造成损失的，由责任方依法承担；双方均应合理防止损失扩大。
+        </li>
+        <li>
+          因不可抗力或重大平台政策变化影响履约，受影响方应及时通知并提供合理说明，双方协商替代、顺延或终止方案。
+        </li>
+        <li>
+          本协议适用中华人民共和国法律。争议应先友好协商；协商不成，任何一方可向被告住所地有管辖权的人民法院提起诉讼。
+        </li>
+      </ol>
+
+      <h2 class="section-title"><span>16</span>通知、协议组成与生效</h2>
+      <div class="important">
+        <strong>协议组成：</strong
+        >双方在本合同列明的联系人、手机、邮箱、订单页、项目工作台及企业微信形成的通知和记录均可作为履约凭证。服务订单、支付记录、本协议、签字或盖章文件、项目启动单、双方书面确认和交付记录共同构成合作文件；特别约定与通用条款不一致时，以双方后续明确确认的特别约定为准。本协议自双方在企业微信确认合同版本且签字或盖章文件完成留存之日起生效。
+      </div>
+
+      <footer class="footer">
+        <span>FrontMind 企业 GEO 单问题月度优化服务协议</span>
+        <span>第 4 页 / 共 5 页</span>
+      </footer>
+    </section>
+
+    <section class="page page-signature">
+      <header class="doc-header">
+        <div class="brand-lockup">
+          <img src="/brand/frontmind-logo.svg" alt="FrontMind" />
+          <div>
+            <strong>合同确认页</strong>
+            <small>本页与前四页共同组成完整合同，不可分割</small>
+          </div>
+        </div>
+        <div class="doc-meta">
+          <div>
+            <strong>订单编号</strong> <span data-order-id>提交资料后生成</span>
+          </div>
+          <div><strong>生成日期</strong> <span data-contract-date></span></div>
+        </div>
+      </header>
+
+      <h2 class="section-title"><span>17</span>合同主体确认</h2>
+      <div class="locked-scope">
+        <strong
+          ><span data-market-edition>国内版</span> ·
+          <span data-order-category>美誉舆情</span> ·
+          <span data-order-price>¥2,000</span> · 连续 30 日</strong
+        >
+        <p>合同问题：<b data-order-question>以付款确认页所列问题为准</b></p>
+      </div>
+
+      <div class="signature-grid">
+        <article class="signature-card">
+          <h3>甲方（委托方）</h3>
+          <div class="signature-line">
+            <span>单位名称</span><span data-client-legal-name>待提交</span>
+          </div>
+          <div class="signature-line">
+            <span>授权代表</span><span data-client-signatory-name>待提交</span>
+          </div>
+          <div class="signature-line">
+            <span>职务</span><span data-client-signatory-title>待提交</span>
+          </div>
+          <div class="signature-line">
+            <span>联系电话</span><span data-client-mobile>待提交</span>
+          </div>
+          <div class="seal-space">签字 / 盖章留存区域</div>
+          <div class="signature-line">
+            <span>确认日期</span><span>　　　　年　　月　　日</span>
+          </div>
+        </article>
+        <article class="signature-card">
+          <h3>乙方（服务方）</h3>
+          <div class="signature-line">
+            <span>单位名称</span><span>深圳市超前无限科技有限公司</span>
+          </div>
+          <div class="signature-line"><span>授权代表</span><span></span></div>
+          <div class="signature-line">
+            <span>开户银行</span><span>中信银行深圳分行</span>
+          </div>
+          <div class="signature-line">
+            <span>银行账号</span><span>8110301012600865338</span>
+          </div>
+          <div class="seal-space">签字 / 盖章留存区域</div>
+          <div class="signature-line">
+            <span>确认日期</span><span>　　　　年　　月　　日</span>
+          </div>
+        </article>
+      </div>
+
+      <div class="signature-note">
+        双方确认已完整阅读并理解本合同全部五页内容，尤其是本订单锁定范围、验收口径、平台结果边界、退款结算及争议解决条款。双方通过企业微信核对并确认本合同版本，签字或盖章文件由双方分别留存；企业微信确认记录、合同文件、订单与支付记录共同构成履约依据。
+      </div>
+
+      <footer class="footer">
+        <span>FrontMind 企业 GEO 单问题月度优化服务协议</span>
+        <span>第 5 页 / 共 5 页</span>
+      </footer>
+    </section>
+
+    <script>
+      (() => {
+        const plans = {
+          product_scenario: {
+            label: "产品与服务 Q&A",
+            basePrice: 1500,
+          },
+          reputation: {
+            label: "美誉舆情",
+            basePrice: 2000,
+          },
+          competitor_comparison: {
+            label: "竞品对比",
+            basePrice: 2000,
+          },
+        };
+
+        const params = new URLSearchParams(window.location.search);
+        const profile = new URLSearchParams(window.location.hash.slice(1));
+        const requestedCategory = params.get("category") || "";
+        const category = Object.hasOwn(plans, requestedCategory)
+          ? requestedCategory
+          : "reputation";
+        const requestedEdition = params.get("edition") || "";
+        const edition =
+          requestedEdition === "overseas" ? "overseas" : "domestic";
+        const editionConfig =
+          edition === "overseas"
+            ? {
+                label: "海外版",
+                multiplier: 2,
+                contractVersion: "GEO-BASIC-OVERSEAS-2026.08-V3",
+                serviceNote:
+                  "海外版使用英文问题在 ChatGPT 完成监控；监控回答可为英文，后续评估、优化方案、合同与交付均以中文呈现。",
+              }
+            : {
+                label: "国内版",
+                multiplier: 1,
+                contractVersion: "GEO-BASIC-DOMESTIC-2026.08-V3",
+                serviceNote:
+                  "国内版按本合同确认的国内平台范围执行监控、评估与交付。",
+              };
+        const formatPrice = (amount) =>
+          `¥${new Intl.NumberFormat("zh-CN").format(amount)}`;
+        const plan = {
+          ...plans[category],
+          price: formatPrice(
+            plans[category].basePrice * editionConfig.multiplier,
+          ),
+        };
+        const question =
+          (params.get("question") || "").trim().slice(0, 120) ||
+          "以付款确认页所列问题为准";
+        const client =
+          (params.get("client") || "").trim().slice(0, 80) || "待提交合同主体";
+        const orderId =
+          (params.get("order") || "").trim().slice(0, 64) || "提交资料后生成";
+        const date = new Intl.DateTimeFormat("zh-CN", {
+          year: "numeric",
+          month: "2-digit",
+          day: "2-digit",
+        }).format(new Date());
+
+        document
+          .querySelectorAll("[data-order-category]")
+          .forEach((node) => (node.textContent = plan.label));
+        document
+          .querySelectorAll("[data-order-price]")
+          .forEach((node) => (node.textContent = plan.price));
+        document
+          .querySelectorAll("[data-market-edition]")
+          .forEach((node) => (node.textContent = editionConfig.label));
+        document
+          .querySelectorAll("[data-contract-version]")
+          .forEach(
+            (node) => (node.textContent = editionConfig.contractVersion),
+          );
+        document
+          .querySelectorAll("[data-edition-service-note]")
+          .forEach((node) => (node.textContent = editionConfig.serviceNote));
+        document.querySelectorAll("[data-plan-price]").forEach((node) => {
+          const priceCategory = node.getAttribute("data-plan-price");
+          if (!Object.hasOwn(plans, priceCategory)) return;
+          node.textContent = formatPrice(
+            plans[priceCategory].basePrice * editionConfig.multiplier,
+          );
+        });
+        document
+          .querySelectorAll("[data-price-range]")
+          .forEach(
+            (node) =>
+              (node.textContent = `${formatPrice(
+                plans.product_scenario.basePrice * editionConfig.multiplier,
+              )}/${formatPrice(
+                plans.reputation.basePrice * editionConfig.multiplier,
+              )}`),
+          );
+        document
+          .querySelectorAll("[data-order-question]")
+          .forEach((node) => (node.textContent = question));
+        document
+          .querySelectorAll("[data-service-client]")
+          .forEach((node) => (node.textContent = client));
+        document
+          .querySelectorAll("[data-order-id]")
+          .forEach((node) => (node.textContent = orderId));
+        document
+          .querySelectorAll("[data-contract-date]")
+          .forEach((node) => (node.textContent = date));
+        const profileFields = {
+          legalName: {
+            selector: "[data-client-legal-name]",
+            fallback: client,
+            maxLength: 200,
+          },
+          creditCode: {
+            selector: "[data-client-credit-code]",
+            fallback: "待提交",
+            maxLength: 18,
+          },
+          address: {
+            selector: "[data-client-address]",
+            fallback: "待提交",
+            maxLength: 500,
+          },
+          signatoryName: {
+            selector: "[data-client-signatory-name]",
+            fallback: "待提交",
+            maxLength: 128,
+          },
+          signatoryTitle: {
+            selector: "[data-client-signatory-title]",
+            fallback: "待提交",
+            maxLength: 128,
+          },
+          mobile: {
+            selector: "[data-client-mobile]",
+            fallback: "待提交",
+            maxLength: 32,
+          },
+          email: {
+            selector: "[data-client-email]",
+            fallback: "待提交",
+            maxLength: 320,
+          },
+        };
+        Object.entries(profileFields).forEach(([key, field]) => {
+          const value =
+            (profile.get(key) || "").trim().slice(0, field.maxLength) ||
+            field.fallback;
+          document
+            .querySelectorAll(field.selector)
+            .forEach((node) => (node.textContent = value));
+        });
+        document
+          .querySelectorAll("[data-price-row]")
+          .forEach((row) =>
+            row.classList.toggle(
+              "is-current",
+              row.getAttribute("data-price-row") === category,
+            ),
+          );
+        document
+          .querySelectorAll("[data-plan-card]")
+          .forEach((card) =>
+            card.classList.toggle(
+              "is-active",
+              card.getAttribute("data-plan-card") === category,
+            ),
+          );
+
+        document.documentElement.dataset.marketEdition = edition;
+        document.title = `FrontMind_GEO${editionConfig.label}月度基础服务协议_${orderId}`;
+        const printButton = document.getElementById("print-contract");
+        const renderStatus = document.getElementById("render-status");
+        printButton.addEventListener("click", () => window.print());
+
+        const imagesReady = Promise.all(
+          Array.from(document.images).map((image) => {
+            if (image.complete) return Promise.resolve();
+            return new Promise((resolve) => {
+              image.addEventListener("load", resolve, { once: true });
+              image.addEventListener("error", resolve, { once: true });
+            });
+          }),
+        );
+        Promise.all([document.fonts?.ready || Promise.resolve(), imagesReady])
+          .then(() => {
+            document.documentElement.dataset.pdfReady = "true";
+            printButton.disabled = false;
+            renderStatus.textContent = "合同内容已就绪，可下载 PDF";
+            window.dispatchEvent(new Event("frontmind-contract-ready"));
+            if (params.get("print") === "1") window.print();
+          })
+          .catch(() => {
+            printButton.disabled = false;
+            renderStatus.textContent = "合同内容已就绪，可下载 PDF";
+          });
+      })();
+    </script>
   </body>
 </html>

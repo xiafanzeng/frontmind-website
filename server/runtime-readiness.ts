@@ -4,6 +4,8 @@ export type WebsiteRuntimeReadinessOptions<
   TSkills,
   TDependencies extends Record<string, unknown>,
 > = {
+  releaseChannel: "production" | "development";
+  paymentMode: "zpay";
   buildSha: string | null;
   imageDigest: string | null;
   requireReleaseIdentity?: boolean;
@@ -46,6 +48,9 @@ export async function collectWebsiteRuntimeReadiness<
 
   return {
     status: "ok" as const,
+    channel: options.releaseChannel,
+    releaseChannel: options.releaseChannel,
+    paymentMode: options.paymentMode,
     buildSha: options.buildSha,
     imageDigest: options.imageDigest,
     skills,

@@ -1,3 +1,8 @@
+import {
+  GEO_UPSTREAM_PROMPT_MAX_CODE_POINTS,
+  geoPromptCodePointLength,
+} from "./prompt-delivery";
+
 export const FRONTMIND_BASE_PROFILE = "frontmind-base" as const;
 export const FRONTMIND_PRO_PROFILE = "frontmind-pro" as const;
 
@@ -17,6 +22,11 @@ export class GeoBrokerError extends Error {
   }
 }
 
+const FORWARDED_MONITOR_ERROR_CODES = new Set([
+  "MONITOR_SUBMISSION_REJECTED",
+  "MONITOR_SUBMISSION_UNKNOWN",
+]);
+
 export type BrokerFile = {
   id: string;
   filename: string;
@@ -33,7 +43,7 @@ export type BrokerTask = Record<string, unknown> & {
   output?: unknown;
 };
 
-export const GEO_MONITOR_PLATFORM_IDS = [
+export const GEO_DOMESTIC_MONITOR_PLATFORM_IDS = [
   "doubao",
   "yuanbao",
   "deepseek",
@@ -42,7 +52,50 @@ export const GEO_MONITOR_PLATFORM_IDS = [
   "kimi",
 ] as const;
 
+export const GEO_OVERSEAS_MONITOR_PLATFORM_IDS = ["chatgpt"] as const;
+
+export const GEO_MONITOR_PLATFORM_IDS = [
+  ...GEO_DOMESTIC_MONITOR_PLATFORM_IDS,
+  ...GEO_OVERSEAS_MONITOR_PLATFORM_IDS,
+] as const;
+
+export const GEO_MONITORING_EDITIONS = ["domestic", "overseas"] as const;
+
+export type GeoMonitoringEdition = (typeof GEO_MONITORING_EDITIONS)[number];
+
 export type GeoMonitorPlatformId = (typeof GEO_MONITOR_PLATFORM_IDS)[number];
+
+export function normalizedGeoMonitoringEdition(
+  edition?: GeoMonitoringEdition,
+): GeoMonitoringEdition {
+  return edition === "overseas" ? "overseas" : "domestic";
+}
+
+export function isValidGeoMonitoringScope(
+  edition: GeoMonitoringEdition | undefined,
+  platformIds: readonly GeoMonitorPlatformId[],
+) {
+  const normalizedEdition = normalizedGeoMonitoringEdition(edition);
+  const unique = new Set(platformIds);
+  if (!platformIds.length || unique.size !== platformIds.length) return false;
+  if (normalizedEdition === "overseas") {
+    return platformIds.length === 1 && platformIds[0] === "chatgpt";
+  }
+  const allowed = new Set<GeoMonitorPlatformId>(
+    GEO_DOMESTIC_MONITOR_PLATFORM_IDS,
+  );
+  return platformIds.every((platformId) => allowed.has(platformId));
+}
+
+export function geoMonitoringPriceFen(
+  edition: GeoMonitoringEdition | undefined,
+  platformIds: readonly GeoMonitorPlatformId[],
+) {
+  if (!isValidGeoMonitoringScope(edition, platformIds)) return undefined;
+  return normalizedGeoMonitoringEdition(edition) === "overseas"
+    ? 500
+    : platformIds.length * 200;
+}
 
 export type BrokerMonitorSource = {
   title?: string;
@@ -93,19 +146,50 @@ export type BrokerMonitorRun = {
   error?: string;
 };
 
+export type BrokerProjectTaskDeletion =
+  | {
+      schemaVersion: 1;
+      projectId: string;
+      status: "deleted";
+      deletedTasks: number;
+      deletedFiles: number;
+      pendingReservations: 0;
+    }
+  | {
+      schemaVersion: 1;
+      projectId: string;
+      status: "deleting";
+      deletedTasks: number;
+      deletedFiles: number;
+      pendingReservations: number;
+      remainingTasks: number;
+      retryAfterMs: number;
+    };
+
+type BrokerCreateFileInput = {
+  filename: string;
+  mimeType?: string;
+  sizeBytes: number;
+} & (
+  | {
+      projectId: string;
+      idempotencyKey: string;
+    }
+  | {
+      projectId?: undefined;
+      idempotencyKey?: string;
+    }
+);
+
 export interface GeoPresalesBroker {
-  getStatus(): Promise<{
+  getStatus(options?: { freshMonitorCredential?: boolean }): Promise<{
     ok: boolean;
     credentialConfigured: boolean;
     monitorCredentialConfigured: boolean;
+    monitorCredentialAuthenticated: boolean;
     publicUrlConfigured?: boolean;
   }>;
-  createFile(input: {
-    filename: string;
-    mimeType?: string;
-    sizeBytes: number;
-    idempotencyKey?: string;
-  }): Promise<BrokerFile>;
+  createFile(input: BrokerCreateFileInput): Promise<BrokerFile>;
   uploadFile(
     fileId: string,
     body: Buffer,
@@ -121,6 +205,8 @@ export interface GeoPresalesBroker {
   }): Promise<BrokerTask>;
   getTask(taskId: string): Promise<BrokerTask>;
   getTaskResult(taskId: string): Promise<BrokerTask>;
+  deleteTask(taskId: string): Promise<void>;
+  deleteProjectTasks(projectId: string): Promise<BrokerProjectTaskDeletion>;
   deleteFile(fileId: string): Promise<void>;
   downloadFile(fileId: string): Promise<Response>;
   downloadTaskOutput(
@@ -129,13 +215,17 @@ export interface GeoPresalesBroker {
     filename?: string,
   ): Promise<Response>;
   createMonitorRun(input: {
+    projectId: string;
     question: string;
     platforms: GeoMonitorPlatformId[];
     idempotencyKey: string;
   }): Promise<BrokerMonitorRun>;
   getMonitorRun(runId: string): Promise<BrokerMonitorRun>;
   getMonitorResult(runId: string): Promise<BrokerMonitorRun>;
-  deleteMonitorRun(runId: string): Promise<void>;
+  deleteMonitorRun(
+    projectId: string,
+    runId: string,
+  ): Promise<"deleted" | "deleting">;
 }
 
 type BrokerConfig = {
@@ -237,12 +327,17 @@ export class HttpGeoPresalesBroker implements GeoPresalesBroker {
     this.fetchImpl = config.fetchImpl ?? fetch;
   }
 
-  async getStatus() {
-    const status = await this.requestJson<Record<string, unknown>>("/status");
+  async getStatus(options: { freshMonitorCredential?: boolean } = {}) {
+    const status = await this.requestJson<Record<string, unknown>>(
+      options.freshMonitorCredential
+        ? "/status?monitorCredentialProbe=fresh"
+        : "/status",
+    );
     if (
       typeof status.ok !== "boolean" ||
       typeof status.credentialConfigured !== "boolean" ||
       typeof status.monitorCredentialConfigured !== "boolean" ||
+      typeof status.monitorCredentialAuthenticated !== "boolean" ||
       (status.publicUrlConfigured !== undefined &&
         typeof status.publicUrlConfigured !== "boolean")
     ) {
@@ -256,18 +351,14 @@ export class HttpGeoPresalesBroker implements GeoPresalesBroker {
       ok: status.ok,
       credentialConfigured: status.credentialConfigured,
       monitorCredentialConfigured: status.monitorCredentialConfigured,
+      monitorCredentialAuthenticated: status.monitorCredentialAuthenticated,
       ...(typeof status.publicUrlConfigured === "boolean"
         ? { publicUrlConfigured: status.publicUrlConfigured }
         : {}),
     };
   }
 
-  async createFile(input: {
-    filename: string;
-    mimeType?: string;
-    sizeBytes: number;
-    idempotencyKey?: string;
-  }) {
+  async createFile(input: BrokerCreateFileInput) {
     return this.requestJson<BrokerFile>("/files", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -299,6 +390,18 @@ export class HttpGeoPresalesBroker implements GeoPresalesBroker {
     idempotencyKey: string;
     agentProfile?: FrontMindAgentProfile;
   }) {
+    const promptCodePoints = geoPromptCodePointLength(input.prompt);
+    if (promptCodePoints > GEO_UPSTREAM_PROMPT_MAX_CODE_POINTS) {
+      throw new GeoBrokerError(
+        `FrontMind task prompt exceeds ${GEO_UPSTREAM_PROMPT_MAX_CODE_POINTS} Unicode code points`,
+        500,
+        "TASK_PROMPT_TOO_LONG",
+        {
+          maximumCodePoints: GEO_UPSTREAM_PROMPT_MAX_CODE_POINTS,
+          actualCodePoints: promptCodePoints,
+        },
+      );
+    }
     return this.requestJson<BrokerTask>("/tasks", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -321,6 +424,54 @@ export class HttpGeoPresalesBroker implements GeoPresalesBroker {
     return this.requestJson<BrokerTask>(
       `/tasks/${encodeURIComponent(taskId)}/result`,
     );
+  }
+
+  async deleteTask(taskId: string) {
+    const response = await this.request(
+      `/tasks/${encodeURIComponent(taskId)}`,
+      { method: "DELETE" },
+    );
+    if (response.headers.get("x-frontmind-task-retention") === "retained") {
+      if (response.body) await response.body.cancel().catch(() => undefined);
+      throw new GeoBrokerError(
+        "FrontMind task deletion is not enabled",
+        503,
+        "TASK_DELETE_RETAINED",
+      );
+    }
+    if (response.body) await response.body.cancel().catch(() => undefined);
+  }
+
+  async deleteProjectTasks(projectId: string) {
+    const response = await this.request(
+      `/projects/${encodeURIComponent(projectId)}/tasks`,
+      { method: "DELETE" },
+    );
+    const payload = (await response.json()) as BrokerProjectTaskDeletion;
+    if (
+      payload?.schemaVersion !== 1 ||
+      payload.projectId !== projectId ||
+      !["deleted", "deleting"].includes(payload.status) ||
+      !Number.isSafeInteger(payload.deletedTasks) ||
+      payload.deletedTasks < 0 ||
+      !Number.isSafeInteger(payload.deletedFiles) ||
+      payload.deletedFiles < 0 ||
+      !Number.isSafeInteger(payload.pendingReservations) ||
+      payload.pendingReservations < 0 ||
+      (payload.status === "deleted" && payload.pendingReservations !== 0) ||
+      (payload.status === "deleting" &&
+        (!Number.isSafeInteger(payload.remainingTasks) ||
+          payload.remainingTasks < 0 ||
+          !Number.isSafeInteger(payload.retryAfterMs) ||
+          payload.retryAfterMs <= 0))
+    ) {
+      throw new GeoBrokerError(
+        "FrontMind project task deletion returned an invalid response",
+        502,
+        "PROJECT_TASK_DELETE_INVALID_RESPONSE",
+      );
+    }
+    return payload;
   }
 
   async deleteFile(fileId: string) {
@@ -346,6 +497,7 @@ export class HttpGeoPresalesBroker implements GeoPresalesBroker {
   }
 
   async createMonitorRun(input: {
+    projectId: string;
     question: string;
     platforms: GeoMonitorPlatformId[];
     idempotencyKey: string;
@@ -354,6 +506,7 @@ export class HttpGeoPresalesBroker implements GeoPresalesBroker {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
+        projectId: input.projectId,
         question: input.question,
         platforms: input.platforms,
         idempotencyKey: input.idempotencyKey,
@@ -375,12 +528,20 @@ export class HttpGeoPresalesBroker implements GeoPresalesBroker {
     );
   }
 
-  async deleteMonitorRun(runId: string) {
-    const response = await this.request(
-      `/monitor-runs/${encodeURIComponent(runId)}`,
-      { method: "DELETE" },
-    );
-    if (response.body) await response.body.cancel().catch(() => undefined);
+  async deleteMonitorRun(projectId: string, runId: string) {
+    try {
+      const response = await this.request(
+        `/projects/${encodeURIComponent(projectId)}/monitor-runs/${encodeURIComponent(runId)}`,
+        { method: "DELETE" },
+      );
+      if (response.body) await response.body.cancel().catch(() => undefined);
+      return "deleted" as const;
+    } catch (error) {
+      if (error instanceof GeoBrokerError && error.status === 425) {
+        return "deleting" as const;
+      }
+      throw error;
+    }
   }
 
   private async requestJson<T>(
@@ -447,16 +608,15 @@ export class HttpGeoPresalesBroker implements GeoPresalesBroker {
         response.status === 401 || response.status === 403
           ? 502
           : response.status;
-      const code =
-        response.status === 428
+      const code = FORWARDED_MONITOR_ERROR_CODES.has(payload.code)
+        ? payload.code
+        : response.status === 428
           ? "PRESALES_CREDENTIAL_REQUIRED"
           : response.status === 503
             ? "AGENT_NOT_CONFIGURED"
             : "AGENT_REQUEST_FAILED";
       throw new GeoBrokerError(
-        typeof payload === "string" && payload
-          ? payload
-          : "FrontMind 售前服务请求失败",
+        payload.message ? payload.message : "FrontMind 售前服务请求失败",
         status,
         code,
       );
@@ -468,23 +628,34 @@ export class HttpGeoPresalesBroker implements GeoPresalesBroker {
 
 async function readErrorPayload(response: Response) {
   const text = await response.text().catch(() => "");
-  if (!text) return "";
+  if (!text) return { message: "", code: "" };
   try {
     const parsed = JSON.parse(text) as Record<string, unknown>;
     const nested = parsed.error;
-    if (typeof nested === "string") return nested;
+    if (typeof nested === "string") {
+      return { message: nested.slice(0, 240), code: "" };
+    }
     if (
       nested &&
       typeof nested === "object" &&
       typeof (nested as Record<string, unknown>).message === "string"
     ) {
-      return String((nested as Record<string, unknown>).message);
+      const error = nested as Record<string, unknown>;
+      return {
+        message: String(error.message).slice(0, 240),
+        code: typeof error.code === "string" ? error.code : "",
+      };
     }
-    if (typeof parsed.message === "string") return parsed.message;
+    if (typeof parsed.message === "string") {
+      return {
+        message: parsed.message.slice(0, 240),
+        code: typeof parsed.code === "string" ? parsed.code : "",
+      };
+    }
   } catch {
     // Return the short upstream text below.
   }
-  return text.slice(0, 240);
+  return { message: text.slice(0, 240), code: "" };
 }
 
 export function createGeoPresalesBrokerFromEnv(

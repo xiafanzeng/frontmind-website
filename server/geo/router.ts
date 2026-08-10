@@ -20,11 +20,13 @@ import {
   type GeoAdminNotifier,
 } from "./admin-notifications";
 import {
+  ASSESSMENT_TASK_INPUT_FILENAME,
   ASSESSMENT_SKILL_ARCHIVE_FILENAME,
   AssessmentTaskOutputValidationError,
   assertAssessmentOutputScope,
   buildGeoCurrentStateEvaluatorSkillArchive,
   buildAssessmentPrompt,
+  buildAssessmentTaskInput,
   calculateQuestionBaselineAssessment,
   determineBsasGrade,
   resolveAssessmentTaskOutput,
@@ -33,10 +35,13 @@ import {
   buildGeoOptimizationOutcomeForecastTemplate,
   buildGeoOptimizationOutcomeForecasterSkillArchive,
   buildOptimizationOutcomeForecastPrompt,
+  buildOptimizationOutcomeForecastTaskInput,
   calculateOptimizationOutcomeForecast,
   FORECAST_HORIZON_WEEKS,
+  FORECAST_OUTPUT_RESULT_FILENAME,
   FORECAST_OUTPUT_TEMPLATE_FILENAME,
   FORECAST_SKILL_ARCHIVE_FILENAME,
+  FORECAST_TASK_INPUT_FILENAME,
   ForecastTaskOutputValidationError,
   resolveOptimizationOutcomeForecastTaskOutput,
 } from "./forecast";
@@ -46,12 +51,15 @@ import {
   FRONTMIND_BASE_PROFILE,
   FRONTMIND_PRO_PROFILE,
   type BrokerMonitorRun,
+  geoMonitoringPriceFen,
   GEO_MONITOR_PLATFORM_IDS,
   GeoBrokerError,
+  normalizedGeoMonitoringEdition,
   type BrokerTask,
   type FrontMindAgentProfile,
   type GeoPresalesBroker,
   type GeoMonitorPlatformId,
+  type GeoMonitoringEdition,
 } from "./broker";
 import {
   GeoMonitorContractError,
@@ -76,10 +84,11 @@ import {
 } from "./knowledge-base-finalizer";
 import {
   createGeoPaymentGatewayFromEnv,
-  GEO_SERVICE_MONTHLY_PRICE_FEN,
+  geoServiceMonthlyPriceFen,
   type GeoPaymentCheckout,
   type GeoPaymentGateway,
   type GeoPaymentMethod,
+  type GeoPaymentReceipt,
   GeoPaymentVerificationError,
   type GeoPaymentVerifier,
   type GeoServiceCategory,
@@ -107,13 +116,24 @@ import {
   type GeoCustomQuestionValidationStore,
 } from "./custom-question-validation-store";
 import {
+  buildGeoMonitorQuestionTranslationPrompt,
+  geoMonitorQuestionTranslationOperationKey,
+  parseGeoMonitorQuestionTranslationTaskOutput,
+} from "./monitor-question-translation";
+import {
   trustedAssistantOutputFiles,
   trustedAssistantOutputTexts,
 } from "./trusted-task-output";
 import {
+  buildGeoCustomQuestionClassifierTaskInput,
   buildGeoCustomQuestionClassifierPrompt,
   buildGeoQuestionPrompt,
+  buildGeoQuestionTaskInput,
   buildWebsiteKnowledgeBasePrompt,
+  buildWebsiteKnowledgeBaseTaskInput,
+  CUSTOM_QUESTION_TASK_INPUT_FILENAME,
+  QUESTION_TASK_INPUT_FILENAME,
+  WEBSITE_KB_TASK_INPUT_FILENAME,
 } from "./prompts";
 import {
   buildGeoCustomQuestionClassifierSkillArchive,
@@ -156,6 +176,7 @@ import {
   CreateServiceContractRequestSchema,
   CreateServiceAccountRequestSchema,
   CreateServiceAccountRequestV1Schema,
+  ConfirmServiceBankTransferRequestSchema,
   CreateCustomQuestionRequestSchema,
   CreatePaymentRequestSchema,
   CreateProjectRequestSchema,
@@ -168,6 +189,7 @@ import {
   ServiceStatusRequestSchema,
   StartMonitoringRequestSchema,
   SwitchPaymentRequestSchema,
+  SwitchServicePaymentRequestSchema,
   UploadInitRequestSchema,
   type CreateProjectRequest,
   type GeoQuestion,
@@ -210,7 +232,14 @@ const CUSTOM_QUESTION_CLASSIFIER_LEASE_RENEW_MS = 10_000;
 const CUSTOM_QUESTION_VALIDATION_TTL_MS = 24 * 60 * 60 * 1000;
 const CUSTOM_QUESTION_TERMINAL_RETENTION_MS = 24 * 60 * 60 * 1000;
 const SESSION_RATE_LIMIT_WINDOW_MS = 60 * 60 * 1000;
-const GEO_MANUAL_CONTRACT_TEMPLATE_VERSION = "basic-2026.07-v2";
+const MONITOR_QUESTION_TRANSLATION_WAIT_MS = 25_000;
+const MONITOR_QUESTION_TRANSLATION_POLL_MS = 1_000;
+const PAID_MONITOR_START_RATE_LIMIT = 30;
+const PAID_MONITOR_START_RATE_WINDOW_MS = 60 * 1000;
+const GEO_MANUAL_CONTRACT_TEMPLATE_VERSION = {
+  domestic: "basic-domestic-2026.08-v1",
+  overseas: "basic-overseas-2026.08-v1",
+} as const;
 const KNOWLEDGE_BASE_VALIDATION_PUBLIC_ERRORS: Record<
   KnowledgeBaseValidationCategory,
   string
@@ -310,6 +339,7 @@ type ProjectTokenValue = {
   previousQuestionTaskIds?: string[];
   customQuestion?: GeoQuestion;
   monitorRunId?: string;
+  monitoringEdition?: GeoMonitoringEdition;
   monitorQuestionId?: string;
   monitorPlatformIds?: GeoMonitorPlatformId[];
   monitorOrderId?: string;
@@ -396,6 +426,8 @@ type GeoRouterOptions = {
   knowledgeBaseFinalizer?: typeof finalizeKnowledgeBaseCandidate;
   legacyCustomQuestionCompatibilityWaitMs?: number;
   legacyCustomQuestionCompatibilityPollMs?: number;
+  monitorQuestionTranslationWaitMs?: number;
+  monitorQuestionTranslationPollMs?: number;
   customQuestionValidationNow?: () => number;
   env?: NodeJS.ProcessEnv;
 };
@@ -500,8 +532,13 @@ async function verifyUploadedKnowledgeBaseArchive(
 export function createGeoRouter(options: GeoRouterOptions = {}): Router {
   const env = options.env ?? process.env;
   const production = env.NODE_ENV === "production";
-  const { inviteCode, contractAuthCode, sessionSecret, configurationError } =
-    resolveGeoRuntimeConfiguration(env);
+  const {
+    inviteCode,
+    contractAuthCode,
+    bankTransferConfirmationCode,
+    sessionSecret,
+    configurationError,
+  } = resolveGeoRuntimeConfiguration(env);
   const codec = new GeoTokenCodec(
     sessionSecret.length >= 16
       ? sessionSecret
@@ -548,18 +585,30 @@ export function createGeoRouter(options: GeoRouterOptions = {}): Router {
   const legacyCustomQuestionCompatibilityPollMs =
     options.legacyCustomQuestionCompatibilityPollMs ??
     GEO_LEGACY_CUSTOM_QUESTION_COMPATIBILITY_POLL_MS;
+  const monitorQuestionTranslationWaitMs =
+    options.monitorQuestionTranslationWaitMs ??
+    MONITOR_QUESTION_TRANSLATION_WAIT_MS;
+  const monitorQuestionTranslationPollMs =
+    options.monitorQuestionTranslationPollMs ??
+    MONITOR_QUESTION_TRANSLATION_POLL_MS;
   const customQuestionValidationNow =
     options.customQuestionValidationNow ?? Date.now;
   if (
     !Number.isInteger(legacyCustomQuestionCompatibilityWaitMs) ||
     legacyCustomQuestionCompatibilityWaitMs <= 0 ||
     !Number.isInteger(legacyCustomQuestionCompatibilityPollMs) ||
-    legacyCustomQuestionCompatibilityPollMs <= 0
+    legacyCustomQuestionCompatibilityPollMs <= 0 ||
+    !Number.isInteger(monitorQuestionTranslationWaitMs) ||
+    monitorQuestionTranslationWaitMs <= 0 ||
+    !Number.isInteger(monitorQuestionTranslationPollMs) ||
+    monitorQuestionTranslationPollMs <= 0 ||
+    monitorQuestionTranslationPollMs > monitorQuestionTranslationWaitMs
   ) {
-    throw new Error("custom-question legacy compatibility timing is invalid");
+    throw new Error("GEO asynchronous compatibility timing is invalid");
   }
   const failedInvites = new Map<string, FailedInviteWindow>();
   const failedContractCodes = new Map<string, FailedInviteWindow>();
+  const failedBankTransferCodes = new Map<string, FailedInviteWindow>();
   const sessionRates = new Map<string, RateWindow>();
   const identityRates = new Map<string, RateWindow>();
   const serviceOrderLocks = new Map<string, ServiceOrderLock>();
@@ -570,6 +619,27 @@ export function createGeoRouter(options: GeoRouterOptions = {}): Router {
   const monitoringPaymentSwitches = new Map<
     string,
     MonitoringPaymentSwitchFlight
+  >();
+  const servicePaymentSwitches = new Map<
+    string,
+    MonitoringPaymentSwitchFlight
+  >();
+  type ServicePaymentResult = {
+    projectToken: string;
+    project: Awaited<ReturnType<typeof buildProjectView>>;
+  };
+  const serviceBankConfirmations = new Map<
+    string,
+    {
+      authorizationDigest: string;
+      purchaseIntentDigest: string;
+      expiresAt: number;
+      promise: Promise<ServicePaymentResult>;
+    }
+  >();
+  const servicePaymentMutations = new Map<
+    string,
+    { kind: "online" | "bank"; expiresAt: number }
   >();
   // Payment checkout does not currently rotate the project capability token.
   // This registry prevents stale-token deletion within one router lifetime;
@@ -594,6 +664,34 @@ export function createGeoRouter(options: GeoRouterOptions = {}): Router {
     { attempts: number; retryAt: number }
   >();
   const router = express.Router();
+
+  const withServicePaymentMutation = async <T>(
+    key: string,
+    kind: "online" | "bank",
+    operation: () => Promise<T>,
+  ) => {
+    const now = Date.now();
+    pruneExpiringMap(servicePaymentMutations, now, 2000);
+    const active = servicePaymentMutations.get(key);
+    if (active) {
+      throw new GeoHttpError(
+        active.kind === "bank"
+          ? "对公付款确认正在处理，不能同时更换在线支付方式"
+          : "在线收银台正在创建或切换，请完成后再确认对公付款",
+        409,
+        "SERVICE_PAYMENT_MUTATION_IN_PROGRESS",
+      );
+    }
+    const mutation = { kind, expiresAt: now + PROJECT_TTL_MS } as const;
+    servicePaymentMutations.set(key, mutation);
+    try {
+      return await operation();
+    } finally {
+      if (servicePaymentMutations.get(key) === mutation) {
+        servicePaymentMutations.delete(key);
+      }
+    }
+  };
 
   const ensureFinalizedKnowledgeBase = async (
     value: ProjectTokenValue,
@@ -934,6 +1032,8 @@ export function createGeoRouter(options: GeoRouterOptions = {}): Router {
         "company",
       )}_website_lead_knowledge_base.zip`;
       const file = await broker.createFile({
+        projectId: value.projectId,
+        idempotencyKey: `geo:${value.projectId}:knowledge-base-final:${candidateSha}:${WEBSITE_KB_FINALIZER_VERSION}`,
         filename,
         mimeType: "application/zip",
         sizeBytes: finalized.bytes.length,
@@ -1109,6 +1209,103 @@ export function createGeoRouter(options: GeoRouterOptions = {}): Router {
     }
   };
 
+  const ensureDirectBankTransferOrder = async (input: {
+    value: ProjectTokenValue;
+    orderId: string;
+    questionId: string;
+    category: GeoServiceCategory;
+    monitoringEdition: GeoMonitoringEdition;
+    amountFen: number;
+  }) => {
+    const eventAt = normalizedIsoTimestamp(
+      input.value.serviceContractAuthorizedAt,
+      input.value.serviceManualSignedAt,
+      input.value.serviceContractSignedAt,
+      input.value.serviceProfileSubmittedAt,
+      input.value.serviceManualOrderUpdatedAt,
+    );
+    if (!eventAt) {
+      throw new GeoHttpError(
+        "合同确认记录缺少有效时间，不能创建对公付款订单",
+        409,
+        "SERVICE_CONTRACT_EVIDENCE_REQUIRED",
+      );
+    }
+    const expectedOrder: GeoProjectOrder = {
+      orderId: input.orderId,
+      projectId: input.value.projectId,
+      purchaseType: "service",
+      amountFen: input.amountFen,
+      authorizationDigest: serviceBankTransferAuthorizationDigest({
+        projectId: input.value.projectId,
+        manualOrderReference: input.value.serviceManualOrderReference!,
+        orderId: input.orderId,
+        questionId: input.questionId,
+        category: input.category,
+        monitoringEdition: input.monitoringEdition,
+        amountFen: input.amountFen,
+      }),
+      state: "pending",
+      checkoutExpiresAt: new Date(
+        Date.parse(eventAt) + PROJECT_TTL_MS,
+      ).toISOString(),
+      eventAt,
+    };
+    const projectOrders = await readProjectOrders(input.value.projectId);
+    const existing = projectOrders.orders.find(
+      (order) => order.orderId === input.orderId,
+    );
+    const conflictingOrder = projectOrders.orders.find(
+      (order) =>
+        order.purchaseType === "service" &&
+        order.orderId !== input.orderId &&
+        order.state !== "closed" &&
+        order.state !== "terminal_failed",
+    );
+    if (conflictingOrder) {
+      throw new GeoHttpError(
+        "已有在线合同订单，请从该订单选择改为对公付款",
+        409,
+        "SERVICE_BANK_TRANSFER_AUTHORIZATION_REQUIRED",
+      );
+    }
+    if (existing) {
+      if (
+        existing.projectId !== expectedOrder.projectId ||
+        existing.purchaseType !== "service" ||
+        existing.amountFen !== expectedOrder.amountFen ||
+        (existing.state === "pending" &&
+          (!safeSecretEqual(
+            existing.authorizationDigest,
+            expectedOrder.authorizationDigest,
+          ) ||
+            existing.checkoutExpiresAt !== expectedOrder.checkoutExpiresAt ||
+            existing.eventAt !== expectedOrder.eventAt))
+      ) {
+        throw new GeoHttpError(
+          "对公付款订单与当前服务范围不匹配",
+          409,
+          "PAYMENT_SCOPE_MISMATCH",
+        );
+      }
+      if (
+        existing.state === "review_required" ||
+        existing.state === "terminal_failed" ||
+        existing.state === "closed"
+      ) {
+        throw new GeoHttpError(
+          "该对公付款订单正在复核或已关闭，不能继续确认",
+          409,
+          existing.state === "review_required"
+            ? "PAYMENT_REVIEW_REQUIRED"
+            : "PAYMENT_ALREADY_CONFIRMED",
+        );
+      }
+      return existing;
+    }
+    return writeProjectOrder(expectedOrder);
+  };
+
   const createCheckoutIntent = async (
     value: ProjectTokenValue,
     purchaseType: GeoProjectOrder["purchaseType"],
@@ -1267,7 +1464,7 @@ export function createGeoRouter(options: GeoRouterOptions = {}): Router {
     projectId: string,
     orderId: string,
     state: GeoProjectOrderState,
-    facts: { paidAt?: string } = {},
+    facts: { paidAt?: string; allowReviewRecovery?: boolean } = {},
   ) => {
     const projectOrders = await readProjectOrders(projectId);
     const current = projectOrders.orders.find(
@@ -1289,7 +1486,8 @@ export function createGeoRouter(options: GeoRouterOptions = {}): Router {
     if (
       current.state === "review_required" &&
       state !== "fulfilled" &&
-      state !== "terminal_failed"
+      state !== "terminal_failed" &&
+      !(state === "fulfilling" && facts.allowReviewRecovery === true)
     ) {
       return current;
     }
@@ -1305,12 +1503,16 @@ export function createGeoRouter(options: GeoRouterOptions = {}): Router {
     ) {
       return current;
     }
+    if (current.state === state && (current.paidAt || !facts.paidAt)) {
+      return current;
+    }
+    const nextPaidAt = facts.paidAt || current.paidAt;
     const eventAt = new Date().toISOString();
     return writeProjectOrder({
       ...current,
       state,
       eventAt,
-      paidAt: facts.paidAt || current.paidAt,
+      paidAt: nextPaidAt,
       fulfilledAt: state === "fulfilled" ? eventAt : current.fulfilledAt,
     });
   };
@@ -1359,60 +1561,6 @@ export function createGeoRouter(options: GeoRouterOptions = {}): Router {
       serviceAuthorizationDigest: order.authorizationDigest,
       serviceCheckoutExpiresAt: order.checkoutExpiresAt,
     };
-  };
-
-  const assertProjectOrderAllowsDeletion = async (value: ProjectTokenValue) => {
-    const now = Date.now();
-    pruneExpiringMap(projectOrderProtections, now, 20_000);
-    const protection = projectOrderProtections.get(value.projectId);
-    const trackedServiceValue = protection?.service?.value;
-    const serviceValue = latestServiceOrderValue(value, trackedServiceValue);
-    if (
-      (protection?.service || hasServiceOrderFacts(serviceValue)) &&
-      !isCompletedServiceOrder(serviceValue) &&
-      !isTerminalFailedServiceOrder(serviceValue)
-    ) {
-      throw new GeoHttpError(
-        "当前项目存在未决、对账中或尚未完成履约的服务订单，暂不能删除",
-        409,
-        "PROJECT_ORDER_DELETE_BLOCKED",
-      );
-    }
-
-    const monitorRunId =
-      protection?.monitoring?.runId || value.monitorRunId || undefined;
-    if (protection?.monitoring || value.monitorRunId) {
-      if (!monitorRunId) {
-        throw new GeoHttpError(
-          "当前项目存在未决或对账中的监控订单，暂不能删除",
-          409,
-          "PROJECT_ORDER_DELETE_BLOCKED",
-        );
-      }
-      let monitorRun: BrokerMonitorRun;
-      try {
-        monitorRun = await getResolvedMonitorRun(broker, monitorRunId, {
-          platforms: value.monitorPlatformIds,
-        });
-      } catch (error) {
-        if (isAlreadyDeletedGeoResource(error)) return;
-        throw new GeoHttpError(
-          "暂时无法确认监控订单已经完成或明确终止，已阻止删除",
-          409,
-          "PROJECT_ORDER_DELETE_BLOCKED",
-        );
-      }
-      if (
-        monitorRun.status !== "completed" &&
-        monitorRun.status !== "remote_failed"
-      ) {
-        throw new GeoHttpError(
-          "当前项目存在未决、对账中或尚未完成履约的监控订单，暂不能删除",
-          409,
-          "PROJECT_ORDER_DELETE_BLOCKED",
-        );
-      }
-    }
   };
 
   // Project responses contain opaque capability tokens and must never be
@@ -1498,10 +1646,11 @@ export function createGeoRouter(options: GeoRouterOptions = {}): Router {
     const [assessmentTask, forecastTask, monitorRun] = await Promise.all([
       getResolvedTask(broker, value.assessmentTaskId),
       getResolvedTask(broker, value.optimizationForecastTaskId),
-      getResolvedMonitorRun(broker, value.monitorRunId, {
-        question: resolved.question.question,
-        platforms: value.monitorPlatformIds,
-      }),
+      getResolvedMonitorRun(
+        broker,
+        value.monitorRunId,
+        monitorRunExpectation(value),
+      ),
     ]);
     if (
       normalizeTaskStatus(assessmentTask.status) !== "completed" ||
@@ -1550,7 +1699,10 @@ export function createGeoRouter(options: GeoRouterOptions = {}): Router {
       monitorRun,
       preResolvedOutputs,
       category: category as GeoServiceCategory,
-      amountFen: GEO_SERVICE_MONTHLY_PRICE_FEN[category],
+      amountFen: geoServiceMonthlyPriceFen(
+        category as GeoServiceCategory,
+        value.monitoringEdition,
+      ),
     };
   };
 
@@ -1561,6 +1713,8 @@ export function createGeoRouter(options: GeoRouterOptions = {}): Router {
     if (
       response.purchase.projectId !== value.projectId ||
       response.purchase.orderId !== value.serviceOrderId ||
+      normalizedGeoMonitoringEdition(response.purchase.marketEdition) !==
+        normalizedGeoMonitoringEdition(value.monitoringEdition) ||
       (value.serviceProvisioningReference &&
         response.purchase.reference !== value.serviceProvisioningReference)
     ) {
@@ -1604,6 +1758,8 @@ export function createGeoRouter(options: GeoRouterOptions = {}): Router {
   ): ProjectTokenValue => {
     if (
       response.order.projectId !== value.projectId ||
+      normalizedGeoMonitoringEdition(response.order.marketEdition) !==
+        normalizedGeoMonitoringEdition(value.monitoringEdition) ||
       (response.order.amountFen !== undefined &&
         response.order.amountFen !== value.serviceAmountFen) ||
       (value.serviceManualOrderReference &&
@@ -1793,11 +1949,12 @@ export function createGeoRouter(options: GeoRouterOptions = {}): Router {
   };
 
   const assertMonitorProviderReady = async () => {
-    const status = await broker.getStatus();
+    const status = await broker.getStatus({ freshMonitorCredential: true });
     if (
       !status.ok ||
       !status.credentialConfigured ||
-      !status.monitorCredentialConfigured
+      !status.monitorCredentialConfigured ||
+      !status.monitorCredentialAuthenticated
     ) {
       throw new GeoHttpError(
         "监控服务尚未通过上线就绪检查，请稍后再支付",
@@ -1912,6 +2069,47 @@ export function createGeoRouter(options: GeoRouterOptions = {}): Router {
         next(error);
       }
     };
+
+  const consumeMonitoringStartRate = async (
+    req: Request,
+    res: Response,
+    value: ProjectTokenValue,
+    paymentAuthorization: string,
+  ) => {
+    const authorizationDigest = sha256(paymentAuthorization);
+    const ledger = await readProjectOrders(value.projectId);
+    const isPaidFulfillmentRetry = ledger.orders.some(
+      (order) =>
+        order.purchaseType === "monitoring" &&
+        safeSecretEqual(order.authorizationDigest, authorizationDigest) &&
+        ["paid", "fulfilling", "fulfilled", "review_required"].includes(
+          order.state,
+        ),
+    );
+    if (isPaidFulfillmentRetry) {
+      // Payment-status verification has already moved this exact opaque order
+      // capability into fulfillment. Do not strand a paid customer behind the
+      // low hourly quota used for unauthenticated/cost-incurring starts, while
+      // still bounding accidental retry storms per session and network source.
+      consumeSessionRate(
+        res,
+        "monitor-paid-start",
+        PAID_MONITOR_START_RATE_LIMIT,
+        1,
+        PAID_MONITOR_START_RATE_WINDOW_MS,
+      );
+      consumeIdentityRate(
+        req,
+        "monitor-paid-start",
+        PAID_MONITOR_START_RATE_LIMIT,
+        1,
+        PAID_MONITOR_START_RATE_WINDOW_MS,
+      );
+      return;
+    }
+    consumeSessionRate(res, "monitor-create", 6);
+    consumeIdentityRate(req, "monitor-create", 6);
+  };
 
   const openOwnedProject = (req: Request, res: Response) => {
     const { value } = codec.open<ProjectTokenValue>(
@@ -2056,6 +2254,16 @@ export function createGeoRouter(options: GeoRouterOptions = {}): Router {
 
   router.use(express.json({ limit: "1mb" }));
 
+  const rejectPaymentCallbackHead = (_req: Request, res: Response) => {
+    res.setHeader("Allow", "GET");
+    res.status(405).end();
+  };
+  // Express normally treats HEAD as GET when no explicit HEAD handler exists.
+  // Keep callback verification side effects exclusive to the signed GET path,
+  // even if a reverse-proxy method gate is accidentally removed later.
+  router.head("/payments/notify", rejectPaymentCallbackHead);
+  router.head("/payments/return", rejectPaymentCallbackHead);
+
   router.get("/payments/notify", async (req, res) => {
     try {
       const result = await paymentGateway.verifyCallback(
@@ -2189,7 +2397,7 @@ export function createGeoRouter(options: GeoRouterOptions = {}): Router {
         200 * 1024 * 1024,
         input.sizeBytes,
       );
-      const filename = sanitizeFilename(input.filename, "company-material");
+      const filename = safeCustomerUploadFilename(input.filename);
       const file = await broker.createFile({
         filename,
         mimeType: input.contentType,
@@ -2238,21 +2446,33 @@ export function createGeoRouter(options: GeoRouterOptions = {}): Router {
             input,
           )
         : crypto.randomUUID();
+      const customerAttachments = input.attachments.map(
+        (attachment, index) => ({
+          file_id: attachment.fileId,
+          filename: safeCustomerUploadFilename(
+            uploads[index]?.filename || attachment.filename,
+          ),
+        }),
+      );
+      const promptInput = {
+        ...input,
+        attachments: customerAttachments.map(({ filename }) => ({ filename })),
+      };
       const created = await createWebsiteKnowledgeBaseTaskWithSkill(broker, {
         projectId,
-        prompt: await buildWebsiteKnowledgeBasePrompt(input),
-        attachments: input.attachments.map((attachment) => ({
-          file_id: attachment.fileId,
-          filename: sanitizeFilename(attachment.filename, "company-material"),
-        })),
+        prompt: await buildWebsiteKnowledgeBasePrompt(promptInput),
+        taskInput: buildWebsiteKnowledgeBaseTaskInput(promptInput),
+        attachments: customerAttachments,
         idempotencyKey: `geo:${projectId}:knowledge-base:1`,
       });
       const task = created.task;
       const taskId = taskIdFrom(task);
       if (!taskId) {
-        await broker
-          .deleteFile(created.skillAttachment.file_id)
-          .catch(() => undefined);
+        await Promise.allSettled(
+          created.generatedAttachments.map((attachment) =>
+            broker.deleteFile(attachment.file_id),
+          ),
+        );
         throw new GeoHttpError(
           "创建知识库任务失败：缺少任务 ID",
           502,
@@ -2270,7 +2490,9 @@ export function createGeoRouter(options: GeoRouterOptions = {}): Router {
         knowledgeBaseSubmittedAt: new Date().toISOString(),
         knowledgeBaseValidationProfile: "website-lead-v1",
         uploadFileIds: uploads.map((upload) => upload.fileId),
-        temporaryFileIds: [created.skillAttachment.file_id],
+        temporaryFileIds: created.generatedAttachments.map(
+          (attachment) => attachment.file_id,
+        ),
       };
       const projectToken = codec.seal("project", value, PROJECT_TTL_MS);
       const project = await buildProjectView(
@@ -2336,22 +2558,13 @@ export function createGeoRouter(options: GeoRouterOptions = {}): Router {
         category: question.category,
         rankingMetricEligible: question.category !== "reputation",
       },
-      platforms: monitorRun.platforms,
+      platforms: [...monitorRun.platforms].sort(compareCanonicalText),
       repeatPerPlatform: 5,
       expectedResponses: monitorRun.expectedItems,
       successfulResponses: monitorRun.records.filter(
         (record) => record.status === "completed" && Boolean(record.answerText),
       ).length,
-      records: monitorRun.records.map((record) => ({
-        recordId: record.recordId,
-        platform: record.platform,
-        runIndex: record.runIndex,
-        status: record.status,
-        answerText: record.answerText,
-        sources: record.sources,
-        error: record.error,
-        completedAt: record.completedAt,
-      })),
+      records: canonicalAssessmentMonitorRecords(monitorRun.records),
     };
     const monitoringBytes = Buffer.from(
       JSON.stringify(monitoringDocument),
@@ -2369,46 +2582,49 @@ export function createGeoRouter(options: GeoRouterOptions = {}): Router {
       value.companyName,
       "company",
     )}-monitoring-records.json`;
+    const assessmentTaskOperationKey = `geo:${value.projectId}:assessment:v3-top10:${value.monitorRunId}:${value.assessmentAttempt || 1}`;
     const temporaryFiles: string[] = [];
     try {
-      const monitoringFile = await broker.createFile({
+      const monitoringFile = await createGeoTaskEvidenceFile(broker, {
+        projectId: value.projectId,
+        taskOperationKey: assessmentTaskOperationKey,
+        role: "monitoring-records",
         filename: monitoringFilename,
         mimeType: "application/json",
-        sizeBytes: monitoringBytes.length,
+        body: monitoringBytes,
       });
       temporaryFiles.push(monitoringFile.id);
-      await broker.uploadFile(
-        monitoringFile.id,
-        monitoringBytes,
-        "application/json",
-        monitoringFile.proxy_upload_ticket,
-      );
       const archiveAttachment = await materializeArchiveAttachment(
         broker,
         value.knowledgeBaseTaskId,
         archive,
+        {
+          projectId: value.projectId,
+          idempotencyKey: `${assessmentTaskOperationKey}:knowledge-base-archive`,
+        },
       );
       if (archiveAttachment.temporary) {
         temporaryFiles.push(archiveAttachment.file_id);
       }
       const successfulResponses = monitoringDocument.successfulResponses;
+      const assessmentPromptInput = {
+        companyName: value.companyName,
+        archiveFilename: archiveAttachment.filename,
+        monitoringFilename: monitoringFile.filename || monitoringFilename,
+        question: monitoringDocument.question,
+        monitoring: {
+          platforms: monitorRun.platforms,
+          repeatPerPlatform: 5 as const,
+          expectedResponses: monitorRun.expectedItems,
+          successfulResponses,
+          failedResponses: monitorRun.expectedItems - successfulResponses,
+        },
+      };
       const created = await createGeoTaskWithSkillPackages(
         broker,
         {
           projectId: value.projectId,
-          prompt: await buildAssessmentPrompt({
-            companyName: value.companyName,
-            archiveFilename: archiveAttachment.filename,
-            monitoringFilename: monitoringFile.filename || monitoringFilename,
-            question: monitoringDocument.question,
-            monitoring: {
-              platforms: monitorRun.platforms,
-              repeatPerPlatform: 5,
-              expectedResponses: monitorRun.expectedItems,
-              successfulResponses,
-              failedResponses: monitorRun.expectedItems - successfulResponses,
-            },
-          }),
+          prompt: await buildAssessmentPrompt(assessmentPromptInput),
           attachments: [
             {
               file_id: archiveAttachment.file_id,
@@ -2419,13 +2635,14 @@ export function createGeoRouter(options: GeoRouterOptions = {}): Router {
               filename: monitoringFile.filename || monitoringFilename,
             },
           ],
-          idempotencyKey: `geo:${value.projectId}:assessment:v3-top10:${value.monitorRunId}:${value.assessmentAttempt || 1}`,
+          idempotencyKey: assessmentTaskOperationKey,
         },
         [
           {
             filename: ASSESSMENT_SKILL_ARCHIVE_FILENAME,
             body: await buildGeoCurrentStateEvaluatorSkillArchive(),
           },
+          buildAssessmentTaskInput(assessmentPromptInput),
         ],
       );
       temporaryFiles.push(
@@ -2453,9 +2670,11 @@ export function createGeoRouter(options: GeoRouterOptions = {}): Router {
         },
       };
     } catch (error) {
-      await Promise.allSettled(
-        temporaryFiles.map((fileId) => broker.deleteFile(fileId)),
-      );
+      if (!shouldRetainGeneratedTaskFilesForReplay(error)) {
+        await Promise.allSettled(
+          temporaryFiles.map((fileId) => broker.deleteFile(fileId)),
+        );
+      }
       throw error;
     }
   };
@@ -2489,7 +2708,7 @@ export function createGeoRouter(options: GeoRouterOptions = {}): Router {
     const assessmentBytes = Buffer.from(
       JSON.stringify({
         schemaVersion: 2,
-        generatedAt: new Date().toISOString(),
+        generatedAt: value.assessmentSubmittedAt || new Date(0).toISOString(),
         sourceAssessmentTaskId: value.assessmentTaskId,
         assessment: scoredAssessment,
       }),
@@ -2529,53 +2748,53 @@ export function createGeoRouter(options: GeoRouterOptions = {}): Router {
       );
     }
 
+    const forecastTaskOperationKey = `geo:${value.projectId}:optimization-forecast:${value.assessmentTaskId}:planning-target-4w-v5:${value.optimizationForecastAttempt || 1}`;
     const temporaryFiles: string[] = [];
     try {
-      const assessmentFile = await broker.createFile({
+      const assessmentFile = await createGeoTaskEvidenceFile(broker, {
+        projectId: value.projectId,
+        taskOperationKey: forecastTaskOperationKey,
+        role: "current-assessment",
         filename: assessmentFilename,
         mimeType: "application/json",
-        sizeBytes: assessmentBytes.length,
+        body: assessmentBytes,
       });
       temporaryFiles.push(assessmentFile.id);
-      await broker.uploadFile(
-        assessmentFile.id,
-        assessmentBytes,
-        "application/json",
-        assessmentFile.proxy_upload_ticket,
-      );
-      const scenarioFile = await broker.createFile({
+      const scenarioFile = await createGeoTaskEvidenceFile(broker, {
+        projectId: value.projectId,
+        taskOperationKey: forecastTaskOperationKey,
+        role: "execution-scenario",
         filename: scenarioFilename,
         mimeType: "application/json",
-        sizeBytes: scenarioBytes.length,
+        body: scenarioBytes,
       });
       temporaryFiles.push(scenarioFile.id);
-      await broker.uploadFile(
-        scenarioFile.id,
-        scenarioBytes,
-        "application/json",
-        scenarioFile.proxy_upload_ticket,
-      );
       const archiveAttachment = await materializeArchiveAttachment(
         broker,
         value.knowledgeBaseTaskId,
         archive,
+        {
+          projectId: value.projectId,
+          idempotencyKey: `${forecastTaskOperationKey}:knowledge-base-archive`,
+        },
       );
       if (archiveAttachment.temporary) {
         temporaryFiles.push(archiveAttachment.file_id);
       }
+      const forecastPromptInput = {
+        currentAssessmentFilename:
+          assessmentFile.filename || assessmentFilename,
+        knowledgeBaseArchiveFilename: archiveAttachment.filename,
+        executionScenarioFilename: scenarioFile.filename || scenarioFilename,
+        scenarioName: "full_execution" as const,
+        retryReason,
+      };
       const created = await createGeoTaskWithSkillPackages(
         broker,
         {
           projectId: value.projectId,
-          prompt: await buildOptimizationOutcomeForecastPrompt({
-            currentAssessmentFilename:
-              assessmentFile.filename || assessmentFilename,
-            knowledgeBaseArchiveFilename: archiveAttachment.filename,
-            executionScenarioFilename:
-              scenarioFile.filename || scenarioFilename,
-            scenarioName: "full_execution",
-            retryReason,
-          }),
+          prompt:
+            await buildOptimizationOutcomeForecastPrompt(forecastPromptInput),
           attachments: [
             {
               file_id: archiveAttachment.file_id,
@@ -2590,7 +2809,7 @@ export function createGeoRouter(options: GeoRouterOptions = {}): Router {
               filename: scenarioFile.filename || scenarioFilename,
             },
           ],
-          idempotencyKey: `geo:${value.projectId}:optimization-forecast:${value.assessmentTaskId}:planning-target-4w-v5:${value.optimizationForecastAttempt || 1}`,
+          idempotencyKey: forecastTaskOperationKey,
         },
         [
           {
@@ -2602,6 +2821,7 @@ export function createGeoRouter(options: GeoRouterOptions = {}): Router {
             body: await buildGeoOptimizationOutcomeForecastTemplate(),
             mimeType: "application/json",
           },
+          buildOptimizationOutcomeForecastTaskInput(forecastPromptInput),
         ],
       );
       temporaryFiles.push(
@@ -2629,12 +2849,39 @@ export function createGeoRouter(options: GeoRouterOptions = {}): Router {
         },
       };
     } catch (error) {
-      await Promise.allSettled(
-        temporaryFiles.map((fileId) => broker.deleteFile(fileId)),
-      );
+      if (!shouldRetainGeneratedTaskFilesForReplay(error)) {
+        await Promise.allSettled(
+          temporaryFiles.map((fileId) => broker.deleteFile(fileId)),
+        );
+      }
       throw error;
     }
   };
+
+  router.use(
+    "/projects/:projectToken",
+    requireConfiguration,
+    requireSession,
+    asyncHandler(async (req, res, next) => {
+      if (req.method === "DELETE") {
+        next();
+        return;
+      }
+      const value = openOwnedProject(req, res);
+      if (
+        await customQuestionValidationStore.isProjectDeletionFenced(
+          value.projectId,
+        )
+      ) {
+        throw new GeoHttpError(
+          "该项目已删除，不能继续访问或创建新任务",
+          410,
+          "PROJECT_DELETED",
+        );
+      }
+      next();
+    }),
+  );
 
   router.get(
     "/projects/:projectToken",
@@ -2655,9 +2902,11 @@ export function createGeoRouter(options: GeoRouterOptions = {}): Router {
           ? getResolvedTask(broker, value.questionTaskId)
           : Promise.resolve(undefined),
         value.monitorRunId
-          ? getResolvedMonitorRun(broker, value.monitorRunId, {
-              platforms: value.monitorPlatformIds,
-            })
+          ? getResolvedMonitorRun(
+              broker,
+              value.monitorRunId,
+              monitorRunExpectation(value),
+            )
           : Promise.resolve(undefined),
         value.assessmentTaskId
           ? getResolvedTask(broker, value.assessmentTaskId)
@@ -2999,16 +3248,21 @@ export function createGeoRouter(options: GeoRouterOptions = {}): Router {
         broker,
         trackedValue.knowledgeBaseTaskId,
         archive,
+        {
+          projectId: trackedValue.projectId,
+          idempotencyKey: `geo:${trackedValue.projectId}:questions:1:knowledge-base-archive`,
+        },
       );
+      const questionPromptInput = {
+        companyName: trackedValue.companyName,
+        archiveFilename: archiveAttachment.filename,
+      };
       const { task: questionTask, skillAttachments } =
         await createGeoTaskWithSkillPackages(
           broker,
           {
             projectId: trackedValue.projectId,
-            prompt: await buildGeoQuestionPrompt({
-              companyName: trackedValue.companyName,
-              archiveFilename: archiveAttachment.filename,
-            }),
+            prompt: await buildGeoQuestionPrompt(questionPromptInput),
             attachments: [archiveAttachment],
             idempotencyKey: `geo:${trackedValue.projectId}:questions:1`,
             agentProfile: FRONTMIND_PRO_PROFILE,
@@ -3018,6 +3272,7 @@ export function createGeoRouter(options: GeoRouterOptions = {}): Router {
               filename: QUESTION_SKILL_ARCHIVE_FILENAME,
               body: await buildGeoQuestionRecommenderSkillArchive(),
             },
+            buildGeoQuestionTaskInput(questionPromptInput),
           ],
         );
       const questionTaskId = taskIdFrom(questionTask);
@@ -3110,7 +3365,7 @@ export function createGeoRouter(options: GeoRouterOptions = {}): Router {
       input.res.status(input.completedStatus ?? 200).json({
         validation,
         projectToken,
-        question: input.record.result,
+        question: publicGeoQuestion(input.record.result),
         project,
       });
       return;
@@ -3557,10 +3812,26 @@ export function createGeoRouter(options: GeoRouterOptions = {}): Router {
           "MONITOR_ALREADY_CREATED",
         );
       }
-      await resolveMonitorQuestion(value, input.questionId);
+      const { question } = await resolveMonitorQuestion(
+        value,
+        input.questionId,
+      );
       await assertMonitorProviderReady();
       const platformIds = input.platformIds as GeoMonitorPlatformId[];
-      const expectedAmountFen = platformIds.length * 200;
+      const expectedAmountFen = geoMonitoringPriceFen(
+        input.monitoringEdition,
+        platformIds,
+      );
+      if (expectedAmountFen === undefined) {
+        throw new GeoHttpError(
+          "监控版本与平台范围不匹配",
+          400,
+          "MONITOR_SCOPE_INVALID",
+        );
+      }
+      if (input.monitoringEdition === "overseas") {
+        await prewarmMonitorQuestionTranslation(broker, value, question);
+      }
       const ownerSessionId = String(res.locals.geoSessionId || "");
       const checkout = await createDurableCheckout({
         locks: monitoringOrderLocks,
@@ -3568,6 +3839,7 @@ export function createGeoRouter(options: GeoRouterOptions = {}): Router {
           ownerSessionId,
           projectId: value.projectId,
           questionId: input.questionId,
+          monitoringEdition: input.monitoringEdition,
           platformIds: [...platformIds].sort(),
         }),
         value,
@@ -3581,6 +3853,7 @@ export function createGeoRouter(options: GeoRouterOptions = {}): Router {
             projectId: value.projectId,
             questionId: input.questionId,
             platformIds,
+            monitoringEdition: input.monitoringEdition,
             expectedAmountFen,
             method: input.method,
           }),
@@ -3589,7 +3862,8 @@ export function createGeoRouter(options: GeoRouterOptions = {}): Router {
       res.status(checkout.replayed ? 200 : 201).json({
         payment: {
           ...checkout.payment,
-          unitPriceFen: 200,
+          monitoringEdition: input.monitoringEdition,
+          unitPriceFen: input.monitoringEdition === "overseas" ? 500 : 200,
           answersPerPlatform: 5,
         },
       });
@@ -3605,13 +3879,25 @@ export function createGeoRouter(options: GeoRouterOptions = {}): Router {
       const value = openOwnedProject(req, res);
       const input = PaymentStatusRequestSchema.parse(req.body);
       const platformIds = input.platformIds as GeoMonitorPlatformId[];
+      const expectedAmountFen = geoMonitoringPriceFen(
+        input.monitoringEdition,
+        platformIds,
+      );
+      if (expectedAmountFen === undefined) {
+        throw new GeoHttpError(
+          "监控版本与平台范围不匹配",
+          400,
+          "MONITOR_SCOPE_INVALID",
+        );
+      }
       const payment = await paymentGateway.getStatus({
         authorization: input.authorization,
         ownerSessionId: String(res.locals.geoSessionId || ""),
         projectId: value.projectId,
         questionId: input.questionId,
         platformIds,
-        expectedAmountFen: platformIds.length * 200,
+        monitoringEdition: input.monitoringEdition,
+        expectedAmountFen,
       });
       if (payment.status === "paid" || payment.status === "review_required") {
         await transitionProjectOrder(
@@ -3640,11 +3926,24 @@ export function createGeoRouter(options: GeoRouterOptions = {}): Router {
           "MONITOR_ALREADY_CREATED",
         );
       }
-      await resolveMonitorQuestion(value, input.questionId);
+      const { question } = await resolveMonitorQuestion(
+        value,
+        input.questionId,
+      );
       await assertMonitorProviderReady();
 
       const platformIds = input.platformIds as GeoMonitorPlatformId[];
-      const expectedAmountFen = platformIds.length * 200;
+      const expectedAmountFen = geoMonitoringPriceFen(
+        input.monitoringEdition,
+        platformIds,
+      );
+      if (expectedAmountFen === undefined) {
+        throw new GeoHttpError(
+          "监控版本与平台范围不匹配",
+          400,
+          "MONITOR_SCOPE_INVALID",
+        );
+      }
       const authorizationDigest = sha256(input.authorization);
       const projectOrders = await readProjectOrders(value.projectId);
       const currentOrder = projectOrders.orders.find(
@@ -3680,6 +3979,7 @@ export function createGeoRouter(options: GeoRouterOptions = {}): Router {
         ownerSessionId,
         projectId: value.projectId,
         questionId: input.questionId,
+        monitoringEdition: input.monitoringEdition,
         platformIds,
         expectedAmountFen,
         method: input.method,
@@ -3690,6 +3990,7 @@ export function createGeoRouter(options: GeoRouterOptions = {}): Router {
         ownerSessionId,
         projectId: value.projectId,
         questionId: input.questionId,
+        monitoringEdition: input.monitoringEdition,
         platformIds,
         expectedAmountFen,
       };
@@ -3697,6 +3998,7 @@ export function createGeoRouter(options: GeoRouterOptions = {}): Router {
         ownerSessionId,
         projectId: value.projectId,
         questionId: input.questionId,
+        monitoringEdition: input.monitoringEdition,
         platformIds: [...platformIds].sort(),
       });
       const switchStartedAt = Date.now();
@@ -3801,7 +4103,8 @@ export function createGeoRouter(options: GeoRouterOptions = {}): Router {
       res.status(200).json({
         payment: {
           ...checkout,
-          unitPriceFen: 200,
+          monitoringEdition: input.monitoringEdition,
+          unitPriceFen: input.monitoringEdition === "overseas" ? 500 : 200,
           answersPerPlatform: 5,
         },
       });
@@ -3812,15 +4115,22 @@ export function createGeoRouter(options: GeoRouterOptions = {}): Router {
     "/projects/:projectToken/monitoring",
     requireConfiguration,
     requireSession,
-    requireCostRate("monitor-create", 6),
     asyncHandler(async (req, res) => {
       const value = openOwnedProject(req, res);
       const input = StartMonitoringRequestSchema.parse(req.body);
+      await consumeMonitoringStartRate(
+        req,
+        res,
+        value,
+        input.paymentAuthorization,
+      );
       const requestedPlatforms = input.platformIds as GeoMonitorPlatformId[];
 
       if (value.monitorRunId) {
         if (
           value.monitorQuestionId !== input.questionId ||
+          normalizedGeoMonitoringEdition(value.monitoringEdition) !==
+            input.monitoringEdition ||
           !sameStringSet(value.monitorPlatformIds || [], requestedPlatforms)
         ) {
           throw new GeoHttpError(
@@ -3829,9 +4139,11 @@ export function createGeoRouter(options: GeoRouterOptions = {}): Router {
             "MONITOR_SCOPE_CONFLICT",
           );
         }
-        const run = await getResolvedMonitorRun(broker, value.monitorRunId, {
-          platforms: requestedPlatforms,
-        });
+        const run = await getResolvedMonitorRun(
+          broker,
+          value.monitorRunId,
+          monitorRunExpectation(value, requestedPlatforms),
+        );
         const [
           knowledgeBaseTask,
           questionTask,
@@ -3866,14 +4178,24 @@ export function createGeoRouter(options: GeoRouterOptions = {}): Router {
       const { knowledgeBaseTask, questionTask, question } =
         await resolveMonitorQuestion(value, input.questionId);
       await assertMonitorProviderReady();
-
-      const expectedAmountFen = requestedPlatforms.length * 200;
+      const expectedAmountFen = geoMonitoringPriceFen(
+        input.monitoringEdition,
+        requestedPlatforms,
+      );
+      if (expectedAmountFen === undefined) {
+        throw new GeoHttpError(
+          "监控版本与平台范围不匹配",
+          400,
+          "MONITOR_SCOPE_INVALID",
+        );
+      }
       const receipt = await paymentVerifier.verify({
         authorization: input.paymentAuthorization,
         projectId: value.projectId,
         ownerSessionId: String(res.locals.geoSessionId || ""),
         questionId: question.id,
         platformIds: requestedPlatforms,
+        monitoringEdition: input.monitoringEdition,
         expectedAmountFen,
       });
       if (
@@ -3894,6 +4216,33 @@ export function createGeoRouter(options: GeoRouterOptions = {}): Router {
         { paidAt: receipt.paidAt },
       );
 
+      let monitorQuestion: string;
+      try {
+        monitorQuestion = await resolveMonitorQuestionForEdition(
+          broker,
+          value,
+          question,
+          input.monitoringEdition,
+          {
+            waitMs: monitorQuestionTranslationWaitMs,
+            pollMs: monitorQuestionTranslationPollMs,
+          },
+        );
+      } catch (error) {
+        if (
+          error instanceof GeoHttpError &&
+          error.code === "QUESTION_TRANSLATION_FAILED"
+        ) {
+          await transitionProjectOrder(
+            value.projectId,
+            receipt.orderId,
+            "review_required",
+            { paidAt: receipt.paidAt },
+          );
+        }
+        throw error;
+      }
+
       const idempotencyKey = `geo-monitor:${crypto
         .createHash("sha256")
         .update(
@@ -3901,29 +4250,86 @@ export function createGeoRouter(options: GeoRouterOptions = {}): Router {
             projectId: value.projectId,
             orderId: receipt.orderId,
             questionId: question.id,
-            question: question.question,
+            monitoringEdition: input.monitoringEdition,
+            question: monitorQuestion,
             platforms: [...requestedPlatforms].sort(),
           }),
         )
         .digest("hex")}`;
-      const run = normalizeMonitorRun(
-        await broker.createMonitorRun({
-          question: question.question,
-          platforms: requestedPlatforms,
-          idempotencyKey,
-        }),
-        { question: question.question, platforms: requestedPlatforms },
-      );
+      let run: BrokerMonitorRun;
+      try {
+        run = normalizeMonitorRun(
+          await broker.createMonitorRun({
+            projectId: value.projectId,
+            question: monitorQuestion,
+            platforms: requestedPlatforms,
+            idempotencyKey,
+          }),
+          { question: monitorQuestion, platforms: requestedPlatforms },
+        );
+      } catch (error) {
+        if (
+          error instanceof GeoBrokerError &&
+          error.code === "MONITOR_SUBMISSION_UNKNOWN"
+        ) {
+          throw new GeoHttpError(
+            "监控服务尚未确认任务已经创建；付款与订单已保留，请稍后使用同一订单重试",
+            503,
+            "MONITOR_SUBMISSION_UNCONFIRMED",
+          );
+        }
+        if (
+          error instanceof GeoBrokerError &&
+          error.code === "MONITOR_SUBMISSION_REJECTED"
+        ) {
+          await transitionProjectOrder(
+            value.projectId,
+            receipt.orderId,
+            "review_required",
+            { paidAt: receipt.paidAt },
+          );
+          throw new GeoHttpError(
+            "监控服务已明确拒绝本次任务；付款与订单已保留，请联系技术支持",
+            502,
+            "MONITOR_SUBMISSION_REJECTED",
+          );
+        }
+        throw error;
+      }
+      if (
+        run.status === "submission_in_progress" ||
+        run.status === "submission_unknown"
+      ) {
+        throw new GeoHttpError(
+          "监控服务尚未确认任务已经创建；付款与订单已保留，请稍后使用同一订单重试",
+          503,
+          "MONITOR_SUBMISSION_UNCONFIRMED",
+        );
+      }
+      if (run.status === "remote_failed" || run.status === "shape_mismatch") {
+        await transitionProjectOrder(
+          value.projectId,
+          receipt.orderId,
+          "review_required",
+          { paidAt: receipt.paidAt },
+        );
+        throw new GeoHttpError(
+          "监控服务已明确拒绝或无法校验本次任务；付款与订单已保留，请联系技术支持",
+          502,
+          "MONITOR_SUBMISSION_REJECTED",
+        );
+      }
       const fulfillingOrder = await transitionProjectOrder(
         value.projectId,
         receipt.orderId,
         "fulfilling",
-        { paidAt: receipt.paidAt },
+        { paidAt: receipt.paidAt, allowReviewRecovery: true },
       );
       trackProjectOrder(value, { monitoring: { runId: run.runId } });
       const nextValue: ProjectTokenValue = {
         ...value,
         monitorRunId: run.runId,
+        monitoringEdition: input.monitoringEdition,
         monitorQuestionId: question.id,
         monitorPlatformIds: requestedPlatforms,
         monitorOrderId: fulfillingOrder.orderId,
@@ -3965,9 +4371,11 @@ export function createGeoRouter(options: GeoRouterOptions = {}): Router {
         value.questionTaskId
           ? getResolvedTask(broker, value.questionTaskId)
           : Promise.resolve(undefined),
-        getResolvedMonitorRun(broker, value.monitorRunId, {
-          platforms: value.monitorPlatformIds,
-        }),
+        getResolvedMonitorRun(
+          broker,
+          value.monitorRunId,
+          monitorRunExpectation(value),
+        ),
       ]);
       if (!questionTask) {
         throw new GeoHttpError(
@@ -4126,7 +4534,7 @@ export function createGeoRouter(options: GeoRouterOptions = {}): Router {
           category: question.category,
           rankingMetricEligible: question.category !== "reputation",
         },
-        platforms: monitorRun.platforms,
+        platforms: [...monitorRun.platforms].sort(compareCanonicalText),
         repeatPerPlatform: 5,
         expectedResponses: monitorRun.expectedItems,
         successfulResponses: monitorRun.records.filter(
@@ -4136,16 +4544,7 @@ export function createGeoRouter(options: GeoRouterOptions = {}): Router {
         // The assessment remains text/evidence based. Structured media is
         // returned to the customer UI but is not sent to the evaluator, and
         // page screenshots/reasoning never enter the monitor contract.
-        records: monitorRun.records.map((record) => ({
-          recordId: record.recordId,
-          platform: record.platform,
-          runIndex: record.runIndex,
-          status: record.status,
-          answerText: record.answerText,
-          sources: record.sources,
-          error: record.error,
-          completedAt: record.completedAt,
-        })),
+        records: canonicalAssessmentMonitorRecords(monitorRun.records),
       };
       const monitoringBytes = Buffer.from(
         JSON.stringify(monitoringDocument),
@@ -4163,22 +4562,15 @@ export function createGeoRouter(options: GeoRouterOptions = {}): Router {
         value.companyName,
         "company",
       )}-monitoring-records.json`;
-      const monitoringFile = await broker.createFile({
+      const assessmentTaskOperationKey = `geo:${value.projectId}:assessment:v3-top10:${value.monitorRunId}:${value.assessmentAttempt || 1}`;
+      const monitoringFile = await createGeoTaskEvidenceFile(broker, {
+        projectId: value.projectId,
+        taskOperationKey: assessmentTaskOperationKey,
+        role: "monitoring-records",
         filename: monitoringFilename,
         mimeType: "application/json",
-        sizeBytes: monitoringBytes.length,
+        body: monitoringBytes,
       });
-      try {
-        await broker.uploadFile(
-          monitoringFile.id,
-          monitoringBytes,
-          "application/json",
-          monitoringFile.proxy_upload_ticket,
-        );
-      } catch (error) {
-        await broker.deleteFile(monitoringFile.id).catch(() => undefined);
-        throw error;
-      }
 
       let archiveAttachment: Awaited<
         ReturnType<typeof materializeArchiveAttachment>
@@ -4188,26 +4580,33 @@ export function createGeoRouter(options: GeoRouterOptions = {}): Router {
           broker,
           value.knowledgeBaseTaskId,
           archive,
+          {
+            projectId: value.projectId,
+            idempotencyKey: `${assessmentTaskOperationKey}:knowledge-base-archive`,
+          },
         );
       } catch (error) {
-        await broker.deleteFile(monitoringFile.id).catch(() => undefined);
+        if (!shouldRetainGeneratedTaskFilesForReplay(error)) {
+          await broker.deleteFile(monitoringFile.id).catch(() => undefined);
+        }
         throw error;
       }
 
       const successfulResponses = monitoringDocument.successfulResponses;
-      const prompt = await buildAssessmentPrompt({
+      const assessmentPromptInput = {
         companyName: value.companyName,
         archiveFilename: archiveAttachment.filename,
         monitoringFilename: monitoringFile.filename || monitoringFilename,
         question: monitoringDocument.question,
         monitoring: {
           platforms: monitorRun.platforms,
-          repeatPerPlatform: 5,
+          repeatPerPlatform: 5 as const,
           expectedResponses: monitorRun.expectedItems,
           successfulResponses,
           failedResponses: monitorRun.expectedItems - successfulResponses,
         },
-      });
+      };
+      const prompt = await buildAssessmentPrompt(assessmentPromptInput);
       let assessmentTask: BrokerTask;
       let skillAttachments: Array<{ file_id: string; filename: string }>;
       try {
@@ -4226,24 +4625,27 @@ export function createGeoRouter(options: GeoRouterOptions = {}): Router {
                 filename: monitoringFile.filename || monitoringFilename,
               },
             ],
-            idempotencyKey: `geo:${value.projectId}:assessment:v3-top10:${value.monitorRunId}:${value.assessmentAttempt || 1}`,
+            idempotencyKey: assessmentTaskOperationKey,
           },
           [
             {
               filename: ASSESSMENT_SKILL_ARCHIVE_FILENAME,
               body: await buildGeoCurrentStateEvaluatorSkillArchive(),
             },
+            buildAssessmentTaskInput(assessmentPromptInput),
           ],
         );
         assessmentTask = created.task;
         skillAttachments = created.skillAttachments;
       } catch (error) {
-        await Promise.allSettled([
-          broker.deleteFile(monitoringFile.id),
-          ...(archiveAttachment.temporary
-            ? [broker.deleteFile(archiveAttachment.file_id)]
-            : []),
-        ]);
+        if (!shouldRetainGeneratedTaskFilesForReplay(error)) {
+          await Promise.allSettled([
+            broker.deleteFile(monitoringFile.id),
+            ...(archiveAttachment.temporary
+              ? [broker.deleteFile(archiveAttachment.file_id)]
+              : []),
+          ]);
+        }
         throw error;
       }
       const assessmentTaskId = taskIdFrom(assessmentTask);
@@ -4306,9 +4708,11 @@ export function createGeoRouter(options: GeoRouterOptions = {}): Router {
             ? getResolvedTask(broker, value.questionTaskId)
             : Promise.resolve(undefined),
           value.monitorRunId
-            ? getResolvedMonitorRun(broker, value.monitorRunId, {
-                platforms: value.monitorPlatformIds,
-              })
+            ? getResolvedMonitorRun(
+                broker,
+                value.monitorRunId,
+                monitorRunExpectation(value),
+              )
             : Promise.resolve(undefined),
           getResolvedTask(broker, value.assessmentTaskId),
         ]);
@@ -4486,7 +4890,7 @@ export function createGeoRouter(options: GeoRouterOptions = {}): Router {
       )}-current-assessment.json`;
       const assessmentDocument = {
         schemaVersion: 1,
-        generatedAt: new Date().toISOString(),
+        generatedAt: value.assessmentSubmittedAt || new Date(0).toISOString(),
         sourceAssessmentTaskId: value.assessmentTaskId,
         assessment: scoredAssessment,
       };
@@ -4529,55 +4933,58 @@ export function createGeoRouter(options: GeoRouterOptions = {}): Router {
         );
       }
 
+      const forecastTaskOperationKey = `geo:${value.projectId}:optimization-forecast:${value.assessmentTaskId}:planning-target-4w-v5:${value.optimizationForecastAttempt || 1}`;
       const temporaryFiles: string[] = [];
       const { forecastTask, forecastTaskId } = await (async () => {
         try {
-          const assessmentFile = await broker.createFile({
+          const assessmentFile = await createGeoTaskEvidenceFile(broker, {
+            projectId: value.projectId,
+            taskOperationKey: forecastTaskOperationKey,
+            role: "current-assessment",
             filename: assessmentFilename,
             mimeType: "application/json",
-            sizeBytes: assessmentBytes.length,
+            body: assessmentBytes,
           });
           temporaryFiles.push(assessmentFile.id);
-          await broker.uploadFile(
-            assessmentFile.id,
-            assessmentBytes,
-            "application/json",
-            assessmentFile.proxy_upload_ticket,
-          );
-          const scenarioFile = await broker.createFile({
+          const scenarioFile = await createGeoTaskEvidenceFile(broker, {
+            projectId: value.projectId,
+            taskOperationKey: forecastTaskOperationKey,
+            role: "execution-scenario",
             filename: scenarioFilename,
             mimeType: "application/json",
-            sizeBytes: scenarioBytes.length,
+            body: scenarioBytes,
           });
           temporaryFiles.push(scenarioFile.id);
-          await broker.uploadFile(
-            scenarioFile.id,
-            scenarioBytes,
-            "application/json",
-            scenarioFile.proxy_upload_ticket,
-          );
 
           const archiveAttachment = await materializeArchiveAttachment(
             broker,
             value.knowledgeBaseTaskId,
             archive,
+            {
+              projectId: value.projectId,
+              idempotencyKey: `${forecastTaskOperationKey}:knowledge-base-archive`,
+            },
           );
           if (archiveAttachment.temporary)
             temporaryFiles.push(archiveAttachment.file_id);
 
+          const forecastPromptInput = {
+            currentAssessmentFilename:
+              assessmentFile.filename || assessmentFilename,
+            knowledgeBaseArchiveFilename: archiveAttachment.filename,
+            executionScenarioFilename:
+              scenarioFile.filename || scenarioFilename,
+            scenarioName: "full_execution" as const,
+            retryReason: forecastRetryReason,
+          };
           const created = await createGeoTaskWithSkillPackages(
             broker,
             {
               projectId: value.projectId,
-              prompt: await buildOptimizationOutcomeForecastPrompt({
-                currentAssessmentFilename:
-                  assessmentFile.filename || assessmentFilename,
-                knowledgeBaseArchiveFilename: archiveAttachment.filename,
-                executionScenarioFilename:
-                  scenarioFile.filename || scenarioFilename,
-                scenarioName: "full_execution",
-                retryReason: forecastRetryReason,
-              }),
+              prompt:
+                await buildOptimizationOutcomeForecastPrompt(
+                  forecastPromptInput,
+                ),
               attachments: [
                 {
                   file_id: archiveAttachment.file_id,
@@ -4592,7 +4999,7 @@ export function createGeoRouter(options: GeoRouterOptions = {}): Router {
                   filename: scenarioFile.filename || scenarioFilename,
                 },
               ],
-              idempotencyKey: `geo:${value.projectId}:optimization-forecast:${value.assessmentTaskId}:planning-target-4w-v5:${value.optimizationForecastAttempt || 1}`,
+              idempotencyKey: forecastTaskOperationKey,
             },
             [
               {
@@ -4604,6 +5011,7 @@ export function createGeoRouter(options: GeoRouterOptions = {}): Router {
                 body: await buildGeoOptimizationOutcomeForecastTemplate(),
                 mimeType: "application/json",
               },
+              buildOptimizationOutcomeForecastTaskInput(forecastPromptInput),
             ],
           );
           const task = created.task;
@@ -4620,9 +5028,11 @@ export function createGeoRouter(options: GeoRouterOptions = {}): Router {
           }
           return { forecastTask: task, forecastTaskId: taskId };
         } catch (error) {
-          await Promise.allSettled(
-            temporaryFiles.map((fileId) => broker.deleteFile(fileId)),
-          );
+          if (!shouldRetainGeneratedTaskFilesForReplay(error)) {
+            await Promise.allSettled(
+              temporaryFiles.map((fileId) => broker.deleteFile(fileId)),
+            );
+          }
           throw error;
         }
       })();
@@ -4652,6 +5062,199 @@ export function createGeoRouter(options: GeoRouterOptions = {}): Router {
       res.status(201).json({ projectToken, project });
     }),
   );
+
+  const buildServicePaymentResult = async (
+    value: ProjectTokenValue,
+    scope: Awaited<ReturnType<typeof resolveServiceScope>>,
+    projectToken: string,
+  ) => {
+    const monitorRun = value.monitorRunId
+      ? await getResolvedMonitorRun(
+          broker,
+          value.monitorRunId,
+          monitorRunExpectation(value),
+        )
+      : undefined;
+    const project = await buildProjectView(
+      broker,
+      value,
+      projectToken,
+      scope.knowledgeBaseTask,
+      scope.questionTask,
+      monitorRun,
+      scope.assessmentTask,
+      scope.forecastTask,
+      scope.preResolvedOutputs,
+    );
+    return { projectToken, project };
+  };
+
+  const finalizeVerifiedServicePayment = async (input: {
+    value: ProjectTokenValue;
+    scope: Awaited<ReturnType<typeof resolveServiceScope>>;
+    receipt: GeoPaymentReceipt;
+    purchaseIntent?: string;
+    allowDirectBankOrder: boolean;
+  }) => {
+    const { value, scope, receipt } = input;
+    if (
+      !receipt.orderId.trim() ||
+      receipt.amountFen !== scope.amountFen ||
+      !Number.isFinite(Date.parse(receipt.paidAt))
+    ) {
+      throw new GeoPaymentVerificationError(
+        "支付订单金额或状态与本次服务不匹配",
+        "PAYMENT_SCOPE_MISMATCH",
+        402,
+      );
+    }
+    const contractAuthorizedAt = normalizedIsoTimestamp(
+      value.serviceContractAuthorizedAt,
+    );
+    if (
+      value.serviceContractAuthorizationMode === "external_wechat" &&
+      contractAuthorizedAt &&
+      Date.parse(receipt.paidAt) <= Date.parse(contractAuthorizedAt)
+    ) {
+      throw new GeoPaymentVerificationError(
+        "支付时间必须晚于合同确认时间",
+        "PAYMENT_PRECEDES_CONTRACT_AUTHORIZATION",
+        409,
+      );
+    }
+
+    const projectOrders = await readProjectOrders(value.projectId);
+    const existingOrder = projectOrders.orders.find(
+      (order) => order.orderId === receipt.orderId,
+    );
+    let paidOrder: GeoProjectOrder;
+    if (existingOrder) {
+      if (
+        existingOrder.purchaseType !== "service" ||
+        existingOrder.amountFen !== scope.amountFen
+      ) {
+        throw new GeoPaymentVerificationError(
+          "支付订单与本次服务范围不匹配",
+          "PAYMENT_SCOPE_MISMATCH",
+          409,
+        );
+      }
+      if (
+        existingOrder.state === "review_required" ||
+        existingOrder.state === "terminal_failed" ||
+        existingOrder.state === "closed"
+      ) {
+        throw new GeoPaymentVerificationError(
+          "该订单当前不能自动确认付款",
+          "PAYMENT_REVIEW_REQUIRED",
+          409,
+        );
+      }
+      paidOrder = await transitionProjectOrder(
+        value.projectId,
+        receipt.orderId,
+        "paid",
+        { paidAt: receipt.paidAt },
+      );
+    } else {
+      if (!input.allowDirectBankOrder) {
+        throw new GeoHttpError(
+          "项目订单账本缺少本次订单，已阻止继续操作",
+          503,
+          "PROJECT_ORDER_REGISTRY_UNAVAILABLE",
+        );
+      }
+      const conflictingOrder = projectOrders.orders.find(
+        (order) =>
+          order.purchaseType === "service" &&
+          order.orderId !== receipt.orderId &&
+          order.state !== "closed" &&
+          order.state !== "terminal_failed",
+      );
+      if (conflictingOrder) {
+        throw new GeoPaymentVerificationError(
+          "该项目已有另一项付款或对账记录",
+          "PAYMENT_RECEIPT_CONFLICT",
+          409,
+        );
+      }
+      paidOrder = await writeProjectOrder({
+        orderId: receipt.orderId,
+        projectId: value.projectId,
+        purchaseType: "service",
+        amountFen: receipt.amountFen,
+        authorizationDigest: sha256(
+          JSON.stringify({
+            schemaVersion: 1,
+            kind: "service-bank-transfer",
+            projectId: value.projectId,
+            orderId: receipt.orderId,
+            tradeNo: receipt.tradeNo || receipt.orderId,
+          }),
+        ),
+        state: "paid",
+        checkoutExpiresAt: receipt.paidAt,
+        eventAt: receipt.paidAt,
+        paidAt: receipt.paidAt,
+      });
+    }
+
+    const preparedValue: ProjectTokenValue = {
+      ...value,
+      serviceOrderId: receipt.orderId,
+      serviceQuestionId: scope.question.id,
+      serviceCategory: scope.category,
+      serviceAmountFen: scope.amountFen,
+      serviceTradeNo: receipt.tradeNo || receipt.orderId,
+      servicePaidAt: receipt.paidAt,
+      serviceAuthorizationDigest: paidOrder.authorizationDigest,
+      serviceCheckoutExpiresAt: paidOrder.checkoutExpiresAt,
+      serviceAccountMode: input.purchaseIntent ? "bind_existing" : "create",
+    };
+    const confirmed = await manualOrderPaymentConfirmer(
+      value.serviceManualOrderReference!,
+      {
+        schemaVersion: 1,
+        payment: {
+          orderId: receipt.orderId,
+          tradeNo: receipt.tradeNo || receipt.orderId,
+          amountFen: receipt.amountFen,
+          paidAt: receipt.paidAt,
+        },
+      },
+    );
+    let nextValue = mergeManualOrder(preparedValue, confirmed);
+    if (input.purchaseIntent) {
+      const accountSubmitted = await manualOrderAccountSubmitter(
+        value.serviceManualOrderReference!,
+        {
+          schemaVersion: 1,
+          account: {
+            mode: "bind_existing",
+            purchaseIntent: input.purchaseIntent,
+          },
+        },
+      );
+      nextValue = mergeManualOrder(nextValue, accountSubmitted);
+      if (nextValue.serviceManualOrderStatus !== "active") {
+        throw new GeoHttpError(
+          "已有账号已经绑定，但服务账号未能立即激活",
+          502,
+          "MANUAL_ORDER_ACCOUNT_ACTIVATION_INCOMPLETE",
+        );
+      }
+    }
+    if (nextValue.serviceManualOrderStatus === "active") {
+      nextValue = await handoffKnowledgeBase(
+        nextValue,
+        scope.knowledgeBaseTask,
+      );
+    }
+    nextValue = await syncServiceOrder(nextValue);
+    trackServiceOrder(nextValue);
+    const projectToken = codec.seal("project", nextValue, PROJECT_TTL_MS);
+    return buildServicePaymentResult(nextValue, scope, projectToken);
+  };
 
   router.post(
     "/projects/:projectToken/services/contracts",
@@ -4725,6 +5328,9 @@ export function createGeoRouter(options: GeoRouterOptions = {}): Router {
         ? await manualOrderStatusReader(value.serviceManualOrderReference)
         : await manualOrderCreator({
             schemaVersion: 1,
+            marketEdition: normalizedGeoMonitoringEdition(
+              value.monitoringEdition,
+            ),
             project: {
               id: value.projectId,
               companyName: input.profile.legalName,
@@ -4739,7 +5345,10 @@ export function createGeoRouter(options: GeoRouterOptions = {}): Router {
               },
             },
             contract: {
-              templateVersion: GEO_MANUAL_CONTRACT_TEMPLATE_VERSION,
+              templateVersion:
+                GEO_MANUAL_CONTRACT_TEMPLATE_VERSION[
+                  normalizedGeoMonitoringEdition(value.monitoringEdition)
+                ],
               profile: input.profile,
             },
           });
@@ -4819,9 +5428,11 @@ export function createGeoRouter(options: GeoRouterOptions = {}): Router {
       trackServiceOrder(nextValue);
       const projectToken = codec.seal("project", nextValue, PROJECT_TTL_MS);
       const monitorRun = nextValue.monitorRunId
-        ? await getResolvedMonitorRun(broker, nextValue.monitorRunId, {
-            platforms: nextValue.monitorPlatformIds,
-          })
+        ? await getResolvedMonitorRun(
+            broker,
+            nextValue.monitorRunId,
+            monitorRunExpectation(nextValue),
+          )
         : undefined;
       const project = await buildProjectView(
         broker,
@@ -4870,9 +5481,11 @@ export function createGeoRouter(options: GeoRouterOptions = {}): Router {
       trackServiceOrder(nextValue);
       const projectToken = codec.seal("project", nextValue, PROJECT_TTL_MS);
       const monitorRun = nextValue.monitorRunId
-        ? await getResolvedMonitorRun(broker, nextValue.monitorRunId, {
-            platforms: nextValue.monitorPlatformIds,
-          })
+        ? await getResolvedMonitorRun(
+            broker,
+            nextValue.monitorRunId,
+            monitorRunExpectation(nextValue),
+          )
         : undefined;
       const project = await buildProjectView(
         broker,
@@ -4926,32 +5539,258 @@ export function createGeoRouter(options: GeoRouterOptions = {}): Router {
         projectId: value.projectId,
         questionId: scope.question.id,
         category: scope.category,
+        monitoringEdition: normalizedGeoMonitoringEdition(
+          value.monitoringEdition,
+        ),
         billingMonths: 1,
       });
-      const checkout = await createDurableCheckout({
-        locks: serviceOrderLocks,
-        lockKey,
-        value,
-        purchaseType: "service",
-        amountFen: scope.amountFen,
-        method: input.method,
-        methodLockedCode: "SERVICE_PAYMENT_METHOD_LOCKED",
-        createCheckout: () =>
-          paymentGateway.createServiceCheckout({
-            ownerSessionId,
-            projectId: value.projectId,
-            questionId: scope.question.id,
-            category: scope.category,
-            expectedAmountFen: scope.amountFen,
+      const mutationKey = `${ownerSessionId}:${value.projectId}`;
+      const checkout = await withServicePaymentMutation(
+        mutationKey,
+        "online",
+        () =>
+          createDurableCheckout({
+            locks: serviceOrderLocks,
+            lockKey,
+            value,
+            purchaseType: "service",
+            amountFen: scope.amountFen,
             method: input.method,
+            methodLockedCode: "SERVICE_PAYMENT_METHOD_LOCKED",
+            createCheckout: () =>
+              paymentGateway.createServiceCheckout({
+                ownerSessionId,
+                projectId: value.projectId,
+                questionId: scope.question.id,
+                category: scope.category,
+                monitoringEdition: normalizedGeoMonitoringEdition(
+                  value.monitoringEdition,
+                ),
+                expectedAmountFen: scope.amountFen,
+                method: input.method,
+              }),
           }),
-      });
+      );
       trackServiceOrder(value);
       res.status(checkout.replayed ? 200 : 201).json({
         payment: {
           ...checkout.payment,
           purchaseType: "service",
           category: scope.category,
+          monitoringEdition: normalizedGeoMonitoringEdition(
+            value.monitoringEdition,
+          ),
+          questionId: scope.question.id,
+          billingMonths: 1,
+          unitPriceFen: scope.amountFen,
+        },
+      });
+    }),
+  );
+
+  router.post(
+    "/projects/:projectToken/services/payments/switch",
+    requireConfiguration,
+    requireSession,
+    requireCostRate("service-payment-switch", 10),
+    asyncHandler(async (req, res) => {
+      const value = openOwnedProject(req, res);
+      const input = SwitchServicePaymentRequestSchema.parse(req.body);
+      const scope = await resolveServiceScope(value);
+      if (
+        !value.serviceManualOrderReference ||
+        value.serviceManualOrderStatus !== "payment_required"
+      ) {
+        throw new GeoHttpError(
+          "当前合同订单不在待付款状态",
+          409,
+          "SERVICE_PAYMENT_NOT_ALLOWED",
+        );
+      }
+      assertServiceContractEvidence(value);
+      if (value.serviceOrderId || value.servicePaidAt) {
+        throw new GeoHttpError(
+          "该问题的首月服务已经付款，不能再更换支付方式",
+          409,
+          "SERVICE_ALREADY_PAID",
+        );
+      }
+      await assertServiceWorkspaceReady();
+
+      const authorizationDigest = sha256(input.authorization);
+      const projectOrders = await readProjectOrders(value.projectId);
+      const currentOrder = projectOrders.orders.find(
+        (order) =>
+          order.purchaseType === "service" &&
+          safeSecretEqual(order.authorizationDigest, authorizationDigest),
+      );
+      if (!currentOrder) {
+        throw new GeoHttpError(
+          "未找到可更换支付方式的合同订单，请刷新后重试",
+          409,
+          "PAYMENT_CHECKOUT_NOT_FOUND",
+        );
+      }
+      if (currentOrder.state !== "pending") {
+        throw new GeoHttpError(
+          "当前合同订单已经进入付款或处理流程，不能再更换支付方式",
+          409,
+          currentOrder.state === "review_required"
+            ? "PAYMENT_REVIEW_REQUIRED"
+            : "PAYMENT_ALREADY_CONFIRMED",
+        );
+      }
+      if (currentOrder.amountFen !== scope.amountFen) {
+        throw new GeoHttpError(
+          "支付订单与本次服务范围不匹配",
+          409,
+          "PAYMENT_SCOPE_MISMATCH",
+        );
+      }
+
+      const ownerSessionId = String(res.locals.geoSessionId || "");
+      const edition = normalizedGeoMonitoringEdition(value.monitoringEdition);
+      const switchInput = {
+        authorization: input.authorization,
+        ownerSessionId,
+        projectId: value.projectId,
+        questionId: scope.question.id,
+        category: scope.category,
+        monitoringEdition: edition,
+        expectedAmountFen: scope.amountFen,
+        method: input.method,
+        checkoutExpiresAt: currentOrder.checkoutExpiresAt,
+      };
+      const statusInput = {
+        authorization: input.authorization,
+        ownerSessionId,
+        projectId: value.projectId,
+        questionId: scope.question.id,
+        category: scope.category,
+        monitoringEdition: edition,
+        expectedAmountFen: scope.amountFen,
+      };
+      const lockKey = JSON.stringify({
+        ownerSessionId,
+        projectId: value.projectId,
+        questionId: scope.question.id,
+        category: scope.category,
+        monitoringEdition: edition,
+        billingMonths: 1,
+      });
+      const mutationKey = `${ownerSessionId}:${value.projectId}`;
+      const switchStartedAt = Date.now();
+      pruneExpiringMap(servicePaymentSwitches, switchStartedAt, 20_000);
+      const activeSwitch = servicePaymentSwitches.get(lockKey);
+      let checkout: GeoPaymentCheckout;
+      if (activeSwitch) {
+        if (
+          !safeSecretEqual(
+            activeSwitch.authorizationDigest,
+            authorizationDigest,
+          ) ||
+          activeSwitch.method !== input.method
+        ) {
+          throw new GeoHttpError(
+            "当前支付方式正在切换，请等待完成后重试",
+            409,
+            "PAYMENT_SWITCH_IN_PROGRESS",
+          );
+        }
+        checkout = await activeSwitch.promise;
+      } else {
+        const promise = withServicePaymentMutation(
+          mutationKey,
+          "online",
+          async () => {
+            try {
+              return await paymentGateway.switchServiceCheckoutMethod(
+                switchInput,
+              );
+            } catch (error) {
+              if (
+                error instanceof GeoPaymentVerificationError &&
+                error.code === "PAYMENT_ALREADY_CONFIRMED"
+              ) {
+                const payment =
+                  await paymentGateway.getServiceStatus(statusInput);
+                if (
+                  (payment.status === "paid" ||
+                    payment.status === "review_required") &&
+                  payment.orderId === currentOrder.orderId &&
+                  payment.amountFen === currentOrder.amountFen
+                ) {
+                  await transitionProjectOrder(
+                    value.projectId,
+                    currentOrder.orderId,
+                    payment.status,
+                    { paidAt: payment.paidAt },
+                  );
+                }
+              }
+              throw error;
+            }
+          },
+        );
+        const switchFlight: MonitoringPaymentSwitchFlight = {
+          authorizationDigest,
+          method: input.method,
+          expiresAt: switchStartedAt + PROJECT_TTL_MS,
+          promise,
+        };
+        servicePaymentSwitches.set(lockKey, switchFlight);
+        try {
+          checkout = await promise;
+        } finally {
+          if (servicePaymentSwitches.get(lockKey) === switchFlight) {
+            servicePaymentSwitches.delete(lockKey);
+          }
+        }
+      }
+      if (
+        !safeSecretEqual(checkout.authorization, input.authorization) ||
+        checkout.orderId !== currentOrder.orderId ||
+        checkout.amountFen !== currentOrder.amountFen ||
+        checkout.expiresAt !== currentOrder.checkoutExpiresAt ||
+        checkout.fields.type !== input.method ||
+        checkout.fields.param !== input.authorization ||
+        checkout.fields.out_trade_no !== currentOrder.orderId
+      ) {
+        throw new GeoHttpError(
+          "支付服务返回了不一致的切换结果，已阻止打开收银台",
+          502,
+          "PAYMENT_SWITCH_INVALID",
+        );
+      }
+
+      const now = Date.now();
+      pruneExpiringMap(serviceOrderLocks, now, 20_000);
+      const lock = serviceOrderLocks.get(lockKey);
+      if (
+        lock?.checkout &&
+        !safeSecretEqual(lock.checkout.authorization, input.authorization)
+      ) {
+        throw new GeoHttpError(
+          "当前收银台已被另一项操作更新，请刷新后重试",
+          409,
+          "PAYMENT_CHECKOUT_REPLACED",
+        );
+      }
+      serviceOrderLocks.set(lockKey, {
+        ...lock,
+        method: input.method,
+        expiresAt: now + PROJECT_TTL_MS,
+        checkout,
+        checkoutCommitted: true,
+        checkoutPromise: undefined,
+      });
+      trackServiceOrder(value);
+      res.status(200).json({
+        payment: {
+          ...checkout,
+          purchaseType: "service",
+          category: scope.category,
+          monitoringEdition: edition,
           questionId: scope.question.id,
           billingMonths: 1,
           unitPriceFen: scope.amountFen,
@@ -4986,6 +5825,9 @@ export function createGeoRouter(options: GeoRouterOptions = {}): Router {
         projectId: value.projectId,
         questionId: scope.question.id,
         category: scope.category,
+        monitoringEdition: normalizedGeoMonitoringEdition(
+          value.monitoringEdition,
+        ),
         expectedAmountFen: scope.amountFen,
       });
       if (payment.status === "paid" || payment.status === "review_required") {
@@ -5001,6 +5843,264 @@ export function createGeoRouter(options: GeoRouterOptions = {}): Router {
   );
 
   router.post(
+    "/projects/:projectToken/services/payments/bank-transfer/confirm",
+    requireConfiguration,
+    requireSession,
+    requireCostRate("service-bank-transfer-confirm", 8),
+    asyncHandler(async (req, res) => {
+      const openedValue = openOwnedProject(req, res);
+      const value = latestServiceOrderValue(
+        openedValue,
+        projectOrderProtections.get(openedValue.projectId)?.service?.value,
+      );
+      const input = ConfirmServiceBankTransferRequestSchema.parse(req.body);
+      const ownerSessionId = String(res.locals.geoSessionId || "");
+      const confirmationKey = `${ownerSessionId}:${value.projectId}`;
+      const confirmationNow = Date.now();
+      pruneExpiringMap(failedBankTransferCodes, confirmationNow, 2000);
+      const failedConfirmation = failedBankTransferCodes.get(confirmationKey);
+      if (
+        failedConfirmation &&
+        failedConfirmation.resetAt > confirmationNow &&
+        failedConfirmation.count >= 5
+      ) {
+        res.setHeader(
+          "Retry-After",
+          String(
+            Math.max(
+              1,
+              Math.ceil((failedConfirmation.resetAt - confirmationNow) / 1000),
+            ),
+          ),
+        );
+        throw new GeoHttpError(
+          "对公付款确认码尝试次数过多，请 15 分钟后再试",
+          429,
+          "BANK_TRANSFER_CODE_RATE_LIMITED",
+        );
+      }
+      if (
+        !safeSecretEqual(input.confirmationCode, bankTransferConfirmationCode)
+      ) {
+        const activeFailure =
+          failedConfirmation && failedConfirmation.resetAt > confirmationNow
+            ? failedConfirmation
+            : { count: 0, resetAt: confirmationNow + 15 * 60 * 1000 };
+        activeFailure.count += 1;
+        failedBankTransferCodes.set(confirmationKey, activeFailure);
+        pruneExpiringMap(failedBankTransferCodes, confirmationNow, 2000);
+        throw new GeoHttpError(
+          "对公付款确认码不正确，请联系管理员确认",
+          403,
+          "BANK_TRANSFER_CODE_INVALID",
+        );
+      }
+      failedBankTransferCodes.delete(confirmationKey);
+
+      const scope = await resolveServiceScope(value);
+      const alreadyConfirmedBankTransfer =
+        Boolean(value.serviceOrderId) &&
+        value.serviceTradeNo?.startsWith("bank:") === true;
+      if (value.serviceOrderId && !alreadyConfirmedBankTransfer) {
+        throw new GeoHttpError(
+          "在线付款已经确认，不能改为对公付款",
+          409,
+          "SERVICE_ALREADY_PAID",
+        );
+      }
+      if (alreadyConfirmedBankTransfer) {
+        if (
+          !value.serviceManualOrderReference ||
+          value.serviceQuestionId !== scope.question.id ||
+          value.serviceCategory !== scope.category ||
+          value.serviceAmountFen !== scope.amountFen ||
+          !value.servicePaidAt ||
+          (input.purchaseIntent && value.serviceAccountMode !== "bind_existing")
+        ) {
+          throw new GeoHttpError(
+            "已确认的对公付款与当前服务范围不一致",
+            409,
+            "SERVICE_SCOPE_CONFLICT",
+          );
+        }
+        trackServiceOrder(value);
+        const replayProjectToken = codec.seal("project", value, PROJECT_TTL_MS);
+        res
+          .status(200)
+          .json(
+            await buildServicePaymentResult(value, scope, replayProjectToken),
+          );
+        return;
+      }
+      if (
+        !value.serviceManualOrderReference ||
+        value.serviceManualOrderStatus !== "payment_required"
+      ) {
+        throw new GeoHttpError(
+          "合同尚未完成确认，不能确认对公付款",
+          409,
+          "SERVICE_PAYMENT_NOT_ALLOWED",
+        );
+      }
+      assertServiceContractEvidence(value);
+      await assertServiceWorkspaceReady();
+
+      const edition = normalizedGeoMonitoringEdition(value.monitoringEdition);
+      const directOrderId = serviceBankTransferOrderId({
+        projectId: value.projectId,
+        manualOrderReference: value.serviceManualOrderReference,
+        questionId: scope.question.id,
+        category: scope.category,
+        monitoringEdition: edition,
+        amountFen: scope.amountFen,
+      });
+      const projectOrders = await readProjectOrders(value.projectId);
+      const authorizationDigest = input.authorization
+        ? sha256(input.authorization)
+        : "";
+      const currentOrder = input.authorization
+        ? projectOrders.orders.find(
+            (order) =>
+              order.purchaseType === "service" &&
+              safeSecretEqual(order.authorizationDigest, authorizationDigest),
+          )
+        : projectOrders.orders.find(
+            (order) =>
+              order.purchaseType === "service" &&
+              order.orderId === directOrderId,
+          );
+      if (input.authorization && !currentOrder) {
+        throw new GeoHttpError(
+          "未找到可改为对公付款的在线合同订单",
+          409,
+          "PAYMENT_CHECKOUT_NOT_FOUND",
+        );
+      }
+      if (
+        currentOrder &&
+        (currentOrder.amountFen !== scope.amountFen ||
+          currentOrder.purchaseType !== "service")
+      ) {
+        throw new GeoHttpError(
+          "付款订单与当前服务范围不匹配",
+          409,
+          "PAYMENT_SCOPE_MISMATCH",
+        );
+      }
+      if (
+        currentOrder &&
+        (currentOrder.state === "review_required" ||
+          currentOrder.state === "terminal_failed" ||
+          currentOrder.state === "closed")
+      ) {
+        throw new GeoHttpError(
+          "该订单正在复核或已关闭，不能确认对公付款",
+          409,
+          currentOrder.state === "review_required"
+            ? "PAYMENT_REVIEW_REQUIRED"
+            : "PAYMENT_ALREADY_CONFIRMED",
+        );
+      }
+      if (!input.authorization) {
+        const conflictingOrder = projectOrders.orders.find(
+          (order) =>
+            order.purchaseType === "service" &&
+            order.orderId !== directOrderId &&
+            order.state !== "closed" &&
+            order.state !== "terminal_failed",
+        );
+        if (conflictingOrder) {
+          throw new GeoHttpError(
+            "已有在线合同订单，请从该订单选择改为对公付款",
+            409,
+            "SERVICE_BANK_TRANSFER_AUTHORIZATION_REQUIRED",
+          );
+        }
+      }
+
+      const orderId = currentOrder?.orderId ?? directOrderId;
+      const flightKey = `${ownerSessionId}:${value.projectId}`;
+      const bankAuthorizationDigest = sha256(
+        input.authorization || `direct:${orderId}`,
+      );
+      const purchaseIntentDigest = sha256(input.purchaseIntent || "create");
+      pruneExpiringMap(serviceBankConfirmations, confirmationNow, 2000);
+      const activeConfirmation = serviceBankConfirmations.get(flightKey);
+      let result: ServicePaymentResult;
+      if (activeConfirmation) {
+        if (
+          !safeSecretEqual(
+            activeConfirmation.authorizationDigest,
+            bankAuthorizationDigest,
+          ) ||
+          !safeSecretEqual(
+            activeConfirmation.purchaseIntentDigest,
+            purchaseIntentDigest,
+          )
+        ) {
+          throw new GeoHttpError(
+            "另一项对公付款确认正在处理，请等待完成后重试",
+            409,
+            "BANK_TRANSFER_CONFIRMATION_IN_PROGRESS",
+          );
+        }
+        result = await activeConfirmation.promise;
+      } else {
+        const promise = withServicePaymentMutation(
+          flightKey,
+          "bank",
+          async () => {
+            if (!input.authorization) {
+              await ensureDirectBankTransferOrder({
+                value,
+                orderId,
+                questionId: scope.question.id,
+                category: scope.category,
+                monitoringEdition: edition,
+                amountFen: scope.amountFen,
+              });
+            }
+            const receipt = await paymentGateway.confirmServiceBankTransfer({
+              ...(input.authorization
+                ? { authorization: input.authorization }
+                : {}),
+              orderId,
+              ownerSessionId,
+              projectId: value.projectId,
+              questionId: scope.question.id,
+              category: scope.category,
+              monitoringEdition: edition,
+              expectedAmountFen: scope.amountFen,
+            });
+            return finalizeVerifiedServicePayment({
+              value,
+              scope,
+              receipt,
+              purchaseIntent: input.purchaseIntent,
+              allowDirectBankOrder: false,
+            });
+          },
+        );
+        const confirmationFlight = {
+          authorizationDigest: bankAuthorizationDigest,
+          purchaseIntentDigest,
+          expiresAt: confirmationNow + PROJECT_TTL_MS,
+          promise,
+        };
+        serviceBankConfirmations.set(flightKey, confirmationFlight);
+        try {
+          result = await promise;
+        } finally {
+          if (serviceBankConfirmations.get(flightKey) === confirmationFlight) {
+            serviceBankConfirmations.delete(flightKey);
+          }
+        }
+      }
+      res.status(201).json(result);
+    }),
+  );
+
+  router.post(
     "/projects/:projectToken/services/start",
     requireConfiguration,
     requireSession,
@@ -5010,12 +6110,6 @@ export function createGeoRouter(options: GeoRouterOptions = {}): Router {
       const input = ServicePaymentAuthorizationSchema.parse(req.body);
       const scope = await resolveServiceScope(value);
       await assertServiceWorkspaceReady();
-      const loadMonitorRun = () =>
-        value.monitorRunId
-          ? getResolvedMonitorRun(broker, value.monitorRunId, {
-              platforms: value.monitorPlatformIds,
-            })
-          : Promise.resolve(undefined);
 
       if (value.serviceOrderId) {
         trackServiceOrder(value);
@@ -5033,19 +6127,13 @@ export function createGeoRouter(options: GeoRouterOptions = {}): Router {
             "SERVICE_SCOPE_CONFLICT",
           );
         }
-        const monitorRun = await loadMonitorRun();
-        const project = await buildProjectView(
-          broker,
-          value,
-          req.params.projectToken,
-          scope.knowledgeBaseTask,
-          scope.questionTask,
-          monitorRun,
-          scope.assessmentTask,
-          scope.forecastTask,
-          scope.preResolvedOutputs,
+        res.json(
+          await buildServicePaymentResult(
+            value,
+            scope,
+            req.params.projectToken,
+          ),
         );
-        res.json({ projectToken: req.params.projectToken, project });
         return;
       }
       if (
@@ -5066,107 +6154,20 @@ export function createGeoRouter(options: GeoRouterOptions = {}): Router {
         projectId: value.projectId,
         questionId: scope.question.id,
         category: scope.category,
+        monitoringEdition: normalizedGeoMonitoringEdition(
+          value.monitoringEdition,
+        ),
         expectedAmountFen: scope.amountFen,
       });
-      if (
-        !receipt.orderId.trim() ||
-        receipt.amountFen !== scope.amountFen ||
-        !Number.isFinite(Date.parse(receipt.paidAt))
-      ) {
-        throw new GeoPaymentVerificationError(
-          "支付订单金额或状态与本次服务不匹配",
-          "PAYMENT_SCOPE_MISMATCH",
-          402,
-        );
-      }
-      const contractAuthorizedAt = normalizedIsoTimestamp(
-        value.serviceContractAuthorizedAt,
+      res.status(201).json(
+        await finalizeVerifiedServicePayment({
+          value,
+          scope,
+          receipt,
+          purchaseIntent: input.purchaseIntent,
+          allowDirectBankOrder: false,
+        }),
       );
-      if (
-        value.serviceContractAuthorizationMode === "external_wechat" &&
-        contractAuthorizedAt &&
-        Date.parse(receipt.paidAt) <= Date.parse(contractAuthorizedAt)
-      ) {
-        throw new GeoPaymentVerificationError(
-          "支付时间必须晚于合同确认时间",
-          "PAYMENT_PRECEDES_CONTRACT_AUTHORIZATION",
-          409,
-        );
-      }
-      const paidOrder = await transitionProjectOrder(
-        value.projectId,
-        receipt.orderId,
-        "paid",
-        { paidAt: receipt.paidAt },
-      );
-
-      const preparedValue: ProjectTokenValue = {
-        ...value,
-        serviceOrderId: receipt.orderId,
-        serviceQuestionId: scope.question.id,
-        serviceCategory: scope.category,
-        serviceAmountFen: scope.amountFen,
-        serviceTradeNo: receipt.tradeNo || receipt.orderId,
-        servicePaidAt: receipt.paidAt,
-        serviceAuthorizationDigest: paidOrder.authorizationDigest,
-        serviceCheckoutExpiresAt: paidOrder.checkoutExpiresAt,
-        serviceAccountMode: input.purchaseIntent ? "bind_existing" : "create",
-      };
-      const confirmed = await manualOrderPaymentConfirmer(
-        value.serviceManualOrderReference,
-        {
-          schemaVersion: 1,
-          payment: {
-            orderId: receipt.orderId,
-            tradeNo: receipt.tradeNo || receipt.orderId,
-            amountFen: receipt.amountFen,
-            paidAt: receipt.paidAt,
-          },
-        },
-      );
-      let nextValue = mergeManualOrder(preparedValue, confirmed);
-      if (input.purchaseIntent) {
-        const accountSubmitted = await manualOrderAccountSubmitter(
-          value.serviceManualOrderReference,
-          {
-            schemaVersion: 1,
-            account: {
-              mode: "bind_existing",
-              purchaseIntent: input.purchaseIntent,
-            },
-          },
-        );
-        nextValue = mergeManualOrder(nextValue, accountSubmitted);
-        if (nextValue.serviceManualOrderStatus !== "active") {
-          throw new GeoHttpError(
-            "已有账号已经绑定，但服务账号未能立即激活",
-            502,
-            "MANUAL_ORDER_ACCOUNT_ACTIVATION_INCOMPLETE",
-          );
-        }
-      }
-      if (nextValue.serviceManualOrderStatus === "active") {
-        nextValue = await handoffKnowledgeBase(
-          nextValue,
-          scope.knowledgeBaseTask,
-        );
-      }
-      nextValue = await syncServiceOrder(nextValue);
-      trackServiceOrder(nextValue);
-      const projectToken = codec.seal("project", nextValue, PROJECT_TTL_MS);
-      const monitorRun = await loadMonitorRun();
-      const project = await buildProjectView(
-        broker,
-        nextValue,
-        projectToken,
-        scope.knowledgeBaseTask,
-        scope.questionTask,
-        monitorRun,
-        scope.assessmentTask,
-        scope.forecastTask,
-        scope.preResolvedOutputs,
-      );
-      res.status(201).json({ projectToken, project });
     }),
   );
 
@@ -5256,9 +6257,11 @@ export function createGeoRouter(options: GeoRouterOptions = {}): Router {
         trackServiceOrder(nextValue);
         const projectToken = codec.seal("project", nextValue, PROJECT_TTL_MS);
         const monitorRun = nextValue.monitorRunId
-          ? await getResolvedMonitorRun(broker, nextValue.monitorRunId, {
-              platforms: nextValue.monitorPlatformIds,
-            })
+          ? await getResolvedMonitorRun(
+              broker,
+              nextValue.monitorRunId,
+              monitorRunExpectation(nextValue),
+            )
           : undefined;
         const project = await buildProjectView(
           broker,
@@ -5305,6 +6308,9 @@ export function createGeoRouter(options: GeoRouterOptions = {}): Router {
           };
           const provisioned = await purchaseProvisioner({
             schemaVersion: 2,
+            marketEdition: normalizedGeoMonitoringEdition(
+              value.monitoringEdition,
+            ),
             project: {
               id: value.projectId,
               companyName: value.companyName,
@@ -5356,9 +6362,11 @@ export function createGeoRouter(options: GeoRouterOptions = {}): Router {
         trackServiceOrder(nextValue);
         const projectToken = codec.seal("project", nextValue, PROJECT_TTL_MS);
         const monitorRun = nextValue.monitorRunId
-          ? await getResolvedMonitorRun(broker, nextValue.monitorRunId, {
-              platforms: nextValue.monitorPlatformIds,
-            })
+          ? await getResolvedMonitorRun(
+              broker,
+              nextValue.monitorRunId,
+              monitorRunExpectation(nextValue),
+            )
           : undefined;
         const project = await buildProjectView(
           broker,
@@ -5401,9 +6409,11 @@ export function createGeoRouter(options: GeoRouterOptions = {}): Router {
       ) {
         trackServiceOrder(value);
         const monitorRun = value.monitorRunId
-          ? await getResolvedMonitorRun(broker, value.monitorRunId, {
-              platforms: value.monitorPlatformIds,
-            })
+          ? await getResolvedMonitorRun(
+              broker,
+              value.monitorRunId,
+              monitorRunExpectation(value),
+            )
           : undefined;
         const project = await buildProjectView(
           broker,
@@ -5474,9 +6484,11 @@ export function createGeoRouter(options: GeoRouterOptions = {}): Router {
       trackServiceOrder(syncedValue);
       const projectToken = codec.seal("project", syncedValue, PROJECT_TTL_MS);
       const monitorRun = syncedValue.monitorRunId
-        ? await getResolvedMonitorRun(broker, syncedValue.monitorRunId, {
-            platforms: syncedValue.monitorPlatformIds,
-          })
+        ? await getResolvedMonitorRun(
+            broker,
+            syncedValue.monitorRunId,
+            monitorRunExpectation(syncedValue),
+          )
         : undefined;
       const project = await buildProjectView(
         broker,
@@ -5537,9 +6549,11 @@ export function createGeoRouter(options: GeoRouterOptions = {}): Router {
       trackServiceOrder(nextValue);
       const projectToken = codec.seal("project", nextValue, PROJECT_TTL_MS);
       const monitorRun = nextValue.monitorRunId
-        ? await getResolvedMonitorRun(broker, nextValue.monitorRunId, {
-            platforms: nextValue.monitorPlatformIds,
-          })
+        ? await getResolvedMonitorRun(
+            broker,
+            nextValue.monitorRunId,
+            monitorRunExpectation(nextValue),
+          )
         : undefined;
       const project = await buildProjectView(
         broker,
@@ -5707,42 +6721,32 @@ export function createGeoRouter(options: GeoRouterOptions = {}): Router {
     "/projects/:projectToken",
     requireConfiguration,
     requireSession,
-    requireSessionRate("project-delete", 20),
+    requireSessionRate("project-delete", 150, 10 * 60 * 1000),
     asyncHandler(async (req, res) => {
-      let value = openOwnedProject(req, res);
-      let terminalMonitorRun: BrokerMonitorRun | undefined;
-      if (value.monitorRunId) {
-        try {
-          terminalMonitorRun = await getResolvedMonitorRun(
-            broker,
-            value.monitorRunId,
-            { platforms: value.monitorPlatformIds },
-          );
-        } catch (error) {
-          // A rotated credential can no longer see historical runs. Deletion
-          // must still be able to proceed; the durable order registry below
-          // remains the authority for paid or unfinished fulfillment.
-          if (!isAlreadyDeletedGeoResource(error)) throw error;
-        }
-      }
-      value = await syncMonitoringOrder(value, terminalMonitorRun);
-      value = await syncServiceOrder(value);
-      const projectOrders = await readProjectOrders(value.projectId);
-      if (projectOrders.blockDeletion) {
-        throw new GeoHttpError(
-          "当前项目存在未决、对账中或尚未完成履约的订单，暂不能删除",
-          409,
-          "PROJECT_ORDER_DELETE_BLOCKED",
-        );
-      }
-      await assertProjectOrderAllowsDeletion(value);
-      // This is the final local authorization gate before destructive remote
-      // cleanup. The persistent fence makes retries idempotent and prevents a
-      // new reservation or an old recovery worker from racing the cleanup.
+      const value = openOwnedProject(req, res);
+      // Fence first so the self-contained project token cannot create fresh
+      // work while its remote resources are being removed. DELETE itself stays
+      // retryable after the fence, and every other project route returns 410.
       await customQuestionValidationStore.fenceProjectDeletion(
         value.projectId,
         { force: true },
       );
+      let deletedOrders = 0;
+      try {
+        deletedOrders = (
+          await projectOrderRegistry.deleteProject(value.projectId)
+        ).deletedOrders;
+      } catch (error) {
+        throw new GeoHttpError(
+          `项目删除保护未能建立：${error instanceof Error ? error.message : "未知错误"}`,
+          502,
+          "PROJECT_DELETE_INCOMPLETE",
+        );
+      }
+      const validationTargets =
+        await customQuestionValidationStore.getProjectDeletionTargets(
+          value.projectId,
+        );
       const protectedMonitorRunId = projectOrderProtections.get(value.projectId)
         ?.monitoring?.runId;
       const taskIds = [
@@ -5754,6 +6758,7 @@ export function createGeoRouter(options: GeoRouterOptions = {}): Router {
         ...(value.previousQuestionTaskIds || []),
         ...(value.previousAssessmentTaskIds || []),
         ...(value.previousOptimizationForecastTaskIds || []),
+        ...validationTargets.taskIds,
       ].filter((item): item is string => Boolean(item));
       const monitorRunIds = [value.monitorRunId, protectedMonitorRunId].filter(
         (item): item is string => Boolean(item),
@@ -5762,40 +6767,101 @@ export function createGeoRouter(options: GeoRouterOptions = {}): Router {
         ...(value.uploadFileIds || []),
         ...(value.archiveFileIds || []),
         ...(value.temporaryFileIds || []),
+        ...validationTargets.temporaryFileIds,
       ];
-      const retainedTaskIds = new Set(taskIds);
+      const uniqueTaskIds = new Set(taskIds);
       const uniqueFileIds = new Set(fileIds);
       const uniqueMonitorRunIds = new Set(monitorRunIds);
-      const operations = [
+      const resourceOperations = [
+        ...Array.from(uniqueTaskIds).map(() => "task"),
         ...Array.from(uniqueFileIds).map(() => "file"),
-        ...Array.from(uniqueMonitorRunIds).map(() => "monitor"),
       ];
-      const results = await Promise.allSettled([
+      const resourceResults = await Promise.allSettled([
+        ...Array.from(uniqueTaskIds).map((taskId) => broker.deleteTask(taskId)),
         ...Array.from(uniqueFileIds).map((fileId) => broker.deleteFile(fileId)),
-        ...Array.from(uniqueMonitorRunIds).map((runId) =>
-          broker.deleteMonitorRun(runId),
-        ),
       ]);
-      const failed = results.filter(
+      const monitorResults = await Promise.allSettled(
+        Array.from(uniqueMonitorRunIds).map((runId) =>
+          broker.deleteMonitorRun(value.projectId, runId),
+        ),
+      );
+      const failed = [...resourceResults, ...monitorResults].filter(
         (result) =>
           result.status === "rejected" &&
-          !isAlreadyDeletedGeoResource(result.reason),
+          !isAlreadyDeletedGeoResource(result.reason) &&
+          !isPendingGeoResourceDeletion(result.reason),
       ).length;
-      const deleted = results.length - failed;
+      const deleted = resourceResults.length + monitorResults.length - failed;
       if (failed > 0) {
         throw new GeoHttpError(
-          `远端项目清理未完成（成功 ${deleted}/${operations.length}），请重试删除`,
+          `远端项目清理未完成（成功 ${deleted}/${resourceOperations.length + monitorResults.length}），请重试删除`,
           502,
           "PROJECT_DELETE_INCOMPLETE",
         );
       }
+      const pendingResources = resourceResults.filter(
+        (result) =>
+          result.status === "rejected" &&
+          isPendingGeoResourceDeletion(result.reason),
+      ).length;
+      const pendingMonitorRuns = monitorResults.filter(
+        (result) =>
+          result.status === "fulfilled" && result.value === "deleting",
+      ).length;
+      if (pendingResources > 0 || pendingMonitorRuns > 0) {
+        res.setHeader("Retry-After", "2");
+        res.status(202).json({
+          ok: false,
+          status: "deleting",
+          retryAfterMs: 2_000,
+          pendingResources,
+          pendingMonitorRuns,
+        });
+        return;
+      }
+      const projectTaskDeletion = await broker.deleteProjectTasks(
+        value.projectId,
+      );
+      if (projectTaskDeletion.status === "deleting") {
+        res.setHeader(
+          "Retry-After",
+          String(
+            Math.max(1, Math.ceil(projectTaskDeletion.retryAfterMs / 1000)),
+          ),
+        );
+        res.status(202).json({
+          ok: false,
+          status: "deleting",
+          retryAfterMs: projectTaskDeletion.retryAfterMs,
+          pendingReservations: projectTaskDeletion.pendingReservations,
+          remainingTasks: projectTaskDeletion.remainingTasks,
+        });
+        return;
+      }
+
+      await customQuestionValidationStore.purgeProjectRecords(value.projectId);
+
+      for (const map of [
+        serviceOrderLocks,
+        monitoringOrderLocks,
+        monitoringPaymentSwitches,
+      ]) {
+        for (const key of Array.from(map.keys())) {
+          try {
+            const scope = JSON.parse(key) as { projectId?: unknown };
+            if (scope.projectId === value.projectId) map.delete(key);
+          } catch {
+            // Only JSON-scoped project keys are used by these registries.
+          }
+        }
+      }
       projectOrderProtections.delete(value.projectId);
       res.json({
         ok: true,
-        deletedTasks: 0,
-        retainedTasks: retainedTaskIds.size,
-        deletedFiles: uniqueFileIds.size,
+        deletedTasks: uniqueTaskIds.size + projectTaskDeletion.deletedTasks,
+        deletedFiles: uniqueFileIds.size + projectTaskDeletion.deletedFiles,
         deletedMonitorRuns: uniqueMonitorRunIds.size,
+        deletedOrders,
       });
     }),
   );
@@ -5849,6 +6915,14 @@ function validCustomQuestion(value: ProjectTokenValue) {
     return undefined;
   }
   return question;
+}
+
+function publicGeoQuestion(
+  question: GeoQuestion,
+): Omit<GeoQuestion, "questionEnglish"> {
+  const { questionEnglish: _legacyQuestionEnglish, ...publicQuestion } =
+    question;
+  return publicQuestion;
 }
 
 function mergeProjectQuestions(
@@ -6245,7 +7319,10 @@ async function buildProjectView(
     Number.isSafeInteger(value.serviceAmountFen) &&
     value.serviceAmountFen ===
       (value.serviceCategory
-        ? GEO_SERVICE_MONTHLY_PRICE_FEN[value.serviceCategory]
+        ? geoServiceMonthlyPriceFen(
+            value.serviceCategory,
+            value.monitoringEdition,
+          )
         : undefined);
   const serviceSigned =
     servicePaid &&
@@ -6439,6 +7516,7 @@ async function buildProjectView(
     id: value.projectId,
     createdAt: value.knowledgeBaseSubmittedAt,
     companyName: value.companyName,
+    monitoringEdition: normalizedGeoMonitoringEdition(value.monitoringEdition),
     stage,
     status,
     // Raw task output may contain structured JSON, tool records, or model
@@ -6478,7 +7556,7 @@ async function buildProjectView(
           archiveUrl,
         }
       : undefined,
-    questions,
+    questions: questions?.map(publicGeoQuestion),
     selectedQuestionId: value.monitorQuestionId,
     selectedPlatformIds: value.monitorPlatformIds || [],
     knowledgeBaseValidationCategory: knowledgeBaseValidationFailure?.category,
@@ -6626,7 +7704,10 @@ async function buildProjectView(
             ? {
                 status: "not_started",
                 category: serviceCategory,
-                amountFen: GEO_SERVICE_MONTHLY_PRICE_FEN[serviceCategory],
+                amountFen: geoServiceMonthlyPriceFen(
+                  serviceCategory,
+                  value.monitoringEdition,
+                ),
                 billingMonths: 1,
                 questionId: serviceQuestion.id,
               }
@@ -7028,6 +8109,7 @@ const assetPreviewCacheByBroker = new WeakMap<
 function omitKnowledgeEvidencePaths(manifest: KnowledgeBaseManifest) {
   const {
     evidencePaths: _evidencePaths,
+    allPaths: _allPaths,
     generatedAt: rawGeneratedAt,
     sources,
     ...publicManifest
@@ -7297,6 +8379,145 @@ async function getResolvedMonitorRun(
   }
 }
 
+async function resolveMonitorQuestionForEdition(
+  broker: GeoPresalesBroker,
+  value: ProjectTokenValue,
+  question: GeoQuestion,
+  edition?: GeoMonitoringEdition,
+  timing: { waitMs: number; pollMs: number } = {
+    waitMs: MONITOR_QUESTION_TRANSLATION_WAIT_MS,
+    pollMs: MONITOR_QUESTION_TRANSLATION_POLL_MS,
+  },
+) {
+  if (normalizedGeoMonitoringEdition(edition) !== "overseas") {
+    return question.question;
+  }
+  const deadline = Date.now() + timing.waitMs;
+  const pending = () =>
+    new GeoHttpError(
+      "付款已确认，正在启动监控，请稍候",
+      503,
+      "QUESTION_TRANSLATION_PENDING",
+    );
+  const failed = () =>
+    new GeoHttpError(
+      "付款已确认，监控启动暂未完成；订单与处理进度已保留",
+      502,
+      "QUESTION_TRANSLATION_FAILED",
+    );
+  const waitForNextObservation = async () => {
+    const remaining = deadline - Date.now();
+    if (remaining <= 0) return false;
+    await new Promise<void>((resolve) =>
+      setTimeout(resolve, Math.min(timing.pollMs, remaining)),
+    );
+    return true;
+  };
+
+  let task: BrokerTask | undefined;
+  while (!task) {
+    try {
+      task = await createMonitorQuestionTranslationTask(
+        broker,
+        value,
+        question,
+      );
+    } catch (error) {
+      if (
+        !(error instanceof GeoBrokerError) ||
+        !isRecoverableTaskResultError(error)
+      ) {
+        throw failed();
+      }
+      if (!(await waitForNextObservation())) throw pending();
+    }
+  }
+
+  // An idempotent create replay can already contain the complete answer even
+  // while the status endpoint is still eventually consistent. A strict schema
+  // plus source digest makes that complete typed assistant output authoritative.
+  const createdTranslation = parseGeoMonitorQuestionTranslationTaskOutput(
+    task,
+    question.question,
+  );
+  if (createdTranslation) return createdTranslation;
+  const createdStatus = normalizeTaskStatus(task.status);
+  if (["failed", "cancelled"].includes(createdStatus)) throw failed();
+
+  const taskId = taskIdFrom(task);
+  if (!taskId) throw failed();
+  while (true) {
+    let resolved: BrokerTask;
+    try {
+      resolved = await getResolvedTask(broker, taskId);
+    } catch (error) {
+      const recoverable =
+        (error instanceof GeoHttpError &&
+          error.code === "TASK_RESULT_TEMPORARILY_UNAVAILABLE") ||
+        (error instanceof GeoBrokerError &&
+          isRecoverableTaskResultError(error));
+      if (!recoverable) throw failed();
+      if (!(await waitForNextObservation())) throw pending();
+      continue;
+    }
+
+    const translated = parseGeoMonitorQuestionTranslationTaskOutput(
+      resolved,
+      question.question,
+    );
+    if (translated) return translated;
+
+    const status = normalizeTaskStatus(resolved.status);
+    if (["failed", "cancelled"].includes(status)) throw failed();
+    if (status === "completed") throw failed();
+    if (!(await waitForNextObservation())) throw pending();
+  }
+}
+
+function createMonitorQuestionTranslationTask(
+  broker: GeoPresalesBroker,
+  value: ProjectTokenValue,
+  question: GeoQuestion,
+) {
+  return broker.createTask({
+    projectId: value.projectId,
+    prompt: buildGeoMonitorQuestionTranslationPrompt(question.question),
+    attachments: [],
+    idempotencyKey: geoMonitorQuestionTranslationOperationKey({
+      projectId: value.projectId,
+      questionId: question.id,
+      question: question.question,
+    }),
+    agentProfile: FRONTMIND_BASE_PROFILE,
+  });
+}
+
+async function prewarmMonitorQuestionTranslation(
+  broker: GeoPresalesBroker,
+  value: ProjectTokenValue,
+  question: GeoQuestion,
+) {
+  try {
+    await createMonitorQuestionTranslationTask(broker, value, question);
+  } catch (error) {
+    // Translation is not a payment prerequisite. A later monitoring request
+    // retries the same deterministic operation key before calling ChatGPT.
+    console.warn("[GEO monitor translation]", {
+      event: "prewarm_deferred",
+      projectId: value.projectId,
+      diagnosticCode:
+        error instanceof GeoBrokerError ? error.code : "TASK_CREATE_FAILED",
+    });
+  }
+}
+
+function monitorRunExpectation(
+  value: ProjectTokenValue,
+  platforms = value.monitorPlatformIds,
+) {
+  return platforms ? { platforms } : undefined;
+}
+
 function isRecoverableMonitorResultError(error: unknown): boolean {
   if (error instanceof GeoMonitorContractError) return true;
   if (!(error instanceof GeoBrokerError)) return false;
@@ -7320,8 +8541,9 @@ async function materializeArchiveAttachment(
   taskId: string,
   archive: { fileId?: string; url?: string; filename: string },
   options: {
+    projectId: string;
     forceCopy?: boolean;
-    idempotencyKey?: string;
+    idempotencyKey: string;
     stagingAttachment?: {
       fileId: string;
       filename: string;
@@ -7332,7 +8554,7 @@ async function materializeArchiveAttachment(
       filename: string;
       temporary: true;
     }) => Promise<void>;
-  } = {},
+  },
 ) {
   if (archive.fileId && !options.forceCopy && !options.stagingAttachment)
     return {
@@ -7377,12 +8599,11 @@ async function materializeArchiveAttachment(
         proxy_upload_ticket: undefined,
       }
     : await broker.createFile({
+        projectId: options.projectId,
+        idempotencyKey: options.idempotencyKey,
         filename: archive.filename,
         mimeType: "application/zip",
         sizeBytes: body.length,
-        ...(options.idempotencyKey
-          ? { idempotencyKey: options.idempotencyKey }
-          : {}),
       });
   if (!options.stagingAttachment) {
     try {
@@ -7538,7 +8759,7 @@ async function advanceCustomQuestionValidation(input: {
     }
 
     const archive = record.knowledgeBaseArtifact;
-    const attachmentOperationKey = (kind: "archive" | "skill") =>
+    const attachmentOperationKey = (kind: "archive" | "skill" | "input") =>
       `geo-custom-question-file:${record.key}:${kind}:${record.attachmentRebuildCount}:v1`;
 
     if (!record.archiveAttachment) {
@@ -7548,6 +8769,7 @@ async function advanceCustomQuestionValidation(input: {
           record.knowledgeBaseTaskId,
           archive,
           {
+            projectId: record.projectId,
             // The durable knowledge-base artifact can belong to a credential
             // retired after API-key rotation. Always copy it into the current
             // credential generation before combining it with the current
@@ -7607,6 +8829,7 @@ async function advanceCustomQuestionValidation(input: {
         let uploadTicket: string | undefined;
         if (!stagingAttachment) {
           const file = await input.broker.createFile({
+            projectId: record.projectId,
             filename: CUSTOM_QUESTION_CLASSIFIER_SKILL_ARCHIVE_FILENAME,
             mimeType: "application/zip",
             sizeBytes: body.length,
@@ -7662,12 +8885,80 @@ async function advanceCustomQuestionValidation(input: {
       }
     }
 
+    // Records submitted by an older Website build already carry their complete
+    // inline prompt. They must remain pollable during a rolling deployment and
+    // must not acquire a new, unused protocol attachment before observation.
+    if (!record.taskId && !record.promptInputAttachment) {
+      try {
+        const taskInput = buildGeoCustomQuestionClassifierTaskInput({
+          companyName: record.companyName,
+          question: record.question,
+          archiveFilename: record.archiveAttachment!.filename,
+        });
+        let stagingAttachment = record.promptInputStagingAttachment;
+        let uploadTicket: string | undefined;
+        if (!stagingAttachment) {
+          const file = await input.broker.createFile({
+            projectId: record.projectId,
+            filename: taskInput.filename,
+            mimeType: taskInput.mimeType,
+            sizeBytes: taskInput.body.length,
+            idempotencyKey: attachmentOperationKey("input"),
+          });
+          uploadTicket = file.proxy_upload_ticket;
+          stagingAttachment = {
+            fileId: file.id,
+            filename: file.filename || taskInput.filename,
+            temporary: true,
+          };
+          try {
+            record = await enqueueLeaseOperation(() =>
+              input.store.retainTemporaryFileForCleanup(
+                record.projectId,
+                record.clientRequestId,
+                stagingAttachment!.fileId,
+              ),
+            );
+            await persist({
+              ...record,
+              state: "prepared",
+              promptInputStagingAttachment: stagingAttachment,
+            });
+          } catch (error) {
+            await input.broker.deleteFile(file.id).catch(() => undefined);
+            throw error;
+          }
+        }
+        await input.broker.uploadFile(
+          stagingAttachment.fileId,
+          taskInput.body,
+          taskInput.mimeType,
+          uploadTicket,
+        );
+        await persist({
+          ...record,
+          state: "prepared",
+          promptInputAttachment: stagingAttachment,
+          promptInputStagingAttachment: undefined,
+          transientErrorCount: 0,
+          firstTransientErrorAt: undefined,
+          lastTransientError: undefined,
+        });
+      } catch (error) {
+        return await persistTransientFailure(
+          error,
+          "CUSTOM_QUESTION_INPUT_PREPARATION_UNAVAILABLE",
+          "问题验证输入附件持续无法准备，请重试当前问题",
+        );
+      }
+    }
+
     let observedTask: BrokerTask | undefined;
     if (!record.taskId) {
       try {
         observedTask = await input.broker.createTask({
           projectId: record.projectId,
-          prompt: buildGeoCustomQuestionClassifierPrompt({
+          prompt: await buildGeoCustomQuestionClassifierPrompt({
             companyName: record.companyName,
             question: record.question,
             archiveFilename: record.archiveAttachment!.filename,
@@ -7676,6 +8967,10 @@ async function advanceCustomQuestionValidation(input: {
             {
               file_id: record.skillAttachment!.fileId,
               filename: record.skillAttachment!.filename,
+            },
+            {
+              file_id: record.promptInputAttachment!.fileId,
+              filename: record.promptInputAttachment!.filename,
             },
             {
               file_id: record.archiveAttachment!.fileId,
@@ -7703,11 +8998,17 @@ async function advanceCustomQuestionValidation(input: {
               ...(record.skillAttachment?.temporary
                 ? [record.skillAttachment.fileId]
                 : []),
+              ...(record.promptInputAttachment?.temporary
+                ? [record.promptInputAttachment.fileId]
+                : []),
               ...(record.archiveAttachment?.temporary
                 ? [record.archiveAttachment.fileId]
                 : []),
               ...(record.skillStagingAttachment?.temporary
                 ? [record.skillStagingAttachment.fileId]
+                : []),
+              ...(record.promptInputStagingAttachment?.temporary
+                ? [record.promptInputStagingAttachment.fileId]
                 : []),
               ...(record.archiveStagingAttachment?.temporary
                 ? [record.archiveStagingAttachment.fileId]
@@ -7719,8 +9020,10 @@ async function advanceCustomQuestionValidation(input: {
             state: "reserved",
             archiveAttachment: undefined,
             skillAttachment: undefined,
+            promptInputAttachment: undefined,
             archiveStagingAttachment: undefined,
             skillStagingAttachment: undefined,
+            promptInputStagingAttachment: undefined,
             orphanedTemporaryFileIds,
             attachmentRebuildCount: record.attachmentRebuildCount + 1,
             transientErrorCount: 0,
@@ -7757,14 +9060,22 @@ async function advanceCustomQuestionValidation(input: {
           },
         });
       }
-      await persist({
-        ...record,
-        state: "submitted",
-        taskId,
-        transientErrorCount: 0,
-        firstTransientErrorAt: undefined,
-        lastTransientError: undefined,
-      });
+      try {
+        await persist({
+          ...record,
+          state: "submitted",
+          taskId,
+          transientErrorCount: 0,
+          firstTransientErrorAt: undefined,
+          lastTransientError: undefined,
+        });
+      } catch (error) {
+        // A confirmed project deletion can win immediately after upstream task
+        // creation. Do not leave that uncommitted task outside the deletion
+        // target inventory.
+        await input.broker.deleteTask(taskId).catch(() => undefined);
+        throw error;
+      }
     }
 
     if (!observedTask) {
@@ -8008,11 +9319,17 @@ async function cleanupCustomQuestionValidation(
       ...(record.skillAttachment?.temporary
         ? [record.skillAttachment.fileId]
         : []),
+      ...(record.promptInputAttachment?.temporary
+        ? [record.promptInputAttachment.fileId]
+        : []),
       ...(record.archiveAttachment?.temporary
         ? [record.archiveAttachment.fileId]
         : []),
       ...(record.skillStagingAttachment?.temporary
         ? [record.skillStagingAttachment.fileId]
+        : []),
+      ...(record.promptInputStagingAttachment?.temporary
+        ? [record.promptInputStagingAttachment.fileId]
         : []),
       ...(record.archiveStagingAttachment?.temporary
         ? [record.archiveStagingAttachment.fileId]
@@ -8039,6 +9356,10 @@ async function cleanupCustomQuestionValidation(
 
 function isAlreadyDeletedGeoResource(error: unknown) {
   return error instanceof GeoBrokerError && error.status === 404;
+}
+
+function isPendingGeoResourceDeletion(error: unknown) {
+  return error instanceof GeoBrokerError && error.status === 425;
 }
 
 export function createGeoCustomQuestionRecoveryWorker(input: {
@@ -8219,11 +9540,134 @@ function safeCustomQuestionDiagnostic(error: unknown) {
     .slice(0, 500);
 }
 
+function compareCanonicalText(left: string, right: string) {
+  return left < right ? -1 : left > right ? 1 : 0;
+}
+
+function canonicalAssessmentMonitorRecords(
+  records: NonNullable<BrokerMonitorRun["records"]>,
+) {
+  return [...records]
+    .sort((left, right) =>
+      compareCanonicalText(
+        `${left.platform}\0${String(left.runIndex).padStart(2, "0")}\0${left.recordId}`,
+        `${right.platform}\0${String(right.runIndex).padStart(2, "0")}\0${right.recordId}`,
+      ),
+    )
+    .map((record) => ({
+      recordId: record.recordId,
+      platform: record.platform,
+      runIndex: record.runIndex,
+      status: record.status,
+      answerText: record.answerText,
+      sources: [...record.sources].sort((left, right) =>
+        compareCanonicalText(
+          `${left.url || ""}\0${left.title || ""}\0${left.domain || ""}`,
+          `${right.url || ""}\0${right.title || ""}\0${right.domain || ""}`,
+        ),
+      ),
+      error: record.error,
+      completedAt: record.completedAt,
+    }));
+}
+
 type GeoTaskSkillPackage = {
   filename: string;
   body: Buffer;
   mimeType?: string;
 };
+
+function generatedTaskFileOperationKey(
+  taskOperationKey: string,
+  packageIndex: number,
+  skillPackage: GeoTaskSkillPackage,
+) {
+  const digest = crypto
+    .createHash("sha256")
+    .update(taskOperationKey, "utf8")
+    .update("\0")
+    .update(String(packageIndex), "utf8")
+    .update("\0")
+    .update(skillPackage.filename, "utf8")
+    .update("\0")
+    .update(skillPackage.mimeType || "application/zip", "utf8")
+    .update("\0")
+    .update(skillPackage.body)
+    .digest("hex");
+  return `geo-generated-task-file:${digest}`;
+}
+
+function generatedTaskEvidenceFileOperationKey(
+  taskOperationKey: string,
+  role: string,
+  evidence: GeoTaskSkillPackage,
+) {
+  const digest = crypto
+    .createHash("sha256")
+    .update(taskOperationKey, "utf8")
+    .update("\0evidence\0", "utf8")
+    .update(role, "utf8")
+    .update("\0", "utf8")
+    .update(evidence.filename, "utf8")
+    .update("\0", "utf8")
+    .update(evidence.mimeType || "application/octet-stream", "utf8")
+    .update("\0", "utf8")
+    .update(evidence.body)
+    .digest("hex");
+  return `geo-generated-task-evidence-file:${digest}`;
+}
+
+function isAmbiguousGeneratedAttachmentError(error: unknown) {
+  return (
+    (error instanceof GeoBrokerError || error instanceof GeoHttpError) &&
+    ([409, 425, 429].includes(error.status) || error.status >= 500)
+  );
+}
+
+function shouldRetainGeneratedTaskFilesForReplay(error: unknown) {
+  return (
+    isAmbiguousGeneratedAttachmentError(error) ||
+    (!(error instanceof GeoBrokerError) && !(error instanceof GeoHttpError))
+  );
+}
+
+async function createGeoTaskEvidenceFile(
+  broker: GeoPresalesBroker,
+  input: {
+    projectId: string;
+    taskOperationKey: string;
+    role: string;
+    filename: string;
+    body: Buffer;
+    mimeType: string;
+  },
+) {
+  const file = await broker.createFile({
+    projectId: input.projectId,
+    filename: input.filename,
+    mimeType: input.mimeType,
+    sizeBytes: input.body.length,
+    idempotencyKey: generatedTaskEvidenceFileOperationKey(
+      input.taskOperationKey,
+      input.role,
+      input,
+    ),
+  });
+  try {
+    await broker.uploadFile(
+      file.id,
+      input.body,
+      input.mimeType,
+      file.proxy_upload_ticket,
+    );
+  } catch (error) {
+    if (!shouldRetainGeneratedTaskFilesForReplay(error)) {
+      await broker.deleteFile(file.id).catch(() => undefined);
+    }
+    throw error;
+  }
+  return file;
+}
 
 async function createGeoTaskWithSkillPackages(
   broker: GeoPresalesBroker,
@@ -8237,13 +9681,25 @@ async function createGeoTaskWithSkillPackages(
   skillPackages: GeoTaskSkillPackage[],
 ) {
   const skillAttachments: Array<{ file_id: string; filename: string }> = [];
+  let taskSubmissionStarted = false;
   try {
-    for (const skillPackage of skillPackages) {
+    for (
+      let packageIndex = 0;
+      packageIndex < skillPackages.length;
+      packageIndex += 1
+    ) {
+      const skillPackage = skillPackages[packageIndex]!;
       const mimeType = skillPackage.mimeType || "application/zip";
       const file = await broker.createFile({
+        projectId: input.projectId,
         filename: skillPackage.filename,
         mimeType,
         sizeBytes: skillPackage.body.length,
+        idempotencyKey: generatedTaskFileOperationKey(
+          input.idempotencyKey,
+          packageIndex,
+          skillPackage,
+        ),
       });
       skillAttachments.push({
         file_id: file.id,
@@ -8256,6 +9712,7 @@ async function createGeoTaskWithSkillPackages(
         file.proxy_upload_ticket,
       );
     }
+    taskSubmissionStarted = true;
     const task = await broker.createTask({
       ...input,
       attachments: [...skillAttachments, ...input.attachments],
@@ -8269,11 +9726,21 @@ async function createGeoTaskWithSkillPackages(
     }
     return { task, skillAttachments };
   } catch (error) {
-    await Promise.allSettled(
-      skillAttachments.map((attachment) =>
-        broker.deleteFile(attachment.file_id),
-      ),
-    );
+    // A timeout/5xx/409 can arrive after the Dashboard or upstream task has
+    // committed. Keep deterministic generated files in that case: the next
+    // request recreates them with the same file operation keys, reuploads the
+    // same bytes, and retries the identical task payload. Deterministic 4xx
+    // setup failures remain safe to clean immediately.
+    const retainForReplay =
+      isAmbiguousGeneratedAttachmentError(error) ||
+      (taskSubmissionStarted && shouldRetainGeneratedTaskFilesForReplay(error));
+    if (!retainForReplay) {
+      await Promise.allSettled(
+        skillAttachments.map((attachment) =>
+          broker.deleteFile(attachment.file_id),
+        ),
+      );
+    }
     throw error;
   }
 }
@@ -8283,14 +9750,16 @@ async function createWebsiteKnowledgeBaseTaskWithSkill(
   input: {
     projectId: string;
     prompt: string;
+    taskInput: GeoTaskSkillPackage;
     attachments: Array<{ file_id: string; filename: string }>;
     idempotencyKey: string;
   },
 ) {
+  const { taskInput, ...taskInputWithoutGeneratedAttachment } = input;
   const result = await createGeoTaskWithSkillPackages(
     broker,
     {
-      ...input,
+      ...taskInputWithoutGeneratedAttachment,
       agentProfile: FRONTMIND_BASE_PROFILE,
     },
     [
@@ -8298,11 +9767,13 @@ async function createWebsiteKnowledgeBaseTaskWithSkill(
         filename: WEBSITE_KB_SKILL_ARCHIVE_FILENAME,
         body: await buildWebsiteKnowledgeBaseSkillArchive(),
       },
+      taskInput,
     ],
   );
   return {
     task: result.task,
-    skillAttachment: result.skillAttachments[0],
+    skillAttachment: result.skillAttachments[0]!,
+    generatedAttachments: result.skillAttachments,
   };
 }
 
@@ -8353,8 +9824,8 @@ function validateProjectAttachments(
     if (
       value.fileId !== attachment.fileId ||
       value.sessionId !== sessionId ||
-      sanitizeFilename(value.filename, "company-material") !==
-        sanitizeFilename(attachment.filename, "company-material")
+      safeCustomerUploadFilename(value.filename) !==
+        safeCustomerUploadFilename(attachment.filename)
     ) {
       throw new GeoHttpError(
         "附件令牌与文件不匹配",
@@ -8474,6 +9945,54 @@ function sha256(value: string) {
   return crypto.createHash("sha256").update(value, "utf8").digest("hex");
 }
 
+function serviceBankTransferOrderId(input: {
+  projectId: string;
+  manualOrderReference: string;
+  questionId: string;
+  category: GeoServiceCategory;
+  monitoringEdition: GeoMonitoringEdition;
+  amountFen: number;
+}) {
+  const digest = sha256(
+    JSON.stringify({
+      schemaVersion: 1,
+      purchaseType: "service-bank-transfer",
+      projectId: input.projectId,
+      manualOrderReference: input.manualOrderReference,
+      questionId: input.questionId,
+      category: input.category,
+      monitoringEdition: input.monitoringEdition,
+      amountFen: input.amountFen,
+    }),
+  );
+  const decimal = BigInt(`0x${digest}`).toString(10).padStart(78, "0");
+  return `2${decimal.slice(0, 31)}`;
+}
+
+function serviceBankTransferAuthorizationDigest(input: {
+  projectId: string;
+  manualOrderReference: string;
+  orderId: string;
+  questionId: string;
+  category: GeoServiceCategory;
+  monitoringEdition: GeoMonitoringEdition;
+  amountFen: number;
+}) {
+  return sha256(
+    JSON.stringify({
+      schemaVersion: 1,
+      purchaseType: "service-bank-transfer",
+      projectId: input.projectId,
+      manualOrderReference: input.manualOrderReference,
+      orderId: input.orderId,
+      questionId: input.questionId,
+      category: input.category,
+      monitoringEdition: input.monitoringEdition,
+      amountFen: input.amountFen,
+    }),
+  );
+}
+
 function normalizedIsoTimestamp(...values: unknown[]) {
   for (const value of values) {
     const normalized =
@@ -8534,7 +10053,8 @@ function publicAssessmentText(value: unknown, fallback: string) {
   if (typeof value !== "string" || !value.trim()) return fallback;
   const normalized = value.trim();
   return normalized.toLowerCase() === "schema" ||
-    PUBLIC_ASSESSMENT_INTERNAL_PATTERN.test(normalized)
+    PUBLIC_ASSESSMENT_INTERNAL_PATTERN.test(normalized) ||
+    !/[\u3400-\u9fff]/.test(normalized)
     ? fallback
     : normalized;
 }
@@ -8670,6 +10190,42 @@ function sanitizeFilename(value: string, fallback: string) {
     .trim()
     .slice(0, 180);
   return sanitized || fallback;
+}
+
+const GEO_SERVER_RESERVED_ATTACHMENT_FILENAMES = new Set(
+  [
+    WEBSITE_KB_SKILL_ARCHIVE_FILENAME,
+    QUESTION_SKILL_ARCHIVE_FILENAME,
+    CUSTOM_QUESTION_CLASSIFIER_SKILL_ARCHIVE_FILENAME,
+    ASSESSMENT_SKILL_ARCHIVE_FILENAME,
+    FORECAST_SKILL_ARCHIVE_FILENAME,
+    WEBSITE_KB_TASK_INPUT_FILENAME,
+    QUESTION_TASK_INPUT_FILENAME,
+    CUSTOM_QUESTION_TASK_INPUT_FILENAME,
+    ASSESSMENT_TASK_INPUT_FILENAME,
+    FORECAST_TASK_INPUT_FILENAME,
+    FORECAST_OUTPUT_TEMPLATE_FILENAME,
+    FORECAST_OUTPUT_RESULT_FILENAME,
+    "frontmind-standard-one-month-scenario.json",
+    "website-lead-candidate-v1.zip",
+  ].map((filename) => filename.normalize("NFKC").toLowerCase()),
+);
+
+function safeCustomerUploadFilename(value: string) {
+  const sanitized = sanitizeFilename(value, "company-material");
+  if (
+    !GEO_SERVER_RESERVED_ATTACHMENT_FILENAMES.has(
+      sanitized.normalize("NFKC").toLowerCase(),
+    )
+  ) {
+    return sanitized;
+  }
+  const digest = crypto
+    .createHash("sha256")
+    .update(sanitized, "utf8")
+    .digest("hex")
+    .slice(0, 12);
+  return `customer-upload-${digest}-${sanitized}`.slice(0, 180);
 }
 
 function contentDisposition(filename: string) {

@@ -2,8 +2,10 @@ import { defineConfig } from 'astro/config';
 import react from '@astrojs/react';
 import tailwindcss from '@tailwindcss/vite';
 import path from 'node:path';
+import { releaseProfile } from './config/release-profile.mjs';
 
 export default defineConfig({
+  site: releaseProfile.siteUrl,
   integrations: [react()],
   server: {
     host: true,

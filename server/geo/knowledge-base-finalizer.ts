@@ -6,6 +6,7 @@ import {
   KnowledgeBaseCompletenessInputSchema,
   parseKnowledgeBaseArchive,
   WebsiteLeadPackageManifestV3InputSchema,
+  websiteLeadNarrativeCharacterCountForLeaf,
   type KnowledgeBaseManifest,
 } from "./archive";
 import {
@@ -263,65 +264,8 @@ function meaningfulCharacters(value: string) {
 
 function evidenceCharacters(value: string) {
   return meaningfulCharacters(
-    value
-      .replace(/<!--[\s\S]*?-->/g, "")
-      .replace(/^#{1,6}\s+/gm, ""),
+    value.replace(/<!--[\s\S]*?-->/g, "").replace(/^#{1,6}\s+/gm, ""),
   );
-}
-
-function narrativeTextForDocument(markdown: string) {
-  const retainedLines: string[] = [];
-  const lines = markdown.split(/\r?\n/);
-  let excludedSectionDepth: number | undefined;
-  for (let index = 0; index < lines.length; index += 1) {
-    const line = lines[index] || "";
-    const heading = line.match(/^(#{1,6})\s+(.+?)\s*$/);
-    if (heading) {
-      const depth = heading[1]!.length;
-      if (excludedSectionDepth !== undefined && depth <= excludedSectionDepth) {
-        excludedSectionDepth = undefined;
-      }
-      if (
-        /(?:原始|证据|引用|参考)?来源|素材清单|展示素材|机器清单|证据状态|状态头|sources?|references?|asset inventory/i.test(
-          heading[2] || "",
-        )
-      ) {
-        excludedSectionDepth = depth;
-      }
-      continue;
-    }
-    if (excludedSectionDepth !== undefined) continue;
-    if (
-      /^\s*>\s*.*(?:状态|status)\s*[:：].*(?:来源|source)\s*[:：]/i.test(line)
-    ) {
-      continue;
-    }
-    if (line.trim().startsWith("|")) {
-      const tableLines: string[] = [];
-      let tableIndex = index;
-      while (
-        tableIndex < lines.length &&
-        (lines[tableIndex] || "").trim().startsWith("|")
-      ) {
-        tableLines.push(lines[tableIndex] || "");
-        tableIndex += 1;
-      }
-      index = tableIndex - 1;
-      const tableText = tableLines.join("\n");
-      if (!/(?:来源|出处|证据链接|source|url)/i.test(tableText)) {
-        retainedLines.push(tableText);
-      }
-      continue;
-    }
-    retainedLines.push(line);
-  }
-  return retainedLines
-    .join("\n")
-    .replace(/<!--[\s\S]*?-->/g, "")
-    .replace(/!\[[^\]]*]\([^)]*\)/g, "")
-    .replace(/\[([^\]]+)]\([^)]*\)/g, "$1")
-    .replace(/https?:\/\/[^\s)>\]]+/gi, "")
-    .replace(/<[^>]+>/g, "");
 }
 
 function normalizeSourceUrl(value: string) {
@@ -357,10 +301,7 @@ function buildSources(candidate: ParsedCandidate) {
   }));
 }
 
-function sourceIdsForMarkdown(
-  markdown: string,
-  sourceRecords: SourceRecord[],
-) {
+function sourceIdsForMarkdown(markdown: string, sourceRecords: SourceRecord[]) {
   const keys = new Set<string>();
   for (const match of Array.from(
     markdown.matchAll(
@@ -369,9 +310,7 @@ function sourceIdsForMarkdown(
   )) {
     keys.add(`url:${normalizeSourceUrl(match[1]!)}`);
   }
-  for (const match of Array.from(
-    markdown.matchAll(/\[上传文件：([^\]]+)]/g),
-  )) {
+  for (const match of Array.from(markdown.matchAll(/\[上传文件：([^\]]+)]/g))) {
     keys.add(`upload:${match[1]!.trim().normalize("NFKC").toLowerCase()}`);
   }
   return sourceRecords
@@ -437,10 +376,7 @@ function sanitizeSupportedNarrative(value: string) {
 
 function gapNarrative(value: string, title: string) {
   const retained = removeEvidenceMarkers(value).trim();
-  if (
-    retained &&
-    /(?:暂无|尚未|未发现|未提供|待核验|不适用)/.test(retained)
-  ) {
+  if (retained && /(?:暂无|尚未|未发现|未提供|待核验|不适用)/.test(retained)) {
     return retained;
   }
   return `公开资料暂未提供${title}的可核验信息。`;
@@ -511,10 +447,7 @@ function buildOverviewNarrative(input: {
   sourceRecords: SourceRecord[];
 }) {
   if (!input.hasEvidence) return "";
-  const introSourceIds = sourceIdsForMarkdown(
-    input.intro,
-    input.sourceRecords,
-  );
+  const introSourceIds = sourceIdsForMarkdown(input.intro, input.sourceRecords);
   let narrative = introSourceIds.length
     ? normalizeOverviewNarrative(sanitizeSupportedNarrative(input.intro))
     : "";
@@ -540,10 +473,7 @@ function splitLargeChunk(title: string, markdown: string) {
   let currentCharacters = 0;
   for (const paragraph of paragraphs) {
     const paragraphCharacters = meaningfulCharacters(paragraph);
-    if (
-      current.length &&
-      currentCharacters + paragraphCharacters > 1_400
-    ) {
+    if (current.length && currentCharacters + paragraphCharacters > 1_400) {
       groups.push(current);
       current = [];
       currentCharacters = 0;
@@ -553,8 +483,7 @@ function splitLargeChunk(title: string, markdown: string) {
   }
   if (current.length) groups.push(current);
   return groups.map((group, index) => ({
-    title:
-      groups.length === 1 ? title : `${title}（${String(index + 1)}）`,
+    title: groups.length === 1 ? title : `${title}（${String(index + 1)}）`,
     markdown: group.join("\n\n"),
   }));
 }
@@ -569,8 +498,7 @@ function splitSupportedAndGaps(title: string, markdown: string) {
   const gaps = paragraphs.filter(
     (paragraph) =>
       !supported.includes(paragraph) &&
-      (/\[待核验]/.test(paragraph) ||
-        meaningfulCharacters(paragraph) > 0),
+      (/\[待核验]/.test(paragraph) || meaningfulCharacters(paragraph) > 0),
   );
   const values: Array<{ title: string; markdown: string; gap: boolean }> = [];
   if (supported.length) {
@@ -615,10 +543,7 @@ function titleSlug(value: string) {
     .replace(/[^a-z0-9]+/g, "-")
     .replace(/^-+|-+$/g, "")
     .slice(0, 32);
-  return (
-    ascii ||
-    createHash("sha256").update(value).digest("hex").slice(0, 10)
-  );
+  return ascii || createHash("sha256").update(value).digest("hex").slice(0, 10);
 }
 
 function factParagraphsForSource(
@@ -671,10 +596,8 @@ export function assessKnowledgeBaseCandidate(
   const reasons: string[] = [];
   const sourceRecords = buildSources(candidate);
   const publishable = (id: string) =>
-    sourceIdsForMarkdown(
-      candidate.factSections.get(id) || "",
-      sourceRecords,
-    ).length > 0;
+    sourceIdsForMarkdown(candidate.factSections.get(id) || "", sourceRecords)
+      .length > 0;
   if (tier === "rich" && !publishable("D01")) {
     reasons.push("D01 企业基础缺少可发布证据");
   }
@@ -713,8 +636,7 @@ export function assessKnowledgeBaseCandidate(
             ) || "";
           return (
             publishable(id) &&
-            sourceIdsForMarkdown(customerSection, sourceRecords)
-              .length === 0
+            sourceIdsForMarkdown(customerSection, sourceRecords).length === 0
           );
         })
       : [];
@@ -733,9 +655,8 @@ export function assessKnowledgeBaseCandidate(
     if (!factSourceIds.length) return false;
     const customerSourceIds = new Set(
       sourceIdsForMarkdown(
-        candidate.customerSections.get(
-          customerSectionForDimension[id] || "",
-        ) || "",
+        candidate.customerSections.get(customerSectionForDimension[id] || "") ||
+          "",
         sourceRecords,
       ),
     );
@@ -888,9 +809,7 @@ async function finalizeAssets(
             return (
               record.source.kind === candidateAsset.sourceKind &&
               sourceName.normalize("NFKC").toLowerCase() ===
-                trace.sourceDocumentName
-                  .normalize("NFKC")
-                  .toLowerCase()
+                trace.sourceDocumentName.normalize("NFKC").toLowerCase()
             );
           })
         : undefined;
@@ -898,15 +817,11 @@ async function finalizeAssets(
       ? evidenceBySourceId.get(sourceDocumentRecord.id)?.document.path
       : undefined;
     const key =
-      trace.url ||
-      `${candidateAsset.sourceKind}:${candidateAsset.archivePath}`;
+      trace.url || `${candidateAsset.sourceKind}:${candidateAsset.archivePath}`;
     if (usedCandidateKeys.has(key)) continue;
     usedCandidateKeys.add(key);
     try {
-      if (
-        trace.method === "official_document" &&
-        !sourceDocumentPath
-      ) {
+      if (trace.method === "official_document" && !sourceDocumentPath) {
         throw new Error("候选素材缺少可关联的上传或官方文档来源记录");
       }
       const normalized = await normalizeImage(candidateAsset);
@@ -935,9 +850,7 @@ async function finalizeAssets(
         alt: candidateAsset.caption,
         branchId,
         documentIds,
-        ...(trace.sourcePageUrl
-          ? { sourcePageUrl: trace.sourcePageUrl }
-          : {}),
+        ...(trace.sourcePageUrl ? { sourcePageUrl: trace.sourcePageUrl } : {}),
         ...(trace.url ? { sourceAssetUrl: trace.url } : {}),
         ...(sourceDocumentPath ? { sourceDocumentPath } : {}),
         sourceKind: candidateAsset.sourceKind,
@@ -976,9 +889,7 @@ async function finalizeAssets(
     } catch (error) {
       rejected.push({
         ...(trace.url ? { url: trace.url } : {}),
-        ...(trace.sourcePageUrl
-          ? { sourcePageUrl: trace.sourcePageUrl }
-          : {}),
+        ...(trace.sourcePageUrl ? { sourcePageUrl: trace.sourcePageUrl } : {}),
         ...(sourceDocumentPath ? { sourceDocumentPath } : {}),
         sourceKind: candidateAsset.sourceKind,
         method: trace.method,
@@ -1166,9 +1077,7 @@ export async function finalizeKnowledgeBaseCandidate(input: {
       const evidenceEntries = sourceIds
         .map((sourceId) => evidenceBySourceId.get(sourceId))
         .filter(
-          (
-            entry,
-          ): entry is { document: PackageDocument; characters: number } =>
+          (entry): entry is { document: PackageDocument; characters: number } =>
             Boolean(entry),
         );
       const narrative = supported
@@ -1179,15 +1088,13 @@ export async function finalizeKnowledgeBaseCandidate(input: {
         title: chunk.title,
         branchId,
         displayBranchId,
-        narrative:
-          narrative || `公开资料暂未提供${chunk.title}的可核验信息。`,
+        narrative: narrative || `公开资料暂未提供${chunk.title}的可核验信息。`,
         rawMarkdown: chunk.markdown,
         status: supported ? status : "needs_verification",
         sourceIds: supported ? sourceIds : [],
-        evidenceDocumentIds:
-          supported
-            ? evidenceEntries.map((entry) => entry.document.id)
-            : [],
+        evidenceDocumentIds: supported
+          ? evidenceEntries.map((entry) => entry.document.id)
+          : [],
         evidenceCharacters: supported
           ? evidenceEntries.reduce(
               (total, entry) => total + entry.characters,
@@ -1213,9 +1120,7 @@ export async function finalizeKnowledgeBaseCandidate(input: {
   const manufacturingEvidence = manufacturingSourceIds
     .map((sourceId) => evidenceBySourceId.get(sourceId))
     .filter(
-      (
-        entry,
-      ): entry is { document: PackageDocument; characters: number } =>
+      (entry): entry is { document: PackageDocument; characters: number } =>
         Boolean(entry),
     );
   const hasManufacturingEvidence = manufacturingEvidence.length > 0;
@@ -1267,8 +1172,7 @@ export async function finalizeKnowledgeBaseCandidate(input: {
     let mergeIndex = leafDrafts.length - 2;
     while (
       mergeIndex > 0 &&
-      leafDrafts[mergeIndex]!.branchId !==
-        leafDrafts[mergeIndex + 1]!.branchId
+      leafDrafts[mergeIndex]!.branchId !== leafDrafts[mergeIndex + 1]!.branchId
     ) {
       mergeIndex -= 1;
     }
@@ -1280,14 +1184,10 @@ export async function finalizeKnowledgeBaseCandidate(input: {
       new Set([...left.sourceIds, ...right.sourceIds]),
     );
     left.evidenceDocumentIds = Array.from(
-      new Set([
-        ...left.evidenceDocumentIds,
-        ...right.evidenceDocumentIds,
-      ]),
+      new Set([...left.evidenceDocumentIds, ...right.evidenceDocumentIds]),
     );
     left.evidenceCharacters = left.evidenceDocumentIds.reduce(
-      (total, id) =>
-        total + (evidenceById.get(id)?.characters || 0),
+      (total, id) => total + (evidenceById.get(id)?.characters || 0),
       0,
     );
     leafDrafts.splice(mergeIndex + 1, 1);
@@ -1295,9 +1195,7 @@ export async function finalizeKnowledgeBaseCandidate(input: {
 
   for (const entry of Array.from(evidenceById.values())) {
     const linkedLeafIds = leafDrafts
-      .filter((leaf) =>
-        leaf.evidenceDocumentIds.includes(entry.document.id),
-      )
+      .filter((leaf) => leaf.evidenceDocumentIds.includes(entry.document.id))
       .map((leaf) => leaf.id);
     const current = markdownByPath.get(entry.document.path) || "";
     const withLinks = [
@@ -1367,9 +1265,7 @@ export async function finalizeKnowledgeBaseCandidate(input: {
     const evidenceForOverview = evidenceIds
       .map((id) => evidenceById.get(id))
       .filter(
-        (
-          entry,
-        ): entry is { document: PackageDocument; characters: number } =>
+        (entry): entry is { document: PackageDocument; characters: number } =>
           Boolean(entry),
       );
     const sourceIds = Array.from(
@@ -1589,10 +1485,7 @@ export async function finalizeKnowledgeBaseCandidate(input: {
   const branchEvidence = DISPLAY_BRANCHES.map((display) => {
     const deduplicatedEvidenceCharacters = Array.from(
       evidenceIdsByDisplay.get(display.id) || [],
-    ).reduce(
-      (total, id) => total + (evidenceCharactersById.get(id) || 0),
-      0,
-    );
+    ).reduce((total, id) => total + (evidenceCharactersById.get(id) || 0), 0);
     return {
       branchId: display.id,
       overviewDocumentId: overviewIds.get(display.id)!,
@@ -1632,8 +1525,8 @@ export async function finalizeKnowledgeBaseCandidate(input: {
     .reduce(
       (total, document) =>
         total +
-        meaningfulCharacters(
-          narrativeTextForDocument(markdownByPath.get(document.path) || ""),
+        websiteLeadNarrativeCharacterCountForLeaf(
+          markdownByPath.get(document.path) || "",
         ),
       0,
     );
@@ -1752,8 +1645,7 @@ export async function finalizeKnowledgeBaseCandidate(input: {
     documents,
     assets: assetResult.finalized.map((entry) => entry.asset),
     counts: {
-      totalFiles:
-        documents.length + 2 + assetResult.finalized.length,
+      totalFiles: documents.length + 2 + assetResult.finalized.length,
       customerVisibleCharacters: customerCharacters,
       evidenceCharacters: packagedEvidenceCharacters,
       packagedImages: assetResult.finalized.length,
@@ -1767,8 +1659,8 @@ export async function finalizeKnowledgeBaseCandidate(input: {
     .digest("hex");
 
   const zip = new JSZip();
-  const sortedMarkdown = Array.from(markdownByPath.entries()).sort(([left], [right]) =>
-    left.localeCompare(right),
+  const sortedMarkdown = Array.from(markdownByPath.entries()).sort(
+    ([left], [right]) => left.localeCompare(right),
   );
   for (const [entryPath, markdown] of sortedMarkdown) {
     zip.file(entryPath, markdown.endsWith("\n") ? markdown : `${markdown}\n`, {

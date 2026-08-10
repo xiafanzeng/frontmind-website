@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  ConfirmServiceBankTransferRequestSchema,
   CreateCustomQuestionRequestSchema,
   CreatePaymentRequestSchema,
   CreateProjectRequestSchema,
@@ -12,6 +13,7 @@ import {
   ServiceStatusRequestSchema,
   StartMonitoringRequestSchema,
   SwitchPaymentRequestSchema,
+  SwitchServicePaymentRequestSchema,
 } from "./schemas";
 import { buildValidQuestionSet } from "./question-set.test-fixture";
 
@@ -279,7 +281,7 @@ describe("custom GEO question policy", () => {
 });
 
 describe("StartMonitoringRequestSchema", () => {
-  it("accepts only a unique non-empty subset of the six fixed platforms", () => {
+  it("keeps the six domestic platforms and accepts only ChatGPT overseas", () => {
     expect(
       StartMonitoringRequestSchema.parse({
         questionId: "product-scenario-01",
@@ -308,6 +310,25 @@ describe("StartMonitoringRequestSchema", () => {
         paymentAuthorization: "signed-zpay-authorization",
       }),
     ).toThrow();
+    expect(
+      StartMonitoringRequestSchema.parse({
+        questionId: "product-scenario-01",
+        monitoringEdition: "overseas",
+        platformIds: ["chatgpt"],
+        paymentAuthorization: "signed-zpay-authorization",
+      }),
+    ).toMatchObject({
+      monitoringEdition: "overseas",
+      platformIds: ["chatgpt"],
+    });
+    expect(() =>
+      StartMonitoringRequestSchema.parse({
+        questionId: "product-scenario-01",
+        monitoringEdition: "overseas",
+        platformIds: ["chatgpt", "doubao"],
+        paymentAuthorization: "signed-zpay-authorization",
+      }),
+    ).toThrow(/ChatGPT only/);
   });
 });
 
@@ -414,6 +435,47 @@ describe("service payment schemas", () => {
         method: "alipay",
         amountFen: 1,
         category: "product_scenario",
+      }),
+    ).toThrow();
+  });
+
+  it("accepts only authorization and method when switching a service checkout", () => {
+    expect(
+      SwitchServicePaymentRequestSchema.parse({
+        authorization: "signed-service-payment-authorization",
+        method: "wxpay",
+      }),
+    ).toEqual({
+      authorization: "signed-service-payment-authorization",
+      method: "wxpay",
+    });
+    expect(() =>
+      SwitchServicePaymentRequestSchema.parse({
+        authorization: "signed-service-payment-authorization",
+        method: "alipay",
+        amountFen: 150_000,
+      }),
+    ).toThrow();
+  });
+
+  it("accepts only the server-confirmed bank transfer inputs", () => {
+    expect(
+      ConfirmServiceBankTransferRequestSchema.parse({
+        confirmationCode: "admin-confirmation",
+        authorization: "signed-service-payment-authorization",
+        purchaseIntent: "one-time-purchase-intent-001",
+      }),
+    ).toEqual({
+      confirmationCode: "admin-confirmation",
+      authorization: "signed-service-payment-authorization",
+      purchaseIntent: "one-time-purchase-intent-001",
+    });
+    expect(() =>
+      ConfirmServiceBankTransferRequestSchema.parse({
+        confirmationCode: "admin-confirmation",
+        amountFen: 1,
+        paidAt: new Date().toISOString(),
+        status: "paid",
       }),
     ).toThrow();
   });

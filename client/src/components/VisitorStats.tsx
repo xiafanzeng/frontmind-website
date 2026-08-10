@@ -521,8 +521,8 @@ export function normalizeVisitorStats(
     0,
   );
   // The published total counts every displayed region bucket, including the
-  // explicit `other` and `unknown` buckets. Keep client validation aligned
-  // with the server so a valid historical snapshot is not rejected.
+  // explicit `other` bucket. Keep client validation aligned with the server's
+  // final public country list so a valid summary is not rejected.
   const countryCount = countries.length;
   if (
     totalReads !== candidate.totalReads ||

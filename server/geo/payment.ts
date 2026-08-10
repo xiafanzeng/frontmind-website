@@ -1,5 +1,10 @@
 import crypto from "node:crypto";
-import type { GeoMonitorPlatformId } from "./broker";
+import {
+  geoMonitoringPriceFen,
+  normalizedGeoMonitoringEdition,
+  type GeoMonitoringEdition,
+  type GeoMonitorPlatformId,
+} from "./broker";
 import {
   createGeoPaymentReceiptStore,
   GeoAccountProvisioningError,
@@ -19,6 +24,7 @@ const PAYMENT_CALLBACK_RECORDING_GRACE_MS = 365 * 24 * 60 * 60 * 1000;
 const EARLIEST_SUPPORTED_PAYMENT_MS = Date.parse("2020-01-01T00:00:00.000Z");
 const MAX_PROVIDER_CLOCK_SKEW_MS = 5 * 60 * 1000;
 const MAX_ZPAY_RESPONSE_BYTES = 64 * 1024;
+const DIRECT_BANK_CREATED_AT = "2020-01-01T00:00:00.000Z";
 
 export type GeoPaymentMethod = "alipay" | "wxpay";
 export type GeoServiceCategory =
@@ -33,12 +39,23 @@ export const GEO_SERVICE_MONTHLY_PRICE_FEN: Record<GeoServiceCategory, number> =
     competitor_comparison: 200_000,
   };
 
+export function geoServiceMonthlyPriceFen(
+  category: GeoServiceCategory,
+  edition?: GeoMonitoringEdition,
+) {
+  const basePrice = GEO_SERVICE_MONTHLY_PRICE_FEN[category];
+  return normalizedGeoMonitoringEdition(edition) === "overseas"
+    ? basePrice * 2
+    : basePrice;
+}
+
 export type GeoPaymentVerificationInput = {
   authorization: string;
   projectId: string;
   ownerSessionId: string;
   questionId: string;
   platformIds: GeoMonitorPlatformId[];
+  monitoringEdition?: GeoMonitoringEdition;
   expectedAmountFen: number;
 };
 
@@ -61,6 +78,7 @@ export type GeoServicePaymentVerificationInput = {
   ownerSessionId: string;
   questionId: string;
   category: GeoServiceCategory;
+  monitoringEdition?: GeoMonitoringEdition;
   expectedAmountFen: number;
 };
 
@@ -70,6 +88,20 @@ export type GeoServicePaymentCheckoutInput = Omit<
 > & {
   ownerSessionId: string;
   method: GeoPaymentMethod;
+};
+
+export type GeoServicePaymentCheckoutSwitchInput =
+  GeoServicePaymentVerificationInput & {
+    method: GeoPaymentMethod;
+    checkoutExpiresAt: string;
+  };
+
+export type GeoServiceBankTransferInput = Omit<
+  GeoServicePaymentVerificationInput,
+  "authorization"
+> & {
+  authorization?: string;
+  orderId: string;
 };
 
 export type GeoPaymentReceipt = {
@@ -110,6 +142,12 @@ export interface GeoPaymentGateway extends GeoPaymentVerifier {
   createServiceCheckout(
     input: GeoServicePaymentCheckoutInput,
   ): Promise<GeoPaymentCheckout>;
+  switchServiceCheckoutMethod(
+    input: GeoServicePaymentCheckoutSwitchInput,
+  ): Promise<GeoPaymentCheckout>;
+  confirmServiceBankTransfer(
+    input: GeoServiceBankTransferInput,
+  ): Promise<GeoPaymentReceipt>;
   getStatus(input: GeoPaymentVerificationInput): Promise<GeoPaymentStatus>;
   getServiceStatus(
     input: GeoServicePaymentVerificationInput,
@@ -145,11 +183,13 @@ type ZpayPaymentTokenCommon = {
 type ZpayMonitoringPaymentTokenValue = ZpayPaymentTokenCommon & {
   purchaseType?: "monitoring";
   platformIds: GeoMonitorPlatformId[];
+  monitoringEdition?: GeoMonitoringEdition;
 };
 
 type ZpayServicePaymentTokenValue = ZpayPaymentTokenCommon & {
   purchaseType: "service";
   category: GeoServiceCategory;
+  monitoringEdition?: GeoMonitoringEdition;
 };
 
 type ZpayPaymentTokenValue =
@@ -219,6 +259,10 @@ export class ZpayGeoPaymentGateway implements GeoPaymentGateway {
   ) => string;
   private readonly publicBaseUrl: URL;
   private readonly receiptStore: GeoPaymentReceiptStore;
+  private readonly bankReceiptFlights = new Map<
+    string,
+    Promise<GeoPaymentReceipt>
+  >();
 
   constructor(
     private readonly config: ZpayGatewayConfig,
@@ -239,6 +283,7 @@ export class ZpayGeoPaymentGateway implements GeoPaymentGateway {
     input: GeoPaymentCheckoutInput,
   ): Promise<GeoPaymentCheckout> {
     assertPaymentScope(input);
+    const edition = normalizedGeoMonitoringEdition(input.monitoringEdition);
     await this.assertReceiptStoreReady();
     if (!input.ownerSessionId.trim()) {
       throw new GeoPaymentVerificationError(
@@ -256,7 +301,7 @@ export class ZpayGeoPaymentGateway implements GeoPaymentGateway {
         500,
       );
     }
-    const productName = `FrontMind GEO 问题现状监控（${input.platformIds.length}个平台，每平台5次）`;
+    const productName = `FrontMind GEO ${edition === "overseas" ? "海外版" : "国内版"}问题现状监控（${input.platformIds.length}个平台，每平台5次）`;
     const createdAt = this.now().toISOString();
     const authorization = this.codec.seal<ZpayPaymentTokenValue>(
       "payment",
@@ -267,6 +312,7 @@ export class ZpayGeoPaymentGateway implements GeoPaymentGateway {
         projectId: input.projectId,
         questionId: input.questionId,
         platformIds: normalizedPlatforms(input.platformIds),
+        monitoringEdition: edition,
         amountFen: input.expectedAmountFen,
         method: input.method,
         productName,
@@ -330,7 +376,8 @@ export class ZpayGeoPaymentGateway implements GeoPaymentGateway {
         500,
       );
     }
-    const productName = `FrontMind GEO ${serviceCategoryLabel(input.category)}优化服务（1个问题 / 连续30天）`;
+    const edition = normalizedGeoMonitoringEdition(input.monitoringEdition);
+    const productName = `FrontMind GEO ${edition === "overseas" ? "海外版" : "国内版"}${serviceCategoryLabel(input.category)}优化服务（1个问题 / 连续30天）`;
     const createdAt = this.now().toISOString();
     const authorization = this.codec.seal<ZpayPaymentTokenValue>(
       "payment",
@@ -341,6 +388,7 @@ export class ZpayGeoPaymentGateway implements GeoPaymentGateway {
         projectId: input.projectId,
         questionId: input.questionId,
         category: input.category,
+        monitoringEdition: edition,
         amountFen: input.expectedAmountFen,
         method: input.method,
         productName,
@@ -387,6 +435,24 @@ export class ZpayGeoPaymentGateway implements GeoPaymentGateway {
     input: GeoPaymentCheckoutSwitchInput,
   ): Promise<GeoPaymentCheckout> {
     const opened = this.openAndVerifyScope(input);
+    return this.switchOpenedCheckout(input, opened);
+  }
+
+  async switchServiceCheckoutMethod(
+    input: GeoServicePaymentCheckoutSwitchInput,
+  ): Promise<GeoPaymentCheckout> {
+    const opened = this.openAndVerifyServiceScope(input);
+    return this.switchOpenedCheckout(input, opened);
+  }
+
+  private async switchOpenedCheckout(
+    input: {
+      authorization: string;
+      method: GeoPaymentMethod;
+      checkoutExpiresAt: string;
+    },
+    opened: OpenedZpayPayment,
+  ): Promise<GeoPaymentCheckout> {
     const status = await this.resolvePaymentStatus(opened);
     if (status.status !== "pending") {
       throw new GeoPaymentVerificationError(
@@ -448,6 +514,166 @@ export class ZpayGeoPaymentGateway implements GeoPaymentGateway {
       action: ZPAY_SUBMIT_URL,
       method: "POST",
       fields,
+    };
+  }
+
+  async confirmServiceBankTransfer(
+    input: GeoServiceBankTransferInput,
+  ): Promise<GeoPaymentReceipt> {
+    assertServicePaymentScope(input);
+    if (!input.ownerSessionId.trim()) {
+      throw new GeoPaymentVerificationError(
+        "对公付款缺少有效的邀请会话",
+        "PAYMENT_SESSION_REQUIRED",
+        401,
+      );
+    }
+    if (!/^\d{1,32}$/.test(input.orderId)) {
+      throw new GeoPaymentVerificationError(
+        "对公付款订单号无效",
+        "PAYMENT_ORDER_INVALID",
+        400,
+      );
+    }
+    await this.assertReceiptStoreReady();
+
+    const opened = input.authorization
+      ? this.openAndVerifyServiceScope({
+          authorization: input.authorization,
+          ownerSessionId: input.ownerSessionId,
+          projectId: input.projectId,
+          questionId: input.questionId,
+          category: input.category,
+          monitoringEdition: input.monitoringEdition,
+          expectedAmountFen: input.expectedAmountFen,
+        })
+      : this.directBankPayment(input);
+    if (opened.payment.outTradeNo !== input.orderId) {
+      throw new GeoPaymentVerificationError(
+        "对公付款与原在线订单不匹配",
+        "PAYMENT_SCOPE_MISMATCH",
+        409,
+      );
+    }
+
+    const lookup = this.receiptLookup(opened);
+    const flightKey = JSON.stringify(lookup);
+    const activeFlight = this.bankReceiptFlights.get(flightKey);
+    if (activeFlight) return activeFlight;
+
+    const promise = this.confirmServiceBankTransferOnce(opened, lookup);
+    this.bankReceiptFlights.set(flightKey, promise);
+    try {
+      return await promise;
+    } finally {
+      if (this.bankReceiptFlights.get(flightKey) === promise) {
+        this.bankReceiptFlights.delete(flightKey);
+      }
+    }
+  }
+
+  private async confirmServiceBankTransferOnce(
+    opened: OpenedZpayPayment,
+    lookup: ReturnType<ZpayGeoPaymentGateway["receiptLookup"]>,
+  ): Promise<GeoPaymentReceipt> {
+    const existing = await this.findStoredReceipt(opened);
+    if (existing) {
+      if (!existing.tradeNo.startsWith("bank:")) {
+        throw new GeoPaymentVerificationError(
+          "在线付款已经确认，不能改为对公付款",
+          "PAYMENT_ALREADY_CONFIRMED",
+          409,
+        );
+      }
+      if (existing.reviewRequired) {
+        throw new GeoPaymentVerificationError(
+          "该订单正在人工复核，不能确认对公付款",
+          "PAYMENT_REVIEW_REQUIRED",
+          409,
+        );
+      }
+      return this.receiptFromStored(existing);
+    }
+
+    if (opened.payment.createdAt !== DIRECT_BANK_CREATED_AT) {
+      const providerStatus = await this.queryProviderPaymentStatus(
+        opened.payment,
+      );
+      if (providerStatus.status === "paid") {
+        await this.persistPaidStatus(opened, providerStatus);
+        throw new GeoPaymentVerificationError(
+          "在线付款已经确认，不能改为对公付款",
+          "PAYMENT_ALREADY_CONFIRMED",
+          409,
+        );
+      }
+    }
+
+    const receipt: GeoStoredPaymentReceipt = {
+      ...lookup,
+      tradeNo: `bank:${sha256(
+        JSON.stringify({
+          schemaVersion: 1,
+          orderId: lookup.orderId,
+          scopeHash: lookup.scopeHash,
+        }),
+      ).slice(0, 48)}`,
+      amountFen: opened.payment.amountFen,
+      paidAt: this.now().toISOString(),
+      purchaseType: "service",
+      reviewRequired: false,
+    };
+    const stored = await this.withReceiptStore(
+      () => this.receiptStore.record(receipt),
+      "对公付款回执暂未安全保存",
+    );
+    this.assertStoredReceiptMatches(opened, stored);
+    if (
+      stored.tradeNo !== receipt.tradeNo ||
+      stored.reviewRequired ||
+      stored.purchaseType !== "service"
+    ) {
+      throw new GeoPaymentVerificationError(
+        "对公付款回执与本次确认不一致",
+        "PAYMENT_RECEIPT_CONFLICT",
+        409,
+      );
+    }
+    return this.receiptFromStored(stored);
+  }
+
+  private directBankPayment(
+    input: GeoServiceBankTransferInput,
+  ): OpenedZpayPayment {
+    const edition = normalizedGeoMonitoringEdition(input.monitoringEdition);
+    return {
+      checkoutExpiresAt: Date.parse(DIRECT_BANK_CREATED_AT),
+      payment: {
+        purchaseType: "service",
+        outTradeNo: input.orderId,
+        ownerSessionId: input.ownerSessionId,
+        projectId: input.projectId,
+        questionId: input.questionId,
+        category: input.category,
+        monitoringEdition: edition,
+        amountFen: input.expectedAmountFen,
+        method: "alipay",
+        productName: `FrontMind GEO ${
+          edition === "overseas" ? "海外版" : "国内版"
+        }${serviceCategoryLabel(input.category)}优化服务（对公付款）`,
+        createdAt: DIRECT_BANK_CREATED_AT,
+      },
+    };
+  }
+
+  private receiptFromStored(
+    receipt: GeoStoredPaymentReceipt,
+  ): GeoPaymentReceipt {
+    return {
+      orderId: receipt.orderId,
+      tradeNo: receipt.tradeNo,
+      amountFen: receipt.amountFen,
+      paidAt: receipt.paidAt,
     };
   }
 
@@ -732,6 +958,8 @@ export class ZpayGeoPaymentGateway implements GeoPaymentGateway {
       payment.questionId !== input.questionId ||
       payment.amountFen !== input.expectedAmountFen ||
       !samePlatforms(payment.platformIds, input.platformIds) ||
+      normalizedGeoMonitoringEdition(payment.monitoringEdition) !==
+        normalizedGeoMonitoringEdition(input.monitoringEdition) ||
       payment.ownerSessionId !== input.ownerSessionId
     ) {
       throw new GeoPaymentVerificationError(
@@ -752,6 +980,8 @@ export class ZpayGeoPaymentGateway implements GeoPaymentGateway {
       payment.projectId !== input.projectId ||
       payment.questionId !== input.questionId ||
       payment.category !== input.category ||
+      normalizedGeoMonitoringEdition(payment.monitoringEdition) !==
+        normalizedGeoMonitoringEdition(input.monitoringEdition) ||
       payment.amountFen !== input.expectedAmountFen ||
       payment.ownerSessionId !== input.ownerSessionId
     ) {
@@ -1057,6 +1287,14 @@ export class UnconfiguredGeoPaymentGateway implements GeoPaymentGateway {
     throw this.error();
   }
 
+  async switchServiceCheckoutMethod(): Promise<GeoPaymentCheckout> {
+    throw this.error();
+  }
+
+  async confirmServiceBankTransfer(): Promise<GeoPaymentReceipt> {
+    throw this.error();
+  }
+
   async getStatus(): Promise<GeoPaymentStatus> {
     throw this.error();
   }
@@ -1106,8 +1344,18 @@ function paymentScopeHash(payment: ZpayPaymentTokenValue) {
       questionIdDigest: sha256(payment.questionId),
       amountFen: payment.amountFen,
       ...(payment.purchaseType === "service"
-        ? { category: payment.category }
-        : { platformIds: normalizedPlatforms(payment.platformIds) }),
+        ? {
+            category: payment.category,
+            ...(payment.monitoringEdition
+              ? { monitoringEdition: payment.monitoringEdition }
+              : {}),
+          }
+        : {
+            platformIds: normalizedPlatforms(payment.platformIds),
+            ...(payment.monitoringEdition
+              ? { monitoringEdition: payment.monitoringEdition }
+              : {}),
+          }),
     }),
   );
 }
@@ -1189,9 +1437,17 @@ function isPublicCallbackHostname(value: string) {
 function assertPaymentScope(
   input: Pick<
     GeoPaymentVerificationInput,
-    "projectId" | "questionId" | "platformIds" | "expectedAmountFen"
+    | "projectId"
+    | "questionId"
+    | "platformIds"
+    | "monitoringEdition"
+    | "expectedAmountFen"
   >,
 ) {
+  const scopedPrice = geoMonitoringPriceFen(
+    input.monitoringEdition,
+    input.platformIds,
+  );
   if (
     !input.projectId.trim() ||
     !input.questionId.trim() ||
@@ -1199,7 +1455,8 @@ function assertPaymentScope(
     normalizedPlatforms(input.platformIds).length !==
       input.platformIds.length ||
     !Number.isSafeInteger(input.expectedAmountFen) ||
-    input.expectedAmountFen !== input.platformIds.length * 200
+    scopedPrice === undefined ||
+    input.expectedAmountFen !== scopedPrice
   ) {
     throw new GeoPaymentVerificationError(
       "支付订单范围无效",
@@ -1212,7 +1469,11 @@ function assertPaymentScope(
 function assertServicePaymentScope(
   input: Pick<
     GeoServicePaymentVerificationInput,
-    "projectId" | "questionId" | "category" | "expectedAmountFen"
+    | "projectId"
+    | "questionId"
+    | "category"
+    | "monitoringEdition"
+    | "expectedAmountFen"
   >,
 ) {
   if (
@@ -1220,7 +1481,8 @@ function assertServicePaymentScope(
     !input.questionId.trim() ||
     !Object.hasOwn(GEO_SERVICE_MONTHLY_PRICE_FEN, input.category) ||
     !Number.isSafeInteger(input.expectedAmountFen) ||
-    input.expectedAmountFen !== GEO_SERVICE_MONTHLY_PRICE_FEN[input.category]
+    input.expectedAmountFen !==
+      geoServiceMonthlyPriceFen(input.category, input.monitoringEdition)
   ) {
     throw new GeoPaymentVerificationError(
       "服务订单范围无效",
@@ -1312,6 +1574,9 @@ function createNumericOrderId(
         projectId: input.projectId,
         questionId: input.questionId,
         ...purchaseScope,
+        ...(input.monitoringEdition
+          ? { monitoringEdition: input.monitoringEdition }
+          : {}),
         amountFen: input.expectedAmountFen,
       }),
       "utf8",

@@ -1,7 +1,10 @@
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it, vi } from "vitest";
 
-import { GeoServiceOnboarding } from "./GeoServiceOnboarding";
+import {
+  buildPopulatedServiceContractHref,
+  GeoServiceOnboarding,
+} from "./GeoServiceOnboarding";
 import type { GeoServiceActivation } from "./types";
 
 const baseActivation: GeoServiceActivation = {
@@ -23,6 +26,7 @@ function renderOnboarding(activation = baseActivation) {
       companyName="深圳星辰科技有限公司"
       categoryLabel="产品场景"
       question="深圳星辰科技适合哪些企业使用？"
+      contractHref="/contracts/frontmind-geo-monthly-optimization-service-agreement.html?category=product_scenario"
       isPreview={false}
       onSubmitProfile={vi.fn()}
       onCheckout={vi.fn()}
@@ -33,6 +37,33 @@ function renderOnboarding(activation = baseActivation) {
 }
 
 describe("GeoServiceOnboarding", () => {
+  it("preserves the contract query and replaces its profile hash", () => {
+    const href = buildPopulatedServiceContractHref(
+      "/contracts/frontmind-geo-monthly-optimization-service-agreement.html?category=reputation&question=%E7%A1%85%E5%9F%BA%E6%B5%81%E5%8A%A8#stale=true",
+      {
+        legalName: "硅基流动",
+        creditCode: "91440300mak683qkx0",
+        address: "Building 10, Lingxiu Lanpo Lake",
+        signatoryName: "Fanzeng Xia",
+        signatoryTitle: "代表人",
+        mobile: "13086803181",
+        email: "FX394@NYU.EDU",
+        authorized: true,
+      },
+    );
+    const [contractPath, profileHash] = href.split("#");
+    const profile = new URLSearchParams(profileHash);
+
+    expect(contractPath).toBe(
+      "/contracts/frontmind-geo-monthly-optimization-service-agreement.html?category=reputation&question=%E7%A1%85%E5%9F%BA%E6%B5%81%E5%8A%A8",
+    );
+    expect(profile.get("legalName")).toBe("硅基流动");
+    expect(profile.get("creditCode")).toBe("91440300MAK683QKX0");
+    expect(profile.get("signatoryName")).toBe("Fanzeng Xia");
+    expect(profile.get("email")).toBe("fx394@nyu.edu");
+    expect(profile.has("stale")).toBe(false);
+  });
+
   it("shows the external-contract sequence as three ordered steps", () => {
     const html = renderOnboarding();
 
@@ -41,9 +72,16 @@ describe("GeoServiceOnboarding", () => {
     expect(html).toContain("开通账号");
     expect(html).not.toContain("合同查看");
     expect(html).not.toContain("查看合同内容");
-    expect(html).not.toContain(
+    expect(html).toContain("查看合同");
+    expect(html).toContain(
       "frontmind-geo-monthly-optimization-service-agreement",
     );
+    const contractLink = html.match(
+      /<a[^>]*class="geo-onboarding-contract-view"[^>]*>/,
+    )?.[0];
+    expect(contractLink).toContain('target="_blank"');
+    expect(contractLink).toContain('rel="noopener noreferrer"');
+    expect(contractLink).not.toContain("onclick=");
     expect(html.indexOf("签约资料")).toBeLessThan(html.indexOf("付款确认"));
     expect(html.indexOf("付款确认")).toBeLessThan(html.indexOf("开通账号"));
     expect(html).not.toContain(">04</small>");
@@ -187,9 +225,11 @@ describe("GeoServiceOnboarding", () => {
     expect(html).toContain("合同已在企业微信确认，可以付款");
     expect(html).toContain("合同状态");
     expect(html).toContain("管理员已确认");
-    expect(html).toContain('src="/geo-builder/payments/alipay.svg"');
-    expect(html).toContain('src="/geo-builder/payments/wechat-pay.svg"');
-    expect(html).toContain("选择后由收银台生成真实二维码");
+    expect(html).toContain("付款方式：微信 / 支付宝 / 对公账户");
+    expect(html).toContain("查看合同");
+    expect(html).not.toContain('src="/geo-builder/payments/alipay.svg"');
+    expect(html).not.toContain('src="/geo-builder/payments/wechat-pay.svg"');
+    expect(html).not.toContain("geo-onboarding-payment-channels");
     expect(html).toContain("前往付款");
   });
 

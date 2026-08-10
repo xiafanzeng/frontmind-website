@@ -2,6 +2,11 @@ import { z } from "zod";
 import { GeoServiceContractProfileSchema } from "./schemas";
 
 const PROVISIONING_TIMEOUT_MS = 15_000;
+export const GEO_MARKET_EDITION_RESPONSE_HEADER =
+  "x-frontmind-market-edition-response";
+const GEO_MARKET_EDITION_RESPONSE_CAPABILITY = {
+  [GEO_MARKET_EDITION_RESPONSE_HEADER]: "1",
+} as const;
 const PUBLIC_PLACEHOLDER_MARKERS = [
   "replace-with",
   "replace_with",
@@ -18,6 +23,7 @@ const serviceCategorySchema = z.enum([
   "reputation",
   "competitor_comparison",
 ]);
+export const GeoMarketEditionSchema = z.enum(["domestic", "overseas"]);
 const isoDateTimeSchema = z.string().datetime({ offset: true });
 const canonicalUtcDateTimeSchema = z
   .string()
@@ -271,6 +277,7 @@ export const GeoPurchaseAccountTargetSchema = z.discriminatedUnion("mode", [
 export const GeoPurchaseProvisionRequestV2Schema = z
   .object({
     schemaVersion: z.literal(2),
+    marketEdition: GeoMarketEditionSchema.optional(),
     project: z
       .object({
         id: z.string().trim().min(8).max(80),
@@ -337,6 +344,7 @@ export const GeoPurchaseProvisionResponseV2Schema = z
         reference: identifierSchema,
         projectId: z.string().trim().min(8).max(80),
         orderId: z.string().trim().min(8).max(64),
+        marketEdition: GeoMarketEditionSchema.optional(),
         status: purchaseStatusSchema,
         updatedAt: isoDateTimeSchema,
         retryable: z.boolean().optional(),
@@ -368,11 +376,19 @@ export const GeoPurchaseProvisionResponseV2Schema = z
     }
   });
 
+const opaqueKnowledgeImportIdentitySchema = z
+  .string()
+  .min(1)
+  .max(255)
+  .refine((value) => value === value.trim(), {
+    message: "opaque identity must not contain leading or trailing whitespace",
+  });
+
 const GeoKnowledgeImportRequestBaseSchema = z.object({
   companyName: z.string().trim().min(1).max(200),
-  taskId: z.string().trim().min(1).max(255),
-  outputItemId: z.string().trim().min(1).max(255),
-  fileId: z.string().trim().min(1).max(255).optional(),
+  taskId: opaqueKnowledgeImportIdentitySchema,
+  outputItemId: opaqueKnowledgeImportIdentitySchema,
+  fileId: opaqueKnowledgeImportIdentitySchema.optional(),
   descriptorHash: sha256Schema,
   artifactSha256: sha256Schema,
   filename: z.string().trim().min(1).max(512),
@@ -397,16 +413,16 @@ export const GeoKnowledgeImportRequestV4Schema = z
     companyName: z.string().trim().min(1).max(200),
     candidate: z
       .object({
-        taskId: z.string().trim().min(1).max(255),
-        outputItemId: z.string().trim().min(1).max(255),
-        fileId: z.string().trim().min(1).max(255).optional(),
+        taskId: opaqueKnowledgeImportIdentitySchema,
+        outputItemId: opaqueKnowledgeImportIdentitySchema,
+        fileId: opaqueKnowledgeImportIdentitySchema.optional(),
         descriptorHash: sha256Schema,
         sha256: sha256Schema,
       })
       .strict(),
     finalArtifact: z
       .object({
-        fileId: z.string().trim().min(1).max(255),
+        fileId: opaqueKnowledgeImportIdentitySchema,
         filename: z.string().trim().min(1).max(512),
         sha256: sha256Schema,
         archiveContractVersion: z.literal(3),
@@ -539,6 +555,7 @@ export const GeoManualServiceOrderStatusSchema = z.enum(
 export const GeoManualServiceOrderCreateRequestSchema = z
   .object({
     schemaVersion: z.literal(1),
+    marketEdition: GeoMarketEditionSchema.optional(),
     project: z
       .object({
         id: z.string().trim().min(8).max(80),
@@ -631,6 +648,7 @@ export const GeoManualServiceOrderResponseSchema = z
       .object({
         reference: identifierSchema,
         projectId: z.string().trim().min(8).max(80),
+        marketEdition: GeoMarketEditionSchema.optional(),
         status: GeoManualServiceOrderStatusSchema,
         amountFen: z.number().int().positive().max(10_000_000).optional(),
         contractId: identifierSchema.optional(),
@@ -819,6 +837,14 @@ export const GeoProjectOrdersByProjectSchema = z
     }
   });
 
+export const GeoProjectOrderDeletionResponseSchema = z
+  .object({
+    schemaVersion: z.literal(1),
+    projectId: z.string().trim().min(8).max(80),
+    deletedOrders: z.number().int().nonnegative(),
+  })
+  .strict();
+
 const GeoProjectOrderRegistryReadySchema = z
   .object({
     schemaVersion: z.literal(1),
@@ -831,6 +857,9 @@ export type GeoProjectOrderState = z.infer<typeof GeoProjectOrderStateSchema>;
 export type GeoProjectOrdersByProject = z.infer<
   typeof GeoProjectOrdersByProjectSchema
 >;
+export type GeoProjectOrderDeletionResponse = z.infer<
+  typeof GeoProjectOrderDeletionResponseSchema
+>;
 export type GeoProjectOrderRegistry = {
   assertReady: () => Promise<void>;
   upsert: (order: GeoProjectOrder) => Promise<GeoProjectOrder>;
@@ -839,6 +868,9 @@ export type GeoProjectOrderRegistry = {
     order: GeoProjectOrder,
   ) => Promise<GeoProjectOrder>;
   findByProject: (projectId: string) => Promise<GeoProjectOrdersByProject>;
+  deleteProject: (
+    projectId: string,
+  ) => Promise<GeoProjectOrderDeletionResponse>;
 };
 
 export const GeoPaymentReceiptSchema = z
@@ -1137,6 +1169,7 @@ export function createGeoPurchaseProvisioner(
           "Content-Type": "application/json",
           "Idempotency-Key": `geo-basic:${request.order.id}:purchase-v2`,
           "x-frontmind-provisioning-token": serviceToken(env),
+          ...GEO_MARKET_EDITION_RESPONSE_CAPABILITY,
         },
         body: JSON.stringify(request),
       },
@@ -1170,6 +1203,7 @@ export function createGeoPurchaseStatusReader(
         headers: {
           Accept: "application/json",
           "x-frontmind-provisioning-token": serviceToken(env),
+          ...GEO_MARKET_EDITION_RESPONSE_CAPABILITY,
         },
       },
     });
@@ -1203,6 +1237,7 @@ export function createGeoManualServiceOrderCreator(
           "Content-Type": "application/json",
           "Idempotency-Key": `geo-manual:${request.project.id}:${request.service.purchasedQuestion.id}:contract-v1`,
           "x-frontmind-provisioning-token": serviceToken(env),
+          ...GEO_MARKET_EDITION_RESPONSE_CAPABILITY,
         },
         body: JSON.stringify(request),
       },
@@ -1235,6 +1270,7 @@ export function createGeoManualServiceOrderStatusReader(
         headers: {
           Accept: "application/json",
           "x-frontmind-provisioning-token": serviceToken(env),
+          ...GEO_MARKET_EDITION_RESPONSE_CAPABILITY,
         },
       },
     });
@@ -1269,6 +1305,7 @@ export function createGeoManualServiceOrderExternalAuthorizer(
           Accept: "application/json",
           "Content-Type": "application/json",
           "x-frontmind-provisioning-token": serviceToken(env),
+          ...GEO_MARKET_EDITION_RESPONSE_CAPABILITY,
         },
         body: JSON.stringify(request),
       },
@@ -1304,6 +1341,7 @@ export function createGeoManualServiceOrderPaymentConfirmer(
           "Content-Type": "application/json",
           "Idempotency-Key": `geo-manual:${parsedReference}:${request.payment.orderId}:payment-v1`,
           "x-frontmind-provisioning-token": serviceToken(env),
+          ...GEO_MARKET_EDITION_RESPONSE_CAPABILITY,
         },
         body: JSON.stringify(request),
       },
@@ -1339,6 +1377,7 @@ export function createGeoManualServiceOrderAccountSubmitter(
           "Content-Type": "application/json",
           "Idempotency-Key": `geo-manual:${parsedReference}:account-v1`,
           "x-frontmind-provisioning-token": serviceToken(env),
+          ...GEO_MARKET_EDITION_RESPONSE_CAPABILITY,
         },
         body: JSON.stringify(request),
       },
@@ -1655,6 +1694,35 @@ export function createGeoProjectOrderRegistry(
       if (response.projectId !== projectId) {
         throw new GeoAccountProvisioningError(
           "项目订单账本返回了其他项目的状态",
+          502,
+          "PROJECT_ORDER_REGISTRY_MISMATCH",
+        );
+      }
+      return response;
+    },
+
+    async deleteProject(rawProjectId) {
+      const projectId = z.string().trim().min(8).max(80).parse(rawProjectId);
+      const endpoint = provisioningBaseEndpoint(env);
+      endpoint.pathname = `${endpoint.pathname}/project-orders/projects/${encodeURIComponent(projectId)}`;
+      const response = await fetchProvisioningJson({
+        endpoint,
+        fetchImpl,
+        timeoutMs,
+        responseSchema: GeoProjectOrderDeletionResponseSchema,
+        invalidResponseMessage: "项目订单账本返回了无效删除结果",
+        unavailableMessage: "项目订单账本暂时无法删除，请稍后重试",
+        timeoutMessage: "项目订单账本删除超时，请稍后重试",
+        fallbackCode: "PROJECT_ORDER_REGISTRY_DELETE_FAILED",
+        fallbackMessage: "项目订单记录暂时无法删除",
+        init: {
+          method: "DELETE",
+          headers: authenticatedHeaders(),
+        },
+      });
+      if (response.projectId !== projectId) {
+        throw new GeoAccountProvisioningError(
+          "项目订单账本返回了其他项目的删除结果",
           502,
           "PROJECT_ORDER_REGISTRY_MISMATCH",
         );

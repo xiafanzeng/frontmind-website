@@ -13,6 +13,7 @@ import {
   ForecastRawTaskOutputSchema,
   buildGeoOptimizationOutcomeForecasterSkillArchive,
   buildOptimizationOutcomeForecastPrompt,
+  buildOptimizationOutcomeForecastTaskInput,
   calculateOptimizationOutcomeForecast,
   parseOptimizationOutcomeForecastTaskOutput,
   resolveOptimizationOutcomeForecastTaskOutput,
@@ -543,6 +544,25 @@ describe("GEO optimization forecast schema and parser", () => {
     });
     expect(parsed.forecastType).toBe("conditional_4_week");
     expect(parsed.roadmap.map((phase) => phase.phase)).toEqual([1, 2, 3, 4]);
+  });
+
+  it("uses the shared bounded recovery for inline forecast string quotes", () => {
+    const raw = rawForecast();
+    raw.summary = '规划结果为"可执行但仍需复测"，不得视为结果保证。';
+    const malformed = JSON.stringify(raw).replaceAll('\\"', '"');
+    expect(() => JSON.parse(malformed)).toThrow();
+
+    const parsed = parseOptimizationOutcomeForecastTaskOutput({
+      output: [
+        {
+          role: "assistant",
+          type: "message",
+          content: [{ type: "output_text", text: malformed }],
+        },
+      ],
+    });
+
+    expect(parsed.summary).toBe(raw.summary);
   });
 
   it("resolves a URL-backed trusted JSON output_file", async () => {
@@ -1078,20 +1098,28 @@ describe("forecast Base prompt and audited skill loader", () => {
     expect(prompt).toContain("缺失或不可用时应校验失败");
     expect(prompt).not.toContain("保留现状评估中的单问题范围、不可用指标");
     expect(prompt).not.toContain("不确定时返回 not_projectable");
-    expect(prompt).toContain(
-      '"currentAssessmentAttachment": "FrontMind-current-assessment.json"',
+    expect(prompt).toContain("frontmind-optimization-forecast-task-input.json");
+    expect(prompt).not.toContain("FrontMind-current-assessment.json");
+    const taskInput = JSON.parse(
+      buildOptimizationOutcomeForecastTaskInput({
+        currentAssessmentFilename: "FrontMind-current-assessment.json",
+        knowledgeBaseArchiveFilename: "FrontMind-kb.zip",
+        executionScenarioFilename: "FrontMind-full-execution-scenario.json",
+        scenarioName: "full_execution",
+      }).body.toString("utf8"),
     );
-    expect(prompt).toContain('"knowledgeBaseArchive": "FrontMind-kb.zip"');
-    expect(prompt).toContain(
-      '"executionScenarioAttachment": "FrontMind-full-execution-scenario.json"',
-    );
+    expect(taskInput.data).toMatchObject({
+      currentAssessmentAttachment: "FrontMind-current-assessment.json",
+      knowledgeBaseArchive: "FrontMind-kb.zip",
+      executionScenarioAttachment: "FrontMind-full-execution-scenario.json",
+    });
     expect(prompt).toContain(FORECAST_SKILL_ARCHIVE_FILENAME);
     expect(prompt).toContain(FORECAST_OUTPUT_TEMPLATE_FILENAME);
     expect(prompt).toContain(FORECAST_OUTPUT_RESULT_FILENAME);
     expect(prompt).toContain("typed output_file");
     expect(prompt).toContain("才把同一个完整 JSON 对象直接写入");
     expect(prompt).not.toContain("# FILE:");
-    expect(Buffer.byteLength(prompt, "utf8")).toBeLessThan(6 * 1024);
+    expect(Array.from(prompt).length).toBeLessThanOrEqual(3_000);
 
     const archive = await buildGeoOptimizationOutcomeForecasterSkillArchive();
     const zip = await JSZip.loadAsync(archive);

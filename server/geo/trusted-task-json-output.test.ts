@@ -1,6 +1,9 @@
 import { describe, expect, it } from "vitest";
 import {
+  parseTrustedTaskJsonCandidate,
   resolveTrustedTaskJsonOutput,
+  trustedTaskJsonObjectCandidates,
+  TRUSTED_TASK_JSON_MAX_QUOTE_REPAIRS,
   TRUSTED_TASK_JSON_MAX_TOTAL_BYTES,
   TrustedTaskJsonOutputError,
   type TrustedTaskJsonCandidateInspection,
@@ -24,6 +27,22 @@ function inspectTestOutput(
 }
 
 describe("trusted task JSON output files", () => {
+  it("extracts wrapped objects and repairs only a bounded number of in-string quotes", () => {
+    const wrapped =
+      '评估完成。```json\n{"valid":true,"summary":"说明"结论":结果为"可执行",但需复测。"}\n```';
+    const candidates = trustedTaskJsonObjectCandidates(wrapped);
+    expect(candidates.length).toBeLessThanOrEqual(3);
+    expect(candidates.map(parseTrustedTaskJsonCandidate)).toContainEqual({
+      valid: true,
+      summary: '说明"结论":结果为"可执行",但需复测。',
+    });
+
+    const excessive = `{"valid":true,"summary":"${'"引用"'.repeat(
+      TRUSTED_TASK_JSON_MAX_QUOTE_REPAIRS / 2 + 1,
+    )}"}`;
+    expect(parseTrustedTaskJsonCandidate(excessive)).toBeUndefined();
+  });
+
   it("collects only located typed files at the trusted assistant boundary", () => {
     const files = trustedAssistantOutputFiles({
       metadata: {
@@ -204,6 +223,41 @@ describe("trusted task JSON output files", () => {
 
     expect(downloads).toEqual(["invalid-utf8", "valid-bom"]);
     expect(result).toEqual({ valid: true, id: 2 });
+  });
+
+  it("recovers bounded unescaped quotes from a complete trusted JSON file", async () => {
+    const result = await resolveTrustedTaskJsonOutput(
+      {
+        async downloadFile() {
+          return new Response(
+            '{"valid":true,"summary":"结果为"可执行但需复测"。"}',
+          );
+        },
+        async downloadTaskOutput() {
+          throw new Error("URL fallback should not be used");
+        },
+      },
+      {
+        output: [
+          {
+            type: "output_file",
+            file_id: "recoverable",
+            filename: "result.json",
+          },
+        ],
+      },
+      {
+        inspectInline: () => undefined,
+        inspectParsed: (value) =>
+          value &&
+          typeof value === "object" &&
+          (value as Record<string, unknown>).valid === true
+            ? { success: true, data: value as TestOutput }
+            : { success: false, code: "SCHEMA_MISMATCH" },
+      },
+    );
+
+    expect(result).toMatchObject({ valid: true });
   });
 
   it("does not inspect inline output before a preferred valid file", async () => {

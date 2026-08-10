@@ -35,6 +35,11 @@ import { assertGeoPaymentConfigurationFromEnv } from "./geo/payment";
 import { createGeoCustomQuestionValidationStore } from "./geo/custom-question-validation-store";
 import { collectWebsiteRuntimeReadiness } from "./runtime-readiness";
 import { assertGeoRuntimeConfigurationFromEnv } from "./geo/runtime-config";
+import { releaseProfile } from "../config/release-profile.mjs";
+import {
+  assertFrontMindReleaseRuntime,
+  frontmindReleaseChannel,
+} from "./release-channel";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -65,6 +70,11 @@ async function getGeoRuntimeSkillReadiness() {
 }
 
 async function startServer() {
+  const releaseChannel = frontmindReleaseChannel(releaseProfile);
+  const { paymentMode } = assertFrontMindReleaseRuntime(
+    process.env,
+    releaseProfile,
+  );
   const buildSha = geoPublicBuildSha();
   const imageDigest =
     process.env.FRONTMIND_IMAGE_DIGEST?.trim().toLowerCase() || null;
@@ -81,9 +91,12 @@ async function startServer() {
     broker: geoBroker,
     projectOrderRegistry,
     paymentReceiptStore,
+    requireAgentCredential: releaseProfile.requireAgentCredential,
   });
   const getWebsiteRuntimeReadiness = () =>
     collectWebsiteRuntimeReadiness({
+      releaseChannel,
+      paymentMode,
       buildSha,
       imageDigest,
       requireReleaseIdentity: process.env.NODE_ENV === "production",
@@ -96,7 +109,9 @@ async function startServer() {
       validationStore: customQuestionValidationStore,
     });
   if (process.env.NODE_ENV === "production") {
-    assertGeoPaymentConfigurationFromEnv(process.env);
+    if (paymentMode === "zpay") {
+      assertGeoPaymentConfigurationFromEnv(process.env);
+    }
     // The same deep probe used by /readyz runs before the socket is opened.
     // A container with invalid secrets, Skills or persistence never advertises
     // itself as started and can be safely rolled back by the deploy controller.
@@ -105,6 +120,12 @@ async function startServer() {
   const app = express();
   const server = createServer(app);
   installBaseSecurityHeaders(app);
+  if (!releaseProfile.publishSearchIndexes) {
+    app.use((_req, res, next) => {
+      res.setHeader("X-Robots-Tag", releaseProfile.robotsDirective);
+      next();
+    });
+  }
 
   if (process.env.NODE_ENV === "production") {
     // Fail closed to local reverse proxies unless deployment explicitly names
@@ -125,6 +146,9 @@ async function startServer() {
     res.json({
       status: "ok",
       service: "frontmind-website",
+      channel: releaseChannel,
+      releaseChannel,
+      paymentMode,
       buildSha,
       imageDigest,
     });

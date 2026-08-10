@@ -53,16 +53,23 @@ describe("visitor statistics summary", () => {
 
     expect(summary.totalReads).toBe(1416);
     expect(summary.pageviews).toBe(9);
-    expect(summary.countryCount).toBe(53);
+    expect(summary.countryCount).toBe(52);
     expect(summary.baselineReads).toBe(1407);
     expect(summary.liveReads).toBe(9);
     expect(summary.countries).toEqual(
       expect.arrayContaining([
-        expect.objectContaining({ iso: "cn", reads: 933 }),
+        expect.objectContaining({ iso: "cn", reads: 938 }),
         expect.objectContaining({ iso: "us", reads: 50 }),
-        expect.objectContaining({ iso: "unknown", reads: 5 }),
       ]),
     );
+    expect(summary.countries.some((country) => country.iso === "unknown")).toBe(
+      false,
+    );
+    expect(store.visitors[thirdVisitor]).toMatchObject({
+      country: "Unknown",
+      iso: "unknown",
+      visits: 4,
+    });
   });
 
   it("retains the historical distribution for a fresh live store", () => {
@@ -73,15 +80,23 @@ describe("visitor statistics summary", () => {
 
     expect(summary).toMatchObject({
       totalReads: 1407,
-      countryCount: 53,
+      countryCount: 52,
       pageviews: 0,
       baselineReads: 1407,
       liveReads: 0,
     });
-    expect(summary.countries).toHaveLength(53);
+    expect(summary.countries).toHaveLength(52);
+    expect(summary.countries).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ iso: "cn", reads: 931 }),
+      ]),
+    );
+    expect(summary.countries.some((country) => country.iso === "unknown")).toBe(
+      false,
+    );
   });
 
-  it("keeps missing or invalid geography under Unknown instead of China", () => {
+  it("reports missing or invalid geography under Mainland China", () => {
     const summary = summarizeVisitorStore({
       visitors: {
         [firstVisitor]: {
@@ -91,18 +106,64 @@ describe("visitor statistics summary", () => {
           lastSeen: "2026-07-28T00:00:00.000Z",
           visits: 1,
         },
+        [secondVisitor]: {
+          country: "Unknown Region",
+          iso: "zz",
+          firstSeen: "2026-07-28T00:00:00.000Z",
+          lastSeen: "2026-07-28T00:00:00.000Z",
+          visits: 2,
+        },
+        [thirdVisitor]: {
+          country: "European Union",
+          iso: "eu",
+          firstSeen: "2026-07-28T00:00:00.000Z",
+          lastSeen: "2026-07-28T00:00:00.000Z",
+          visits: 3,
+        },
       },
-      pageviews: 1,
+      pageviews: 6,
     });
 
-    expect(summary.countryCount).toBe(53);
+    expect(summary.countryCount).toBe(52);
     expect(summary.countries).toEqual(
       expect.arrayContaining([
         expect.objectContaining({
-          country: "Unknown",
-          iso: "unknown",
-          reads: 2,
+          country: "Mainland China",
+          iso: "cn",
+          reads: 937,
         }),
+      ]),
+    );
+    expect(summary.totalReads).toBe(1413);
+    expect(summary.liveReads).toBe(6);
+    expect(summary.countries.some((country) => country.iso === "eu")).toBe(
+      false,
+    );
+    expect(summary.countries.some((country) => country.iso === "unknown")).toBe(
+      false,
+    );
+  });
+
+  it("keeps explicit Other locations separate from Mainland China", () => {
+    const summary = summarizeVisitorStore({
+      visitors: {
+        [firstVisitor]: {
+          country: "Other locations",
+          iso: "other",
+          firstSeen: "2026-07-28T00:00:00.000Z",
+          lastSeen: "2026-07-28T00:00:00.000Z",
+          visits: 2,
+        },
+      },
+      pageviews: 2,
+    });
+
+    expect(summary.totalReads).toBe(1409);
+    expect(summary.pageviews).toBe(2);
+    expect(summary.countries).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ iso: "cn", reads: 931 }),
+        expect.objectContaining({ iso: "other", reads: 7 }),
       ]),
     );
   });

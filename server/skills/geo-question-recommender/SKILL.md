@@ -60,7 +60,7 @@ Natural comparison wording such as “应如何评估 A 与 B 的服务覆盖？
 
 ## Portfolio Rules
 
-- Write natural Simplified Chinese in the way a real buyer would ask an AI assistant.
+- Write natural Simplified Chinese in `question` in the way a real buyer would ask an AI assistant.
 - Write each question as one short and direct sentence with one core intent. Never use the Chinese comma `，` or ASCII comma `,` in a customer-visible question.
 - Make every question specific to facts discovered in the ZIP, except that a competitor identity may be supplemented from trustworthy public knowledge or research as described above.
 - For every `reputation` item, include the exact `enterpriseAnchor` in the visible question and ask for a direct trust, reliability, safety, service-quality, or reputation judgment. Reject company-profile and evidence-list prompts even when their answers could support reputation.

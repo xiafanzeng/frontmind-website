@@ -20,13 +20,22 @@ export type GeoQuestionCategory =
   | "industry_ranking"
   | "competitor_comparison";
 
+export type GeoMonitoringEdition = "domestic" | "overseas";
+
+export function resolveGeoMonitoringEdition(
+  value: unknown,
+): GeoMonitoringEdition {
+  return value === "overseas" ? "overseas" : "domestic";
+}
+
 export type GeoPlatformId =
   | "doubao"
   | "yuanbao"
   | "deepseek"
   | "baiduai"
   | "qianwen"
-  | "kimi";
+  | "kimi"
+  | "chatgpt";
 
 export type GeoMonitoringStatus =
   | "not_started"
@@ -373,6 +382,8 @@ export type GeoKnowledgeSection = {
   evidenceCount?: number;
   status?: "verified" | "inferred" | "needs_verification" | "not_applicable";
   contentAvailability?: "complete" | "limited_evidence" | "needs_verification";
+  /** Explicit compatibility marker for historical server-injected H2 titles. */
+  titleInjected?: boolean;
   /**
    * Customer-facing branch overview. Older archives only expose `summary` and
    * `markdown`; consumers must keep treating those fields as the fallback.
@@ -459,6 +470,7 @@ export type GeoKnowledgeBase = {
   summary?: string;
   generatedAt?: string;
   packageManifestSha256?: string;
+  archiveContractVersion?: 1 | 2 | 3 | 4;
   archiveName?: string;
   archiveUrl?: string;
   reportMarkdown?: string;
@@ -473,6 +485,8 @@ export type GeoQuestion = {
   id: string;
   category: GeoQuestionCategory;
   question: string;
+  /** @deprecated Legacy local-data compatibility only; runtime monitoring translates `question`. */
+  questionEnglish?: string;
   rationale?: string;
   evidenceRefs?: string[];
   selectable: boolean;
@@ -590,6 +604,8 @@ export type GeoProject = {
   knowledgeBase?: GeoKnowledgeBase;
   questions: GeoQuestion[];
   selectedQuestionId?: string;
+  /** Missing on historical projects and therefore resolved as `domestic`. */
+  monitoringEdition?: GeoMonitoringEdition;
   selectedPlatformIds: GeoPlatformId[];
   monitoring?: GeoMonitoringResult;
   assessment?: GeoAssessmentResult;
@@ -604,7 +620,7 @@ export type GeoPlatform = {
   name: string;
   logo: string;
   answersPerRun: 5;
-  unitPriceCny: 2;
+  unitPriceCny: 2 | 5;
   accent: string;
 };
 
@@ -656,6 +672,14 @@ export const GEO_PLATFORMS: GeoPlatform[] = [
     answersPerRun: 5,
     unitPriceCny: 2,
     accent: "#111827",
+  },
+  {
+    id: "chatgpt",
+    name: "ChatGPT",
+    logo: "/geo-builder/platforms/chatgpt.png",
+    answersPerRun: 5,
+    unitPriceCny: 5,
+    accent: "#10a37f",
   },
 ];
 

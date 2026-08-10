@@ -7,6 +7,8 @@ import { describe, expect, it } from "vitest";
 import {
   extractKnowledgeBaseAssetPreviews,
   parseKnowledgeBaseArchive,
+  websiteLeadHeadingIsSourceInventory,
+  websiteLeadNarrativeCharacterCountForLeaf,
 } from "./archive";
 
 function crc32(bytes: Buffer) {
@@ -167,7 +169,7 @@ async function buildFixtureZip(
 }
 
 async function buildWebsiteLeadBudgetFixture(options?: {
-  schemaVersion?: 1 | 2;
+  schemaVersion?: 1 | 2 | 3 | 4;
   leafCount?: number;
   imageCount?: number;
   documentCount?: number;
@@ -203,6 +205,8 @@ async function buildWebsiteLeadBudgetFixture(options?: {
   v2ContentStatus?: "complete" | "limited_evidence" | "needs_verification";
 }) {
   const schemaVersion = options?.schemaVersion ?? 1;
+  const usesStructuredManifest = schemaVersion !== 1;
+  const usesV3ValidationRules = schemaVersion >= 3;
   const leafCount = options?.leafCount ?? 40;
   const imageCount = options?.imageCount ?? 1;
   const documentCount = options?.documentCount ?? 0;
@@ -358,7 +362,7 @@ async function buildWebsiteLeadBudgetFixture(options?: {
     string,
     { id: string; characters: number }
   >();
-  if (schemaVersion === 2) {
+  if (usesStructuredManifest) {
     for (const [publicBranch, branchId] of v2DisplayBranches) {
       const id = `doc-evidence-${publicBranch}`;
       const content = [
@@ -426,12 +430,11 @@ async function buildWebsiteLeadBudgetFixture(options?: {
       (branchId === "05_manufacturing"
         ? "core-capabilities"
         : "company-identity");
-    const kind =
-      schemaVersion === 2
+    const kind = usesStructuredManifest
+      ? "leaf"
+      : overviewPublicBranches.has(publicBranch)
         ? "leaf"
-        : overviewPublicBranches.has(publicBranch)
-          ? "leaf"
-          : "overview";
+        : "overview";
     overviewPublicBranches.add(publicBranch);
     const documentId = `doc-leaf-${String(index + 1).padStart(3, "0")}`;
     const narrative =
@@ -483,19 +486,22 @@ async function buildWebsiteLeadBudgetFixture(options?: {
           ? {}
           : { sourceIds: ["source-official"] }),
         assetIds: documentId === productDocumentId ? productAssetIds : [],
-        ...(schemaVersion === 2
+        ...(usesStructuredManifest
           ? {
               evidenceCharacters:
                 v2EvidenceByCanonicalBranch.get(branchId)!.characters,
-              dynamicMinimumCharacters: Math.min(
-                200,
-                Math.max(
-                  60,
-                  Math.ceil(
-                    v2EvidenceByCanonicalBranch.get(branchId)!.characters * 0.2,
+              dynamicMinimumCharacters: usesV3ValidationRules
+                ? 8
+                : Math.min(
+                    200,
+                    Math.max(
+                      60,
+                      Math.ceil(
+                        v2EvidenceByCanonicalBranch.get(branchId)!.characters *
+                          0.2,
+                      ),
+                    ),
                   ),
-                ),
-              ),
               evidenceDocumentIds: [
                 v2EvidenceByCanonicalBranch.get(branchId)!.id,
               ],
@@ -508,7 +514,7 @@ async function buildWebsiteLeadBudgetFixture(options?: {
       },
     );
   }
-  if (schemaVersion === 2) {
+  if (usesStructuredManifest) {
     for (const [
       index,
       [publicBranch, branchId],
@@ -544,10 +550,12 @@ async function buildWebsiteLeadBudgetFixture(options?: {
           sourceIds: ["source-official"],
           assetIds: branchId === "03_products" ? productAssetIds : [],
           evidenceCharacters: evidence.characters,
-          dynamicMinimumCharacters: Math.min(
-            publicBranch === "products-services" ? 3_000 : 1_500,
-            Math.max(120, Math.ceil(evidence.characters * 0.25)),
-          ),
+          dynamicMinimumCharacters: usesV3ValidationRules
+            ? 0
+            : Math.min(
+                publicBranch === "products-services" ? 3_000 : 1_500,
+                Math.max(120, Math.ceil(evidence.characters * 0.25)),
+              ),
           evidenceDocumentIds: [evidence.id],
           customerVisible: true,
         },
@@ -580,8 +588,8 @@ async function buildWebsiteLeadBudgetFixture(options?: {
           ? Buffer.from("not an image")
           : buildTestPng(
               options?.duplicateImageBytes ? 1 : index + 1,
-              schemaVersion === 2 ? 800 : 1,
-              schemaVersion === 2 ? 450 : 1,
+              usesStructuredManifest ? 800 : 1,
+              usesStructuredManifest ? 450 : 1,
             ));
     root.file(assetPath, imageBytes);
     packageAssets.push({
@@ -595,22 +603,22 @@ async function buildWebsiteLeadBudgetFixture(options?: {
       ...(options?.omitImageDimensions
         ? {}
         : {
-            width: rasterOverride?.width ?? (schemaVersion === 2 ? 800 : 1),
-            height: rasterOverride?.height ?? (schemaVersion === 2 ? 450 : 1),
+            width: rasterOverride?.width ?? (usesStructuredManifest ? 800 : 1),
+            height:
+              rasterOverride?.height ?? (usesStructuredManifest ? 450 : 1),
           }),
       caption: `产品图片 ${index + 1}`,
       alt: `产品图片 ${index + 1}`,
       branchId: "03_products",
-      documentIds:
-        schemaVersion === 2
-          ? [productDocumentId, "doc-overview-products-services"]
-          : [productDocumentId],
+      documentIds: usesStructuredManifest
+        ? [productDocumentId, "doc-overview-products-services"]
+        : [productDocumentId],
       ...(options?.omitImageSourcePage
         ? {}
         : { sourcePageUrl: "https://example.com/products" }),
       sourceAssetUrl: `https://example.com/assets/image-${index + 1}.${extension}`,
       ownership: "first_party",
-      ...(schemaVersion === 2
+      ...(usesStructuredManifest
         ? {
             assetType: index === 0 ? "brand_identity" : "product_ui",
             displayRole: "inline",
@@ -632,7 +640,7 @@ async function buildWebsiteLeadBudgetFixture(options?: {
   }
   const customerVisibleCharacters =
     leafCount * (options?.narrativeCharactersPerLeaf ?? 200) +
-    (schemaVersion === 2
+    (usesStructuredManifest
       ? 7 * (options?.v2OverviewNarrativeCharacters ?? 200)
       : 0);
   const eligibleFirstPartyImages =
@@ -644,6 +652,20 @@ async function buildWebsiteLeadBudgetFixture(options?: {
     imageCount +
     documentCount +
     (options?.extraFileCount ?? 0);
+  const archiveAllPaths = [
+    ...packageDocuments.map((document) => document.path),
+    "00_completeness.json",
+    "00_package_manifest.json",
+    ...packageAssets.map((asset) => asset.path),
+    ...Array.from(
+      { length: documentCount },
+      (_, index) => `10_reference_assets/documents/document-${index + 1}.pdf`,
+    ),
+    ...Array.from(
+      { length: options?.extraFileCount ?? 0 },
+      (_, index) => `10_reference_assets/ledger-${index + 1}.csv`,
+    ),
+  ];
   root.file(
     "00_package_manifest.json",
     JSON.stringify({
@@ -660,7 +682,15 @@ async function buildWebsiteLeadBudgetFixture(options?: {
         ),
         packagedImages: imageCount,
       },
-      ...(schemaVersion === 2
+      ...(schemaVersion === 4
+        ? {
+            allPaths: archiveAllPaths,
+            evidencePaths: packageDocuments
+              .filter((document) => document.kind === "evidence")
+              .map((document) => document.path),
+          }
+        : {}),
+      ...(usesStructuredManifest
         ? {
             branchEvidence: v2DisplayBranches.map(([publicBranch], index) => {
               const evidence = v2EvidenceByPublicBranch.get(publicBranch)!;
@@ -675,10 +705,12 @@ async function buildWebsiteLeadBudgetFixture(options?: {
                 overviewDocumentId: `doc-overview-${publicBranch}`,
                 contentStatus: options?.v2ContentStatus ?? "limited_evidence",
                 deduplicatedEvidenceCharacters: branchEvidenceCharacters,
-                dynamicOverviewMinimum: Math.min(
-                  publicBranch === "products-services" ? 3_000 : 1_500,
-                  Math.max(120, Math.ceil(branchEvidenceCharacters * 0.25)),
-                ),
+                dynamicOverviewMinimum: usesV3ValidationRules
+                  ? 0
+                  : Math.min(
+                      publicBranch === "products-services" ? 3_000 : 1_500,
+                      Math.max(120, Math.ceil(branchEvidenceCharacters * 0.25)),
+                    ),
                 checkedSourceCount: index + 1,
               };
             }),
@@ -1091,6 +1123,67 @@ describe("knowledge-base ZIP manifest", () => {
     });
   });
 
+  it("counts business tables whose body mentions source-like phrases", () => {
+    const businessTable = [
+      "| 类型 | 平台价值 |",
+      "| --- | --- |",
+      `| 收入来源 | ${"乙".repeat(593)} |`,
+      "| 社区活力来源 | 不同来源模型 |",
+    ].join("\n");
+    const incidentSample = `${"甲".repeat(55_803)}\n\n${businessTable}`;
+
+    expect(websiteLeadNarrativeCharacterCountForLeaf(businessTable)).toBe(615);
+    expect(websiteLeadNarrativeCharacterCountForLeaf(incidentSample)).toBe(
+      56_418,
+    );
+  });
+
+  it.each([
+    ["ﬃ", 3],
+    ["㍿", 4],
+    ["企业知识", 4],
+  ])("normalizes %s with NFKC before the formal count", (value, expected) => {
+    expect(websiteLeadNarrativeCharacterCountForLeaf(value)).toBe(expected);
+  });
+
+  it.each(["来源", "数据来源", "证据链接", "Source URL", "References"])(
+    "excludes a source inventory table with the %s header",
+    (header) => {
+      const markdown = [
+        "保留正文",
+        "",
+        `| 事实 | ${header} |`,
+        "| --- | --- |",
+        "| 企业成立时间 | https://official.example/facts |",
+      ].join("\n");
+
+      expect(websiteLeadNarrativeCharacterCountForLeaf(markdown)).toBe(4);
+    },
+  );
+
+  it.each(["收入来源", "社区活力来源", "不同来源模型"])(
+    "keeps the business section heading %s",
+    (heading) => {
+      const markdown = `## ${heading}\n\n应保留的业务正文`;
+
+      expect(websiteLeadHeadingIsSourceInventory(heading)).toBe(false);
+      expect(websiteLeadNarrativeCharacterCountForLeaf(markdown)).toBe(8);
+    },
+  );
+
+  it.each([
+    "来源",
+    "Acme 来源索引",
+    "原始来源",
+    "References",
+    "Asset Inventory",
+  ])("excludes the explicit source section heading %s", (heading) => {
+    const markdown = `## ${heading}\n\n不应计入的来源正文\n\n## 正文\n\n应保留`;
+
+    expect(websiteLeadHeadingIsSourceInventory(heading)).toBe(true);
+    expect(websiteLeadNarrativeCharacterCountForLeaf(markdown)).toBe(3);
+  });
+
   it.each([36, 48])(
     "accepts a package containing %s real, deduplicated first-party images",
     async (imageCount) => {
@@ -1187,7 +1280,211 @@ describe("knowledge-base ZIP manifest", () => {
     expect(manifest.sections[0].leaves?.[0]?.markdown).not.toContain(
       "https://example.com/",
     );
+    expect(manifest.sections[0].markdown).toContain("# 叶子 1");
+    expect(manifest.sections[0].markdown).not.toContain(
+      "## 叶子 1\n\n# 叶子 1",
+    );
     expect(manifest.packageManifestSha256).toMatch(/^[a-f0-9]{64}$/);
+  });
+
+  it("adds a manifest document title only when the body starts with a different heading", async () => {
+    const zip = await JSZip.loadAsync(await buildWebsiteLeadBudgetFixture());
+    const root = "Bounded_knowledge_base";
+    const packageManifest = JSON.parse(
+      await zip.file(`${root}/00_package_manifest.json`)!.async("string"),
+    ) as {
+      documents: Array<{
+        path: string;
+        title: string;
+        customerVisible: boolean;
+      }>;
+    };
+    const firstDocument = packageManifest.documents.find(
+      (document) => document.customerVisible && document.title === "叶子 1",
+    )!;
+    const documentPath = `${root}/${firstDocument.path}`;
+    const markdown = await zip.file(documentPath)!.async("string");
+    zip.file(documentPath, markdown.replace("# 叶子 1", "# 正文内标题"));
+
+    const manifest = await parseKnowledgeBaseArchive(
+      Buffer.from(await zip.generateAsync({ type: "uint8array" })),
+      {
+        companyName: "StructuredTitleCo",
+        validationProfile: "website-lead-v1",
+      },
+    );
+
+    expect(manifest.sections[0].markdown).toContain(
+      "## 叶子 1\n\n# 正文内标题",
+    );
+  });
+
+  it("recognizes the first visible heading after leading HTML comments", async () => {
+    const zip = await JSZip.loadAsync(await buildWebsiteLeadBudgetFixture());
+    const root = "Bounded_knowledge_base";
+    const packageManifest = JSON.parse(
+      await zip.file(`${root}/00_package_manifest.json`)!.async("string"),
+    ) as {
+      documents: Array<{
+        path: string;
+        title: string;
+        customerVisible: boolean;
+      }>;
+    };
+    const firstDocument = packageManifest.documents.find(
+      (document) => document.customerVisible && document.title === "叶子 1",
+    )!;
+    const documentPath = `${root}/${firstDocument.path}`;
+    const markdown = await zip.file(documentPath)!.async("string");
+    zip.file(
+      documentPath,
+      `<!--\ninternal rendering metadata\n-->\n\n${markdown}`,
+    );
+
+    const manifest = await parseKnowledgeBaseArchive(
+      Buffer.from(await zip.generateAsync({ type: "uint8array" })),
+      {
+        companyName: "CommentHeadingCo",
+        validationProfile: "website-lead-v1",
+      },
+    );
+
+    expect(manifest.sections[0].markdown).toContain(
+      "<!--\ninternal rendering metadata\n-->\n\n# 叶子 1",
+    );
+    expect(manifest.sections[0].markdown).not.toContain("## 叶子 1\n\n<!--");
+    expect(manifest.sections[0].titleInjected).toBe(false);
+  });
+
+  it.each([1, 2, 3] as const)(
+    "keeps schema-v%s evidencePaths equal to the complete ZIP inventory",
+    async (schemaVersion) => {
+      const archive = await buildWebsiteLeadBudgetFixture({
+        schemaVersion,
+        imageCount: 0,
+        v2EvidenceCharactersPerBranch: 120,
+      });
+      const zip = await JSZip.loadAsync(archive);
+      const expectedPaths = Object.values(zip.files)
+        .filter((entry) => !entry.dir)
+        .map((entry) => entry.name.replace(/^Bounded_knowledge_base\//, ""))
+        .sort();
+
+      const manifest = await parseKnowledgeBaseArchive(archive, {
+        companyName: `LegacyPathContractV${schemaVersion}`,
+        validationProfile: "website-lead-v1",
+      });
+
+      expect(manifest.archiveContractVersion).toBe(schemaVersion);
+      expect(manifest.allPaths).toBeUndefined();
+      expect([...manifest.evidencePaths].sort()).toEqual(expectedPaths);
+    },
+  );
+
+  it("reads schema-v4 allPaths separately from the evidence allowlist", async () => {
+    const archive = await buildWebsiteLeadBudgetFixture({
+      schemaVersion: 4,
+      imageCount: 0,
+    });
+
+    const manifest = await parseKnowledgeBaseArchive(archive, {
+      companyName: "ExplicitEvidencePathContract",
+      validationProfile: "website-lead-v1",
+    });
+
+    expect(manifest.archiveContractVersion).toBe(4);
+    expect(manifest.allPaths).toContain("README.md");
+    expect(manifest.evidencePaths).not.toContain("README.md");
+    expect(manifest.evidencePaths).toContain(
+      "10_reference_assets/evidence/company-identity.md",
+    );
+    expect(
+      manifest.evidencePaths.every((entryPath) =>
+        manifest.allPaths?.includes(entryPath),
+      ),
+    ).toBe(true);
+  });
+
+  it("rejects a schema-v4 evidence path absent from allPaths", async () => {
+    const zip = await JSZip.loadAsync(
+      await buildWebsiteLeadBudgetFixture({
+        schemaVersion: 4,
+        imageCount: 0,
+      }),
+    );
+    const manifestPath = "Bounded_knowledge_base/00_package_manifest.json";
+    const packageManifest = JSON.parse(
+      await zip.file(manifestPath)!.async("string"),
+    );
+    packageManifest.evidencePaths.push("invented/evidence.md");
+    zip.file(manifestPath, JSON.stringify(packageManifest));
+
+    await expect(
+      parseKnowledgeBaseArchive(
+        Buffer.from(await zip.generateAsync({ type: "uint8array" })),
+        {
+          companyName: "InvalidEvidencePathContract",
+          validationProfile: "website-lead-v1",
+        },
+      ),
+    ).rejects.toThrow(/evidencePaths contains a path absent from allPaths/i);
+  });
+
+  it("rejects a schema-v4 non-evidence document in evidencePaths", async () => {
+    const zip = await JSZip.loadAsync(
+      await buildWebsiteLeadBudgetFixture({
+        schemaVersion: 4,
+        imageCount: 0,
+      }),
+    );
+    const manifestPath = "Bounded_knowledge_base/00_package_manifest.json";
+    const packageManifest = JSON.parse(
+      await zip.file(manifestPath)!.async("string"),
+    );
+    packageManifest.evidencePaths.push("README.md");
+    zip.file(manifestPath, JSON.stringify(packageManifest));
+
+    await expect(
+      parseKnowledgeBaseArchive(
+        Buffer.from(await zip.generateAsync({ type: "uint8array" })),
+        {
+          companyName: "NonEvidencePathContract",
+          validationProfile: "website-lead-v1",
+        },
+      ),
+    ).rejects.toThrow(/must match its non-customer evidence documents/i);
+  });
+
+  it("rejects schema-v4 path casing that differs from the ZIP identity", async () => {
+    const zip = await JSZip.loadAsync(
+      await buildWebsiteLeadBudgetFixture({
+        schemaVersion: 4,
+        imageCount: 0,
+      }),
+    );
+    const manifestPath = "Bounded_knowledge_base/00_package_manifest.json";
+    const packageManifest = JSON.parse(
+      await zip.file(manifestPath)!.async("string"),
+    );
+    const originalPath = packageManifest.evidencePaths[0] as string;
+    const mismatchedPath = originalPath.replace(
+      "10_reference_assets",
+      "10_REFERENCE_ASSETS",
+    );
+    packageManifest.evidencePaths[0] = mismatchedPath;
+    packageManifest.allPaths[packageManifest.allPaths.indexOf(originalPath)] =
+      mismatchedPath;
+    zip.file(manifestPath, JSON.stringify(packageManifest));
+
+    await expect(
+      parseKnowledgeBaseArchive(
+        Buffer.from(await zip.generateAsync({ type: "uint8array" })),
+        {
+          companyName: "CaseSensitivePathContract",
+          validationProfile: "website-lead-v1",
+        },
+      ),
+    ).rejects.toThrow(/allPaths does not match the ZIP inventory/i);
   });
 
   it("accepts a sparse v2 company as limited_evidence when linked evidence and the image ledger are honest", async () => {

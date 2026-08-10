@@ -12,6 +12,7 @@ import {
   type BrokerFile,
   type BrokerMonitorRun,
   type BrokerTask,
+  type GeoMonitoringEdition,
   type GeoMonitorPlatformId,
   type GeoPresalesBroker,
   type FrontMindAgentProfile,
@@ -43,7 +44,9 @@ import {
   GeoPaymentVerificationError,
   type GeoPaymentVerificationInput,
   type GeoPaymentGateway,
+  type GeoServiceBankTransferInput,
   type GeoServicePaymentCheckoutInput,
+  type GeoServicePaymentCheckoutSwitchInput,
   type GeoServicePaymentVerificationInput,
 } from "./payment";
 import type {
@@ -59,6 +62,32 @@ import type {
   GeoPurchaseProvisionRequestV2,
   GeoPurchaseProvisionResponseV2,
 } from "./provisioning";
+
+function monitorTranslationTaskOutput(
+  sourceQuestion: string,
+  questionEnglish: string,
+) {
+  return [
+    {
+      type: "output_message",
+      role: "assistant",
+      content: [
+        {
+          type: "output_text",
+          text: {
+            value: JSON.stringify({
+              schemaVersion: 1,
+              sourceQuestionSha256: createHash("sha256")
+                .update(sourceQuestion, "utf8")
+                .digest("hex"),
+              questionEnglish,
+            }),
+          },
+        },
+      ],
+    },
+  ];
+}
 
 function fixtureCrc32(bytes: Buffer) {
   let crc = 0xffffffff;
@@ -94,6 +123,67 @@ function fixturePng(seed = 1) {
   ]);
 }
 
+async function finalizeKnowledgeBaseCandidateAsV4(
+  input: Parameters<typeof finalizeKnowledgeBaseCandidate>[0],
+) {
+  const finalized = await finalizeKnowledgeBaseCandidate(input);
+  const zip = await JSZip.loadAsync(finalized.bytes);
+  const packageManifestPath = "00_package_manifest.json";
+  const packageManifest = JSON.parse(
+    await zip.file(packageManifestPath)!.async("string"),
+  ) as {
+    schemaVersion: number;
+    documents: Array<{
+      kind: string;
+      path: string;
+      customerVisible: boolean;
+    }>;
+    allPaths?: string[];
+    evidencePaths?: string[];
+  };
+  const allPaths = Object.values(zip.files)
+    .filter((entry) => !entry.dir)
+    .map((entry) => entry.name)
+    .sort();
+  const evidencePaths = packageManifest.documents
+    .filter(
+      (document) => document.kind === "evidence" && !document.customerVisible,
+    )
+    .map((document) => document.path)
+    .sort();
+  const packageManifestText = `${JSON.stringify(
+    {
+      ...packageManifest,
+      schemaVersion: 4,
+      allPaths,
+      evidencePaths,
+    },
+    null,
+    2,
+  )}\n`;
+  zip.file(packageManifestPath, packageManifestText);
+  const bytes = await zip.generateAsync({
+    type: "nodebuffer",
+    compression: "DEFLATE",
+    compressionOptions: { level: 9 },
+    platform: "UNIX",
+  });
+
+  return {
+    ...finalized,
+    bytes,
+    sha256: createHash("sha256").update(bytes).digest("hex"),
+    packageManifestSha256: createHash("sha256")
+      .update(packageManifestText)
+      .digest("hex"),
+    manifest: await parseKnowledgeBaseArchive(bytes, {
+      companyName: input.companyName,
+      generatedAt: input.evaluatedAt,
+      validationProfile: "website-lead-v1",
+    }),
+  };
+}
+
 function fixtureEvidenceCharacterCount(markdown: string) {
   return Array.from(
     markdown
@@ -117,12 +207,15 @@ class MockBroker implements GeoPresalesBroker {
   taskAgentProfiles: Array<FrontMindAgentProfile | undefined> = [];
   uploads = new Map<string, Buffer>();
   skillUploads = new Map<string, Buffer>();
+  taskInputUploads = new Map<string, Buffer>();
   archive = Buffer.alloc(0);
   nextTask = 1;
   nextSkillFile = 1;
+  nextTaskInputFile = 1;
   nextRegularFile = 1;
   questionTaskCount = 0;
   customQuestionClassifierTaskCount = 0;
+  monitorQuestionTranslationTaskCount = 0;
   customQuestionClassifierPendingPolls = 0;
   customQuestionClassifierPolls = 0;
   assessmentTaskCount = 0;
@@ -134,6 +227,7 @@ class MockBroker implements GeoPresalesBroker {
   idempotentTasks = new Map<string, BrokerTask>();
   idempotentFiles = new Map<string, BrokerFile>();
   fileCredentialVersions = new Map<string, number>();
+  fileProjectIds = new Map<string, string>();
   fileCreateOperationKeys: string[] = [];
   loseNextIdempotentFileCreateResponse = false;
   rotateCredentialWhenFileResponseIsLost = false;
@@ -150,13 +244,19 @@ class MockBroker implements GeoPresalesBroker {
   monitorRuns = new Map<string, BrokerMonitorRun>();
   monitorResults = new Map<string, BrokerMonitorRun>();
   monitorCreates = 0;
+  monitorCreateStatus: BrokerMonitorRun["status"] = "submitted";
+  monitorCreateError?: Error;
   monitorResultReads = 0;
   monitorResultError?: Error;
   taskResultErrors = new Map<string, Error>();
   taskErrors = new Map<string, Error>();
   createTaskErrors: Error[] = [];
   taskResults = new Map<string, BrokerTask>();
+  deletedTasks: string[] = [];
+  taskProjectIds = new Map<string, string>();
   monitorCredentialConfigured = true;
+  monitorCredentialAuthenticated = true;
+  freshMonitorCredentialChecks: boolean[] = [];
   publicUrlConfigured = true;
   omitNextKnowledgeTaskStatus = false;
   downloadErrors = new Map<string, Error>();
@@ -173,6 +273,11 @@ class MockBroker implements GeoPresalesBroker {
     evidenceRefs: ["01_company_overview/overview.md"],
   };
   customQuestionClassifierRawText?: string;
+  monitorQuestionTranslationQuestionEnglish =
+    "Which business problems does Acme Service Module 1 primarily solve?";
+  monitorQuestionTranslationRawOutput?: unknown;
+  monitorQuestionTranslationStatus: "completed" | "running" | "failed" =
+    "completed";
 
   private customQuestionClassifierText() {
     return (
@@ -181,16 +286,34 @@ class MockBroker implements GeoPresalesBroker {
     );
   }
 
-  async getStatus() {
+  private monitorQuestionTranslationText(prompt: string) {
+    const sourceQuestionSha256 = prompt.match(
+      /"sourceQuestionSha256":"([a-f0-9]{64})"/,
+    )?.[1];
+    return JSON.stringify(
+      this.monitorQuestionTranslationRawOutput ?? {
+        schemaVersion: 1,
+        sourceQuestionSha256,
+        questionEnglish: this.monitorQuestionTranslationQuestionEnglish,
+      },
+    );
+  }
+
+  async getStatus(options: { freshMonitorCredential?: boolean } = {}) {
+    this.freshMonitorCredentialChecks.push(
+      options.freshMonitorCredential === true,
+    );
     return {
       ok: true,
       credentialConfigured: true,
       monitorCredentialConfigured: this.monitorCredentialConfigured,
+      monitorCredentialAuthenticated: this.monitorCredentialAuthenticated,
       publicUrlConfigured: this.publicUrlConfigured,
     };
   }
 
   async createFile(input: {
+    projectId?: string;
     filename: string;
     mimeType?: string;
     idempotencyKey?: string;
@@ -207,6 +330,12 @@ class MockBroker implements GeoPresalesBroker {
         filename: input.filename,
         status: "pending",
       };
+    } else if (input.filename.endsWith("-task-input.json")) {
+      file = {
+        id: `task-input-file-${this.nextTaskInputFile++}`,
+        filename: input.filename,
+        status: "pending",
+      };
     } else {
       file = {
         id: `file-${this.nextRegularFile++}`,
@@ -215,6 +344,7 @@ class MockBroker implements GeoPresalesBroker {
       };
     }
     this.createdFileIds.push(file.id);
+    if (input.projectId) this.fileProjectIds.set(file.id, input.projectId);
     this.createdFileMimeTypes.set(file.id, input.mimeType);
     this.fileCredentialVersions.set(file.id, this.currentCredentialVersion);
     if (input.idempotencyKey) {
@@ -244,6 +374,8 @@ class MockBroker implements GeoPresalesBroker {
     }
     if (fileId.startsWith("skill-file-")) {
       this.skillUploads.set(fileId, body);
+    } else if (fileId.startsWith("task-input-file-")) {
+      this.taskInputUploads.set(fileId, body);
     } else {
       this.uploads.set(fileId, body);
     }
@@ -251,6 +383,7 @@ class MockBroker implements GeoPresalesBroker {
   }
 
   async createTask(input: {
+    projectId?: string;
     prompt: string;
     attachments: Array<{ file_id: string; filename: string }>;
     idempotencyKey: string;
@@ -283,89 +416,122 @@ class MockBroker implements GeoPresalesBroker {
     const isCustomQuestionClassifierTask = input.prompt.includes(
       "geo-custom-question-classifier.skill.zip",
     );
+    const isMonitorQuestionTranslationTask = input.prompt.includes(
+      "frontmind.geo.monitor-question-translation.v1",
+    );
     const isAssessmentTask = input.prompt.includes(
       "geo-current-state-evaluator.skill.zip",
     );
     const isForecastTask = input.prompt.includes(
       "geo-optimization-outcome-forecaster.skill.zip",
     );
-    const id = isCustomQuestionClassifierTask
-      ? `custom-question-classifier-${++this.customQuestionClassifierTaskCount}`
-      : isQuestionTask
-        ? `question-${++this.questionTaskCount}`
-        : isAssessmentTask
-          ? `assessment-${++this.assessmentTaskCount}`
-          : isForecastTask
-            ? `forecast-${++this.forecastTaskCount}`
-            : `kb-${this.nextTask++}`;
-    const task: BrokerTask = isCustomQuestionClassifierTask
-      ? this.customQuestionClassifierPendingPolls > 0
-        ? {
-            id,
-            status: "running",
-            progress: 0.25,
-            output: [],
-          }
-        : {
-            id,
-            status: "completed",
-            output: [
-              {
-                role: "assistant",
-                content: [{ text: this.customQuestionClassifierText() }],
-              },
-            ],
-          }
-      : isQuestionTask
-        ? {
-            id,
-            status: "completed",
-            output: [
-              {
-                role: "assistant",
-                content: [
+    const id = isMonitorQuestionTranslationTask
+      ? `monitor-question-translation-${++this.monitorQuestionTranslationTaskCount}`
+      : isCustomQuestionClassifierTask
+        ? `custom-question-classifier-${++this.customQuestionClassifierTaskCount}`
+        : isQuestionTask
+          ? `question-${++this.questionTaskCount}`
+          : isAssessmentTask
+            ? `assessment-${++this.assessmentTaskCount}`
+            : isForecastTask
+              ? `forecast-${++this.forecastTaskCount}`
+              : `kb-${this.nextTask++}`;
+    const task: BrokerTask = isMonitorQuestionTranslationTask
+      ? {
+          id,
+          status: this.monitorQuestionTranslationStatus,
+          output:
+            this.monitorQuestionTranslationStatus === "completed"
+              ? [
                   {
-                    text:
-                      this.questionTaskOutput !== undefined
-                        ? (JSON.stringify(this.questionTaskOutput) ?? "")
-                        : this.invalidFirstQuestionTask &&
-                            this.questionTaskCount === 1
-                          ? JSON.stringify({ questions: [] })
-                          : JSON.stringify(validQuestionSet()),
+                    role: "assistant",
+                    content: [
+                      {
+                        text: this.monitorQuestionTranslationText(input.prompt),
+                      },
+                    ],
                   },
-                ],
-              },
-            ],
-          }
-        : isAssessmentTask && this.completeAssessmentImmediately
+                ]
+              : [],
+        }
+      : isCustomQuestionClassifierTask
+        ? this.customQuestionClassifierPendingPolls > 0
+          ? {
+              id,
+              status: "running",
+              progress: 0.25,
+              output: [],
+            }
+          : {
+              id,
+              status: "completed",
+              output: [
+                {
+                  role: "assistant",
+                  content: [{ text: this.customQuestionClassifierText() }],
+                },
+              ],
+            }
+        : isQuestionTask
           ? {
               id,
               status: "completed",
               output: [
                 {
                   role: "assistant",
-                  content: [{ text: JSON.stringify(validAssessmentOutput()) }],
+                  content: [
+                    {
+                      text:
+                        this.questionTaskOutput !== undefined
+                          ? (JSON.stringify(this.questionTaskOutput) ?? "")
+                          : this.invalidFirstQuestionTask &&
+                              this.questionTaskCount === 1
+                            ? JSON.stringify({ questions: [] })
+                            : JSON.stringify(validQuestionSet()),
+                    },
+                  ],
                 },
               ],
             }
-          : isForecastTask && this.completeForecastImmediately
+          : isAssessmentTask && this.completeAssessmentImmediately
             ? {
                 id,
                 status: "completed",
                 output: [
                   {
                     role: "assistant",
-                    content: [{ text: JSON.stringify(validForecastOutput()) }],
+                    content: [
+                      { text: JSON.stringify(validAssessmentOutput()) },
+                    ],
                   },
                 ],
               }
-            : !isQuestionTask &&
-                !isAssessmentTask &&
-                !isForecastTask &&
-                this.omitNextKnowledgeTaskStatus
-              ? { id, progress: 0.25, output: [] }
-              : { id, status: "running", progress: 0.25, output: [] };
+            : isForecastTask && this.completeForecastImmediately
+              ? {
+                  id,
+                  status: "completed",
+                  output: [
+                    {
+                      role: "assistant",
+                      content: [
+                        { text: JSON.stringify(validForecastOutput()) },
+                      ],
+                    },
+                  ],
+                }
+              : !isQuestionTask &&
+                  !isAssessmentTask &&
+                  !isForecastTask &&
+                  this.omitNextKnowledgeTaskStatus
+                ? { id, progress: 0.25, output: [] }
+                : { id, status: "running", progress: 0.25, output: [] };
     this.tasks.set(id, task);
+    if (input.projectId) {
+      this.taskProjectIds.set(id, input.projectId);
+      for (const attachment of input.attachments) {
+        this.fileProjectIds.set(attachment.file_id, input.projectId);
+      }
+    }
     this.idempotentTasks.set(input.idempotencyKey, task);
     return task;
   }
@@ -404,11 +570,50 @@ class MockBroker implements GeoPresalesBroker {
     return this.taskResults.get(taskId) ?? this.getTask(taskId);
   }
 
+  async deleteTask(taskId: string) {
+    this.deletedTasks.push(taskId);
+    this.tasks.delete(taskId);
+    this.taskResults.delete(taskId);
+    this.taskProjectIds.delete(taskId);
+    for (const [key, task] of Array.from(this.idempotentTasks.entries())) {
+      if (task.id === taskId) this.idempotentTasks.delete(key);
+    }
+  }
+
+  async deleteProjectTasks(projectId: string) {
+    const taskIds = Array.from(this.taskProjectIds.entries())
+      .filter(([, candidateProjectId]) => candidateProjectId === projectId)
+      .map(([taskId]) => taskId);
+    for (const taskId of taskIds) await this.deleteTask(taskId);
+    const fileIds = Array.from(this.fileProjectIds.entries())
+      .filter(([, candidateProjectId]) => candidateProjectId === projectId)
+      .map(([fileId]) => fileId);
+    for (const fileId of fileIds) {
+      try {
+        await this.deleteFile(fileId);
+      } catch (error) {
+        if (!(error instanceof GeoBrokerError) || error.status !== 404) {
+          throw error;
+        }
+      }
+    }
+    return {
+      schemaVersion: 1 as const,
+      projectId,
+      status: "deleted" as const,
+      deletedTasks: taskIds.length,
+      deletedFiles: fileIds.length,
+      pendingReservations: 0 as const,
+    };
+  }
+
   async deleteFile(fileId: string) {
     if (this.failDeleteFile) throw new Error("delete failed");
     this.deletedFiles.push(fileId);
     this.uploads.delete(fileId);
     this.skillUploads.delete(fileId);
+    this.taskInputUploads.delete(fileId);
+    this.fileProjectIds.delete(fileId);
   }
 
   async downloadFile(fileId?: string) {
@@ -435,16 +640,18 @@ class MockBroker implements GeoPresalesBroker {
   }
 
   async createMonitorRun(input: {
+    projectId: string;
     question: string;
     platforms: GeoMonitorPlatformId[];
     idempotencyKey: string;
   }) {
+    if (this.monitorCreateError) throw this.monitorCreateError;
     const existing = this.monitorRuns.get(input.idempotencyKey);
     if (existing) return existing;
     this.monitorCreates += 1;
     const run: BrokerMonitorRun = {
       runId: `monitor-${this.monitorCreates}`,
-      status: "submitted",
+      status: this.monitorCreateStatus,
       question: input.question,
       platforms: input.platforms,
       repeatPerPlatform: 5,
@@ -470,8 +677,9 @@ class MockBroker implements GeoPresalesBroker {
     return this.monitorResults.get(runId) ?? this.getMonitorRun(runId);
   }
 
-  async deleteMonitorRun(runId: string) {
+  async deleteMonitorRun(_projectId: string, runId: string) {
     this.monitorRuns.delete(runId);
+    return "deleted" as const;
   }
 }
 
@@ -482,8 +690,11 @@ let paymentCalls: GeoPaymentVerificationInput[];
 let paymentCheckoutCalls: GeoPaymentCheckoutInput[];
 let paymentSwitchCalls: GeoPaymentCheckoutSwitchInput[];
 let paymentStatusCalls: GeoPaymentVerificationInput[];
+let paymentCallbackCalls: number;
 let servicePaymentCalls: GeoServicePaymentVerificationInput[];
 let servicePaymentCheckoutCalls: GeoServicePaymentCheckoutInput[];
+let servicePaymentSwitchCalls: GeoServicePaymentCheckoutSwitchInput[];
+let serviceBankTransferCalls: GeoServiceBankTransferInput[];
 let servicePaymentStatusCalls: GeoServicePaymentVerificationInput[];
 let accountProvisionCalls: GeoAccountProvisionRequest[];
 let purchaseProvisionCalls: GeoPurchaseProvisionRequestV2[];
@@ -522,13 +733,18 @@ let projectOrderRegistry: GeoProjectOrderRegistry;
 let paymentGateway: GeoPaymentGateway;
 let customQuestionValidationStore: MemoryGeoCustomQuestionValidationStore;
 let customQuestionValidationNowMs: number;
+let knowledgeBaseFinalizerOverride:
+  | typeof finalizeKnowledgeBaseCandidate
+  | undefined;
 
 const CUSTOM_QUESTION_CLIENT_REQUEST_ID =
   "11111111-1111-4111-8111-111111111111";
 const CONTRACT_AUTH_CODE = "frontmind666";
+const BANK_TRANSFER_CONFIRMATION_CODE = "frontmind888";
 
 beforeEach(async () => {
   broker = new MockBroker();
+  knowledgeBaseFinalizerOverride = undefined;
   customQuestionValidationNowMs = Date.parse("2026-08-01T00:00:00.000Z");
   customQuestionValidationStore = new MemoryGeoCustomQuestionValidationStore();
   broker.archive = await fixtureCandidateArchive();
@@ -536,8 +752,11 @@ beforeEach(async () => {
   paymentCheckoutCalls = [];
   paymentSwitchCalls = [];
   paymentStatusCalls = [];
+  paymentCallbackCalls = 0;
   servicePaymentCalls = [];
   servicePaymentCheckoutCalls = [];
+  servicePaymentSwitchCalls = [];
+  serviceBankTransferCalls = [];
   servicePaymentStatusCalls = [];
   accountProvisionCalls = [];
   purchaseProvisionCalls = [];
@@ -610,6 +829,15 @@ beforeEach(async () => {
         ),
         orders,
       };
+    },
+    async deleteProject(projectId) {
+      let deletedOrders = 0;
+      for (const [orderId, order] of Array.from(projectOrders.entries())) {
+        if (order.projectId !== projectId) continue;
+        projectOrders.delete(orderId);
+        deletedOrders += 1;
+      }
+      return { schemaVersion: 1, projectId, deletedOrders };
     },
   };
   paymentGateway = {
@@ -685,6 +913,52 @@ beforeEach(async () => {
         },
       };
     },
+    async switchServiceCheckoutMethod(input) {
+      servicePaymentSwitchCalls.push(input);
+      if (paymentAccepted) {
+        throw new GeoPaymentVerificationError(
+          "付款已确认，不能再更换支付方式",
+          "PAYMENT_ALREADY_CONFIRMED",
+          409,
+        );
+      }
+      return {
+        authorization: input.authorization,
+        orderId: "zpay-service-order-001",
+        amountFen: input.expectedAmountFen,
+        expiresAt: input.checkoutExpiresAt,
+        action: "https://zpayz.cn/submit.php",
+        method: "POST",
+        fields: {
+          pid: "merchant-test",
+          type: input.method,
+          out_trade_no: "zpay-service-order-001",
+          money: (input.expectedAmountFen / 100).toFixed(2),
+          param: input.authorization,
+          sign: "test-service-switch-signature",
+          sign_type: "MD5",
+        },
+      };
+    },
+    async confirmServiceBankTransfer(input) {
+      serviceBankTransferCalls.push(input);
+      if (input.authorization && paymentAccepted) {
+        throw new GeoPaymentVerificationError(
+          "在线付款已经确认，不能改为对公付款",
+          "PAYMENT_ALREADY_CONFIRMED",
+          409,
+        );
+      }
+      return {
+        orderId: input.orderId,
+        tradeNo: `bank:${createHash("sha256")
+          .update(input.orderId)
+          .digest("hex")
+          .slice(0, 48)}`,
+        amountFen: input.expectedAmountFen,
+        paidAt: servicePaymentPaidAt,
+      };
+    },
     async getServiceStatus(input) {
       servicePaymentStatusCalls.push(input);
       return {
@@ -695,6 +969,7 @@ beforeEach(async () => {
       };
     },
     async verifyCallback(params) {
+      paymentCallbackCalls += 1;
       if (params.sign === "ledger-down") {
         throw new GeoPaymentVerificationError(
           "付款已确认，但支付回执暂未安全保存",
@@ -743,7 +1018,13 @@ beforeEach(async () => {
       broker,
       customQuestionValidationStore,
       customQuestionValidationNow: () => customQuestionValidationNowMs,
+      knowledgeBaseFinalizer: (input) =>
+        knowledgeBaseFinalizerOverride
+          ? knowledgeBaseFinalizerOverride(input)
+          : finalizeKnowledgeBaseCandidate(input),
       paymentGateway,
+      monitorQuestionTranslationWaitMs: 100,
+      monitorQuestionTranslationPollMs: 2,
       accountProvisioner: async (request) => {
         accountProvisionCalls.push(request);
         return {
@@ -772,6 +1053,7 @@ beforeEach(async () => {
             ...purchaseProvisionResponse.purchase,
             projectId: request.project.id,
             orderId: request.order.id,
+            marketEdition: request.marketEdition,
           },
         };
       },
@@ -781,15 +1063,19 @@ beforeEach(async () => {
       },
       manualOrderCreator: async (request) => {
         manualOrderCreateCalls.push(request);
+        const marketEdition = request.marketEdition ?? "domestic";
+        const domesticAmountFen =
+          request.service.purchasedQuestion.category === "product_scenario"
+            ? 150_000
+            : 200_000;
         const response: GeoManualServiceOrderResponse = {
           ...manualOrderResponse,
           order: {
             ...manualOrderResponse.order,
             projectId: request.project.id,
+            marketEdition,
             amountFen:
-              request.service.purchasedQuestion.category === "product_scenario"
-                ? 150_000
-                : 200_000,
+              domesticAmountFen * (marketEdition === "overseas" ? 2 : 1),
           },
         };
         manualOrderResponse = response;
@@ -1045,7 +1331,13 @@ describe("GEO API", () => {
       [`/projects/${encoded}/services/contracts`, "POST", {}],
       [`/projects/${encoded}/services/contracts/status`, "POST", {}],
       [`/projects/${encoded}/services/payments`, "POST", {}],
+      [`/projects/${encoded}/services/payments/switch`, "POST", {}],
       [`/projects/${encoded}/services/payments/status`, "POST", {}],
+      [
+        `/projects/${encoded}/services/payments/bank-transfer/confirm`,
+        "POST",
+        {},
+      ],
       [`/projects/${encoded}/services/start`, "POST", {}],
       [`/projects/${encoded}/services/account`, "POST", {}],
       [`/projects/${encoded}/services/account/status`, "POST", {}],
@@ -1300,7 +1592,12 @@ describe("GEO API", () => {
       ],
     });
     expect(broker.prompts[0]).toContain("不要询问、等待确认");
-    expect(broker.prompts[0]).toContain("catalog.pdf");
+    expect(broker.prompts[0]).not.toContain("catalog.pdf");
+    expect(
+      JSON.parse(
+        broker.taskInputUploads.get("task-input-file-1")!.toString("utf8"),
+      ).data.uploadedFiles,
+    ).toEqual(["catalog.pdf"]);
     expect(broker.prompts[0]).not.toContain("# FILE: SKILL.md");
     expect(broker.taskAgentProfiles).toEqual([FRONTMIND_BASE_PROFILE]);
     expect(broker.taskAttachments[0]).toEqual([
@@ -1308,11 +1605,135 @@ describe("GEO API", () => {
         file_id: "skill-file-1",
         filename: "website-one-shot-kb-builder.skill.zip",
       },
+      {
+        file_id: "task-input-file-1",
+        filename: "frontmind-website-kb-task-input.json",
+      },
       { file_id: ticket.fileId, filename: "catalog.pdf" },
     ]);
     expect(
       broker.skillUploads.get("skill-file-1")?.subarray(0, 4).toString("hex"),
     ).toBe("504b0304");
+    expect(broker.prompts[0]).toContain(
+      createHash("sha256")
+        .update(broker.skillUploads.get("skill-file-1")!)
+        .digest("hex"),
+    );
+    expect(broker.prompts[0]).toContain(
+      createHash("sha256")
+        .update(broker.taskInputUploads.get("task-input-file-1")!)
+        .digest("hex"),
+    );
+  });
+
+  it("renames customer uploads that collide with server-owned Skill or task-input files", async () => {
+    const { cookie } = await verifyInvite();
+    const initialized = await jsonRequest("/uploads/init", cookie, {
+      method: "POST",
+      body: {
+        filename: "website-one-shot-kb-builder.skill.zip",
+        contentType: "application/zip",
+        sizeBytes: 3,
+      },
+    });
+    expect(initialized.response.status).toBe(201);
+    const ticket = initialized.body as Record<string, string>;
+    expect(ticket.filename).toMatch(
+      /^customer-upload-[a-f0-9]{12}-website-one-shot-kb-builder\.skill\.zip$/,
+    );
+
+    const uploaded = await fetch(`${baseUrl}/uploads/proxy`, {
+      method: "PUT",
+      headers: {
+        cookie,
+        "content-type": "application/zip",
+        "x-geo-upload-token": ticket.uploadToken,
+      },
+      body: Buffer.from("zip"),
+    });
+    expect(uploaded.status).toBe(200);
+
+    const created = await jsonRequest("/projects", cookie, {
+      method: "POST",
+      body: {
+        input: "",
+        attachments: [
+          {
+            fileId: ticket.fileId,
+            // A stale or hostile client may replay the original reserved name;
+            // the sealed upload token remains authoritative.
+            filename: "website-one-shot-kb-builder.skill.zip",
+            uploadToken: ticket.uploadToken,
+          },
+        ],
+      },
+    });
+    expect(created.response.status).toBe(201);
+    const submittedNames = broker.taskAttachments[0]!.map(
+      (attachment) => attachment.filename,
+    );
+    expect(
+      submittedNames.filter(
+        (filename) => filename === "website-one-shot-kb-builder.skill.zip",
+      ),
+    ).toHaveLength(1);
+    expect(submittedNames).toContain(ticket.filename);
+    expect(
+      JSON.parse(
+        broker.taskInputUploads.get("task-input-file-1")!.toString("utf8"),
+      ).data.uploadedFiles,
+    ).toEqual([ticket.filename]);
+  });
+
+  it("reuses generated file ids after an ambiguous task-create response", async () => {
+    const { cookie } = await verifyInvite();
+    const createTask = broker.createTask.bind(broker);
+    const submittedAttachments: Array<
+      Array<{ file_id: string; filename: string }>
+    > = [];
+    let loseFirstResponse = true;
+    broker.createTask = async (input) => {
+      submittedAttachments.push(
+        input.attachments.map(({ file_id, filename }) => ({
+          file_id,
+          filename,
+        })),
+      );
+      const task = await createTask(input);
+      if (loseFirstResponse) {
+        loseFirstResponse = false;
+        throw new GeoBrokerError(
+          "task committed before the response was lost",
+          502,
+          "AGENT_UNAVAILABLE",
+        );
+      }
+      return task;
+    };
+    const request = {
+      method: "POST" as const,
+      body: {
+        clientRequestId: "11111111-1111-4111-8111-111111111111",
+        input: "https://acme.example",
+        attachments: [],
+      },
+    };
+
+    const ambiguous = await jsonRequest("/projects", cookie, request);
+    expect(ambiguous.response.status).toBe(502);
+    const replayed = await jsonRequest("/projects", cookie, request);
+    expect(replayed.response.status).toBe(201);
+
+    expect(submittedAttachments).toHaveLength(2);
+    expect(submittedAttachments[1]).toEqual(submittedAttachments[0]);
+    expect(new Set(broker.fileCreateOperationKeys).size).toBe(2);
+    expect(broker.createdFileIds).toHaveLength(2);
+    expect(broker.deletedFiles).not.toContain(
+      submittedAttachments[0]![0]!.file_id,
+    );
+    expect(broker.deletedFiles).not.toContain(
+      submittedAttachments[0]![1]!.file_id,
+    );
   });
 
   it("binds upload tickets to the invitation session and declared size", async () => {
@@ -1351,7 +1772,7 @@ describe("GEO API", () => {
     expect(wrongSize.status).toBe(400);
   });
 
-  it("finalizes a candidate, returns fixed knowledge sections and strict questions, then retains both tasks", async () => {
+  it("finalizes a candidate, returns fixed knowledge sections and strict questions, then physically deletes both tasks", async () => {
     const { cookie } = await verifyInvite();
     const created = await jsonRequest("/projects", cookie, {
       method: "POST",
@@ -1418,7 +1839,17 @@ describe("GEO API", () => {
     expect(broker.prompts[1]).toContain(
       "最终响应只能是符合 schema 的 JSON 对象",
     );
-    expect(broker.prompts[1]).toContain('"companyName": "Acme"');
+    expect(broker.prompts[1]).not.toContain('"companyName": "Acme"');
+    const questionTaskInputAttachment = broker.taskAttachments[1]!.find(
+      (attachment) => attachment.filename.endsWith("-task-input.json"),
+    )!;
+    expect(
+      JSON.parse(
+        broker.taskInputUploads
+          .get(questionTaskInputAttachment.file_id)!
+          .toString("utf8"),
+      ).data.companyName,
+    ).toBe("Acme");
 
     const replayedOldToken = await jsonRequest(
       `/projects/${encodeURIComponent(initial.projectToken)}/questions`,
@@ -1449,11 +1880,48 @@ describe("GEO API", () => {
     );
     expect(removed.body).toMatchObject({
       ok: true,
-      deletedTasks: 0,
-      retainedTasks: 2,
+      deletedTasks: 2,
     });
-    expect(broker.tasks.has("kb-1")).toBe(true);
-    expect(broker.tasks.has("question-1")).toBe(true);
+    expect(broker.tasks.has("kb-1")).toBe(false);
+    expect(broker.tasks.has("question-1")).toBe(false);
+  });
+
+  it("keeps both v4 archive path inventories out of the public project payload", async () => {
+    knowledgeBaseFinalizerOverride = finalizeKnowledgeBaseCandidateAsV4;
+    const { cookie } = await verifyInvite();
+    const created = await jsonRequest("/projects", cookie, {
+      method: "POST",
+      body: { input: "https://acme.example", attachments: [] },
+    });
+    const initial = created.body as Record<string, any>;
+    broker.tasks.set("kb-1", {
+      id: "kb-1",
+      status: "completed",
+      output: [
+        {
+          role: "assistant",
+          content: [
+            {
+              type: "output_file",
+              file_id: "archive-v4",
+              filename: "Acme-v4.zip",
+            },
+          ],
+        },
+      ],
+    });
+
+    const completed = await jsonRequest(
+      `/projects/${encodeURIComponent(initial.projectToken)}`,
+      cookie,
+    );
+    const knowledgeBase = (completed.body as Record<string, any>).project
+      .knowledgeBase;
+
+    expect(completed.response.status).toBe(200);
+    expect(knowledgeBase.archiveContractVersion).toBe(4);
+    expect(knowledgeBase.allPaths).toBeUndefined();
+    expect(knowledgeBase.evidencePaths).toBeUndefined();
   });
 
   it("finalizes the single candidate pipeline once and serves the same final ZIP everywhere", async () => {
@@ -2340,13 +2808,128 @@ describe("GEO API", () => {
     expect(retried.response.status).toBe(200);
     expect(retried.body).toMatchObject({
       ok: true,
-      deletedTasks: 0,
-      retainedTasks: 1,
-      deletedFiles: 2,
+      deletedTasks: 1,
+      deletedFiles: 3,
     });
-    expect(retainedTaskIds.every((taskId) => broker.tasks.has(taskId))).toBe(
+    expect(retainedTaskIds.every((taskId) => !broker.tasks.has(taskId))).toBe(
       true,
     );
+  });
+
+  it("returns a retryable deletion receipt while a project task reservation is still in flight", async () => {
+    const ready = await createReadyProject();
+    const deleteProjectTasks = broker.deleteProjectTasks.bind(broker);
+    let attempts = 0;
+    broker.deleteProjectTasks = async (projectId) => {
+      attempts += 1;
+      if (attempts <= 25) {
+        return {
+          schemaVersion: 1 as const,
+          projectId,
+          status: "deleting" as const,
+          deletedTasks: 1,
+          deletedFiles: 0,
+          pendingReservations: 1,
+          remainingTasks: 1,
+          retryAfterMs: 1_000,
+        };
+      }
+      return deleteProjectTasks(projectId);
+    };
+
+    for (let index = 0; index < 25; index += 1) {
+      const pending = await jsonRequest(
+        `/projects/${encodeURIComponent(ready.projectToken)}`,
+        ready.cookie,
+        { method: "DELETE" },
+      );
+      expect(pending.response.status).toBe(202);
+      expect(pending.body).toMatchObject({
+        status: "deleting",
+        pendingReservations: 1,
+        retryAfterMs: 1_000,
+      });
+    }
+
+    const completed = await jsonRequest(
+      `/projects/${encodeURIComponent(ready.projectToken)}`,
+      ready.cookie,
+      { method: "DELETE" },
+    );
+    expect(completed.response.status).toBe(200);
+    expect(completed.body).toMatchObject({ ok: true });
+  });
+
+  it("keeps project deletion pending until an in-flight monitor submission settles", async () => {
+    const ready = await createReadyProject();
+    const monitored = await startOnePlatformMonitor(ready);
+    const deleteMonitorRun = broker.deleteMonitorRun.bind(broker);
+    let attempts = 0;
+    broker.deleteMonitorRun = async (projectId, runId) => {
+      attempts += 1;
+      if (attempts === 1) return "deleting" as const;
+      return deleteMonitorRun(projectId, runId);
+    };
+
+    const pending = await jsonRequest(
+      `/projects/${encodeURIComponent(monitored.projectToken)}`,
+      ready.cookie,
+      { method: "DELETE" },
+    );
+    expect(pending.response.status).toBe(202);
+    expect(pending.body).toMatchObject({
+      status: "deleting",
+      pendingMonitorRuns: 1,
+      retryAfterMs: 2_000,
+    });
+
+    const completed = await jsonRequest(
+      `/projects/${encodeURIComponent(monitored.projectToken)}`,
+      ready.cookie,
+      { method: "DELETE" },
+    );
+    expect(completed.response.status).toBe(200);
+    expect(completed.body).toMatchObject({ ok: true });
+  });
+
+  it("keeps project deletion pending until an in-flight task write settles", async () => {
+    const ready = await createReadyProject();
+    const deleteTask = broker.deleteTask.bind(broker);
+    let taskDeletionPending = true;
+    broker.deleteTask = async (taskId) => {
+      if (taskDeletionPending) {
+        throw new GeoBrokerError(
+          "task completion is still settling",
+          425,
+          "TASK_DELETION_PENDING",
+        );
+      }
+      return deleteTask(taskId);
+    };
+
+    const pending = await jsonRequest(
+      `/projects/${encodeURIComponent(ready.projectToken)}`,
+      ready.cookie,
+      { method: "DELETE" },
+    );
+    expect(pending.response.status).toBe(202);
+    expect(pending.body).toMatchObject({
+      status: "deleting",
+      pendingResources: expect.any(Number),
+      retryAfterMs: 2_000,
+    });
+    expect(
+      Number((pending.body as Record<string, unknown>).pendingResources),
+    ).toBeGreaterThan(0);
+
+    taskDeletionPending = false;
+    const completed = await jsonRequest(
+      `/projects/${encodeURIComponent(ready.projectToken)}`,
+      ready.cookie,
+      { method: "DELETE" },
+    );
+    expect(completed.response.status).toBe(200);
+    expect(completed.body).toMatchObject({ ok: true });
   });
 
   it("treats resources hidden by a rotated API Key as already deleted", async () => {
@@ -2369,7 +2952,7 @@ describe("GEO API", () => {
     expect(deleted.body).toMatchObject({ ok: true });
   });
 
-  it("blocks deletion for a pending monitoring order and until paid monitoring is fulfilled", async () => {
+  it("physically deletes a project with a pending monitoring order and permanently fences its old token", async () => {
     const ready = await createReadyProject();
     const checkout = await jsonRequest(
       `/projects/${encodeURIComponent(ready.projectToken)}/payments`,
@@ -2390,11 +2973,26 @@ describe("GEO API", () => {
       ready.cookie,
       { method: "DELETE" },
     );
-    expect(pendingDelete.response.status).toBe(409);
-    expect(pendingDelete.body).toMatchObject({
-      ok: false,
-      error: { code: "PROJECT_ORDER_DELETE_BLOCKED" },
+    expect(pendingDelete.response.status).toBe(200);
+    expect(pendingDelete.body).toMatchObject({ ok: true, deletedOrders: 2 });
+    expect(projectOrders.size).toBe(0);
+
+    const fencedRead = await jsonRequest(
+      `/projects/${encodeURIComponent(ready.projectToken)}`,
+      ready.cookie,
+    );
+    expect(fencedRead.response.status).toBe(410);
+    expect(fencedRead.body).toMatchObject({
+      error: { code: "PROJECT_DELETED" },
     });
+
+    const repeatedDelete = await jsonRequest(
+      `/projects/${encodeURIComponent(ready.projectToken)}`,
+      ready.cookie,
+      { method: "DELETE" },
+    );
+    expect(repeatedDelete.response.status).toBe(200);
+    expect(repeatedDelete.body).toMatchObject({ ok: true, deletedOrders: 0 });
 
     const restartedApp = express();
     restartedApp.use(
@@ -2403,6 +3001,7 @@ describe("GEO API", () => {
         broker,
         paymentGateway,
         projectOrderRegistry,
+        customQuestionValidationStore,
         env: {
           NODE_ENV: "test",
           FRONTMIND_GEO_INVITE_CODE: "frontmind666",
@@ -2417,67 +3016,19 @@ describe("GEO API", () => {
     );
     try {
       const restartedPort = (restartedServer.address() as AddressInfo).port;
-      const restartedDelete = await fetch(
+      const restartedRead = await fetch(
         `http://127.0.0.1:${restartedPort}/api/geo/projects/${encodeURIComponent(ready.projectToken)}`,
-        { method: "DELETE", headers: { cookie: ready.cookie } },
+        { headers: { cookie: ready.cookie } },
       );
-      expect(restartedDelete.status).toBe(409);
-      expect(await restartedDelete.json()).toMatchObject({
-        error: { code: "PROJECT_ORDER_DELETE_BLOCKED" },
+      expect(restartedRead.status).toBe(410);
+      expect(await restartedRead.json()).toMatchObject({
+        error: { code: "PROJECT_DELETED" },
       });
     } finally {
       await new Promise<void>((resolve, reject) =>
         restartedServer.close((error) => (error ? reject(error) : resolve())),
       );
     }
-
-    const monitored = await startOnePlatformMonitor(ready);
-    const unfulfilledDelete = await jsonRequest(
-      `/projects/${encodeURIComponent(ready.projectToken)}`,
-      ready.cookie,
-      { method: "DELETE" },
-    );
-    expect(unfulfilledDelete.response.status).toBe(409);
-    expect(unfulfilledDelete.body).toMatchObject({
-      error: { code: "PROJECT_ORDER_DELETE_BLOCKED" },
-    });
-
-    const run = broker.monitorRuns.get("monitor-1")!;
-    broker.monitorRuns.set("monitor-1", {
-      ...run,
-      status: "partial_review_required",
-      failedItems: 1,
-      error: "一项监控结果需要人工对账",
-    });
-    const reconciliationDelete = await jsonRequest(
-      `/projects/${encodeURIComponent(ready.projectToken)}`,
-      ready.cookie,
-      { method: "DELETE" },
-    );
-    expect(reconciliationDelete.response.status).toBe(409);
-    expect(reconciliationDelete.body).toMatchObject({
-      error: { code: "PROJECT_ORDER_DELETE_BLOCKED" },
-    });
-
-    broker.monitorRuns.set("monitor-1", {
-      ...run,
-      status: "completed",
-      completedItems: 5,
-      records: Array.from({ length: 5 }, (_, index) =>
-        monitorRecord(index + 1, `Acme 回答 ${index + 1}`),
-      ),
-    });
-    const fulfilledDelete = await jsonRequest(
-      `/projects/${encodeURIComponent(monitored.projectToken)}`,
-      ready.cookie,
-      { method: "DELETE" },
-    );
-    expect(fulfilledDelete.response.status).toBe(200);
-    expect(fulfilledDelete.body).toMatchObject({
-      ok: true,
-      deletedMonitorRuns: 1,
-    });
-    expect(broker.monitorRuns.has("monitor-1")).toBe(false);
   });
 
   it("allows deletion after a paid monitoring run has explicitly terminated", async () => {
@@ -2563,7 +3114,7 @@ describe("GEO API", () => {
     });
   });
 
-  it("fails closed before remote deletion when the durable order registry cannot be read", async () => {
+  it("does not consult deletion eligibility before physically deleting a project", async () => {
     const ready = await createReadyProject();
     projectOrderRegistry.findByProject = async () => {
       throw new Error("database unavailable");
@@ -2574,13 +3125,10 @@ describe("GEO API", () => {
       ready.cookie,
       { method: "DELETE" },
     );
-    expect(removed.response.status).toBe(503);
-    expect(removed.body).toMatchObject({
-      ok: false,
-      error: { code: "PROJECT_ORDER_REGISTRY_UNAVAILABLE" },
-    });
-    expect(broker.tasks.has("kb-1")).toBe(true);
-    expect(broker.tasks.has("question-1")).toBe(true);
+    expect(removed.response.status).toBe(200);
+    expect(removed.body).toMatchObject({ ok: true });
+    expect(broker.tasks.has("kb-1")).toBe(false);
+    expect(broker.tasks.has("question-1")).toBe(false);
   });
 
   it("closes a durable checkout intent after an explicit gateway failure and does not leave a phantom delete block", async () => {
@@ -2648,7 +3196,7 @@ describe("GEO API", () => {
     expect(removed.response.status).toBe(200);
   });
 
-  it("keeps the durable intent blocking deletion when checkout commit is unavailable", async () => {
+  it("physically deletes a durable pending intent when checkout commit is unavailable", async () => {
     const ready = await createReadyProject();
     projectOrderRegistry.commitIntent = async () => {
       throw new Error("commit result unavailable");
@@ -2676,10 +3224,9 @@ describe("GEO API", () => {
       ready.cookie,
       { method: "DELETE" },
     );
-    expect(removed.response.status).toBe(409);
-    expect(removed.body).toMatchObject({
-      error: { code: "PROJECT_ORDER_DELETE_BLOCKED" },
-    });
+    expect(removed.response.status).toBe(200);
+    expect(removed.body).toMatchObject({ ok: true, deletedOrders: 1 });
+    expect(projectOrders.size).toBe(0);
   });
 
   it("deduplicates a replayed initial project request within the same session", async () => {
@@ -2968,6 +3515,398 @@ describe("GEO API", () => {
     expect(broker.monitorCreates).toBe(0);
   });
 
+  it("binds the overseas edition to ChatGPT, the English prompt, and the ¥5 checkout", async () => {
+    const ready = await createReadyProject();
+    const sourceQuestion = "Acme 的服务模块 1 主要解决哪些业务问题？";
+    const scope = {
+      questionId: "product-scenario-01",
+      monitoringEdition: "overseas",
+      platformIds: ["chatgpt"],
+    } as const;
+
+    const created = await jsonRequest(
+      `/projects/${encodeURIComponent(ready.projectToken)}/payments`,
+      ready.cookie,
+      { method: "POST", body: { ...scope, method: "wxpay" } },
+    );
+
+    expect(created.response.status).toBe(201);
+    expect(created.body).toMatchObject({
+      payment: {
+        amountFen: 500,
+        unitPriceFen: 500,
+        monitoringEdition: "overseas",
+        answersPerPlatform: 5,
+      },
+    });
+    expect(paymentCheckoutCalls.at(-1)).toMatchObject({
+      monitoringEdition: "overseas",
+      platformIds: ["chatgpt"],
+      expectedAmountFen: 500,
+    });
+    expect(broker.monitorQuestionTranslationTaskCount).toBe(1);
+
+    const originalPayment = (created.body as any).payment;
+    paymentAccepted = false;
+    const switched = await jsonRequest(
+      `/projects/${encodeURIComponent(ready.projectToken)}/payments/switch`,
+      ready.cookie,
+      {
+        method: "POST",
+        body: {
+          ...scope,
+          authorization: originalPayment.authorization,
+          method: "alipay",
+        },
+      },
+    );
+    expect(switched.response.status).toBe(200);
+    expect(switched.body).toMatchObject({
+      payment: {
+        authorization: originalPayment.authorization,
+        orderId: originalPayment.orderId,
+        expiresAt: originalPayment.expiresAt,
+        amountFen: 500,
+        unitPriceFen: 500,
+        monitoringEdition: "overseas",
+        fields: {
+          type: "alipay",
+          param: originalPayment.authorization,
+          out_trade_no: originalPayment.orderId,
+        },
+      },
+    });
+    expect(paymentSwitchCalls.at(-1)).toMatchObject({
+      monitoringEdition: "overseas",
+      platformIds: ["chatgpt"],
+      expectedAmountFen: 500,
+      checkoutExpiresAt: originalPayment.expiresAt,
+      method: "alipay",
+    });
+    paymentAccepted = true;
+
+    const started = await jsonRequest(
+      `/projects/${encodeURIComponent(ready.projectToken)}/monitoring`,
+      ready.cookie,
+      {
+        method: "POST",
+        body: {
+          ...scope,
+          paymentAuthorization: originalPayment.authorization,
+        },
+      },
+    );
+
+    expect(started.response.status).toBe(201);
+    expect(started.body).toMatchObject({
+      project: {
+        monitoringEdition: "overseas",
+        selectedQuestionId: scope.questionId,
+        selectedPlatformIds: ["chatgpt"],
+      },
+    });
+    expect(paymentCalls.at(-1)).toMatchObject({
+      monitoringEdition: "overseas",
+      expectedAmountFen: 500,
+    });
+    expect(broker.monitorQuestionTranslationTaskCount).toBe(1);
+    expect(broker.monitorCreates).toBe(1);
+    const translationPrompt = broker.prompts.find((prompt) =>
+      prompt.includes("frontmind.geo.monitor-question-translation.v1"),
+    );
+    expect(translationPrompt).toContain(sourceQuestion);
+    expect(broker.taskAttachments.at(-1)).toEqual([]);
+    expect(broker.monitorRuns.get("monitor-1")).toMatchObject({
+      question:
+        "Which business problems does Acme Service Module 1 primarily solve?",
+      platforms: ["chatgpt"],
+    });
+    const startedPayload = started.body as Record<string, any>;
+    expect(JSON.stringify(startedPayload.project.monitoring)).not.toContain(
+      "Which business problems does Acme Service Module 1 primarily solve?",
+    );
+    expect(
+      startedPayload.project.questions.every(
+        (question: Record<string, unknown>) => !("questionEnglish" in question),
+      ),
+    ).toBe(true);
+  });
+
+  it("starts from strict typed text.value output before task status convergence", async () => {
+    broker.monitorQuestionTranslationStatus = "running";
+    const ready = await createReadyProject();
+    const scope = {
+      questionId: "product-scenario-01",
+      monitoringEdition: "overseas",
+      platformIds: ["chatgpt"],
+    } as const;
+    const checkout = await jsonRequest(
+      `/projects/${encodeURIComponent(ready.projectToken)}/payments`,
+      ready.cookie,
+      { method: "POST", body: { ...scope, method: "wxpay" } },
+    );
+    expect(checkout.response.status).toBe(201);
+
+    const task = broker.tasks.get("monitor-question-translation-1")!;
+    task.status = "running";
+    task.output = monitorTranslationTaskOutput(
+      "Acme 的服务模块 1 主要解决哪些业务问题？",
+      "Which business problems does Acme Service Module 1 primarily solve?",
+    );
+    const started = await jsonRequest(
+      `/projects/${encodeURIComponent(ready.projectToken)}/monitoring`,
+      ready.cookie,
+      {
+        method: "POST",
+        body: {
+          ...scope,
+          paymentAuthorization: "zpay-signed-authorization-placeholder",
+        },
+      },
+    );
+
+    expect(started.response.status).toBe(201);
+    expect(broker.monitorCreates).toBe(1);
+    expect(broker.monitorRuns.get("monitor-1")).toMatchObject({
+      question:
+        "Which business problems does Acme Service Module 1 primarily solve?",
+      platforms: ["chatgpt"],
+    });
+  });
+
+  it("waits inside one paid request for a running translation to complete", async () => {
+    broker.monitorQuestionTranslationStatus = "running";
+    const ready = await createReadyProject();
+    const scope = {
+      questionId: "product-scenario-01",
+      monitoringEdition: "overseas",
+      platformIds: ["chatgpt"],
+    } as const;
+    const checkout = await jsonRequest(
+      `/projects/${encodeURIComponent(ready.projectToken)}/payments`,
+      ready.cookie,
+      { method: "POST", body: { ...scope, method: "wxpay" } },
+    );
+    expect(checkout.response.status).toBe(201);
+    const task = broker.tasks.get("monitor-question-translation-1")!;
+    const getTask = vi.spyOn(broker, "getTask");
+    const complete = setTimeout(() => {
+      task.status = "completed";
+      task.output = monitorTranslationTaskOutput(
+        "Acme 的服务模块 1 主要解决哪些业务问题？",
+        "Which business problems does Acme Service Module 1 primarily solve?",
+      );
+    }, 12);
+
+    const started = await jsonRequest(
+      `/projects/${encodeURIComponent(ready.projectToken)}/monitoring`,
+      ready.cookie,
+      {
+        method: "POST",
+        body: {
+          ...scope,
+          paymentAuthorization: "zpay-signed-authorization-placeholder",
+        },
+      },
+    );
+    clearTimeout(complete);
+
+    expect(started.response.status).toBe(201);
+    expect(getTask.mock.calls.length).toBeGreaterThan(1);
+    expect(broker.monitorCreates).toBe(1);
+  });
+
+  it("keeps overseas checkout available when translation prewarming is deferred", async () => {
+    const ready = await createReadyProject();
+    broker.createTaskErrors.push(
+      new GeoBrokerError(
+        "translation queue unavailable",
+        503,
+        "AGENT_UNAVAILABLE",
+      ),
+    );
+    const scope = {
+      questionId: "product-scenario-01",
+      monitoringEdition: "overseas",
+      platformIds: ["chatgpt"],
+    } as const;
+
+    const checkout = await jsonRequest(
+      `/projects/${encodeURIComponent(ready.projectToken)}/payments`,
+      ready.cookie,
+      { method: "POST", body: { ...scope, method: "wxpay" } },
+    );
+    expect(checkout.response.status).toBe(201);
+    expect(paymentCheckoutCalls).toHaveLength(1);
+    expect(broker.monitorQuestionTranslationTaskCount).toBe(0);
+
+    const started = await jsonRequest(
+      `/projects/${encodeURIComponent(ready.projectToken)}/monitoring`,
+      ready.cookie,
+      {
+        method: "POST",
+        body: {
+          ...scope,
+          paymentAuthorization: "zpay-signed-authorization-placeholder",
+        },
+      },
+    );
+    expect(started.response.status).toBe(201);
+    expect(broker.monitorQuestionTranslationTaskCount).toBe(1);
+    expect(broker.monitorCreates).toBe(1);
+  });
+
+  it("fails closed after payment when the monitoring-time translation is not source-bound", async () => {
+    broker.monitorQuestionTranslationRawOutput = {
+      schemaVersion: 1,
+      sourceQuestionSha256: "0".repeat(64),
+      questionEnglish: "Is this unrelated platform stable?",
+    };
+    const ready = await createReadyProject();
+    const scope = {
+      questionId: "product-scenario-01",
+      monitoringEdition: "overseas",
+      platformIds: ["chatgpt"],
+    } as const;
+    const checkout = await jsonRequest(
+      `/projects/${encodeURIComponent(ready.projectToken)}/payments`,
+      ready.cookie,
+      {
+        method: "POST",
+        body: { ...scope, method: "wxpay" },
+      },
+    );
+    expect(checkout.response.status).toBe(201);
+    expect(paymentCheckoutCalls).toHaveLength(1);
+
+    const started = await jsonRequest(
+      `/projects/${encodeURIComponent(ready.projectToken)}/monitoring`,
+      ready.cookie,
+      {
+        method: "POST",
+        body: {
+          ...scope,
+          paymentAuthorization: "zpay-signed-authorization-placeholder",
+        },
+      },
+    );
+    expect(started.response.status).toBe(502);
+    expect(started.body).toMatchObject({
+      error: { code: "QUESTION_TRANSLATION_FAILED" },
+    });
+    expect(paymentCalls).toHaveLength(1);
+    expect(broker.monitorQuestionTranslationTaskCount).toBe(1);
+    expect(broker.monitorCreates).toBe(0);
+    expect(projectOrders.get("zpay-order-001")?.state).toBe("review_required");
+  });
+
+  it("keeps a paid order retryable without duplicating a pending translation task", async () => {
+    broker.monitorQuestionTranslationStatus = "running";
+    const ready = await createReadyProject();
+    const scope = {
+      questionId: "product-scenario-01",
+      monitoringEdition: "overseas",
+      platformIds: ["chatgpt"],
+    } as const;
+    const checkout = await jsonRequest(
+      `/projects/${encodeURIComponent(ready.projectToken)}/payments`,
+      ready.cookie,
+      { method: "POST", body: { ...scope, method: "wxpay" } },
+    );
+    expect(checkout.response.status).toBe(201);
+
+    for (let attempt = 0; attempt < 7; attempt += 1) {
+      const retried = await jsonRequest(
+        `/projects/${encodeURIComponent(ready.projectToken)}/monitoring`,
+        ready.cookie,
+        {
+          method: "POST",
+          body: {
+            ...scope,
+            paymentAuthorization: "zpay-signed-authorization-placeholder",
+          },
+        },
+      );
+      expect(retried.response.status).toBe(503);
+      expect(retried.body).toMatchObject({
+        error: { code: "QUESTION_TRANSLATION_PENDING" },
+      });
+      expect(JSON.stringify(retried.body)).not.toMatch(
+        /英文监控问题|翻译|技术支持|请求过于频繁/,
+      );
+    }
+
+    expect(broker.monitorQuestionTranslationTaskCount).toBe(1);
+    expect(broker.monitorCreates).toBe(0);
+    expect(paymentCalls).toHaveLength(7);
+    expect(projectOrders.get("zpay-order-001")?.state).toBe("paid");
+  });
+
+  it("rescues a paid order after the old hourly monitor-create quota is exhausted", async () => {
+    const ready = await createReadyProject();
+    const scope = {
+      questionId: "product-scenario-01",
+      monitoringEdition: "overseas",
+      platformIds: ["chatgpt"],
+    } as const;
+    const checkout = await jsonRequest(
+      `/projects/${encodeURIComponent(ready.projectToken)}/payments`,
+      ready.cookie,
+      { method: "POST", body: { ...scope, method: "wxpay" } },
+    );
+    expect(checkout.response.status).toBe(201);
+
+    paymentAccepted = false;
+    for (let attempt = 0; attempt < 6; attempt += 1) {
+      const denied = await jsonRequest(
+        `/projects/${encodeURIComponent(ready.projectToken)}/monitoring`,
+        ready.cookie,
+        {
+          method: "POST",
+          body: {
+            ...scope,
+            paymentAuthorization: "zpay-signed-authorization-placeholder",
+          },
+        },
+      );
+      expect(denied.response.status).not.toBe(429);
+    }
+
+    paymentAccepted = true;
+    const paid = await jsonRequest(
+      `/projects/${encodeURIComponent(ready.projectToken)}/payments/status`,
+      ready.cookie,
+      {
+        method: "POST",
+        body: {
+          ...scope,
+          authorization: "zpay-signed-authorization-placeholder",
+        },
+      },
+    );
+    expect(paid.body).toMatchObject({ payment: { status: "paid" } });
+
+    const started = await jsonRequest(
+      `/projects/${encodeURIComponent(ready.projectToken)}/monitoring`,
+      ready.cookie,
+      {
+        method: "POST",
+        body: {
+          ...scope,
+          paymentAuthorization: "zpay-signed-authorization-placeholder",
+        },
+      },
+    );
+    expect(started.response.status).toBe(201);
+    expect(broker.monitorQuestionTranslationTaskCount).toBe(1);
+    expect(broker.monitorCreates).toBe(1);
+    expect(
+      Array.from(projectOrders.values()).filter(
+        (order) => order.orderId === "zpay-order-001",
+      ),
+    ).toHaveLength(1);
+  });
+
   it("rejects stale or already-paid authorizations before switching channels", async () => {
     const ready = await createReadyProject();
     const scope = {
@@ -3184,6 +4123,32 @@ describe("GEO API", () => {
       error: { code: "MONITOR_PROVIDER_NOT_READY" },
     });
     expect(paymentCheckoutCalls).toHaveLength(0);
+    expect(broker.freshMonitorCredentialChecks).toContain(true);
+  });
+
+  it("blocks checkout when the monitor key exists but provider authentication rejects it", async () => {
+    const ready = await createReadyProject();
+    broker.monitorCredentialAuthenticated = false;
+
+    const response = await jsonRequest(
+      `/projects/${encodeURIComponent(ready.projectToken)}/payments`,
+      ready.cookie,
+      {
+        method: "POST",
+        body: {
+          questionId: "product-scenario-01",
+          platformIds: ["doubao"],
+          method: "wxpay",
+        },
+      },
+    );
+
+    expect(response.response.status).toBe(503);
+    expect(response.body).toMatchObject({
+      error: { code: "MONITOR_PROVIDER_NOT_READY" },
+    });
+    expect(paymentCheckoutCalls).toHaveLength(0);
+    expect(broker.freshMonitorCredentialChecks).toContain(true);
   });
 
   it("persists an existing recommended question as a no-active terminal receipt that old clients may ACK", async () => {
@@ -3315,6 +4280,13 @@ describe("GEO API", () => {
 
   it("binds a validated custom question to the project, payment, monitor, and assessment", async () => {
     const ready = await createReadyProject();
+    broker.customQuestionClassifierOutput = {
+      ...broker.customQuestionClassifierOutput,
+      // Rolling-release compatibility: old completed classifier tasks may
+      // still contain this field, but it must not be persisted or exposed.
+      questionEnglish:
+        "What problems can Acme solve in university research scenarios?",
+    };
     const custom = await jsonRequest(
       `/projects/${encodeURIComponent(ready.projectToken)}/questions/custom`,
       ready.cookie,
@@ -3335,6 +4307,7 @@ describe("GEO API", () => {
       selectable: true,
       evidenceRefs: ["01_company_overview/overview.md"],
     });
+    expect(customPayload.question).not.toHaveProperty("questionEnglish");
     expect(broker.customQuestionClassifierTaskCount).toBe(1);
     expect(
       broker.taskAttachments
@@ -3345,6 +4318,11 @@ describe("GEO API", () => {
         ),
     ).toBe(true);
     expect(customPayload.project.questions).toHaveLength(21);
+    expect(
+      customPayload.project.questions.some(
+        (question: Record<string, unknown>) => "questionEnglish" in question,
+      ),
+    ).toBe(false);
     expect(customPayload.projectToken).not.toBe(ready.projectToken);
 
     const questionId = customPayload.question.id as string;
@@ -3414,9 +4392,19 @@ describe("GEO API", () => {
       { method: "POST", body: {} },
     );
     expect(assessed.response.status).toBe(201);
-    expect(broker.prompts.at(-1)).toContain(
+    expect(broker.prompts.at(-1)).not.toContain(
       "Acme 在高校科研场景中能解决什么问题？",
     );
+    const assessmentTaskInputAttachment = broker.taskAttachments
+      .at(-1)!
+      .find((attachment) => attachment.filename.endsWith("-task-input.json"))!;
+    expect(
+      JSON.parse(
+        broker.taskInputUploads
+          .get(assessmentTaskInputAttachment.file_id)!
+          .toString("utf8"),
+      ).data.question.text,
+    ).toBe("Acme 在高校科研场景中能解决什么问题？");
   });
 
   it("returns an async reservation and resumes the same upstream validation task", async () => {
@@ -3909,9 +4897,9 @@ describe("GEO API", () => {
       `${pathname}/${CUSTOM_QUESTION_CLIENT_REQUEST_ID}`,
       ready.cookie,
     );
-    expect(preciseStatus.response.status).toBe(409);
+    expect(preciseStatus.response.status).toBe(410);
     expect(preciseStatus.body).toMatchObject({
-      error: { code: "CUSTOM_QUESTION_PROJECT_DELETION_FENCED" },
+      error: { code: "PROJECT_DELETED" },
     });
 
     const worker = createGeoCustomQuestionRecoveryWorker({
@@ -3960,14 +4948,17 @@ describe("GEO API", () => {
       ready.projectToken,
       "project",
     ).value;
-    expect(broker.tasks.has(project.knowledgeBaseTaskId)).toBe(true);
+    expect(broker.tasks.has(project.knowledgeBaseTaskId)).toBe(false);
     await expect(crashedStore.listActive()).resolves.toEqual([]);
     await expect(
       crashedStore.get(project.projectId, CUSTOM_QUESTION_CLIENT_REQUEST_ID),
-    ).resolves.toMatchObject({
-      state: "failed",
-      error: { code: "PROJECT_DELETED", retryable: false },
-    });
+    ).rejects.toMatchObject({ code: "PROJECT_DELETION_FENCED" });
+    await expect(
+      crashedStore.getProjectDeletionTargets(project.projectId),
+    ).resolves.toEqual({ taskIds: [], temporaryFileIds: [] });
+    await expect(
+      crashedStore.isProjectDeletionFenced(project.projectId),
+    ).resolves.toBe(true);
   });
 
   it("bridges a cached client without clientRequestId to one deterministic upstream task", async () => {
@@ -4100,6 +5091,96 @@ describe("GEO API", () => {
     } finally {
       log.mockRestore();
     }
+  });
+
+  it("polls an in-flight pre-upgrade classifier task without creating the new input attachment", async () => {
+    const store = new MemoryGeoCustomQuestionValidationStore();
+    const projectId = "rolling-upgrade-project";
+    const clientRequestId = "22222222-2222-4222-8222-222222222222";
+    const question = "Acme 在高校科研场景中能解决什么问题？";
+    const reservation = await store.reserve({
+      projectId,
+      ownerSessionHash: "a".repeat(64),
+      clientRequestId,
+      requestHash: geoCustomQuestionRequestHash({
+        projectId,
+        knowledgeBaseTaskId: "knowledge-task-before-upgrade",
+        question,
+      }),
+      question,
+      questionHash: geoCustomQuestionHash(question),
+      companyName: "Acme",
+      knowledgeBaseTaskId: "knowledge-task-before-upgrade",
+      knowledgeBaseValidationProfile: "website-lead-v1",
+      knowledgeBaseArtifact: {
+        fileId: "knowledge-file-before-upgrade",
+        filename: "Acme.zip",
+        sha256: "1".repeat(64),
+        packageManifestSha256: "2".repeat(64),
+      },
+      expiresAt: "2027-08-01T00:00:00.000Z",
+    });
+    const lease = await store.tryAcquireLease(projectId, clientRequestId);
+    expect(lease).toBeDefined();
+    const taskId = "custom-question-classifier-before-upgrade";
+    await store.update(
+      {
+        ...reservation.record,
+        state: "submitted",
+        archiveAttachment: {
+          fileId: "archive-before-upgrade",
+          filename: "Acme.zip",
+          temporary: false,
+        },
+        skillAttachment: {
+          fileId: "skill-before-upgrade",
+          filename: "geo-custom-question-classifier.skill.zip",
+          temporary: false,
+        },
+        taskId,
+      },
+      lease!,
+    );
+    await store.releaseLease(lease!);
+    broker.customQuestionClassifierOutput = {
+      decision: "reject",
+      category: "unrelated",
+      enterpriseRelated: false,
+      reasonCode: "enterprise_unrelated",
+      reason: "问题与当前企业知识无关。",
+      enterpriseAnchor: null,
+      offeringAnchor: null,
+      evidenceRefs: [],
+    };
+    broker.tasks.set(taskId, {
+      id: taskId,
+      status: "completed",
+      output: [
+        {
+          role: "assistant",
+          content: [
+            {
+              text: JSON.stringify(broker.customQuestionClassifierOutput),
+            },
+          ],
+        },
+      ],
+    });
+    broker.regularUploadError = new Error(
+      "new protocol uploads must not gate an existing task",
+    );
+
+    await createGeoCustomQuestionRecoveryWorker({ broker, store }).runOnce();
+
+    await expect(store.get(projectId, clientRequestId)).resolves.toMatchObject({
+      state: "rejected",
+      taskId,
+      cleanupCompleted: true,
+    });
+    expect(broker.taskInputUploads.size).toBe(0);
+    expect(
+      broker.createdFileIds.some((fileId) => fileId.startsWith("task-input-")),
+    ).toBe(false);
   });
 
   it("recovers every reservation beyond the concurrency limit across competing workers without duplicate tasks", async () => {
@@ -4578,12 +5659,12 @@ describe("GEO API", () => {
     });
     expect(broker.customQuestionClassifierTaskCount).toBe(1);
     const finalAttachments = broker.taskAttachments.at(-1)!;
-    expect(finalAttachments).toHaveLength(2);
+    expect(finalAttachments).toHaveLength(3);
     expect(
       finalAttachments.map((attachment) =>
         broker.fileCredentialVersions.get(attachment.file_id),
       ),
-    ).toEqual([2, 2]);
+    ).toEqual([2, 2, 2]);
     expect(broker.deletedFiles).toContain(fileCreatedBeforeRotation);
 
     const generationZeroArchiveKeys = broker.fileCreateOperationKeys.filter(
@@ -4726,7 +5807,8 @@ describe("GEO API", () => {
     expect(broker.customQuestionClassifierTaskCount).toBe(1);
     const classifierAttachments = broker.taskAttachments.at(-1)!;
     expect(classifierAttachments[0]?.file_id).toMatch(/^skill-file-/);
-    expect(classifierAttachments[1]?.file_id).toMatch(/^file-/);
+    expect(classifierAttachments[1]?.file_id).toMatch(/^task-input-file-/);
+    expect(classifierAttachments[2]?.file_id).toMatch(/^file-/);
   });
 
   it("retries terminal resource cleanup in the background before marking it complete", async () => {
@@ -5152,6 +6234,19 @@ describe("GEO API", () => {
     expect(await ledgerUnavailable.text()).toBe("fail");
   });
 
+  it("rejects HEAD payment callbacks without executing GET verification side effects", async () => {
+    for (const callback of ["notify", "return"]) {
+      const response = await fetch(
+        `${baseUrl}/payments/${callback}?sign=mock`,
+        { method: "HEAD" },
+      );
+      expect(response.status).toBe(405);
+      expect(response.headers.get("allow")).toBe("GET");
+      expect(await response.text()).toBe("");
+    }
+    expect(paymentCallbackCalls).toBe(0);
+  });
+
   it("submits one 5-per-platform text search run and replays idempotently", async () => {
     const ready = await createReadyProject();
     const checkout = await jsonRequest(
@@ -5212,6 +6307,145 @@ describe("GEO API", () => {
     );
     expect(replayed.response.status).toBe(201);
     expect(broker.monitorCreates).toBe(1);
+  });
+
+  it("keeps an unconfirmed monitor submission paid without claiming fulfillment or churning the order", async () => {
+    const ready = await createReadyProject();
+    broker.monitorCreateStatus = "submission_unknown";
+    const checkout = await jsonRequest(
+      `/projects/${encodeURIComponent(ready.projectToken)}/payments`,
+      ready.cookie,
+      {
+        method: "POST",
+        body: {
+          questionId: "product-scenario-01",
+          platformIds: ["doubao"],
+          method: "alipay",
+        },
+      },
+    );
+    const body = {
+      questionId: "product-scenario-01",
+      platformIds: ["doubao"],
+      paymentAuthorization: (checkout.body as any).payment.authorization,
+    };
+
+    const first = await jsonRequest(
+      `/projects/${encodeURIComponent(ready.projectToken)}/monitoring`,
+      ready.cookie,
+      { method: "POST", body },
+    );
+    expect(first.response.status).toBe(503);
+    expect(first.body).toMatchObject({
+      error: { code: "MONITOR_SUBMISSION_UNCONFIRMED" },
+    });
+    const paidOrder = projectOrders.get("zpay-order-001");
+    expect(paidOrder).toMatchObject({ state: "paid" });
+    const paidEventAt = paidOrder?.eventAt;
+
+    const replayed = await jsonRequest(
+      `/projects/${encodeURIComponent(ready.projectToken)}/monitoring`,
+      ready.cookie,
+      { method: "POST", body },
+    );
+    expect(replayed.response.status).toBe(503);
+    expect(broker.monitorCreates).toBe(1);
+    expect(projectOrders.get("zpay-order-001")).toMatchObject({
+      state: "paid",
+      eventAt: paidEventAt,
+    });
+  });
+
+  it("recovers the same paid order after an explicit monitor rejection is repaired", async () => {
+    const ready = await createReadyProject();
+    broker.monitorCreateError = new GeoBrokerError(
+      "监控服务已明确拒绝本次提交",
+      502,
+      "MONITOR_SUBMISSION_REJECTED",
+    );
+    const checkout = await jsonRequest(
+      `/projects/${encodeURIComponent(ready.projectToken)}/payments`,
+      ready.cookie,
+      {
+        method: "POST",
+        body: {
+          questionId: "product-scenario-01",
+          platformIds: ["doubao"],
+          method: "alipay",
+        },
+      },
+    );
+    const body = {
+      questionId: "product-scenario-01",
+      platformIds: ["doubao"],
+      paymentAuthorization: (checkout.body as any).payment.authorization,
+    };
+
+    const rejected = await jsonRequest(
+      `/projects/${encodeURIComponent(ready.projectToken)}/monitoring`,
+      ready.cookie,
+      { method: "POST", body },
+    );
+    expect(rejected.response.status).toBe(502);
+    expect(rejected.body).toMatchObject({
+      error: { code: "MONITOR_SUBMISSION_REJECTED" },
+    });
+    expect(projectOrders.get("zpay-order-001")).toMatchObject({
+      state: "review_required",
+    });
+
+    broker.monitorCreateError = undefined;
+    const recovered = await jsonRequest(
+      `/projects/${encodeURIComponent(ready.projectToken)}/monitoring`,
+      ready.cookie,
+      { method: "POST", body },
+    );
+    expect(recovered.response.status).toBe(201);
+    expect(projectOrders.get("zpay-order-001")).toMatchObject({
+      state: "fulfilling",
+    });
+    expect(broker.monitorCreates).toBe(1);
+  });
+
+  it("translates a thrown unknown submission into a paid unconfirmed order", async () => {
+    const ready = await createReadyProject();
+    broker.monitorCreateError = new GeoBrokerError(
+      "监控提交结果未知",
+      502,
+      "MONITOR_SUBMISSION_UNKNOWN",
+    );
+    const checkout = await jsonRequest(
+      `/projects/${encodeURIComponent(ready.projectToken)}/payments`,
+      ready.cookie,
+      {
+        method: "POST",
+        body: {
+          questionId: "product-scenario-01",
+          platformIds: ["doubao"],
+          method: "alipay",
+        },
+      },
+    );
+    const response = await jsonRequest(
+      `/projects/${encodeURIComponent(ready.projectToken)}/monitoring`,
+      ready.cookie,
+      {
+        method: "POST",
+        body: {
+          questionId: "product-scenario-01",
+          platformIds: ["doubao"],
+          paymentAuthorization: (checkout.body as any).payment.authorization,
+        },
+      },
+    );
+
+    expect(response.response.status).toBe(503);
+    expect(response.body).toMatchObject({
+      error: { code: "MONITOR_SUBMISSION_UNCONFIRMED" },
+    });
+    expect(projectOrders.get("zpay-order-001")).toMatchObject({
+      state: "paid",
+    });
   });
 
   it("returns completed records from the result endpoint while monitoring is still running", async () => {
@@ -5469,6 +6703,7 @@ describe("GEO API", () => {
       assessmentAttachments.map((attachment) => attachment.filename),
     ).toEqual([
       "geo-current-state-evaluator.skill.zip",
+      "frontmind-current-state-assessment-task-input.json",
       "Acme_website_lead_knowledge_base.zip",
       "Acme-monitoring-records.json",
     ]);
@@ -5484,6 +6719,86 @@ describe("GEO API", () => {
       { title: "检索参考", url: "https://search.example/result" },
     ]);
     expect(parsedMonitoring.records[0].media).toBeUndefined();
+  });
+
+  it("replays one accepted assessment with the same generated evidence file ids after its response is lost", async () => {
+    const ready = await createReadyProject();
+    const monitored = await startOnePlatformMonitor(ready);
+    const run = broker.monitorRuns.get("monitor-1")!;
+    broker.monitorRuns.set("monitor-1", {
+      ...run,
+      status: "completed",
+      completedItems: 5,
+      records: Array.from({ length: 5 }, (_, index) =>
+        monitorRecord(index + 1, `Acme 回答 ${index + 1}`),
+      ),
+    });
+
+    const createTask = broker.createTask.bind(broker);
+    const submittedAttachments: Array<
+      Array<{ file_id: string; filename: string }>
+    > = [];
+    let loseFirstAssessmentResponse = true;
+    broker.createTask = async (input) => {
+      if (!input.prompt.includes("geo-current-state-evaluator.skill.zip")) {
+        return createTask(input);
+      }
+      submittedAttachments.push(
+        input.attachments.map(({ file_id, filename }) => ({
+          file_id,
+          filename,
+        })),
+      );
+      const task = await createTask(input);
+      if (loseFirstAssessmentResponse) {
+        loseFirstAssessmentResponse = false;
+        throw new GeoBrokerError(
+          "assessment committed before the response was lost",
+          502,
+          "AGENT_UNAVAILABLE",
+        );
+      }
+      return task;
+    };
+
+    const pathname = `/projects/${encodeURIComponent(monitored.projectToken)}/assessment`;
+    const ambiguous = await jsonRequest(pathname, ready.cookie, {
+      method: "POST",
+      body: {},
+    });
+    expect(ambiguous.response.status).toBe(502);
+    const reorderedRun = broker.monitorRuns.get("monitor-1")!;
+    broker.monitorRuns.set("monitor-1", {
+      ...reorderedRun,
+      platforms: [...reorderedRun.platforms].reverse(),
+      records: [...(reorderedRun.records || [])].reverse().map((record) => ({
+        ...record,
+        sources: [...record.sources].reverse(),
+      })),
+    });
+    const replayed = await jsonRequest(pathname, ready.cookie, {
+      method: "POST",
+      body: {},
+    });
+
+    expect(replayed.response.status).toBe(201);
+    expect(broker.assessmentTaskCount).toBe(1);
+    expect(submittedAttachments).toHaveLength(2);
+    expect(submittedAttachments[1]).toEqual(submittedAttachments[0]);
+    const evidenceFileId = submittedAttachments[0]!.find(
+      (attachment) => attachment.filename === "Acme-monitoring-records.json",
+    )!.file_id;
+    expect(evidenceFileId).toBe(
+      submittedAttachments[1]!.find(
+        (attachment) => attachment.filename === "Acme-monitoring-records.json",
+      )!.file_id,
+    );
+    expect(broker.deletedFiles).not.toContain(evidenceFileId);
+    expect(
+      broker.fileCreateOperationKeys.filter((key) =>
+        key.startsWith("geo-generated-task-evidence-file:"),
+      ),
+    ).toHaveLength(2);
   });
 
   it("keeps invalid completed assessment terminal on GET and only reruns it after an explicit POST", async () => {
@@ -6148,6 +7463,7 @@ describe("GEO API", () => {
     expect(attachments.map((attachment) => attachment.filename)).toEqual([
       "geo-optimization-outcome-forecaster.skill.zip",
       "optimization-forecast-output-template.json",
+      "frontmind-optimization-forecast-task-input.json",
       "Acme_website_lead_knowledge_base.zip",
       "Acme-current-assessment.json",
       "frontmind-standard-one-month-scenario.json",
@@ -6213,6 +7529,105 @@ describe("GEO API", () => {
     expect(broker.forecastTaskCount).toBe(1);
   });
 
+  it("replays one accepted forecast with identical assessment and scenario file ids after its response is lost", async () => {
+    const ready = await createReadyProject();
+    const monitored = await startOnePlatformMonitor(ready);
+    const run = broker.monitorRuns.get("monitor-1")!;
+    broker.monitorRuns.set("monitor-1", {
+      ...run,
+      status: "completed",
+      completedItems: 5,
+      records: Array.from({ length: 5 }, (_, index) =>
+        monitorRecord(index + 1, `Acme 回答 ${index + 1}`),
+      ),
+    });
+    const assessed = await jsonRequest(
+      `/projects/${encodeURIComponent(monitored.projectToken)}/assessment`,
+      ready.cookie,
+      { method: "POST", body: {} },
+    );
+    expect(assessed.response.status).toBe(201);
+    broker.tasks.set("assessment-1", {
+      id: "assessment-1",
+      status: "completed",
+      output: [
+        {
+          role: "assistant",
+          content: [{ text: JSON.stringify(validAssessmentOutput()) }],
+        },
+      ],
+    });
+
+    const createTask = broker.createTask.bind(broker);
+    const submittedAttachments: Array<
+      Array<{ file_id: string; filename: string }>
+    > = [];
+    let loseFirstForecastResponse = true;
+    broker.createTask = async (input) => {
+      if (
+        !input.prompt.includes("geo-optimization-outcome-forecaster.skill.zip")
+      ) {
+        return createTask(input);
+      }
+      submittedAttachments.push(
+        input.attachments.map(({ file_id, filename }) => ({
+          file_id,
+          filename,
+        })),
+      );
+      const task = await createTask(input);
+      if (loseFirstForecastResponse) {
+        loseFirstForecastResponse = false;
+        throw new GeoBrokerError(
+          "forecast committed before the response was lost",
+          502,
+          "AGENT_UNAVAILABLE",
+        );
+      }
+      return task;
+    };
+    const evidenceKeyCountBefore = broker.fileCreateOperationKeys.filter(
+      (key) => key.startsWith("geo-generated-task-evidence-file:"),
+    ).length;
+    const assessedPayload = assessed.body as Record<string, any>;
+    const pathname = `/projects/${encodeURIComponent(assessedPayload.projectToken)}/optimization-forecast`;
+    const ambiguous = await jsonRequest(pathname, ready.cookie, {
+      method: "POST",
+      body: {},
+    });
+    expect(ambiguous.response.status).toBe(502);
+    const replayed = await jsonRequest(pathname, ready.cookie, {
+      method: "POST",
+      body: {},
+    });
+
+    expect(replayed.response.status).toBe(201);
+    expect(broker.forecastTaskCount).toBe(1);
+    expect(submittedAttachments).toHaveLength(2);
+    expect(submittedAttachments[1]).toEqual(submittedAttachments[0]);
+    const firstForecastAttachments = submittedAttachments[0]!;
+    const secondForecastAttachments = submittedAttachments[1]!;
+    for (const filename of [
+      "Acme-current-assessment.json",
+      "frontmind-standard-one-month-scenario.json",
+    ]) {
+      const fileId = firstForecastAttachments.find(
+        (attachment) => attachment.filename === filename,
+      )!.file_id;
+      expect(
+        secondForecastAttachments.find(
+          (attachment) => attachment.filename === filename,
+        )!.file_id,
+      ).toBe(fileId);
+      expect(broker.deletedFiles).not.toContain(fileId);
+    }
+    expect(
+      broker.fileCreateOperationKeys.filter((key) =>
+        key.startsWith("geo-generated-task-evidence-file:"),
+      ).length - evidenceKeyCountBefore,
+    ).toBe(4);
+  });
+
   it("retries one invalid optimization forecast output", async () => {
     const ready = await createReadyProject();
     const monitored = await startOnePlatformMonitor(ready);
@@ -6256,7 +7671,17 @@ describe("GEO API", () => {
     expect((retried.body as any).project.executionLog.currentEntryId).toBe(
       "optimization-forecast",
     );
-    expect(broker.prompts.at(-1)).toContain("一次结构校验重试");
+    expect(broker.prompts.at(-1)).toContain("data.retryReason");
+    const retryInputAttachment = broker.taskAttachments
+      .at(-1)!
+      .find((attachment) => attachment.filename.endsWith("-task-input.json"))!;
+    expect(
+      JSON.parse(
+        broker.taskInputUploads
+          .get(retryInputAttachment.file_id)!
+          .toString("utf8"),
+      ).data.retryReason,
+    ).toBeTruthy();
 
     const unavailableFileId = "forecast-output-unavailable";
     broker.downloadErrors.set(
@@ -6301,8 +7726,17 @@ describe("GEO API", () => {
 
     expect(retried.response.status).toBe(200);
     expect(broker.forecastTaskCount).toBe(2);
-    expect(broker.prompts.at(-1)).toContain("一次结构校验重试");
-    expect(broker.prompts.at(-1)).toContain("上一次优化效果评估任务已取消");
+    expect(broker.prompts.at(-1)).toContain("data.retryReason");
+    const automaticRetryInputAttachment = broker.taskAttachments
+      .at(-1)!
+      .find((attachment) => attachment.filename.endsWith("-task-input.json"))!;
+    expect(
+      JSON.parse(
+        broker.taskInputUploads
+          .get(automaticRetryInputAttachment.file_id)!
+          .toString("utf8"),
+      ).data.retryReason,
+    ).toContain("上一次优化效果评估任务已取消");
     const retriedPayload = retried.body as Record<string, any>;
     const retriedValue = new GeoTokenCodec(
       "test-session-secret-at-least-16-characters",
@@ -6561,8 +7995,12 @@ describe("GEO API", () => {
     expect(manualOrderCreateCalls).toHaveLength(1);
     expect(manualOrderExternalAuthorizationCalls).toHaveLength(1);
     expect(manualOrderCreateCalls[0]).toMatchObject({
+      marketEdition: "domestic",
       project: { companyName: "深圳星辰科技有限公司" },
-      contract: { templateVersion: "basic-2026.07-v2", profile },
+      contract: {
+        templateVersion: "basic-domestic-2026.08-v1",
+        profile,
+      },
     });
     expect(adminNotificationCalls).toEqual([
       {
@@ -6638,6 +8076,579 @@ describe("GEO API", () => {
     );
     expect(checkout.response.status).toBe(201);
     expect(servicePaymentCheckoutCalls).toHaveLength(1);
+  });
+
+  it("carries the overseas contract, double price, and account edition through activation", async () => {
+    const ready = await createServiceReadyProject(
+      "product-scenario-01",
+      "overseas",
+    );
+    expect(ready.project).toMatchObject({
+      monitoringEdition: "overseas",
+      serviceActivation: {
+        status: "not_started",
+        amountFen: 300_000,
+      },
+    });
+    expect(ready.project.assessment.summary).toMatch(/[\u3400-\u9fff]/u);
+    expect(ready.project.optimizationForecast.summary).toMatch(
+      /[\u3400-\u9fff]/u,
+    );
+
+    const payable = await advanceManualOrder(ready);
+    expect(manualOrderCreateCalls).toHaveLength(1);
+    expect(manualOrderCreateCalls[0]).toMatchObject({
+      marketEdition: "overseas",
+      service: {
+        purchasedQuestion: {
+          id: "product-scenario-01",
+          category: "product_scenario",
+        },
+      },
+      contract: { templateVersion: "basic-overseas-2026.08-v1" },
+    });
+    expect(manualOrderResponse.order).toMatchObject({
+      marketEdition: "overseas",
+      amountFen: 300_000,
+    });
+    expect(adminNotificationCalls[0]).toMatchObject({ amountFen: 300_000 });
+
+    const checkout = await jsonRequest(
+      `/projects/${encodeURIComponent(payable.projectToken)}/services/payments`,
+      payable.cookie,
+      { method: "POST", body: { method: "alipay" } },
+    );
+    expect(checkout.response.status).toBe(201);
+    expect(checkout.body).toMatchObject({
+      payment: {
+        monitoringEdition: "overseas",
+        amountFen: 300_000,
+        unitPriceFen: 300_000,
+        fields: { money: "3000.00" },
+      },
+    });
+    expect(servicePaymentCheckoutCalls[0]).toMatchObject({
+      monitoringEdition: "overseas",
+      expectedAmountFen: 300_000,
+    });
+
+    const started = await jsonRequest(
+      `/projects/${encodeURIComponent(payable.projectToken)}/services/start`,
+      payable.cookie,
+      {
+        method: "POST",
+        body: {
+          authorization: (checkout.body as any).payment.authorization,
+        },
+      },
+    );
+    expect(started.response.status).toBe(201);
+    expect(started.body).toMatchObject({
+      project: {
+        monitoringEdition: "overseas",
+        serviceActivation: {
+          status: "account_setup_required",
+          amountFen: 300_000,
+        },
+      },
+    });
+
+    const activated = await jsonRequest(
+      `/projects/${encodeURIComponent((started.body as any).projectToken)}/services/account`,
+      payable.cookie,
+      {
+        method: "POST",
+        body: {
+          displayName: "Acme",
+          username: "acme.overseas",
+          password: "StrongPassword123",
+        },
+      },
+    );
+    expect(activated.response.status).toBe(201);
+    expect(activated.body).toMatchObject({
+      project: {
+        monitoringEdition: "overseas",
+        serviceActivation: {
+          status: "active",
+          amountFen: 300_000,
+          accountUsername: "acme.overseas",
+        },
+      },
+    });
+    expect(manualOrderAccountCalls).toHaveLength(1);
+    expect(purchaseProvisionCalls).toHaveLength(0);
+  });
+
+  it("switches an overseas service checkout with server-derived scope and stable order facts", async () => {
+    const ready = await createServiceReadyProject("reputation-01", "overseas");
+    const payable = await advanceManualOrder(ready);
+    const checkout = await jsonRequest(
+      `/projects/${encodeURIComponent(payable.projectToken)}/services/payments`,
+      payable.cookie,
+      { method: "POST", body: { method: "alipay" } },
+    );
+    paymentAccepted = false;
+    const original = (checkout.body as any).payment;
+
+    const switched = await jsonRequest(
+      `/projects/${encodeURIComponent(payable.projectToken)}/services/payments/switch`,
+      payable.cookie,
+      {
+        method: "POST",
+        body: { authorization: original.authorization, method: "wxpay" },
+      },
+    );
+
+    expect(switched.response.status).toBe(200);
+    expect(switched.body).toMatchObject({
+      payment: {
+        authorization: original.authorization,
+        orderId: original.orderId,
+        amountFen: 400_000,
+        expiresAt: original.expiresAt,
+        monitoringEdition: "overseas",
+        fields: {
+          type: "wxpay",
+          param: original.authorization,
+          out_trade_no: original.orderId,
+        },
+      },
+    });
+    expect(servicePaymentSwitchCalls).toHaveLength(1);
+    expect(servicePaymentSwitchCalls[0]).toMatchObject({
+      questionId: "reputation-01",
+      category: "reputation",
+      monitoringEdition: "overseas",
+      expectedAmountFen: 400_000,
+      method: "wxpay",
+    });
+
+    const forged = await jsonRequest(
+      `/projects/${encodeURIComponent(payable.projectToken)}/services/payments/switch`,
+      payable.cookie,
+      {
+        method: "POST",
+        body: {
+          authorization: original.authorization,
+          method: "alipay",
+          amountFen: 1,
+        },
+      },
+    );
+    expect(forged.response.status).toBe(400);
+    expect(servicePaymentSwitchCalls).toHaveLength(1);
+  });
+
+  it("confirms an overseas direct bank transfer once and never exposes its confirmation code", async () => {
+    const ready = await createServiceReadyProject("reputation-01", "overseas");
+    const payable = await advanceManualOrder(ready);
+    const pathname = `/projects/${encodeURIComponent(payable.projectToken)}/services/payments/bank-transfer/confirm`;
+
+    const confirmed = await jsonRequest(pathname, payable.cookie, {
+      method: "POST",
+      body: { confirmationCode: BANK_TRANSFER_CONFIRMATION_CODE },
+    });
+
+    expect(confirmed.response.status).toBe(201);
+    expect(confirmed.body).toMatchObject({
+      project: {
+        monitoringEdition: "overseas",
+        serviceActivation: {
+          status: "account_setup_required",
+          amountFen: 400_000,
+          orderId: expect.stringMatching(/^\d{32}$/),
+        },
+      },
+    });
+    expect(serviceBankTransferCalls).toHaveLength(1);
+    expect(serviceBankTransferCalls[0]).toMatchObject({
+      orderId: expect.stringMatching(/^\d{32}$/),
+      monitoringEdition: "overseas",
+      category: "reputation",
+      expectedAmountFen: 400_000,
+    });
+    expect(serviceBankTransferCalls[0]).not.toHaveProperty("authorization");
+    expect(manualOrderPaymentCalls).toHaveLength(1);
+    expect(manualOrderPaymentCalls[0].request.payment).toMatchObject({
+      orderId: serviceBankTransferCalls[0].orderId,
+      tradeNo: expect.stringMatching(/^bank:/),
+      amountFen: 400_000,
+    });
+    expect(JSON.stringify(confirmed.body)).not.toContain(
+      BANK_TRANSFER_CONFIRMATION_CODE,
+    );
+
+    const replayed = await jsonRequest(pathname, payable.cookie, {
+      method: "POST",
+      body: { confirmationCode: BANK_TRANSFER_CONFIRMATION_CODE },
+    });
+    expect(replayed.response.status).toBe(200);
+    expect((replayed.body as any).project.serviceActivation.orderId).toBe(
+      (confirmed.body as any).project.serviceActivation.orderId,
+    );
+    expect(serviceBankTransferCalls).toHaveLength(1);
+    expect(manualOrderPaymentCalls).toHaveLength(1);
+
+    const decoded = new GeoTokenCodec(
+      "test-session-secret-at-least-16-characters",
+    ).open<Record<string, unknown>>(
+      (confirmed.body as any).projectToken,
+      "project",
+    ).value;
+    expect(JSON.stringify(decoded)).not.toContain(
+      BANK_TRANSFER_CONFIRMATION_CODE,
+    );
+  });
+
+  it("persists a direct-bank pending order before the receipt and recovers after finalization is lost", async () => {
+    const ready = await createServiceReadyProject();
+    const payable = await advanceManualOrder(ready);
+    const bankPath = `/projects/${encodeURIComponent(payable.projectToken)}/services/payments/bank-transfer/confirm`;
+    let persistedReceipt:
+      | {
+          orderId: string;
+          tradeNo: string;
+          amountFen: number;
+          paidAt: string;
+        }
+      | undefined;
+    paymentGateway.confirmServiceBankTransfer = async (input) => {
+      serviceBankTransferCalls.push(input);
+      expect(projectOrders.get(input.orderId)).toMatchObject({
+        orderId: input.orderId,
+        purchaseType: "service",
+        amountFen: input.expectedAmountFen,
+        state: "pending",
+      });
+      expect(projectOrders.get(input.orderId)).not.toHaveProperty("paidAt");
+      persistedReceipt ??= {
+        orderId: input.orderId,
+        tradeNo: `bank:${createHash("sha256")
+          .update(input.orderId)
+          .digest("hex")
+          .slice(0, 48)}`,
+        amountFen: input.expectedAmountFen,
+        paidAt: servicePaymentPaidAt,
+      };
+      return persistedReceipt;
+    };
+    const originalUpsert = projectOrderRegistry.upsert;
+    let loseFirstPaidTransition = true;
+    projectOrderRegistry.upsert = async (order) => {
+      if (
+        loseFirstPaidTransition &&
+        order.purchaseType === "service" &&
+        /^\d{32}$/.test(order.orderId) &&
+        order.state === "paid"
+      ) {
+        loseFirstPaidTransition = false;
+        throw new Error("simulated crash after durable bank receipt");
+      }
+      return originalUpsert(order);
+    };
+
+    const interrupted = await jsonRequest(bankPath, payable.cookie, {
+      method: "POST",
+      body: { confirmationCode: BANK_TRANSFER_CONFIRMATION_CODE },
+    });
+
+    expect(interrupted.response.status).toBe(503);
+    expect(interrupted.body).toMatchObject({
+      error: { code: "PROJECT_ORDER_REGISTRY_UNAVAILABLE" },
+    });
+    expect(persistedReceipt).toBeDefined();
+    expect(serviceBankTransferCalls).toHaveLength(1);
+    expect(manualOrderPaymentCalls).toHaveLength(0);
+    const pendingOrder = Array.from(projectOrders.values()).find(
+      (order) => order.orderId === persistedReceipt!.orderId,
+    );
+    expect(pendingOrder).toMatchObject({
+      orderId: expect.stringMatching(/^\d{32}$/),
+      purchaseType: "service",
+      amountFen: 150_000,
+      authorizationDigest: expect.stringMatching(/^[a-f0-9]{64}$/),
+      state: "pending",
+      checkoutExpiresAt: expect.any(String),
+      eventAt: expect.any(String),
+    });
+    expect(pendingOrder).not.toHaveProperty("paidAt");
+
+    const onlineCheckout = await jsonRequest(
+      `/projects/${encodeURIComponent(payable.projectToken)}/services/payments`,
+      payable.cookie,
+      { method: "POST", body: { method: "alipay" } },
+    );
+    expect(onlineCheckout.response.status).toBe(409);
+    expect(onlineCheckout.body).toMatchObject({
+      error: { code: "PROJECT_ORDER_DELETE_BLOCKED" },
+    });
+    expect(servicePaymentCheckoutCalls).toHaveLength(0);
+
+    const recovered = await jsonRequest(bankPath, payable.cookie, {
+      method: "POST",
+      body: { confirmationCode: BANK_TRANSFER_CONFIRMATION_CODE },
+    });
+    expect(recovered.response.status).toBe(201);
+    expect(recovered.body).toMatchObject({
+      project: {
+        serviceActivation: {
+          orderId: pendingOrder!.orderId,
+          amountFen: 150_000,
+          status: "account_setup_required",
+        },
+      },
+    });
+    expect(serviceBankTransferCalls).toHaveLength(2);
+    expect(serviceBankTransferCalls[1].orderId).toBe(
+      serviceBankTransferCalls[0].orderId,
+    );
+    expect(manualOrderPaymentCalls).toHaveLength(1);
+    expect(projectOrders.get(pendingOrder!.orderId)).toMatchObject({
+      authorizationDigest: pendingOrder!.authorizationDigest,
+      checkoutExpiresAt: pendingOrder!.checkoutExpiresAt,
+      state: "fulfilling",
+      paidAt: servicePaymentPaidAt,
+    });
+  });
+
+  it("reuses a pending online order for bank transfer and prevents later checkout switching", async () => {
+    const ready = await createServiceReadyProject();
+    const payable = await advanceManualOrder(ready);
+    const checkout = await jsonRequest(
+      `/projects/${encodeURIComponent(payable.projectToken)}/services/payments`,
+      payable.cookie,
+      { method: "POST", body: { method: "alipay" } },
+    );
+    const payment = (checkout.body as any).payment;
+    paymentAccepted = false;
+
+    const confirmed = await jsonRequest(
+      `/projects/${encodeURIComponent(payable.projectToken)}/services/payments/bank-transfer/confirm`,
+      payable.cookie,
+      {
+        method: "POST",
+        body: {
+          confirmationCode: BANK_TRANSFER_CONFIRMATION_CODE,
+          authorization: payment.authorization,
+        },
+      },
+    );
+
+    expect(confirmed.response.status).toBe(201);
+    expect((confirmed.body as any).project.serviceActivation.orderId).toBe(
+      payment.orderId,
+    );
+    expect(serviceBankTransferCalls).toHaveLength(1);
+    expect(serviceBankTransferCalls[0]).toMatchObject({
+      authorization: payment.authorization,
+      orderId: payment.orderId,
+      expectedAmountFen: 150_000,
+    });
+
+    const lateSwitch = await jsonRequest(
+      `/projects/${encodeURIComponent(payable.projectToken)}/services/payments/switch`,
+      payable.cookie,
+      {
+        method: "POST",
+        body: { authorization: payment.authorization, method: "wxpay" },
+      },
+    );
+    expect(lateSwitch.response.status).toBe(409);
+    expect(lateSwitch.body).toMatchObject({
+      error: { code: "PAYMENT_ALREADY_CONFIRMED" },
+    });
+    expect(servicePaymentSwitchCalls).toHaveLength(0);
+  });
+
+  it("rejects bank confirmation when the online service order is already paid", async () => {
+    const ready = await createServiceReadyProject();
+    const payable = await advanceManualOrder(ready);
+    const checkout = await jsonRequest(
+      `/projects/${encodeURIComponent(payable.projectToken)}/services/payments`,
+      payable.cookie,
+      { method: "POST", body: { method: "alipay" } },
+    );
+    const payment = (checkout.body as any).payment;
+
+    const rejected = await jsonRequest(
+      `/projects/${encodeURIComponent(payable.projectToken)}/services/payments/bank-transfer/confirm`,
+      payable.cookie,
+      {
+        method: "POST",
+        body: {
+          confirmationCode: BANK_TRANSFER_CONFIRMATION_CODE,
+          authorization: payment.authorization,
+        },
+      },
+    );
+
+    expect(rejected.response.status).toBe(409);
+    expect(rejected.body).toMatchObject({
+      error: { code: "PAYMENT_ALREADY_CONFIRMED" },
+    });
+    expect(serviceBankTransferCalls).toHaveLength(1);
+    expect(manualOrderPaymentCalls).toHaveLength(0);
+  });
+
+  it("never returns a switched checkout while bank confirmation owns the service scope", async () => {
+    const ready = await createServiceReadyProject();
+    const payable = await advanceManualOrder(ready);
+    const checkout = await jsonRequest(
+      `/projects/${encodeURIComponent(payable.projectToken)}/services/payments`,
+      payable.cookie,
+      { method: "POST", body: { method: "alipay" } },
+    );
+    const payment = (checkout.body as any).payment;
+    paymentAccepted = false;
+
+    let bankStartedResolve!: () => void;
+    const bankStarted = new Promise<void>((resolve) => {
+      bankStartedResolve = resolve;
+    });
+    let bankReceiptResolve!: (receipt: {
+      orderId: string;
+      tradeNo: string;
+      amountFen: number;
+      paidAt: string;
+    }) => void;
+    const bankReceipt = new Promise<{
+      orderId: string;
+      tradeNo: string;
+      amountFen: number;
+      paidAt: string;
+    }>((resolve) => {
+      bankReceiptResolve = resolve;
+    });
+    paymentGateway.confirmServiceBankTransfer = async (input) => {
+      serviceBankTransferCalls.push(input);
+      bankStartedResolve();
+      return bankReceipt;
+    };
+
+    const bankConfirmation = jsonRequest(
+      `/projects/${encodeURIComponent(payable.projectToken)}/services/payments/bank-transfer/confirm`,
+      payable.cookie,
+      {
+        method: "POST",
+        body: {
+          confirmationCode: BANK_TRANSFER_CONFIRMATION_CODE,
+          authorization: payment.authorization,
+        },
+      },
+    );
+    await bankStarted;
+
+    const switchAttempt = await jsonRequest(
+      `/projects/${encodeURIComponent(payable.projectToken)}/services/payments/switch`,
+      payable.cookie,
+      {
+        method: "POST",
+        body: { authorization: payment.authorization, method: "wxpay" },
+      },
+    );
+    expect(switchAttempt.response.status).toBe(409);
+    expect(switchAttempt.body).toMatchObject({
+      error: { code: "SERVICE_PAYMENT_MUTATION_IN_PROGRESS" },
+    });
+    expect(servicePaymentSwitchCalls).toHaveLength(0);
+
+    bankReceiptResolve({
+      orderId: payment.orderId,
+      tradeNo: `bank:${"a".repeat(48)}`,
+      amountFen: 150_000,
+      paidAt: servicePaymentPaidAt,
+    });
+    const confirmed = await bankConfirmation;
+    expect(confirmed.response.status).toBe(201);
+    expect((confirmed.body as any).project.serviceActivation.orderId).toBe(
+      payment.orderId,
+    );
+  });
+
+  it("rate-limits bank confirmation code failures and accepts no browser payment facts", async () => {
+    const ready = await createServiceReadyProject();
+    const payable = await advanceManualOrder(ready);
+    const pathname = `/projects/${encodeURIComponent(payable.projectToken)}/services/payments/bank-transfer/confirm`;
+    const forgedFacts = await jsonRequest(pathname, payable.cookie, {
+      method: "POST",
+      body: {
+        confirmationCode: "wrong-code",
+        amountFen: 1,
+        paidAt: new Date().toISOString(),
+        status: "paid",
+      },
+    });
+    expect(forgedFacts.response.status).toBe(400);
+
+    for (let attempt = 0; attempt < 5; attempt += 1) {
+      const rejected = await jsonRequest(pathname, payable.cookie, {
+        method: "POST",
+        body: { confirmationCode: "wrong-code" },
+      });
+      expect(rejected.response.status).toBe(403);
+      expect(rejected.body).toMatchObject({
+        error: { code: "BANK_TRANSFER_CODE_INVALID" },
+      });
+    }
+    const limited = await jsonRequest(pathname, payable.cookie, {
+      method: "POST",
+      body: { confirmationCode: BANK_TRANSFER_CONFIRMATION_CODE },
+    });
+    expect(limited.response.status).toBe(429);
+    expect(limited.response.headers.get("retry-after")).toBeTruthy();
+    expect(limited.body).toMatchObject({
+      error: { code: "BANK_TRANSFER_CODE_RATE_LIMITED" },
+    });
+    expect(serviceBankTransferCalls).toHaveLength(0);
+    expect(manualOrderPaymentCalls).toHaveLength(0);
+    expect(JSON.stringify(limited.body)).not.toContain(
+      BANK_TRANSFER_CONFIRMATION_CODE,
+    );
+  });
+
+  it("binds an existing account after a direct bank confirmation without sealing the purchase intent", async () => {
+    const ready = await createServiceReadyProject();
+    const payable = await advanceManualOrder(ready);
+    const purchaseIntent = "one-time-existing-account-intent-001";
+    const confirmed = await jsonRequest(
+      `/projects/${encodeURIComponent(payable.projectToken)}/services/payments/bank-transfer/confirm`,
+      payable.cookie,
+      {
+        method: "POST",
+        body: {
+          confirmationCode: BANK_TRANSFER_CONFIRMATION_CODE,
+          purchaseIntent,
+        },
+      },
+    );
+
+    expect(confirmed.response.status).toBe(201);
+    expect(confirmed.body).toMatchObject({
+      project: {
+        serviceActivation: {
+          status: "active",
+          accountMode: "bind_existing",
+          accountUsername: "existing.user",
+        },
+      },
+    });
+    expect(manualOrderAccountCalls).toEqual([
+      {
+        reference: "manual-order-reference-001",
+        request: {
+          schemaVersion: 1,
+          account: { mode: "bind_existing", purchaseIntent },
+        },
+      },
+    ]);
+    const decoded = new GeoTokenCodec(
+      "test-session-secret-at-least-16-characters",
+    ).open<Record<string, unknown>>(
+      (confirmed.body as any).projectToken,
+      "project",
+    ).value;
+    expect(JSON.stringify(decoded)).not.toContain(purchaseIntent);
   });
 
   it("clears legacy electronic-signing fields when a historical order is authorized in WeChat", async () => {
@@ -7035,7 +9046,7 @@ describe("GEO API", () => {
     expect(servicePaymentCalls).toHaveLength(2);
   });
 
-  it("blocks deletion after service payment until fulfillment or an explicit non-retryable terminal failure", async () => {
+  it("physically deletes a service project while its manual order is awaiting payment", async () => {
     const ready = await createServiceReadyProject();
     const payable = await advanceManualOrder(ready);
     const paymentRequiredDelete = await jsonRequest(
@@ -7043,11 +9054,13 @@ describe("GEO API", () => {
       payable.cookie,
       { method: "DELETE" },
     );
-    expect(paymentRequiredDelete.response.status).toBe(409);
-    expect(paymentRequiredDelete.body).toMatchObject({
-      error: { code: "PROJECT_ORDER_DELETE_BLOCKED" },
-    });
+    expect(paymentRequiredDelete.response.status).toBe(200);
+    expect(paymentRequiredDelete.body).toMatchObject({ ok: true });
+  });
 
+  it("physically deletes a paid service project while account setup is unfinished", async () => {
+    const ready = await createServiceReadyProject();
+    const payable = await advanceManualOrder(ready);
     const checkout = await jsonRequest(
       `/projects/${encodeURIComponent(payable.projectToken)}/services/payments`,
       payable.cookie,
@@ -7071,36 +9084,9 @@ describe("GEO API", () => {
       payable.cookie,
       { method: "DELETE" },
     );
-    expect(paidUnfulfilledDelete.response.status).toBe(409);
-    expect(paidUnfulfilledDelete.body).toMatchObject({
-      ok: false,
-      error: { code: "PROJECT_ORDER_DELETE_BLOCKED" },
-    });
-
-    manualOrderResponse = {
-      ...manualOrderResponse,
-      order: {
-        ...manualOrderResponse.order,
-        status: "failed",
-        retryable: false,
-        message: "订单已明确终止，无需后续人工处理",
-        updatedAt: "2026-07-22T10:30:00.000Z",
-      },
-    };
-    const terminal = await jsonRequest(
-      `/projects/${encodeURIComponent(startedPayload.projectToken)}/services/contracts/status`,
-      payable.cookie,
-      { method: "POST", body: {} },
-    );
-    expect(terminal.response.status).toBe(200);
-
-    const terminalDelete = await jsonRequest(
-      `/projects/${encodeURIComponent((terminal.body as any).projectToken)}`,
-      payable.cookie,
-      { method: "DELETE" },
-    );
-    expect(terminalDelete.response.status).toBe(200);
-    expect(terminalDelete.body).toMatchObject({ ok: true });
+    expect(paidUnfulfilledDelete.response.status).toBe(200);
+    expect(paidUnfulfilledDelete.body).toMatchObject({ ok: true });
+    expect(manualOrderPaymentCalls).toHaveLength(1);
   });
 
   it("allows deletion after a paid service is fully activated and its knowledge base is ready", async () => {
@@ -8113,6 +10099,7 @@ async function startOnePlatformMonitor(
   },
   questionId = "product-scenario-01",
   platformIds: GeoMonitorPlatformId[] = ["doubao"],
+  monitoringEdition?: GeoMonitoringEdition,
 ) {
   const projectId = new GeoTokenCodec(
     "test-session-secret-at-least-16-characters",
@@ -8131,6 +10118,7 @@ async function startOnePlatformMonitor(
         body: {
           questionId,
           platformIds,
+          ...(monitoringEdition ? { monitoringEdition } : {}),
           method: "alipay",
         },
       },
@@ -8146,6 +10134,7 @@ async function startOnePlatformMonitor(
       body: {
         questionId,
         platformIds,
+        ...(monitoringEdition ? { monitoringEdition } : {}),
         paymentAuthorization: authorization,
       },
     },
@@ -8154,14 +10143,25 @@ async function startOnePlatformMonitor(
   return started.body as Record<string, any>;
 }
 
-async function createServiceReadyProject(questionId = "product-scenario-01") {
-  const question = validQuestionSet().questions.find(
+async function createServiceReadyProject(
+  questionId = "product-scenario-01",
+  monitoringEdition: GeoMonitoringEdition = "domestic",
+) {
+  const questionSet = validQuestionSet();
+  const question = questionSet.questions.find(
     (candidate) => candidate.id === questionId,
   );
   if (!question) throw new Error(`missing fixture question ${questionId}`);
 
   const ready = await createReadyProject();
-  const monitored = await startOnePlatformMonitor(ready, questionId);
+  const platformId: GeoMonitorPlatformId =
+    monitoringEdition === "overseas" ? "chatgpt" : "doubao";
+  const monitored = await startOnePlatformMonitor(
+    ready,
+    questionId,
+    [platformId],
+    monitoringEdition,
+  );
   const monitorRunId = `monitor-${broker.monitorCreates}`;
   const run = broker.monitorRuns.get(monitorRunId);
   if (!run) throw new Error(`missing fixture monitor run ${monitorRunId}`);
@@ -8170,7 +10170,13 @@ async function createServiceReadyProject(questionId = "product-scenario-01") {
     status: "completed",
     completedItems: 5,
     records: Array.from({ length: 5 }, (_, index) =>
-      monitorRecord(index + 1, `Acme 回答 ${index + 1}`),
+      monitorRecord(
+        index + 1,
+        monitoringEdition === "overseas"
+          ? `Acme monitoring answer ${index + 1}`
+          : `Acme 回答 ${index + 1}`,
+        platformId,
+      ),
     ),
   });
 
@@ -8188,7 +10194,9 @@ async function createServiceReadyProject(questionId = "product-scenario-01") {
     output: [
       {
         role: "assistant",
-        content: [{ text: JSON.stringify(validAssessmentOutput(question)) }],
+        content: [
+          { text: JSON.stringify(validAssessmentOutput(question, platformId)) },
+        ],
       },
     ],
   });
@@ -8280,10 +10288,14 @@ async function advanceManualOrder(
   };
 }
 
-function monitorRecord(runIndex: number, answerText: string) {
+function monitorRecord(
+  runIndex: number,
+  answerText: string,
+  platform: GeoMonitorPlatformId = "doubao",
+) {
   return {
     recordId: `record-${runIndex}`,
-    platform: "doubao" as const,
+    platform,
     runIndex,
     status: "completed" as const,
     answerText,
@@ -8305,6 +10317,7 @@ function validAssessmentOutput(
     category: "product_scenario",
     question: "Acme 的服务模块 1 主要解决哪些业务问题？",
   },
+  platform: GeoMonitorPlatformId = "doubao",
 ) {
   const rankingMetricEligible = question.category !== "reputation";
   const indicator = () => ({
@@ -8312,7 +10325,7 @@ function validAssessmentOutput(
     measurementStatus: "measured",
     confidence: 0.8,
     calculationBasis: "由五次真实回答与知识库证据逐项对照计算。",
-    evidenceRefs: ["doubao/run-01", "01_company_overview/overview.md"],
+    evidenceRefs: [`${platform}/run-01`, "01_company_overview/overview.md"],
     limitations: [],
   });
   return {
@@ -8325,7 +10338,7 @@ function validAssessmentOutput(
       rankingMetricEligible,
     },
     sample: {
-      selectedPlatforms: ["doubao"],
+      selectedPlatforms: [platform],
       repeatPerPlatform: 5,
       expectedResponses: 5,
       successfulResponses: 5,
@@ -8383,7 +10396,7 @@ function validAssessmentOutput(
         },
     platformBreakdown: [
       {
-        platform: "doubao",
+        platform,
         responseCount: 5,
         successfulResponses: 5,
         brandMentionRate: 0.5,
@@ -8393,7 +10406,7 @@ function validAssessmentOutput(
         sourceCount: 2,
         sentiment: "neutral",
         verdict: "品牌已被提及，但核心主张和证据密度仍需提升。",
-        evidenceRefs: ["doubao/run-01"],
+        evidenceRefs: [`${platform}/run-01`],
       },
     ],
     knowledgeVsAnswers: [
@@ -8401,7 +10414,7 @@ function validAssessmentOutput(
         id: "comparison-01",
         topic: "企业定位",
         verdict: "supported",
-        platform: "doubao",
+        platform,
         runIndex: 1,
         answerExcerpt: "Acme 面向科研团队提供设备。",
         kbClaimId: "company-positioning",
@@ -8444,7 +10457,7 @@ function validAssessmentOutput(
         dimension: "semanticAuthority",
         action: "补齐可被 AI 直接引用的官网事实页与权威来源链接。",
         expectedImpact: "提升回答中的权威引用比例。",
-        evidenceRefs: ["doubao/run-01"],
+        evidenceRefs: [`${platform}/run-01`],
       },
     ],
     limitations: ["仅覆盖一个问题和一个平台。"],

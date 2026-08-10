@@ -69,7 +69,7 @@ const RunSchema = z
   .object({
     runId: z.string().trim().min(8).max(255),
     status: StatusSchema,
-    question: z.string().trim().min(4).max(200),
+    question: z.string().trim().min(4).max(240),
     platforms: z.array(PlatformSchema).min(1).max(6),
     repeatPerPlatform: z.literal(5),
     expectedItems: z.number().int().positive().max(30),
@@ -429,7 +429,6 @@ export function toPublicMonitorView(run: BrokerMonitorRun) {
   return {
     runId: run.runId,
     status: run.status,
-    question: run.question,
     platforms: run.platforms,
     repeatPerPlatform: run.repeatPerPlatform,
     expectedRecords: run.expectedItems,

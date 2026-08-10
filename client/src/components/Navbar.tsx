@@ -9,9 +9,7 @@ import {
 } from "../../../shared/siteNavigation";
 
 const FRONTMIND_LOGO_IMG = "/brand/frontmind-logo.svg";
-const CLIENT_PORTAL_URL =
-  import.meta.env.VITE_CLIENT_PORTAL_URL ||
-  "https://dashboard.frontmind.net/login";
+const CLIENT_PORTAL_URL = __FRONTMIND_CLIENT_PORTAL_URL__;
 
 export default function Navbar() {
   const [scrolled, setScrolled] = useState(false);

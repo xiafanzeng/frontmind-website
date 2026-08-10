@@ -24,7 +24,7 @@ describe("shared manual-service-order response contract", () => {
       "frontmind-manual-service-order-v1-2026-08-02",
     );
     expect(createHash("sha256").update(fixtureText).digest("hex")).toBe(
-      "e3e9f0c4a5a83fc41313b40e72b75da583dbf6c4feb796e133bb1d3144f87513",
+      "e7119dd3340f60e49bc678fd2c8d30e716e37f474dfcd6beca0479499c4b7e98",
     );
   });
 
@@ -47,10 +47,19 @@ describe("shared manual-service-order response contract", () => {
       Record<string, unknown>
     >;
     expect(created.order).not.toHaveProperty("amountFen");
+    expect(created.order).toMatchObject({ marketEdition: "overseas" });
     expect(authorized.order).toMatchObject({
       status: "payment_required",
+      marketEdition: "overseas",
       contractAuthorizationMode: "external_wechat",
     });
+    expect(
+      Object.values(fixture.legacyElectronicSignatureFlow).every(
+        (response) =>
+          (response as Record<string, Record<string, unknown>>).order
+            .marketEdition === "domestic",
+      ),
+    ).toBe(true);
     expect(JSON.stringify(fixture.externalWechatFlow)).not.toMatch(
       /contractId|signingUrl|signedAt/,
     );

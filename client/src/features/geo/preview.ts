@@ -38,6 +38,7 @@ const PLATFORM_NAMES: Record<GeoPlatformId, string> = {
   baiduai: "百度 AI+",
   qianwen: "通义千问",
   kimi: "Kimi",
+  chatgpt: "ChatGPT",
 };
 
 const QUESTION_COPY: Record<GeoQuestionCategory, string[]> = {

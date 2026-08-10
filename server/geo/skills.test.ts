@@ -6,10 +6,17 @@ import path from "node:path";
 import { promisify } from "node:util";
 import { describe, expect, it } from "vitest";
 import {
+  buildGeoCustomQuestionClassifierTaskInput,
   buildGeoCustomQuestionClassifierPrompt,
   buildGeoQuestionPrompt,
+  buildGeoQuestionTaskInput,
   buildWebsiteKnowledgeBasePrompt,
+  buildWebsiteKnowledgeBaseTaskInput,
+  CUSTOM_QUESTION_TASK_INPUT_FILENAME,
+  QUESTION_TASK_INPUT_FILENAME,
+  WEBSITE_KB_TASK_INPUT_FILENAME,
 } from "./prompts";
+import { GEO_UPSTREAM_PROMPT_MAX_CODE_POINTS } from "./prompt-delivery";
 import {
   buildGeoCustomQuestionClassifierSkillArchive,
   buildGeoQuestionRecommenderSkillArchive,
@@ -134,16 +141,29 @@ describe("website one-shot knowledge-base skill", () => {
         },
       ],
     });
+    const taskInput = JSON.parse(
+      buildWebsiteKnowledgeBaseTaskInput({
+        input: "https://acme.example",
+        attachments: [{ filename: "catalog.pdf" }],
+      }).body.toString("utf8"),
+    );
     expect(prompt).toContain("不存在后续用户对话");
     expect(prompt).toContain("不要询问、等待确认");
-    expect(prompt).toContain('"rawInput": "https://acme.example"');
+    expect(prompt).toContain(WEBSITE_KB_TASK_INPUT_FILENAME);
+    expect(prompt).not.toContain("https://acme.example");
+    expect(taskInput.data).toMatchObject({
+      rawInput: "https://acme.example",
+      uploadedFiles: ["catalog.pdf"],
+    });
     expect(prompt).toContain(WEBSITE_KB_SKILL_ARCHIVE_FILENAME);
     expect(prompt).toContain("先解压 ZIP 并完整读取根目录 SKILL.md");
     expect(prompt).toContain("website-lead-candidate-v1");
     expect(prompt).toContain(
       "不得开启、调用、切换或推荐 Wide Research / Deep Research",
     );
-    expect(Buffer.byteLength(prompt, "utf8")).toBeLessThanOrEqual(4_000);
+    expect(Array.from(prompt).length).toBeLessThanOrEqual(
+      GEO_UPSTREAM_PROMPT_MAX_CODE_POINTS,
+    );
     for (const removedFinalContract of [
       "8–56",
       "schemaVersion=3",
@@ -559,6 +579,7 @@ describe("GEO question-recommender skill", () => {
     expect(skill).toContain("Five-question intent matrices");
     expect(skill).toContain("Never write placeholder structures");
     expect(skill).toContain("all twenty rationales are specific");
+    expect(skill).not.toContain("questionEnglish");
   });
 
   it("builds a JSON-only grounded recommendation prompt", async () => {
@@ -566,8 +587,19 @@ describe("GEO question-recommender skill", () => {
       companyName: "Acme",
       archiveFilename: "Acme.zip",
     });
+    const taskInput = JSON.parse(
+      buildGeoQuestionTaskInput({
+        companyName: "Acme",
+        archiveFilename: "Acme.zip",
+      }).body.toString("utf8"),
+    );
     expect(prompt).toContain("最终响应只能是符合 schema 的 JSON 对象");
-    expect(prompt).toContain("Acme.zip");
+    expect(prompt).toContain(QUESTION_TASK_INPUT_FILENAME);
+    expect(prompt).not.toContain("Acme.zip");
+    expect(taskInput.data).toEqual({
+      companyName: "Acme",
+      knowledgeBaseArchive: "Acme.zip",
+    });
     expect(prompt).toContain(QUESTION_SKILL_ARCHIVE_FILENAME);
     expect(prompt).not.toContain("# FILE:");
     expect(Buffer.byteLength(prompt, "utf8")).toBeLessThan(4 * 1024);
@@ -603,6 +635,9 @@ describe("GEO question-recommender skill", () => {
       entrypoint: "SKILL.md",
     });
     expect(manifest.files).toHaveLength(3);
+    expect(
+      await zip.file("references/output-schema.json")!.async("string"),
+    ).not.toContain("questionEnglish");
   });
 });
 
@@ -620,16 +655,26 @@ describe("GEO custom-question classifier skill", () => {
     ]) {
       expect(skill.toLowerCase()).toContain(invariant.toLowerCase());
     }
+    expect(skill).not.toContain("questionEnglish");
   });
 
-  it("builds a one-question, JSON-only, knowledge-grounded classifier prompt", () => {
-    const prompt = buildGeoCustomQuestionClassifierPrompt({
+  it("builds a one-question, JSON-only, knowledge-grounded classifier prompt", async () => {
+    const prompt = await buildGeoCustomQuestionClassifierPrompt({
       companyName: "超前智能",
       question: "超前智能有哪些值得重点了解的优势？",
       archiveFilename: "超前智能_website_lead_knowledge_base.zip",
     });
+    const taskInput = JSON.parse(
+      buildGeoCustomQuestionClassifierTaskInput({
+        companyName: "超前智能",
+        question: "超前智能有哪些值得重点了解的优势？",
+        archiveFilename: "超前智能_website_lead_knowledge_base.zip",
+      }).body.toString("utf8"),
+    );
     expect(prompt).toContain(CUSTOM_QUESTION_CLASSIFIER_SKILL_ARCHIVE_FILENAME);
-    expect(prompt).toContain("超前智能有哪些值得重点了解的优势？");
+    expect(prompt).toContain(CUSTOM_QUESTION_TASK_INPUT_FILENAME);
+    expect(prompt).not.toContain("超前智能有哪些值得重点了解的优势？");
+    expect(taskInput.data.question).toBe("超前智能有哪些值得重点了解的优势？");
     expect(prompt).toContain("企业相关性");
     expect(prompt).toContain("行业排名");
     expect(prompt).toContain("单个 JSON 对象");
@@ -660,6 +705,9 @@ describe("GEO custom-question classifier skill", () => {
     expect(CUSTOM_QUESTION_CLASSIFIER_SKILL_ARCHIVE_FILENAME).toBe(
       "geo-custom-question-classifier.skill.zip",
     );
+    expect(
+      await zip.file("references/output-schema.json")!.async("string"),
+    ).not.toContain("questionEnglish");
   });
 });
 

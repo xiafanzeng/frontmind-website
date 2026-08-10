@@ -36,7 +36,10 @@ import {
   type GeoQuestionCategory,
 } from "./types";
 import { KnowledgeCompletenessDialog } from "./KnowledgeCompletenessDialog";
-import { prepareKnowledgeSectionMarkdown } from "./knowledge-section-markdown";
+import {
+  prepareKnowledgeSectionMarkdown,
+  visibleKnowledgeSectionSummary,
+} from "./knowledge-section-markdown";
 import { MonitoringMarkdown } from "./MonitoringMarkdown";
 
 type DashboardSection = "service" | "brand" | "intent" | "progress" | "assets";
@@ -763,7 +766,9 @@ export function KnowledgePanel({
     sections[0]?.id || "",
   );
   const filteredSections = sections.filter((section) =>
-    `${section.title}${section.summary || ""}${section.markdown || ""}`
+    `${section.title}${visibleKnowledgeSectionSummary(section.summary) || ""}${
+      section.markdown || ""
+    }`
       .toLowerCase()
       .includes(knowledgeSearch.toLowerCase()),
   );
@@ -774,9 +779,13 @@ export function KnowledgePanel({
   const selectedSectionMarkdown = selectedSection
     ? prepareKnowledgeSectionMarkdown(
         selectedSection.markdown ||
-          selectedSection.summary ||
-          "该知识主题正在整理。",
+          visibleKnowledgeSectionSummary(selectedSection.summary) ||
+          "",
         selectedSection.title,
+        {
+          archiveContractVersion: knowledgeBase?.archiveContractVersion,
+          titleInjected: selectedSection.titleInjected,
+        },
       )
     : undefined;
   const buildSteps = [
@@ -887,7 +896,7 @@ export function KnowledgePanel({
                     <a
                       href={source.url}
                       target="_blank"
-                      rel="noreferrer"
+                      rel="noopener noreferrer"
                       key={source.id}
                     >
                       {source.title}
@@ -985,13 +994,9 @@ export function KnowledgePanel({
               {selectedSection ? (
                 <>
                   <header>
-                    <div>
-                      <span>知识主题</span>
-                      {!selectedSectionMarkdown?.rendersSectionTitle && (
-                        <h4>{selectedSection.title}</h4>
-                      )}
-                      <p>{selectedSection.summary}</p>
-                    </div>
+                    {!selectedSectionMarkdown?.rendersSectionTitle && (
+                      <h4>{selectedSection.title}</h4>
+                    )}
                     <small
                       className={`status-${selectedSection.status || "unknown"}`}
                     >
@@ -1545,7 +1550,15 @@ export function IntentPanel({
             );
             return [
               <span className="geo-agent-platform-cell" key={answer.id}>
-                {platform && <img src={platform.logo} alt="" />}
+                {platform && (
+                  <img
+                    className={
+                      platform.id === "chatgpt" ? "geo-chatgpt-logo" : undefined
+                    }
+                    src={platform.logo}
+                    alt=""
+                  />
+                )}
                 {platform?.name || answer.platformId}
               </span>,
               `第 ${answer.runIndex} 次`,
@@ -1598,7 +1611,7 @@ export function IntentPanel({
                     <a
                       href={source.url}
                       target="_blank"
-                      rel="noreferrer"
+                      rel="noopener noreferrer"
                       key={`${source.title}-${index}`}
                     >
                       {source.title}
@@ -1621,7 +1634,7 @@ export function IntentPanel({
                     <a
                       href={source.url}
                       target="_blank"
-                      rel="noreferrer"
+                      rel="noopener noreferrer"
                       key={`${source.title}-${index}`}
                     >
                       {source.title}
@@ -1770,7 +1783,15 @@ export function ProgressPanel({
                   );
                   return (
                     <article key={platformId}>
-                      <img src={platform.logo} alt="" />
+                      <img
+                        className={
+                          platform.id === "chatgpt"
+                            ? "geo-chatgpt-logo"
+                            : undefined
+                        }
+                        src={platform.logo}
+                        alt=""
+                      />
                       <div>
                         <strong>{platform.name}</strong>
                         <p>
@@ -1848,7 +1869,7 @@ export function ProgressPanel({
                   <a
                     href={source.url}
                     target="_blank"
-                    rel="noreferrer"
+                    rel="noopener noreferrer"
                     key={source.url}
                   >
                     {source.title}
