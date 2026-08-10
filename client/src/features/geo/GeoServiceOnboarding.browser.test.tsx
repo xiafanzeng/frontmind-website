@@ -10,7 +10,10 @@ import {
 import type { ComponentProps } from "react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-import { GeoServiceOnboarding } from "./GeoServiceOnboarding";
+import {
+  clearGeoServiceContractProfile,
+  GeoServiceOnboarding,
+} from "./GeoServiceOnboarding";
 import type { GeoServiceActivation } from "./types";
 
 const activation: GeoServiceActivation = {
@@ -40,6 +43,7 @@ function renderOnboarding(
       companyName="深圳星辰科技有限公司"
       categoryLabel="产品场景"
       question="深圳星辰科技适合哪些企业使用？"
+      contractHref="/contracts/frontmind-geo-monthly-optimization-service-agreement.html?category=product_scenario"
       isPreview={false}
       onSubmitProfile={onSubmitProfile}
       onCheckout={vi.fn()}
@@ -78,6 +82,19 @@ function completeProfile() {
 }
 
 describe("GeoServiceOnboarding contract-code dialog", () => {
+  it("removes the matching local contract profile during project deletion", () => {
+    sessionStorage.setItem(
+      "frontmind:geo-contract-profile:深圳星辰科技有限公司:深圳星辰科技适合哪些企业使用？",
+      JSON.stringify({ signatoryName: "张三" }),
+    );
+
+    clearGeoServiceContractProfile(
+      "深圳星辰科技有限公司",
+      "深圳星辰科技适合哪些企业使用？",
+    );
+
+    expect(sessionStorage.length).toBe(0);
+  });
   it.each([
     {
       label: "未付款但订单已拒绝",
@@ -230,5 +247,16 @@ describe("GeoServiceOnboarding contract-code dialog", () => {
       await screen.findByText("合同已在企业微信确认，可以付款"),
     ).toBeTruthy();
     expect(screen.queryByRole("dialog")).toBeNull();
+
+    const contractLink = screen.getByRole("link", { name: /查看合同/ });
+    const href = contractLink.getAttribute("href") || "";
+    const [contractPath, profileFragment] = href.split("#", 2);
+    expect(contractPath).toContain(
+      "/contracts/frontmind-geo-monthly-optimization-service-agreement.html",
+    );
+    expect(contractPath).not.toContain("91440300MA5F12345X");
+    expect(contractPath).not.toContain("contracts%40example.com");
+    expect(profileFragment).toContain("creditCode=91440300MA5F12345X");
+    expect(profileFragment).toContain("email=contracts%40example.com");
   });
 });

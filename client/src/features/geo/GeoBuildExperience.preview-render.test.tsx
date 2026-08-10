@@ -21,7 +21,6 @@ import {
   QuestionRecommendation,
   resolvePaymentCheckoutAction,
   ServiceActivation,
-  shouldRenderExecutionProgress,
   StageNavigation,
 } from "./GeoBuildExperience";
 import { KnowledgeCompletenessDetails } from "./KnowledgeCompletenessDialog";
@@ -152,21 +151,6 @@ describe("GEO style preview rendering", () => {
         Date.parse("2026-07-28T09:00:00.000Z"),
       ),
     ).toBe("00:00:30");
-  });
-
-  it("never renders vendor percentage progress for enterprise analysis", () => {
-    expect(
-      shouldRenderExecutionProgress({
-        stage: "enterprise_analysis",
-        progress: 12,
-      }),
-    ).toBe(false);
-    expect(
-      shouldRenderExecutionProgress({
-        stage: "monitoring",
-        progress: 12,
-      }),
-    ).toBe(true);
   });
 
   it("keeps the active stage readable in the compact navigation", () => {
@@ -735,24 +719,27 @@ describe("GEO style preview rendering", () => {
     expect(html).not.toContain("可持续更新");
   });
 
-  it("keeps only the last repeated knowledge-section title closest to the body", () => {
+  it("removes only legacy generated H2 titles from archived document parts", () => {
     const fixture = createGeoStylePreviewProject();
     const firstSection = fixture.knowledgeBase!.sections[0]!;
     const project = {
       ...fixture,
       knowledgeBase: {
         ...fixture.knowledgeBase!,
+        archiveContractVersion: 1 as const,
         sections: [
           {
             ...firstSection,
-            id: "team",
-            title: "团队与组织",
+            id: "company",
+            title: "企业与品牌",
+            summary: "暂无可展示摘要。",
             markdown: [
-              "# 团队与组织",
-              "## 团队与组织",
-              "### 团队与组织",
-              "#### 团队与组织",
-              "官网称，团队由多学科成员组成。",
+              "## 企业与品牌",
+              "# 企业与品牌",
+              "---",
+              "## 企业与品牌",
+              "# 企业与品牌",
+              "官网称，企业成立于 2023 年。",
             ].join("\n\n"),
           },
         ],
@@ -762,10 +749,43 @@ describe("GEO style preview rendering", () => {
       <KnowledgePanel project={project} view="knowledge-display" />,
     );
 
-    expect(html).toMatch(/<strong[^>]*>团队与组织<\/strong>/);
-    expect(html.match(/<h[1-6][^>]*>团队与组织<\/h[1-6]>/g)).toHaveLength(1);
-    expect(html).toMatch(/<h4[^>]*>团队与组织<\/h4>/);
-    expect(html).toContain("官网称，团队由多学科成员组成。");
+    expect(html).toMatch(/<strong[^>]*>企业与品牌<\/strong>/);
+    expect(html.match(/<h[1-6][^>]*>企业与品牌<\/h[1-6]>/g)).toHaveLength(2);
+    expect(html).not.toMatch(/<h4[^>]*>企业与品牌<\/h4>/);
+    expect(html.match(/<h1[^>]*>企业与品牌<\/h1>/g)).toHaveLength(2);
+    expect(html).not.toMatch(/<h2[^>]*>企业与品牌<\/h2>/);
+    expect(html).toContain("官网称，企业成立于 2023 年。");
+    expect(html).not.toContain("<span>知识主题</span>");
+    expect(html).not.toContain("暂无可展示摘要。");
+  });
+
+  it("preserves an authored H2/H1 pair for a current archive contract", () => {
+    const fixture = createGeoStylePreviewProject();
+    const firstSection = fixture.knowledgeBase!.sections[0]!;
+    const project = {
+      ...fixture,
+      knowledgeBase: {
+        ...fixture.knowledgeBase!,
+        archiveContractVersion: 3 as const,
+        sections: [
+          {
+            ...firstSection,
+            id: "authored-company",
+            title: "企业与品牌",
+            markdown: "## 企业与品牌\n\n# 企业与品牌\n\n作者正文。",
+          },
+        ],
+      },
+    };
+
+    const html = renderToStaticMarkup(
+      <KnowledgePanel project={project} view="knowledge-display" />,
+    );
+
+    expect(html).toMatch(/<h2[^>]*>企业与品牌<\/h2>/);
+    expect(html).toMatch(/<h1[^>]*>企业与品牌<\/h1>/);
+    expect(html).not.toMatch(/<h4[^>]*>企业与品牌<\/h4>/);
+    expect(html).toContain("作者正文。");
   });
 
   it("retains the detail heading when knowledge markdown starts with body text", () => {
@@ -791,6 +811,34 @@ describe("GEO style preview rendering", () => {
 
     expect(html).toMatch(/<h4[^>]*>团队与组织<\/h4>/);
     expect(html).toContain("正文直接开始，没有内嵌标题。");
+  });
+
+  it("does not render the historical unavailable summary when a section has no body", () => {
+    const fixture = createGeoStylePreviewProject();
+    const firstSection = fixture.knowledgeBase!.sections[0]!;
+    const project = {
+      ...fixture,
+      knowledgeBase: {
+        ...fixture.knowledgeBase!,
+        sections: [
+          {
+            ...firstSection,
+            id: "empty-company",
+            title: "企业与品牌",
+            summary: "暂无可展示摘要。",
+            markdown: undefined,
+          },
+        ],
+      },
+    };
+    const html = renderToStaticMarkup(
+      <KnowledgePanel project={project} view="knowledge-display" />,
+    );
+
+    expect(html.match(/<h4[^>]*>企业与品牌<\/h4>/g)).toHaveLength(1);
+    expect(html).toContain("本轮没有返回可展示的文字。");
+    expect(html).not.toContain("<span>知识主题</span>");
+    expect(html).not.toContain("暂无可展示摘要。");
   });
 
   it("renders roadmap actions and folds execution conditions into the roadmap", () => {

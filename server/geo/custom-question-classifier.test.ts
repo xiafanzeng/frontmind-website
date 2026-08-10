@@ -160,6 +160,101 @@ describe("custom GEO question classifier contract", () => {
     ).toEqual({ ok: true });
   });
 
+  it.each([1, 2, 3] as const)(
+    "preserves schema-v%s evidencePaths as the legacy complete ZIP inventory",
+    (archiveContractVersion) => {
+      const classification = parseCustomQuestionClassificationTaskOutput(
+        assistantTask({
+          decision: "accept",
+          category: "reputation",
+          enterpriseRelated: true,
+          reasonCode: "accepted",
+          reason: "问题明确询问超前智能，并引用旧包中的真实文件路径。",
+          enterpriseAnchor: "超前智能",
+          offeringAnchor: null,
+          evidenceRefs: ["README.md"],
+        }),
+      );
+      if (!classification || classification.decision !== "accept") {
+        throw new Error("expected accepted fixture");
+      }
+
+      expect(
+        validateAcceptedCustomQuestionGrounding(classification, {
+          question: "超前智能有哪些优势？",
+          companyName: "超前智能",
+          manifest: {
+            ...manifest,
+            archiveContractVersion,
+            evidencePaths: [...manifest.evidencePaths, "README.md"],
+          },
+        }),
+      ).toEqual({ ok: true });
+    },
+  );
+
+  it("uses only schema-v4 evidencePaths instead of accepting every allPaths entry", () => {
+    const classification = parseCustomQuestionClassificationTaskOutput(
+      assistantTask({
+        decision: "accept",
+        category: "reputation",
+        enterpriseRelated: true,
+        reasonCode: "accepted",
+        reason: "问题明确询问超前智能，但引用的是普通说明文件。",
+        enterpriseAnchor: "超前智能",
+        offeringAnchor: null,
+        evidenceRefs: ["README.md"],
+      }),
+    );
+    if (!classification || classification.decision !== "accept") {
+      throw new Error("expected accepted fixture");
+    }
+
+    expect(
+      validateAcceptedCustomQuestionGrounding(classification, {
+        question: "超前智能靠谱吗？",
+        companyName: "超前智能",
+        manifest: {
+          ...manifest,
+          archiveContractVersion: 4,
+          allPaths: [...manifest.evidencePaths, "README.md"],
+          evidencePaths: ["03_products/knowledge-base.md"],
+        },
+      }),
+    ).toMatchObject({ ok: false, kind: "invalid_evidence" });
+  });
+
+  it("accepts a schema-v4 path that is present in both inventories", () => {
+    const classification = parseCustomQuestionClassificationTaskOutput(
+      assistantTask({
+        decision: "accept",
+        category: "product_scenario",
+        enterpriseRelated: true,
+        reasonCode: "accepted",
+        reason: "问题明确询问超前智能的企业知识库产品能力。",
+        enterpriseAnchor: "超前智能",
+        offeringAnchor: "企业知识库",
+        evidenceRefs: ["03_products/knowledge-base.md"],
+      }),
+    );
+    if (!classification || classification.decision !== "accept") {
+      throw new Error("expected accepted fixture");
+    }
+
+    expect(
+      validateAcceptedCustomQuestionGrounding(classification, {
+        question: "超前智能的企业知识库有哪些能力？",
+        companyName: "超前智能",
+        manifest: {
+          ...manifest,
+          archiveContractVersion: 4,
+          allPaths: [...manifest.evidencePaths, "README.md"],
+          evidencePaths: ["03_products/knowledge-base.md"],
+        },
+      }),
+    ).toEqual({ ok: true });
+  });
+
   it("fails closed for an unrelated question even if the model says accept", () => {
     const classification = parseCustomQuestionClassificationTaskOutput(
       assistantTask({

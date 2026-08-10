@@ -65,6 +65,14 @@ describe("custom GEO question validation", () => {
       files: [],
       questions: [],
       selectedPlatformIds: [],
+      serviceActivation: {
+        status: "account_setup_required",
+        questionId: "question-01",
+        category: "product_scenario",
+        amountFen: 150_000,
+        billingMonths: 1,
+        contractWorkflowReference: "manual-order-still-opening",
+      },
     };
     storageMocks.listGeoProjects.mockResolvedValue([project]);
     localStorage.setItem(
@@ -96,7 +104,7 @@ describe("custom GEO question validation", () => {
     );
 
     expect(
-      await screen.findByRole("heading", { name: "删除项目记录？" }),
+      await screen.findByRole("heading", { name: "永久删除项目？" }),
     ).toBeTruthy();
     expect(screen.queryByText(/仍在验证或等待持久化/)).toBeNull();
 

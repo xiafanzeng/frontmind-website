@@ -1735,6 +1735,12 @@ describe("custom-question validation persistence", () => {
       cleanup: unavailable,
     });
     expect(afterTtl).toMatchObject({ tombstonesDeleted: 0, retained: 1 });
+    await expect(
+      store.getProjectDeletionTargets(created.record.projectId),
+    ).resolves.toEqual({
+      taskIds: [],
+      temporaryFileIds: ["retry-cleanup-file"],
+    });
 
     const persistedAfterOutage = await Promise.all(
       (await fs.readdir(directory)).map((name) =>
@@ -2001,6 +2007,12 @@ describe("custom-question validation persistence", () => {
         {
           ...created.record,
           state: "failed",
+          taskId: "project-delete-task",
+          promptInputAttachment: {
+            fileId: "project-delete-input",
+            filename: "task-input.json",
+            temporary: true,
+          },
           error: {
             code: "TEST_TERMINAL",
             message: "terminal",
@@ -2019,6 +2031,24 @@ describe("custom-question validation persistence", () => {
       await expect(
         store.fenceProjectDeletion(created.record.projectId),
       ).resolves.toBeUndefined();
+      await expect(
+        store.isProjectDeletionFenced(created.record.projectId),
+      ).resolves.toBe(true);
+      await expect(
+        store.getProjectDeletionTargets(created.record.projectId),
+      ).resolves.toEqual({
+        taskIds: ["project-delete-task"],
+        temporaryFileIds: ["project-delete-input"],
+      });
+      await expect(
+        store.purgeProjectRecords(created.record.projectId),
+      ).resolves.toBe(1);
+      await expect(
+        store.getProjectDeletionTargets(created.record.projectId),
+      ).resolves.toEqual({ taskIds: [], temporaryFileIds: [] });
+      await expect(
+        store.get(created.record.projectId, created.record.clientRequestId),
+      ).rejects.toMatchObject({ code: "PROJECT_DELETION_FENCED" });
       await expect(store.listActive()).resolves.toEqual([]);
       await expect(store.reserve(reservation())).rejects.toMatchObject({
         code: "PROJECT_DELETION_FENCED",
@@ -2026,6 +2056,12 @@ describe("custom-question validation persistence", () => {
     }
 
     const restarted = new FileGeoCustomQuestionValidationStore(directory);
+    await expect(
+      restarted.isProjectDeletionFenced(reservation().projectId),
+    ).resolves.toBe(true);
+    await expect(
+      restarted.getProjectDeletionTargets(reservation().projectId),
+    ).resolves.toEqual({ taskIds: [], temporaryFileIds: [] });
     await expect(restarted.listActive()).resolves.toEqual([]);
     await expect(restarted.reserve(reservation())).rejects.toMatchObject({
       code: "PROJECT_DELETION_FENCED",
@@ -2033,5 +2069,60 @@ describe("custom-question validation persistence", () => {
     await expect(
       restarted.fenceProjectDeletion(reservation().projectId),
     ).resolves.toBeUndefined();
+  });
+
+  it("does not let a paused file-store worker recreate records after a physical project purge", async () => {
+    const directory = await makeStoreDirectory();
+    let enterUpdate!: () => void;
+    let releaseUpdate!: () => void;
+    const updateEntered = new Promise<void>((resolve) => {
+      enterUpdate = resolve;
+    });
+    const updateRelease = new Promise<void>((resolve) => {
+      releaseUpdate = resolve;
+    });
+    const store = new FileGeoCustomQuestionValidationStore(directory, {
+      beforeRecordCommit: async ({ operation }) => {
+        if (operation !== "update") return;
+        enterUpdate();
+        await updateRelease;
+      },
+    });
+    const created = await store.reserve(reservation());
+    const lease = await store.tryAcquireLease(
+      created.record.projectId,
+      created.record.clientRequestId,
+    );
+    expect(lease).toBeDefined();
+    const lateUpdate = store.update(
+      { ...created.record, state: "prepared" },
+      lease!,
+    );
+    await updateEntered;
+
+    await store.fenceProjectDeletion(created.record.projectId, {
+      force: true,
+    });
+    await expect(
+      store.purgeProjectRecords(created.record.projectId),
+    ).resolves.toBe(1);
+    releaseUpdate();
+    await expect(lateUpdate).rejects.toMatchObject({ code: "LEASE_LOST" });
+
+    const restarted = new FileGeoCustomQuestionValidationStore(directory);
+    await expect(
+      restarted.isProjectDeletionFenced(created.record.projectId),
+    ).resolves.toBe(true);
+    await expect(
+      restarted.getProjectDeletionTargets(created.record.projectId),
+    ).resolves.toEqual({ taskIds: [], temporaryFileIds: [] });
+    await expect(
+      restarted.get(created.record.projectId, created.record.clientRequestId),
+    ).rejects.toMatchObject({ code: "PROJECT_DELETION_FENCED" });
+    expect(
+      (await fs.readdir(directory)).some((name) =>
+        name.endsWith(".tombstone.json"),
+      ),
+    ).toBe(false);
   });
 });

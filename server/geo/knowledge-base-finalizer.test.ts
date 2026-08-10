@@ -559,17 +559,13 @@ describe("website knowledge-base finalizer", () => {
         ).path,
       )!
       .async("string");
-    expect(companyOverview).not.toContain(
-      "示例企业面向企业客户提供软件产品",
-    );
+    expect(companyOverview).not.toContain("示例企业面向企业客户提供软件产品");
     expect(companyOverview).not.toContain("企业与品牌综述");
     expect(companyOverview).not.toContain(
       "企业与品牌分支的事实、来源与待核验边界已按条目分别整理。",
     );
     expect(companyOverview).not.toContain("详细事实与来源已按条目分别整理");
-    const teamOverview = await zip
-      .file("02_team/overview.md")!
-      .async("string");
+    const teamOverview = await zip.file("02_team/overview.md")!.async("string");
     expect(teamOverview).not.toContain("团队与组织综述");
     expect(teamOverview).not.toContain(
       "团队与组织分支的事实、来源与待核验边界已按条目分别整理。",
@@ -656,6 +652,44 @@ describe("website knowledge-base finalizer", () => {
     ).join("\n");
 
     expect(customerText).toContain(semanticProse);
+  });
+
+  it("uses the shared formal count for business source headings and tables", async () => {
+    const parsed = await parseKnowledgeBaseCandidate(await candidateZip());
+    const businessCopy = [
+      "### 收入来源",
+      "",
+      "| 类型 | 平台价值 |",
+      "| --- | --- |",
+      `| 收入来源 | ${"乙".repeat(593)} |`,
+      "| 社区活力来源 | 不同来源模型 [来源](https://example.com/about) |",
+    ].join("\n");
+    parsed.customerSections.set("企业与品牌", businessCopy);
+
+    const finalized = await finalizeKnowledgeBaseCandidate({
+      candidate: parsed,
+      companyName: "示例企业",
+      evaluatedAt: "2026-07-30T01:00:00.000Z",
+    });
+    const zip = await JSZip.loadAsync(finalized.bytes);
+    const packageManifest = JSON.parse(
+      await zip.file("00_package_manifest.json")!.async("string"),
+    ) as {
+      counts: { customerVisibleCharacters: number };
+      documents: Array<{ path: string; customerVisible: boolean }>;
+    };
+    const customerMarkdown = (
+      await Promise.all(
+        packageManifest.documents
+          .filter((document) => document.customerVisible)
+          .map((document) => zip.file(document.path)!.async("string")),
+      )
+    ).join("\n");
+
+    expect(customerMarkdown).toContain("社区活力来源");
+    expect(packageManifest.counts.customerVisibleCharacters).toBe(
+      finalized.metrics.customerCharacters,
+    );
   });
 
   it("normalizes and packages one traceable first-party logo", async () => {

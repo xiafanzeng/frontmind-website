@@ -10,6 +10,7 @@ import {
   trustedAssistantOutputItems,
   trustedAssistantOutputTexts,
 } from "./trusted-task-output";
+import { parseTrustedTaskJsonCandidate } from "./trusted-task-json-output";
 
 export type NormalizedTaskStatus =
   | "queued"
@@ -128,11 +129,8 @@ function inspectQuestionSetFromTask(value: unknown): {
   const candidates: unknown[] = [...trustedAssistantOutputItems(value)];
   for (const text of trustedAssistantOutputTexts(value)) {
     for (const jsonText of possibleJsonValues(text)) {
-      try {
-        candidates.push(JSON.parse(jsonText));
-      } catch {
-        // Try the next text candidate.
-      }
+      const parsed = parseTrustedTaskJsonCandidate(jsonText);
+      if (parsed !== undefined) candidates.push(parsed);
     }
   }
 
@@ -255,11 +253,26 @@ function normalizeGeneratedQuestionSet(
       record?.competitorAnchor ?? record?.competitor_anchor,
     );
     const qaIntent = stringValue(record?.qaIntent ?? record?.qa_intent);
+    const questionEnglish = stringValue(
+      record?.questionEnglish ??
+        record?.question_english ??
+        record?.questionEn ??
+        record?.question_en,
+    )
+      .replace(/[\u0000-\u001f\u007f]/g, " ")
+      .replace(/\s+/g, " ")
+      .trim()
+      .slice(0, 240);
 
     questions.push({
       id,
       category,
       question: displayQuestion,
+      ...(questionEnglish.length >= 4 &&
+      /[A-Za-z]/.test(questionEnglish) &&
+      questionEnglish.endsWith("?")
+        ? { questionEnglish }
+        : {}),
       rationale: rationale.slice(0, 240),
       evidenceRefs,
       selectable: classification.selectable && displayQuestion.length >= 4,

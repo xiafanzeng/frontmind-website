@@ -1,4 +1,6 @@
 ---
+import { releaseProfile } from '../../config/release-profile.mjs';
+
 export interface Props {
   title: string;
   description: string;
@@ -17,7 +19,7 @@ const htmlLang = lang === 'zh' ? 'zh-CN' : 'en';
 const locale = lang === 'zh' ? 'zh_CN' : 'en_US';
 const canonical = Astro.url.href;
 const pathname = Astro.url.pathname;
-const siteUrl = Astro.site?.toString().replace(/\/$/, '') || 'https://www.frontmind.net';
+const siteUrl = Astro.site?.toString().replace(/\/$/, '') || releaseProfile.siteUrl;
 const normalizedPath = pathname === '/' ? '' : pathname;
 const alternateZh = normalizedPath.startsWith('/en/') ? `${siteUrl}${normalizedPath.replace(/^\/en/, '') || '/'}` : `${siteUrl}${normalizedPath || '/'}`;
 const alternateEn = normalizedPath.startsWith('/en/') ? `${siteUrl}${normalizedPath || '/'}` : `${siteUrl}/en${normalizedPath || '/'}`;
@@ -92,6 +94,6 @@ const resolvedStructuredData = structuredData || defaultStructuredData;
 <meta name="twitter:description" content={description} />
 <meta name="twitter:image" content={ogImage} />
 <meta name="generator" content={Astro.generator} />
-<meta name="robots" content="index,follow" />
+<meta name="robots" content={releaseProfile.robotsDirective} />
 <meta name="frontmind:lang" content={htmlLang} />
 <script id="frontmind-structured-data" type="application/ld+json" set:html={JSON.stringify(resolvedStructuredData)} />

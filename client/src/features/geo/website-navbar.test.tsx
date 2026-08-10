@@ -26,8 +26,8 @@ describe("website Navbar portal entry", () => {
 
     expect(html.match(/>客户入口<\/a>/g)).toHaveLength(2);
     expect(
-      html.match(/href="https:\/\/dashboard\.frontmind\.net\/login"/g),
-    ).toHaveLength(2);
+      html.split(`href="${__FRONTMIND_CLIENT_PORTAL_URL__}"`).length - 1,
+    ).toBe(2);
     expect(html).toContain("bg-[#3D1560]");
     expect(html).not.toContain("智能体入口");
     expect(html).not.toContain("访问权限代号");

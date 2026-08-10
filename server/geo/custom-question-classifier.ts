@@ -4,6 +4,7 @@ import {
   trustedAssistantOutputItems,
   trustedAssistantOutputTexts,
 } from "./trusted-task-output";
+import { trustedTaskJsonObjectCandidates } from "./trusted-task-json-output";
 
 const AcceptedCustomQuestionClassificationSchema = z
   .object({
@@ -16,6 +17,13 @@ const AcceptedCustomQuestionClassificationSchema = z
     enterpriseRelated: z.literal(true),
     reasonCode: z.literal("accepted"),
     reason: z.string().trim().min(8).max(240),
+    questionEnglish: z
+      .string()
+      .trim()
+      .min(4)
+      .max(240)
+      .refine((value) => /[A-Za-z]/.test(value) && value.endsWith("?"))
+      .optional(),
     enterpriseAnchor: z.string().trim().min(2).max(120).nullable(),
     offeringAnchor: z.string().trim().min(2).max(120).nullable(),
     evidenceRefs: z
@@ -118,7 +126,7 @@ export function parseCustomQuestionClassificationTaskOutput(
     if (parsed.success) return parsed.data;
   }
   for (const text of trustedAssistantOutputTexts(task)) {
-    for (const candidate of possibleJsonObjects(text)) {
+    for (const candidate of trustedTaskJsonObjectCandidates(text)) {
       const parsed = parseClassificationJsonCandidate(candidate);
       if (parsed) return parsed;
     }
@@ -135,9 +143,8 @@ function parseClassificationJsonCandidate(
     );
     if (parsed.success) return parsed.data;
   } catch {
-    // A clearly rejected result can still be useful when prose or optional
-    // fields do not form the full JSON contract. The semantic fallback below
-    // never accepts a question or grants access to payment/monitoring.
+    // A malformed accepted result must never grant access to payment or
+    // monitoring. The semantic fallback below can only preserve rejection.
   }
   return inferRejectedClassification(candidate);
 }
@@ -198,7 +205,9 @@ export function validateAcceptedCustomQuestionGrounding(
       kind: "invalid_evidence" | "missing_anchor";
       reason: string;
     } {
-  const evidencePaths = new Set(input.manifest.evidencePaths);
+  const evidencePaths = new Set(
+    customQuestionEvidenceAllowlist(input.manifest),
+  );
   if (
     classification.evidenceRefs.some(
       (evidenceRef) => !evidencePaths.has(evidenceRef),
@@ -256,6 +265,17 @@ export function validateAcceptedCustomQuestionGrounding(
   return { ok: true };
 }
 
+function customQuestionEvidenceAllowlist(manifest: KnowledgeBaseManifest) {
+  if (manifest.archiveContractVersion !== 4) {
+    // v1-v3 historically expose the complete ZIP inventory through this
+    // field. Preserve that behavior until their producers and tasks retire.
+    return manifest.evidencePaths;
+  }
+  if (!manifest.allPaths) return [];
+  const allPaths = new Set(manifest.allPaths);
+  return manifest.evidencePaths.filter((entryPath) => allPaths.has(entryPath));
+}
+
 function normalizeAnchorText(value: string) {
   return value
     .normalize("NFKC")
@@ -270,20 +290,4 @@ function isSpecificAnchor(value: string) {
   if (!value || GENERIC_ANCHORS.has(value)) return false;
   if (/^[a-z\d]+$/i.test(value)) return value.length >= 3;
   return Array.from(value).length >= 2;
-}
-
-function possibleJsonObjects(value: string) {
-  const trimmed = value.trim();
-  const results = new Set<string>();
-  if (trimmed) {
-    results.add(
-      trimmed.replace(/^```(?:json)?\s*/i, "").replace(/\s*```$/, ""),
-    );
-  }
-  const firstBrace = trimmed.indexOf("{");
-  const lastBrace = trimmed.lastIndexOf("}");
-  if (firstBrace >= 0 && lastBrace > firstBrace) {
-    results.add(trimmed.slice(firstBrace, lastBrace + 1));
-  }
-  return Array.from(results);
 }

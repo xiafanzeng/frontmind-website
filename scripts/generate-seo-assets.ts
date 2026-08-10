@@ -8,6 +8,7 @@ import {
   zhExcerptFor,
   zhTitleFor,
 } from "../client/src/data/geoCommunity/translations";
+import { releaseProfile } from "../config/release-profile.mjs";
 
 type RouteMeta = {
   path: string;
@@ -28,8 +29,8 @@ const PROJECT_ROOT = fileURLToPath(new URL("..", import.meta.url));
 const DIST_PUBLIC = path.join(PROJECT_ROOT, "dist/public");
 const CLIENT_PUBLIC = path.join(PROJECT_ROOT, "client/public");
 const DIST_ONLY = process.argv.includes("--dist-only");
-const DEFAULT_SITE_URL = "https://www.frontmind.net";
-const SITE_URL = normalizeSiteUrl(process.env.VITE_SITE_URL || process.env.SITE_URL || DEFAULT_SITE_URL);
+const SITE_URL = normalizeSiteUrl(releaseProfile.siteUrl);
+const ROBOTS_DIRECTIVE = releaseProfile.robotsDirective;
 const BUILD_DATE = process.env.BUILD_DATE || "2026-06-23";
 const SITE_NAME = "FrontMind";
 const DEFAULT_IMAGE = "/home/agent-methodology-wide.webp";
@@ -522,7 +523,7 @@ function buildHead(route: RouteMeta, assetTags: string) {
     <meta name="description" content="${description}" />
     <meta name="keywords" content="${escapeHtml(KEYWORDS)}" />
     <meta name="author" content="FrontMind 超前智能" />
-    <meta name="robots" content="index, follow, max-image-preview:large, max-snippet:-1, max-video-preview:-1" />
+    <meta name="robots" content="${ROBOTS_DIRECTIVE}" />
     <meta name="theme-color" content="#3D1560" />
     <link rel="canonical" href="${canonicalUrl}" />
     <link rel="alternate" hreflang="zh-CN" href="${canonicalUrl}" />
@@ -588,6 +589,14 @@ ${urls}
 }
 
 function generateRobots() {
+  if (!releaseProfile.publishSearchIndexes) {
+    return `# FrontMind isolated development environment.
+# This host must never be indexed or used as the canonical public website.
+User-agent: *
+Disallow: /
+`;
+  }
+
   return `# robots.txt generated for FrontMind technical SEO, AEO, and LLM retrieval.
 # Canonical site: ${SITE_URL}/
 #
@@ -764,11 +773,18 @@ function main() {
   const routes = buildRoutes();
 
   routes.forEach((route) => writeRouteHtml(baseHtml, route, assetTags));
-  writeSharedFile("sitemap.xml", generateSitemap(routes));
+  if (releaseProfile.publishSearchIndexes) {
+    writeSharedFile("sitemap.xml", generateSitemap(routes));
+    writeSharedFile("llms.txt", generateLlms(routes));
+  }
   writeSharedFile("robots.txt", generateRobots());
-  writeSharedFile("llms.txt", generateLlms(routes));
 
   console.log(`Generated SEO assets for ${routes.length} routes.`);
+  console.log(
+    releaseProfile.publishSearchIndexes
+      ? "Published sitemap and llms inventory."
+      : "Omitted sitemap and llms inventory for the non-indexed release channel.",
+  );
   console.log(`Site URL: ${SITE_URL}`);
 }
 

@@ -7,6 +7,28 @@ import {
 } from "./broker";
 
 describe("HttpGeoPresalesBroker", () => {
+  it("rejects an over-budget task prompt before any outbound request", async () => {
+    const fetchMock = vi.fn();
+    const broker = new HttpGeoPresalesBroker({
+      baseUrl: "https://agent.example/api/internal/presales",
+      serviceToken: "private-token",
+      fetchImpl: fetchMock as typeof fetch,
+    });
+
+    await expect(
+      broker.createTask({
+        prompt: "😀".repeat(3_001),
+        attachments: [],
+        idempotencyKey: "geo:over-budget",
+      }),
+    ).rejects.toMatchObject({
+      code: "TASK_PROMPT_TOO_LONG",
+      status: 500,
+      details: { maximumCodePoints: 3_000, actualCodePoints: 3_001 },
+    });
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
   it("forwards a stable file operation key only to the trusted Dashboard proxy", async () => {
     const fetchMock = vi.fn(
       async () =>
@@ -29,6 +51,7 @@ describe("HttpGeoPresalesBroker", () => {
     });
 
     await broker.createFile({
+      projectId: "project-file-1",
       filename: "archive.zip",
       mimeType: "application/zip",
       sizeBytes: 10,
@@ -40,6 +63,7 @@ describe("HttpGeoPresalesBroker", () => {
       "https://agent.example/api/internal/presales/files",
     );
     expect(JSON.parse(String(init?.body))).toEqual({
+      projectId: "project-file-1",
       filename: "archive.zip",
       mimeType: "application/zip",
       sizeBytes: 10,
@@ -170,6 +194,7 @@ describe("HttpGeoPresalesBroker", () => {
       fetchImpl: fetchMock as typeof fetch,
     });
     await broker.createMonitorRun({
+      projectId: "project-monitor-1",
       question: "Acme 适合科研团队吗？",
       platforms: ["doubao", "kimi"],
       idempotencyKey: "geo-monitor:stable-request-hash",
@@ -180,10 +205,149 @@ describe("HttpGeoPresalesBroker", () => {
       "https://agent.example/api/internal/presales/monitor-runs",
     );
     expect(JSON.parse(String(init?.body))).toEqual({
+      projectId: "project-monitor-1",
       question: "Acme 适合科研团队吗？",
       platforms: ["doubao", "kimi"],
       idempotencyKey: "geo-monitor:stable-request-hash",
     });
+  });
+
+  it("physically deletes the project-scoped local monitor record", async () => {
+    const fetchMock = vi.fn(async () => new Response(null, { status: 204 }));
+    const broker = new HttpGeoPresalesBroker({
+      baseUrl: "https://agent.example/api/internal/presales",
+      serviceToken: "private-token",
+      fetchImpl: fetchMock as typeof fetch,
+    });
+
+    await expect(
+      broker.deleteMonitorRun("project-monitor-1", "monitor-run-1"),
+    ).resolves.toBe("deleted");
+
+    const [url, init] = fetchMock.mock.calls[0];
+    expect(String(url)).toBe(
+      "https://agent.example/api/internal/presales/projects/project-monitor-1/monitor-runs/monitor-run-1",
+    );
+    expect(init?.method).toBe("DELETE");
+  });
+
+  it("keeps a project monitor deletion pending while submission is in flight", async () => {
+    const fetchMock = vi.fn(
+      async () =>
+        new Response(
+          JSON.stringify({
+            error: {
+              code: "MONITOR_DELETION_PENDING",
+              message: "monitor submission is still settling",
+            },
+          }),
+          {
+            status: 425,
+            headers: { "content-type": "application/json", "retry-after": "2" },
+          },
+        ),
+    );
+    const broker = new HttpGeoPresalesBroker({
+      baseUrl: "https://agent.example/api/internal/presales",
+      serviceToken: "private-token",
+      fetchImpl: fetchMock as typeof fetch,
+    });
+
+    await expect(
+      broker.deleteMonitorRun("project-monitor-1", "monitor-run-1"),
+    ).resolves.toBe("deleting");
+  });
+
+  it("preserves the project purge deletion receipt", async () => {
+    const fetchMock = vi.fn(
+      async () =>
+        new Response(
+          JSON.stringify({
+            schemaVersion: 1,
+            projectId: "project-delete-1",
+            status: "deleted",
+            deletedTasks: 2,
+            deletedFiles: 3,
+            pendingReservations: 0,
+          }),
+          { status: 200, headers: { "content-type": "application/json" } },
+        ),
+    );
+    const broker = new HttpGeoPresalesBroker({
+      baseUrl: "https://agent.example/api/internal/presales",
+      serviceToken: "private-token",
+      fetchImpl: fetchMock as typeof fetch,
+    });
+
+    await expect(
+      broker.deleteProjectTasks("project-delete-1"),
+    ).resolves.toEqual({
+      schemaVersion: 1,
+      projectId: "project-delete-1",
+      status: "deleted",
+      deletedTasks: 2,
+      deletedFiles: 3,
+      pendingReservations: 0,
+    });
+  });
+
+  it.each(["MONITOR_SUBMISSION_REJECTED", "MONITOR_SUBMISSION_UNKNOWN"])(
+    "preserves the allowlisted Dashboard monitor error code %s",
+    async (code) => {
+      const broker = new HttpGeoPresalesBroker({
+        baseUrl: "https://agent.example/api/internal/presales",
+        serviceToken: "private-token",
+        fetchImpl: vi.fn(
+          async () =>
+            new Response(
+              JSON.stringify({
+                error: { code, message: "监控提交未确认" },
+              }),
+              {
+                status: 502,
+                headers: { "content-type": "application/json" },
+              },
+            ),
+        ) as typeof fetch,
+      });
+
+      await expect(
+        broker.createMonitorRun({
+          projectId: "project-monitor-1",
+          question: "Acme 适合科研团队吗？",
+          platforms: ["doubao"],
+          idempotencyKey: "geo-monitor:stable-request-hash",
+        }),
+      ).rejects.toMatchObject({ code, status: 502 });
+    },
+  );
+
+  it("does not forward an unrecognized Dashboard error code", async () => {
+    const broker = new HttpGeoPresalesBroker({
+      baseUrl: "https://agent.example/api/internal/presales",
+      serviceToken: "private-token",
+      fetchImpl: vi.fn(
+        async () =>
+          new Response(
+            JSON.stringify({
+              error: { code: "INTERNAL_SECRET_CODE", message: "请求失败" },
+            }),
+            {
+              status: 502,
+              headers: { "content-type": "application/json" },
+            },
+          ),
+      ) as typeof fetch,
+    });
+
+    await expect(
+      broker.createMonitorRun({
+        projectId: "project-monitor-1",
+        question: "Acme 适合科研团队吗？",
+        platforms: ["doubao"],
+        idempotencyKey: "geo-monitor:stable-request-hash",
+      }),
+    ).rejects.toMatchObject({ code: "AGENT_REQUEST_FAILED", status: 502 });
   });
 
   it("reads progressive monitor records through the result GET endpoint", async () => {
@@ -305,6 +469,7 @@ describe("HttpGeoPresalesBroker", () => {
           ok: true,
           credentialConfigured: true,
           monitorCredentialConfigured: true,
+          monitorCredentialAuthenticated: true,
           publicUrlConfigured: true,
         }),
         { status: 200, headers: { "content-type": "application/json" } },
@@ -318,6 +483,39 @@ describe("HttpGeoPresalesBroker", () => {
     });
 
     await expect(broker.getStatus()).resolves.toMatchObject({ ok: true });
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("requests an uncached monitor credential probe for payment preflight", async () => {
+    const fetchMock = vi.fn(async (url: string | URL | Request) => {
+      expect(String(url)).toBe(
+        "http://frontmind-dashboard:3001/api/internal/presales/status?monitorCredentialProbe=fresh",
+      );
+      return new Response(
+        JSON.stringify({
+          ok: false,
+          credentialConfigured: true,
+          monitorCredentialConfigured: true,
+          monitorCredentialAuthenticated: false,
+          publicUrlConfigured: true,
+        }),
+        { status: 200, headers: { "content-type": "application/json" } },
+      );
+    });
+    const broker = new HttpGeoPresalesBroker({
+      baseUrl: "http://frontmind-dashboard:3001/api/internal/presales",
+      internalHttpHosts: ["frontmind-dashboard"],
+      serviceToken: "presales-service-token-at-least-32-characters",
+      fetchImpl: fetchMock as typeof fetch,
+    });
+
+    await expect(
+      broker.getStatus({ freshMonitorCredential: true }),
+    ).resolves.toMatchObject({
+      ok: false,
+      monitorCredentialConfigured: true,
+      monitorCredentialAuthenticated: false,
+    });
     expect(fetchMock).toHaveBeenCalledTimes(1);
   });
 

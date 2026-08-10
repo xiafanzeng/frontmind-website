@@ -6,6 +6,11 @@ import {
 } from "lucide-react";
 
 import { cn } from "@/lib/utils";
+import {
+  safeLinkRel,
+  safeLinkTarget,
+  type SafeLinkTarget,
+} from "@/components/SafeLink";
 import { Button, buttonVariants } from "@/components/ui/button";
 
 function Pagination({ className, ...props }: React.ComponentProps<"nav">) {
@@ -40,14 +45,22 @@ function PaginationItem({ ...props }: React.ComponentProps<"li">) {
 type PaginationLinkProps = {
   isActive?: boolean;
 } & Pick<React.ComponentProps<typeof Button>, "size"> &
-  React.ComponentProps<"a">;
+  Omit<React.ComponentProps<"a">, "target" | "rel"> & {
+    target?: SafeLinkTarget;
+    rel?: string;
+  };
 
 function PaginationLink({
   className,
   isActive,
   size = "icon",
+  target,
+  rel,
   ...props
 }: PaginationLinkProps) {
+  const safeTarget = safeLinkTarget(target);
+  const safeRel = safeLinkRel(safeTarget, rel);
+
   return (
     <a
       aria-current={isActive ? "page" : undefined}
@@ -58,9 +71,11 @@ function PaginationLink({
           variant: isActive ? "outline" : "ghost",
           size,
         }),
-        className
+        className,
       )}
       {...props}
+      target={safeTarget}
+      rel={safeRel}
     />
   );
 }

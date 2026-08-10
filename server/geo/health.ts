@@ -9,8 +9,10 @@ declare const __FRONTMIND_BUILD_SHA__: string | undefined;
 export type GeoDependencyReadiness = {
   status: "ok";
   agent: {
-    credentialConfigured: true;
+    credentialRequired: boolean;
+    credentialConfigured: boolean;
     monitorCredentialConfigured: true;
+    monitorCredentialAuthenticated: true;
     publicUrlConfigured: true;
   };
   projectOrderRegistry: { ready: true };
@@ -45,9 +47,11 @@ export function createGeoDependencyHealthChecker(options: {
   broker: GeoPresalesBroker;
   projectOrderRegistry: GeoProjectOrderRegistry;
   paymentReceiptStore: GeoPaymentReceiptStore;
+  requireAgentCredential?: boolean;
   cacheTtlMs?: number;
   now?: () => number;
 }) {
+  const requireAgentCredential = options.requireAgentCredential ?? true;
   const cacheTtlMs = options.cacheTtlMs ?? 2_000;
   const now = options.now ?? Date.now;
   let cached:
@@ -70,8 +74,9 @@ export function createGeoDependencyHealthChecker(options: {
       ]);
       if (
         !agent.ok ||
-        !agent.credentialConfigured ||
+        (requireAgentCredential && !agent.credentialConfigured) ||
         !agent.monitorCredentialConfigured ||
+        !agent.monitorCredentialAuthenticated ||
         agent.publicUrlConfigured !== true
       ) {
         throw new Error("GEO Agent dependencies are not ready");
@@ -79,8 +84,10 @@ export function createGeoDependencyHealthChecker(options: {
       const result: GeoDependencyReadiness = {
         status: "ok",
         agent: {
-          credentialConfigured: true,
+          credentialRequired: requireAgentCredential,
+          credentialConfigured: agent.credentialConfigured,
           monitorCredentialConfigured: true,
+          monitorCredentialAuthenticated: true,
           publicUrlConfigured: true,
         },
         projectOrderRegistry: { ready: true },

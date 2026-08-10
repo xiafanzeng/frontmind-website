@@ -180,6 +180,15 @@ export function trustedAssistantOutputTexts(task: unknown): string[] {
     for (const key of ["text", "output_text", "content"]) {
       const text = record[key];
       if (typeof text === "string" && text.trim()) return [text];
+      // The upstream Tasks API also emits typed text as
+      // `{ type: "output_text", text: { value: "..." } }`. Keep this
+      // deliberately shallow: `trustedAssistantOutputItems` has already
+      // established the assistant-output boundary, and arbitrary metadata or
+      // nested user content must never become trusted output by recursion.
+      const envelope = asRecord(text);
+      if (typeof envelope?.value === "string" && envelope.value.trim()) {
+        return [envelope.value];
+      }
     }
     return [];
   });

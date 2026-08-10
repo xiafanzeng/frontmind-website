@@ -73,6 +73,23 @@ describe("monitor result adapter", () => {
     );
   });
 
+  it("accepts the longest translated overseas question allowed at checkout", () => {
+    const question = `${"A".repeat(239)}?`;
+    const payload = completedRun();
+    payload.question = question;
+    payload.platforms = ["chatgpt"];
+    payload.records = payload.records.map((record) => ({
+      ...record,
+      platform: "chatgpt",
+    }));
+    expect(
+      normalizeMonitorRun(payload, {
+        question,
+        platforms: ["chatgpt"],
+      }).question,
+    ).toBe(question);
+  });
+
   it("treats an explicit canonical source list as authoritative even when empty", () => {
     const payload = completedRun();
     payload.records[0] = {

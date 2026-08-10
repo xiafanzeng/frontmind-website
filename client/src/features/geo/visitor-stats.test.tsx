@@ -87,15 +87,15 @@ describe("visitor statistics UI", () => {
     ).toBeNull();
   });
 
-  it("accepts published region totals that include other and unknown", () => {
+  it("accepts published region totals that include other without unknown", () => {
     const normalized = normalizeVisitorStats({
       totalReads: 8,
-      countryCount: 3,
+      countryCount: 2,
       countries: [
         {
           country: "Mainland China",
           iso: "cn",
-          reads: 5,
+          reads: 6,
           latitude: 35.8617,
           longitude: 104.1954,
         },
@@ -106,24 +106,16 @@ describe("visitor statistics UI", () => {
           latitude: 0,
           longitude: 0,
         },
-        {
-          country: "Unknown",
-          iso: "unknown",
-          reads: 1,
-          latitude: 0,
-          longitude: 0,
-        },
       ],
     });
 
     expect(normalized).toMatchObject({
       totalReads: 8,
-      countryCount: 3,
+      countryCount: 2,
     });
     expect(normalized?.countries.map((country) => country.iso)).toEqual([
       "cn",
       "other",
-      "unknown",
     ]);
   });
 });

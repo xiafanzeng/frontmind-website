@@ -6,6 +6,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { defineConfig, loadEnv, type Plugin, type ViteDevServer } from "vite";
 import { vitePluginManusRuntime } from "vite-plugin-manus-runtime";
+import { releaseProfile } from "./config/release-profile.mjs";
 import { handleVisitorStatsRequest } from "./server/visitorStats";
 import { createGeoRouter } from "./server/geo/router";
 
@@ -18,6 +19,23 @@ const PROJECT_ROOT = import.meta.dirname;
 const LOG_DIR = path.join(PROJECT_ROOT, ".manus-logs");
 const MAX_LOG_SIZE_BYTES = 1 * 1024 * 1024; // 1MB per log file
 const TRIM_TARGET_BYTES = Math.floor(MAX_LOG_SIZE_BYTES * 0.6); // Trim to 60% to avoid constant re-trimming
+
+function vitePluginReleaseProfile(): Plugin {
+  const replacements = [
+    ["__FRONTMIND_SITE_URL__", releaseProfile.siteUrl],
+    ["__FRONTMIND_ROBOTS_DIRECTIVE__", releaseProfile.robotsDirective],
+  ] as const;
+
+  return {
+    name: "frontmind-release-profile",
+    transformIndexHtml(html) {
+      return replacements.reduce(
+        (result, [placeholder, value]) => result.replaceAll(placeholder, value),
+        html,
+      );
+    },
+  };
+}
 
 type LogSource = "browserConsole" | "networkRequests" | "sessionReplay";
 
@@ -247,6 +265,7 @@ export default defineConfig(({ command, mode }) => {
     ...process.env,
   };
   const plugins = [
+    vitePluginReleaseProfile(),
     react(),
     tailwindcss(),
     ...(isProductionBuild
@@ -263,6 +282,15 @@ export default defineConfig(({ command, mode }) => {
 
   return {
     plugins,
+    define: {
+      __FRONTMIND_SITE_URL__: JSON.stringify(releaseProfile.siteUrl),
+      __FRONTMIND_CLIENT_PORTAL_URL__: JSON.stringify(
+        releaseProfile.clientPortalUrl,
+      ),
+      __FRONTMIND_ROBOTS_DIRECTIVE__: JSON.stringify(
+        releaseProfile.robotsDirective,
+      ),
+    },
     resolve: {
       alias: {
         "@": path.resolve(import.meta.dirname, "client", "src"),

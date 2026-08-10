@@ -3,6 +3,7 @@ import {
   assertGeoPaymentConfigurationFromEnv,
   canonicalizeZpayParameters,
   GeoPaymentConfigurationError,
+  geoServiceMonthlyPriceFen,
   signZpayParameters,
   UnconfiguredGeoPaymentVerifier,
   verifyGeoPaymentProviderFromEnv,
@@ -248,6 +249,20 @@ describe("ZPAY GEO gateway", () => {
     expect(anotherMethod.orderId).toBe(first.orderId);
   });
 
+  it("creates an overseas checkout before monitoring-time translation", async () => {
+    const paymentGateway = gateway();
+    const overseasScope = {
+      ...scope,
+      platformIds: ["chatgpt"] as const,
+      monitoringEdition: "overseas" as const,
+      expectedAmountFen: 500,
+    };
+
+    await expect(
+      paymentGateway.createCheckout(overseasScope),
+    ).resolves.toMatchObject({ amountFen: 500 });
+  });
+
   it("switches an unpaid checkout by re-signing the same authorization and order", async () => {
     const fetchMock = vi.fn<typeof fetch>().mockResolvedValue(
       new Response(
@@ -294,6 +309,182 @@ describe("ZPAY GEO gateway", () => {
       signZpayParameters(switched.fields, "merchant-secret"),
     );
     expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("switches an unpaid service checkout without changing its order facts", async () => {
+    const fetchMock = vi.fn<typeof fetch>().mockResolvedValue(
+      new Response(
+        JSON.stringify({
+          code: 1,
+          status: 0,
+          pid: "merchant123",
+          out_trade_no: "202607221800001234567890",
+          type: "alipay",
+          money: "1500.00",
+        }),
+        { headers: { "content-type": "application/json" } },
+      ),
+    );
+    const paymentGateway = gateway(fetchMock);
+    const first = await paymentGateway.createServiceCheckout({
+      ...productServiceScope,
+    });
+
+    const switched = await paymentGateway.switchServiceCheckoutMethod({
+      authorization: first.authorization,
+      ownerSessionId: productServiceScope.ownerSessionId,
+      projectId: productServiceScope.projectId,
+      questionId: productServiceScope.questionId,
+      category: productServiceScope.category,
+      expectedAmountFen: productServiceScope.expectedAmountFen,
+      method: "wxpay",
+      checkoutExpiresAt: first.expiresAt,
+    });
+
+    expect(switched).toMatchObject({
+      authorization: first.authorization,
+      orderId: first.orderId,
+      amountFen: first.amountFen,
+      expiresAt: first.expiresAt,
+      fields: {
+        type: "wxpay",
+        param: first.authorization,
+        out_trade_no: first.orderId,
+      },
+    });
+    expect(switched.fields.sign).toBe(
+      signZpayParameters(switched.fields, "merchant-secret"),
+    );
+  });
+
+  it("records one bank receipt for a pending service order and rejects a late ZPAY callback", async () => {
+    const receiptStore = inMemoryReceiptStore();
+    const fetchMock = vi.fn<typeof fetch>().mockResolvedValue(
+      new Response(
+        JSON.stringify({
+          code: 1,
+          status: 0,
+          pid: "merchant123",
+          out_trade_no: "202607221800001234567890",
+          type: "alipay",
+          money: "1500.00",
+        }),
+        { headers: { "content-type": "application/json" } },
+      ),
+    );
+    const paymentGateway = gateway(fetchMock, receiptStore);
+    const checkout = await paymentGateway.createServiceCheckout({
+      ...productServiceScope,
+    });
+    const bankInput = {
+      authorization: checkout.authorization,
+      orderId: checkout.orderId,
+      ownerSessionId: productServiceScope.ownerSessionId,
+      projectId: productServiceScope.projectId,
+      questionId: productServiceScope.questionId,
+      category: productServiceScope.category,
+      expectedAmountFen: productServiceScope.expectedAmountFen,
+    };
+
+    const first = await paymentGateway.confirmServiceBankTransfer(bankInput);
+    const replayed = await paymentGateway.confirmServiceBankTransfer(bankInput);
+
+    expect(first).toEqual(replayed);
+    expect(first).toMatchObject({
+      orderId: checkout.orderId,
+      amountFen: 150_000,
+      tradeNo: expect.stringMatching(/^bank:[a-f0-9]{48}$/),
+      paidAt: "2026-07-22T10:00:00.000Z",
+    });
+    expect(receiptStore.record).toHaveBeenCalledTimes(1);
+
+    const callback: Record<string, string> = {
+      pid: checkout.fields.pid,
+      name: checkout.fields.name,
+      money: checkout.fields.money,
+      out_trade_no: checkout.orderId,
+      trade_no: "zpay-late-service-payment",
+      param: checkout.authorization,
+      trade_status: "TRADE_SUCCESS",
+      type: checkout.fields.type,
+      sign_type: "MD5",
+    };
+    callback.sign = signZpayParameters(callback, "merchant-secret");
+    await expect(paymentGateway.verifyCallback(callback)).rejects.toMatchObject(
+      {
+        code: "PAYMENT_RECEIPT_CONFLICT",
+        status: 409,
+      },
+    );
+  });
+
+  it("derives an idempotent overseas direct-bank receipt without querying ZPAY", async () => {
+    const receiptStore = inMemoryReceiptStore();
+    const fetchMock = vi.fn<typeof fetch>();
+    const paymentGateway = gateway(fetchMock, receiptStore);
+    const input = {
+      orderId: "21234567890123456789012345678901",
+      ownerSessionId: "session-overseas",
+      projectId: "project-overseas",
+      questionId: "reputation-01",
+      category: "reputation" as const,
+      monitoringEdition: "overseas" as const,
+      expectedAmountFen: 400_000,
+    };
+
+    const [first, replayed] = await Promise.all([
+      paymentGateway.confirmServiceBankTransfer(input),
+      paymentGateway.confirmServiceBankTransfer(input),
+    ]);
+
+    expect(first).toEqual(replayed);
+    expect(first).toMatchObject({
+      orderId: input.orderId,
+      amountFen: 400_000,
+      tradeNo: expect.stringMatching(/^bank:/),
+    });
+    expect(receiptStore.record).toHaveBeenCalledTimes(1);
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it("refuses bank confirmation when the online service payment has settled", async () => {
+    const receiptStore = inMemoryReceiptStore();
+    const fetchMock = vi.fn<typeof fetch>().mockResolvedValue(
+      new Response(
+        JSON.stringify({
+          code: 1,
+          status: 1,
+          pid: "merchant123",
+          out_trade_no: "202607221800001234567890",
+          trade_no: "zpay-service-already-paid",
+          type: "alipay",
+          money: "1500.00",
+          addtime: "2026-07-22 17:55:00",
+          endtime: "2026-07-22 18:00:00",
+        }),
+        { headers: { "content-type": "application/json" } },
+      ),
+    );
+    const paymentGateway = gateway(fetchMock, receiptStore);
+    const checkout = await paymentGateway.createServiceCheckout({
+      ...productServiceScope,
+    });
+
+    await expect(
+      paymentGateway.confirmServiceBankTransfer({
+        authorization: checkout.authorization,
+        orderId: checkout.orderId,
+        ownerSessionId: productServiceScope.ownerSessionId,
+        projectId: productServiceScope.projectId,
+        questionId: productServiceScope.questionId,
+        category: productServiceScope.category,
+        expectedAmountFen: productServiceScope.expectedAmountFen,
+      }),
+    ).rejects.toMatchObject({
+      code: "PAYMENT_ALREADY_CONFIRMED",
+      status: 409,
+    });
+    expect(receiptStore.record).toHaveBeenCalledTimes(1);
   });
 
   it("blocks a payment-method switch once the provider has confirmed payment", async () => {
@@ -1685,6 +1876,19 @@ describe("ZPAY GEO gateway", () => {
 });
 
 describe("monitoring payment boundary", () => {
+  it("prices overseas monitoring services at exactly twice domestic", () => {
+    expect(geoServiceMonthlyPriceFen("product_scenario", "domestic")).toBe(
+      150_000,
+    );
+    expect(geoServiceMonthlyPriceFen("product_scenario", "overseas")).toBe(
+      300_000,
+    );
+    expect(geoServiceMonthlyPriceFen("reputation", "overseas")).toBe(400_000);
+    expect(geoServiceMonthlyPriceFen("competitor_comparison", "overseas")).toBe(
+      400_000,
+    );
+  });
+
   it("fails closed until the signed ZPAY gateway is configured", async () => {
     await expect(
       new UnconfiguredGeoPaymentVerifier().verify({

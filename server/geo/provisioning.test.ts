@@ -13,8 +13,10 @@ import {
   createGeoPurchaseProvisioner,
   createGeoPurchaseStatusReader,
   GeoAccountProvisioningError,
+  GeoKnowledgeImportRequestSchema,
   GeoKnowledgeImportRequestV2Schema,
   GeoManualServiceOrderResponseSchema,
+  GEO_MARKET_EDITION_RESPONSE_HEADER,
   GeoPurchaseProvisionRequestV2Schema,
   GeoPurchaseProvisionResponseV2Schema,
   isTrustedExternalAppUrl,
@@ -72,6 +74,68 @@ describe("provisioning URL trust boundary", () => {
 
     expect(unsafeSigning.success).toBe(false);
     expect(unsafeWorkspace.success).toBe(false);
+  });
+});
+
+describe("knowledge import opaque identity boundary", () => {
+  const hash = "a".repeat(64);
+
+  it.each(["taskId", "outputItemId", "fileId"] as const)(
+    "rejects whitespace normalization of v2 %s",
+    (field) => {
+      expect(
+        GeoKnowledgeImportRequestSchema.safeParse({
+          schemaVersion: 2,
+          companyName: "验收企业",
+          taskId: "task-1",
+          outputItemId: "output-1",
+          fileId: "file-1",
+          descriptorHash: hash,
+          artifactSha256: hash,
+          filename: "knowledge-base.zip",
+          [field]: ` ${field}-value `,
+        }).success,
+      ).toBe(false);
+    },
+  );
+
+  it("rejects whitespace normalization in both v4 identity scopes", () => {
+    const request = {
+      schemaVersion: 4,
+      companyName: "验收企业",
+      candidate: {
+        taskId: "task-1",
+        outputItemId: "output-1",
+        fileId: "candidate-file-1",
+        descriptorHash: hash,
+        sha256: hash,
+      },
+      finalArtifact: {
+        fileId: "final-file-1",
+        filename: "knowledge-base.zip",
+        sha256: hash,
+        archiveContractVersion: 3,
+        validationProfile: "website-lead-v1",
+        packageManifestSha256: hash,
+        finalizerVersion: "website-kb-finalizer-v1",
+      },
+    } as const;
+
+    expect(
+      GeoKnowledgeImportRequestSchema.safeParse({
+        ...request,
+        candidate: { ...request.candidate, taskId: " task-1 " },
+      }).success,
+    ).toBe(false);
+    expect(
+      GeoKnowledgeImportRequestSchema.safeParse({
+        ...request,
+        finalArtifact: {
+          ...request.finalArtifact,
+          fileId: " final-file-1 ",
+        },
+      }).success,
+    ).toBe(false);
   });
 });
 
@@ -147,6 +211,19 @@ describe("website to Agent project-order registry", () => {
           { headers: { "Content-Type": "application/json" } },
         );
       }
+      if (init?.method === "DELETE") {
+        expect(url.pathname).toBe(
+          `/api/internal/provisioning/project-orders/projects/${order.projectId}`,
+        );
+        return new Response(
+          JSON.stringify({
+            schemaVersion: 1,
+            projectId: order.projectId,
+            deletedOrders: 3,
+          }),
+          { headers: { "Content-Type": "application/json" } },
+        );
+      }
       expect(init?.method).toBe("GET");
       expect(url.pathname).toBe(
         `/api/internal/provisioning/project-orders/projects/${order.projectId}`,
@@ -174,7 +251,12 @@ describe("website to Agent project-order registry", () => {
       blockDeletion: true,
       orders: [normalizedOrder],
     });
-    expect(fetchImpl).toHaveBeenCalledTimes(4);
+    await expect(registry.deleteProject(order.projectId)).resolves.toEqual({
+      schemaVersion: 1,
+      projectId: order.projectId,
+      deletedOrders: 3,
+    });
+    expect(fetchImpl).toHaveBeenCalledTimes(5);
   });
 
   it("rejects a commit response that omits the closed checkout intent", async () => {
@@ -870,6 +952,9 @@ describe("website to Agent account provisioner", () => {
       expect(init?.headers).toMatchObject({
         "Idempotency-Key": "geo-basic:FM202607240001:purchase-v2",
       });
+      expect(
+        new Headers(init?.headers).get(GEO_MARKET_EDITION_RESPONSE_HEADER),
+      ).toBe("1");
       const body = JSON.parse(String(init?.body));
       expect(body).toEqual(purchaseRequest);
       expect(JSON.stringify(body)).not.toMatch(/password|userId/);
@@ -919,6 +1004,9 @@ describe("website to Agent account provisioner", () => {
   it("creates, polls, and confirms a manual order through authenticated idempotent calls", async () => {
     const fetchImpl = vi.fn(async (url: URL, init?: RequestInit) => {
       const pathname = url.pathname;
+      expect(
+        new Headers(init?.headers).get(GEO_MARKET_EDITION_RESPONSE_HEADER),
+      ).toBe("1");
       if (pathname.endsWith("/manual-orders")) {
         expect(init?.method).toBe("POST");
         expect(init?.headers).toMatchObject({
@@ -1075,6 +1163,9 @@ describe("website to Agent account provisioner", () => {
       expect(init?.headers).toMatchObject({
         "x-frontmind-provisioning-token": "a".repeat(48),
       });
+      expect(
+        new Headers(init?.headers).get(GEO_MARKET_EDITION_RESPONSE_HEADER),
+      ).toBe("1");
       expect(JSON.parse(String(init?.body))).toEqual({
         schemaVersion: 1,
         authorization: {
@@ -1181,6 +1272,9 @@ describe("website to Agent account provisioner", () => {
         "http://127.0.0.1:3001/api/internal/provisioning/purchases/purchase-reference-20260724/status",
       );
       expect(init?.method).toBe("GET");
+      expect(
+        new Headers(init?.headers).get(GEO_MARKET_EDITION_RESPONSE_HEADER),
+      ).toBe("1");
       return new Response(JSON.stringify(purchaseResponse("provisioned")), {
         headers: { "Content-Type": "application/json" },
       });

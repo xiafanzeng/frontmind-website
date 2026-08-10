@@ -4,6 +4,7 @@ import {
   Building2,
   Check,
   CreditCard,
+  ExternalLink,
   FileCheck2,
   FileText,
   KeyRound,
@@ -55,6 +56,22 @@ export type GeoServiceAccountCredentials = {
 type GeoServiceAccountDraft = GeoServiceAccountCredentials & {
   confirmPassword: string;
 };
+
+export function buildPopulatedServiceContractHref(
+  contractHref: string,
+  profile: GeoServiceContractProfile,
+) {
+  const hash = new URLSearchParams({
+    legalName: profile.legalName.trim(),
+    creditCode: profile.creditCode.trim().toUpperCase(),
+    address: profile.address.trim(),
+    signatoryName: profile.signatoryName.trim(),
+    signatoryTitle: profile.signatoryTitle.trim(),
+    mobile: profile.mobile.trim(),
+    email: profile.email.trim().toLowerCase(),
+  });
+  return `${contractHref.split("#", 1)[0]}#${hash.toString()}`;
+}
 
 const STEP_ORDER: OnboardingStep[] = ["profile", "payment", "account"];
 
@@ -228,6 +245,21 @@ function contractProfileSessionKey(companyName: string, question: string) {
   return `frontmind:geo-contract-profile:${companyName.trim()}:${question.trim()}`;
 }
 
+export function clearGeoServiceContractProfile(
+  companyName: string,
+  question: string,
+) {
+  if (typeof window === "undefined") return;
+  try {
+    window.sessionStorage.removeItem(
+      contractProfileSessionKey(companyName, question),
+    );
+  } catch {
+    // The project deletion itself remains authoritative when browser storage
+    // is unavailable or has already been cleared.
+  }
+}
+
 function readSessionContractProfile(companyName: string, question: string) {
   if (typeof window === "undefined") return undefined;
   try {
@@ -327,7 +359,9 @@ function StepButton({
 export function GeoServiceOnboarding({
   activation,
   companyName,
+  categoryLabel,
   question,
+  contractHref,
   isPreview,
   onSubmitProfile,
   onCheckout,
@@ -339,6 +373,7 @@ export function GeoServiceOnboarding({
   companyName: string;
   categoryLabel: string;
   question: string;
+  contractHref: string;
   isPreview: boolean;
   onSubmitProfile: (
     profile: GeoServiceContractProfile,
@@ -429,6 +464,17 @@ export function GeoServiceOnboarding({
   const activeWorkspaceUrl = agentLoginUrl(
     activation.workspaceUrl || activation.accountSetupUrl,
   );
+  const contractPreviewUrl = safePublicAppUrl(activation.contractPreviewUrl, {
+    allowLocalDevelopment: import.meta.env.DEV,
+  });
+  const populatedContractHref =
+    contractPreviewUrl ||
+    (profile.authorized
+      ? buildPopulatedServiceContractHref(
+          contractHref,
+          profile as GeoServiceContractProfile,
+        )
+      : contractHref);
   const closeContractDialog = () => {
     setContractDialogOpen(false);
     setContractCode("");
@@ -915,19 +961,16 @@ export function GeoServiceOnboarding({
         ) : null}
 
         {viewStep === "payment" && (
-          <div className="geo-onboarding-status-panel">
-            <span className="geo-onboarding-large-icon">
-              <CreditCard size={27} />
-            </span>
+          <div className="geo-onboarding-status-panel geo-onboarding-payment-panel">
             <div>
-              <small>付款确认</small>
+              <small>付款方式：微信 / 支付宝 / 对公账户</small>
               <h4>
                 {activation.paidAt
                   ? "服务款项已确认"
                   : "合同已在企业微信确认，可以付款"}
               </h4>
               <p>
-                付款订单会锁定本次企业、问题与金额。选择支付方式后，安全收银台会为本单实时生成二维码。
+                付款订单会锁定本次企业、问题与金额。进入付款页后可选择微信、支付宝，或查看对公账户信息。
               </p>
               <dl className="geo-onboarding-inline-facts">
                 <div>
@@ -943,38 +986,17 @@ export function GeoServiceOnboarding({
                   <dd>管理员已确认</dd>
                 </div>
               </dl>
-              <div
-                className="geo-onboarding-payment-channels"
-                aria-label="支持的支付方式"
-              >
-                <div className="is-alipay">
-                  <span>
-                    <img
-                      src="/geo-builder/payments/alipay.svg"
-                      alt=""
-                      aria-hidden="true"
-                    />
-                  </span>
-                  <div>
-                    <strong>支付宝支付</strong>
-                    <small>选择后由收银台生成真实二维码</small>
-                  </div>
-                </div>
-                <div className="is-wechat-pay">
-                  <span>
-                    <img
-                      src="/geo-builder/payments/wechat-pay.svg"
-                      alt=""
-                      aria-hidden="true"
-                    />
-                  </span>
-                  <div>
-                    <strong>微信支付</strong>
-                    <small>选择后由收银台生成真实二维码</small>
-                  </div>
-                </div>
-              </div>
               <div className="geo-onboarding-actions">
+                <a
+                  className="geo-onboarding-contract-view"
+                  href={populatedContractHref}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                >
+                  <FileText size={15} />
+                  查看合同
+                  <ExternalLink size={13} />
+                </a>
                 <button
                   type="button"
                   onClick={() => {
@@ -1012,7 +1034,7 @@ export function GeoServiceOnboarding({
                   className="geo-onboarding-workspace-link"
                   href={activeWorkspaceUrl}
                   target="_blank"
-                  rel="noreferrer"
+                  rel="noopener noreferrer"
                 >
                   {activation.workspaceUrl ? "进入看板" : "完成账号设置"}{" "}
                   <ArrowRight size={15} />
@@ -1313,7 +1335,7 @@ export function GeoServiceOnboarding({
               className="geo-contract-code-qr"
               href={FRONTMIND_WECHAT_QR_PATH}
               target="_blank"
-              rel="noreferrer"
+              rel="noopener noreferrer"
               aria-label="打开 FrontMind 管理员企业微信二维码"
             >
               <img

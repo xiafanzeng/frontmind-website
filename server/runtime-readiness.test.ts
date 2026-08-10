@@ -5,6 +5,8 @@ describe("Website runtime readiness", () => {
   it("reports deep dependencies and hashes the private persistence identity", async () => {
     const assertReady = vi.fn(async () => undefined);
     const readiness = await collectWebsiteRuntimeReadiness({
+      releaseChannel: "development",
+      paymentMode: "zpay",
       buildSha: "a".repeat(40),
       imageDigest: `sha256:${"b".repeat(64)}`,
       requireReleaseIdentity: true,
@@ -20,6 +22,9 @@ describe("Website runtime readiness", () => {
     expect(assertReady).toHaveBeenCalledOnce();
     expect(readiness).toMatchObject({
       status: "ok",
+      channel: "development",
+      releaseChannel: "development",
+      paymentMode: "zpay",
       buildSha: "a".repeat(40),
       imageDigest: `sha256:${"b".repeat(64)}`,
       skills: [{ name: "website-one-shot-kb-builder" }],
@@ -38,6 +43,8 @@ describe("Website runtime readiness", () => {
   it("fails readiness when a required dependency is unavailable", async () => {
     await expect(
       collectWebsiteRuntimeReadiness({
+        releaseChannel: "development",
+        paymentMode: "zpay",
         buildSha: null,
         imageDigest: null,
         getSkills: async () => [],
@@ -57,6 +64,8 @@ describe("Website runtime readiness", () => {
     const getDependencies = vi.fn(async () => ({}));
     await expect(
       collectWebsiteRuntimeReadiness({
+        releaseChannel: "development",
+        paymentMode: "zpay",
         buildSha: null,
         imageDigest: null,
         assertConfiguration: () => {
@@ -77,6 +86,8 @@ describe("Website runtime readiness", () => {
   it("fails production preflight without an immutable source and image identity", async () => {
     await expect(
       collectWebsiteRuntimeReadiness({
+        releaseChannel: "production",
+        paymentMode: "zpay",
         buildSha: "a".repeat(40),
         imageDigest: null,
         requireReleaseIdentity: true,

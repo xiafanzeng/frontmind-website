@@ -29,10 +29,12 @@ const STORE_PATH =
 const metadataByIso = new Map(
   visitorCountryCatalog.map((country) => [country.iso, country]),
 );
-const historicalCountryIsos = new Set(
-  visitorHistoricalBaseline
-    .map((country) => country.iso)
-    .filter((iso) => /^[a-z]{2}$/.test(iso)),
+// ISO 3166-1 alpha-2 only. Intl.DisplayNames also recognizes CLDR macro and
+// private-use regions such as EU/XA, which must not become public country tags.
+const ISO_3166_ALPHA_2 = new Set(
+  `ad ae af ag ai al am ao aq ar as at au aw ax az ba bb bd be bf bg bh bi bj bl bm bn bo bq br bs bt bv bw by bz ca cc cd cf cg ch ci ck cl cm cn co cr cu cv cw cx cy cz de dj dk dm do dz ec ee eg eh er es et fi fj fk fm fo fr ga gb gd ge gf gg gh gi gl gm gn gp gq gr gs gt gu gw gy hk hm hn hr ht hu id ie il im in io iq ir is it je jm jo jp ke kg kh ki km kn kp kr kw ky kz la lb lc li lk lr ls lt lu lv ly ma mc md me mf mg mh mk ml mm mn mo mp mq mr ms mt mu mv mw mx my mz na nc ne nf ng ni nl no np nr nu nz om pa pe pf pg ph pk pl pm pn pr ps pt pw py qa re ro rs ru rw sa sb sc sd se sg sh si sj sk sl sm sn so sr ss st sv sx sy sz tc td tf tg th tj tk tl tm tn to tr tt tv tw tz ua ug um us uy uz va vc ve vg vi vn vu wf ws ye yt za zm zw`.split(
+    " ",
+  ),
 );
 const regionNames =
   typeof Intl.DisplayNames !== "undefined"
@@ -141,15 +143,26 @@ export function summarizeVisitorStore(store: VisitorStore) {
   const countryMap = new Map<string, VisitorCountry>(
     visitorHistoricalBaseline.map((country) => [country.iso, { ...country }]),
   );
-  const liveCountryIsos = new Set<string>();
+  const historicalUnknown = countryMap.get("unknown");
+  if (historicalUnknown) {
+    const mainlandChina = countryMap.get("cn");
+    if (!mainlandChina) {
+      throw new Error("Visitor statistics baseline is missing Mainland China");
+    }
+    countryMap.set("cn", {
+      ...mainlandChina,
+      reads: mainlandChina.reads + historicalUnknown.reads,
+    });
+    countryMap.delete("unknown");
+  }
   let liveReads = 0;
 
   for (const visitor of Object.values(store.visitors)) {
     const visits = normalizeVisitCount(visitor.visits);
     if (visits === 0) continue;
     liveReads += visits;
-    const iso = normalizeStoredIso(visitor.iso);
-    if (/^[a-z]{2}$/.test(iso)) liveCountryIsos.add(iso);
+    const storedIso = normalizeStoredIso(visitor.iso);
+    const iso = storedIso === "unknown" ? "cn" : storedIso;
     const metadata = metadataByIso.get(iso);
     const current = countryMap.get(iso);
     countryMap.set(iso, {
@@ -169,11 +182,7 @@ export function summarizeVisitorStore(store: VisitorStore) {
       right.reads - left.reads || left.country.localeCompare(right.country),
   );
   const totalReads = visitorHistoricalBaselineSummary.totalReads + liveReads;
-  const newLiveCountryCount = Array.from(liveCountryIsos).filter(
-    (iso) => !historicalCountryIsos.has(iso),
-  ).length;
-  const countryCount =
-    visitorHistoricalBaselineSummary.countryCount + newLiveCountryCount;
+  const countryCount = countries.length;
 
   return {
     ok: true,
@@ -185,7 +194,7 @@ export function summarizeVisitorStore(store: VisitorStore) {
     pageviews: liveReads,
     countries,
     updatedAt: store.updatedAt || null,
-    note: `Lifetime totals include the published snapshot captured on ${visitorHistoricalBaselineSummary.capturedAt}; newer persisted page views are grouped by trusted country headers, and missing geography remains Unknown.`,
+    note: `Lifetime totals include the published snapshot captured on ${visitorHistoricalBaselineSummary.capturedAt}; newer persisted page views are grouped by trusted country headers, and public reporting includes missing geography in Mainland China.`,
   };
 }
 
@@ -333,14 +342,17 @@ function countryFromHeaders(req: IncomingMessage) {
 function normalizeHeaderIso(value?: string) {
   if (!value) return "";
   const clean = value.trim().toLowerCase();
-  if (!/^[a-z]{2}$/.test(clean) || clean === "xx") return "";
-  return clean;
+  return isRecognizedRegionIso(clean) ? clean : "";
 }
 
 function normalizeStoredIso(value: string) {
   const clean = value.trim().toLowerCase();
   if (clean === "unknown" || clean === "other") return clean;
-  return /^[a-z]{2}$/.test(clean) ? clean : "unknown";
+  return isRecognizedRegionIso(clean) ? clean : "unknown";
+}
+
+function isRecognizedRegionIso(iso: string) {
+  return ISO_3166_ALPHA_2.has(iso);
 }
 
 function countryNameForIso(iso: string) {

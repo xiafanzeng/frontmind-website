@@ -16,6 +16,7 @@ function dependencies() {
       ok: true,
       credentialConfigured: true,
       monitorCredentialConfigured: true,
+      monitorCredentialAuthenticated: true,
       publicUrlConfigured: true,
     })),
   } as unknown as GeoPresalesBroker;
@@ -59,8 +60,10 @@ describe("GEO dependency health", () => {
     await expect(check()).resolves.toMatchObject({
       status: "ok",
       agent: {
+        credentialRequired: true,
         credentialConfigured: true,
         monitorCredentialConfigured: true,
+        monitorCredentialAuthenticated: true,
         publicUrlConfigured: true,
       },
       projectOrderRegistry: { ready: true },
@@ -72,10 +75,64 @@ describe("GEO dependency health", () => {
       ok: true,
       credentialConfigured: true,
       monitorCredentialConfigured: false,
+      monitorCredentialAuthenticated: false,
       publicUrlConfigured: true,
     });
     await expect(
       createGeoDependencyHealthChecker(agentUnavailable)(),
+    ).rejects.toThrow("not ready");
+
+    const developmentWithoutAgentCredential = dependencies();
+    vi.mocked(
+      developmentWithoutAgentCredential.broker.getStatus,
+    ).mockResolvedValue({
+      ok: true,
+      credentialConfigured: false,
+      monitorCredentialConfigured: true,
+      monitorCredentialAuthenticated: true,
+      publicUrlConfigured: true,
+    });
+    await expect(
+      createGeoDependencyHealthChecker({
+        ...developmentWithoutAgentCredential,
+        requireAgentCredential: false,
+      })(),
+    ).resolves.toMatchObject({
+      status: "ok",
+      agent: {
+        credentialRequired: false,
+        credentialConfigured: false,
+        monitorCredentialConfigured: true,
+        monitorCredentialAuthenticated: true,
+        publicUrlConfigured: true,
+      },
+    });
+
+    const unreachableDevelopmentAgent = dependencies();
+    vi.mocked(unreachableDevelopmentAgent.broker.getStatus).mockResolvedValue({
+      ok: false,
+      credentialConfigured: false,
+      monitorCredentialConfigured: true,
+      monitorCredentialAuthenticated: true,
+      publicUrlConfigured: true,
+    });
+    await expect(
+      createGeoDependencyHealthChecker({
+        ...unreachableDevelopmentAgent,
+        requireAgentCredential: false,
+      })(),
+    ).rejects.toThrow("not ready");
+
+    const configuredButRejectedMonitor = dependencies();
+    vi.mocked(configuredButRejectedMonitor.broker.getStatus).mockResolvedValue({
+      ok: false,
+      credentialConfigured: true,
+      monitorCredentialConfigured: true,
+      monitorCredentialAuthenticated: false,
+      publicUrlConfigured: true,
+    });
+    await expect(
+      createGeoDependencyHealthChecker(configuredButRejectedMonitor)(),
     ).rejects.toThrow("not ready");
 
     const registryUnavailable = dependencies();

@@ -1,5 +1,9 @@
 import { z } from "zod";
-import { GEO_MONITOR_PLATFORM_IDS } from "./broker";
+import {
+  GEO_MONITORING_EDITIONS,
+  GEO_MONITOR_PLATFORM_IDS,
+  isValidGeoMonitoringScope,
+} from "./broker";
 
 export const GEO_QUESTION_CATEGORIES = [
   "reputation",
@@ -34,6 +38,18 @@ export const GeoQuestionSchema = z
       .refine((value) => value.endsWith("？"), {
         message: "question must end with a Chinese question mark",
       }),
+    questionEnglish: z
+      .string()
+      .trim()
+      .min(4)
+      .max(240)
+      .refine((value) => /[A-Za-z]/.test(value), {
+        message: "questionEnglish must contain English text",
+      })
+      .refine((value) => value.endsWith("?"), {
+        message: "questionEnglish must end with a question mark",
+      })
+      .optional(),
     rationale: z.string().min(8).max(240),
     enterpriseAnchor: z.string().trim().min(2).max(120).optional(),
     offeringAnchor: z.string().trim().min(2).max(120).optional(),
@@ -620,11 +636,16 @@ export type CreateProjectRequest = z.infer<typeof CreateProjectRequestSchema>;
 
 export const GeoMonitorPlatformSchema = z.enum(GEO_MONITOR_PLATFORM_IDS);
 
+export const GeoMonitoringEditionSchema = z
+  .enum(GEO_MONITORING_EDITIONS)
+  .default("domestic");
+
 export const GeoPaymentMethodSchema = z.enum(["alipay", "wxpay"]);
 
 const GeoPaymentScopeSchema = z
   .object({
     questionId: z.string().trim().min(4).max(80),
+    monitoringEdition: GeoMonitoringEditionSchema,
     platformIds: z
       .array(GeoMonitorPlatformSchema)
       .min(1)
@@ -636,6 +657,18 @@ const GeoPaymentScopeSchema = z
         code: "custom",
         path: ["platformIds"],
         message: "platformIds must be unique",
+      });
+    }
+  })
+  .superRefine(({ monitoringEdition, platformIds }, context) => {
+    if (!isValidGeoMonitoringScope(monitoringEdition, platformIds)) {
+      context.addIssue({
+        code: "custom",
+        path: ["platformIds"],
+        message:
+          monitoringEdition === "overseas"
+            ? "overseas monitoring requires ChatGPT only"
+            : "domestic monitoring does not support overseas platforms",
       });
     }
   });
@@ -656,6 +689,21 @@ export const SwitchPaymentRequestSchema = GeoPaymentScopeSchema.safeExtend({
 export const CreateServicePaymentRequestSchema = z
   .object({
     method: GeoPaymentMethodSchema,
+  })
+  .strict();
+
+export const SwitchServicePaymentRequestSchema = z
+  .object({
+    authorization: z.string().trim().min(16).max(4096),
+    method: GeoPaymentMethodSchema,
+  })
+  .strict();
+
+export const ConfirmServiceBankTransferRequestSchema = z
+  .object({
+    confirmationCode: z.string().trim().min(1).max(128),
+    authorization: z.string().trim().min(16).max(4096).optional(),
+    purchaseIntent: z.string().trim().min(16).max(4096).optional(),
   })
   .strict();
 
@@ -747,6 +795,7 @@ export const CreateServiceAccountRequestSchema = z.union([
 export const StartMonitoringRequestSchema = z
   .object({
     questionId: z.string().trim().min(4).max(80),
+    monitoringEdition: GeoMonitoringEditionSchema,
     platformIds: z
       .array(GeoMonitorPlatformSchema)
       .min(1)
@@ -760,6 +809,18 @@ export const StartMonitoringRequestSchema = z
         code: "custom",
         path: ["platformIds"],
         message: "platformIds must be unique",
+      });
+    }
+  })
+  .superRefine(({ monitoringEdition, platformIds }, context) => {
+    if (!isValidGeoMonitoringScope(monitoringEdition, platformIds)) {
+      context.addIssue({
+        code: "custom",
+        path: ["platformIds"],
+        message:
+          monitoringEdition === "overseas"
+            ? "overseas monitoring requires ChatGPT only"
+            : "domestic monitoring does not support overseas platforms",
       });
     }
   });

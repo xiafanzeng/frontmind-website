@@ -1,6 +1,7 @@
 import { z } from "zod";
 
 import { trustedAssistantOutputTexts } from "./trusted-task-output";
+import { parseTrustedTaskJsonCandidate } from "./trusted-task-json-output";
 
 export const GEO_CRAWL_PROGRESS_MARKER = "FRONTMIND_GEO_CRAWL_PROGRESS_V1";
 
@@ -58,12 +59,8 @@ export function parseTrustedGeoCrawlProgress(
   let latest: GeoCrawlProgress | undefined;
   for (const text of trustedAssistantOutputTexts(task)) {
     for (const candidate of markerPayloads(text)) {
-      let parsedJson: unknown;
-      try {
-        parsedJson = JSON.parse(candidate);
-      } catch {
-        continue;
-      }
+      const parsedJson = parseTrustedTaskJsonCandidate(candidate);
+      if (parsedJson === undefined) continue;
       const parsed = GeoCrawlProgressSchema.safeParse(parsedJson);
       if (!parsed.success) continue;
       if (

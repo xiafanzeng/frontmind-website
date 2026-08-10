@@ -32,6 +32,7 @@ describe("GEO runtime configuration", () => {
 
       expect(configuration).toMatchObject({
         contractAuthCode: "frontmind666",
+        bankTransferConfirmationCode: "frontmind888",
         configurationError: "",
       });
       expect(() =>
@@ -47,6 +48,19 @@ describe("GEO runtime configuration", () => {
     expect(resolveGeoRuntimeConfiguration({ NODE_ENV: "test" })).toMatchObject({
       inviteCode: "frontmind666",
       contractAuthCode: "frontmind666",
+      bankTransferConfirmationCode: "frontmind888",
+      configurationError: "",
+    });
+  });
+
+  it("ignores legacy environment overrides for the fixed bank confirmation code", () => {
+    expect(
+      resolveGeoRuntimeConfiguration({
+        ...secureProductionEnv,
+        FRONTMIND_GEO_BANK_TRANSFER_CONFIRMATION_CODE: "stale-bank-code",
+      }),
+    ).toMatchObject({
+      bankTransferConfirmationCode: "frontmind888",
       configurationError: "",
     });
   });

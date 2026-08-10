@@ -38,6 +38,7 @@ export function createGeoDraftProject(
     progressLabel: "资料已就绪，等待启动企业分析",
     files: files.map(draftFileReference),
     questions: [],
+    monitoringEdition: "domestic",
     selectedPlatformIds: [],
   };
 }
