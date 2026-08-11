@@ -4,6 +4,7 @@ import { z } from "zod";
 import type { GeoPresalesBroker } from "./broker";
 import { GeoQuestionCategorySchema } from "./schemas";
 import {
+  canonicalTrustedTaskJson,
   parseTrustedTaskJsonCandidate,
   resolveTrustedTaskJsonOutput,
   trustedTaskJsonObjectCandidates,
@@ -913,6 +914,7 @@ export function inspectAssessmentTaskOutput(
   }
 
   const issues = new Map<string, AssessmentTaskOutputValidationIssue>();
+  const validCandidates = new Map<string, AssessmentRawTaskOutput>();
   let sawParsedJson = false;
   let sawScopeMismatch = false;
 
@@ -921,7 +923,13 @@ export function inspectAssessmentTaskOutput(
   ): AssessmentRawTaskOutput | undefined => {
     sawParsedJson = true;
     const inspection = inspectParsedAssessmentTaskOutput(candidate, validate);
-    if (inspection.success) return inspection.data;
+    if (inspection.success) {
+      validCandidates.set(
+        canonicalTrustedTaskJson(inspection.data),
+        inspection.data,
+      );
+      return inspection.data;
+    }
     if (inspection.error.code === "SCOPE_MISMATCH") {
       sawScopeMismatch = true;
       return undefined;
@@ -935,8 +943,7 @@ export function inspectAssessmentTaskOutput(
 
   for (const item of structuredItems) {
     if (candidateContext && !candidateContext.takeCandidate(item)) break;
-    const parsed = inspectParsedValue(item);
-    if (parsed) return { success: true, data: parsed };
+    inspectParsedValue(item);
   }
 
   for (const candidate of trustedTexts) {
@@ -945,9 +952,23 @@ export function inspectAssessmentTaskOutput(
       if (candidateContext && !candidateContext.takeCandidate(jsonText)) break;
       const parsedCandidate = parseTrustedTaskJsonCandidate(jsonText);
       if (parsedCandidate === undefined) continue;
-      const parsed = inspectParsedValue(parsedCandidate);
-      if (parsed) return { success: true, data: parsed };
+      inspectParsedValue(parsedCandidate);
     }
+  }
+
+  if (validCandidates.size === 1 && !sawScopeMismatch) {
+    return { success: true, data: validCandidates.values().next().value! };
+  }
+  if (validCandidates.size > 1) {
+    return {
+      success: false,
+      error: new AssessmentTaskOutputValidationError("SCHEMA_MISMATCH", [
+        {
+          path: "root",
+          message: "Conflicting valid JSON candidates",
+        },
+      ]),
+    };
   }
 
   return {

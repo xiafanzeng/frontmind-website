@@ -74,14 +74,7 @@ candidate/
 ## 可信优势
 ```
 
-每个二级标题下必须使用三级标题组织主题，合计 9–19 个 H3；服务端将
-每个 H3 确定性地转为一个知识叶子，不再按长度或证据/缺口二次拆分：
-
-- `企业与品牌` 1–2；`团队与组织` 1–2；`产品与服务` 2–5；
-- `技术与交付` 2–3；`客户与行业` 1–3；`服务与合作` 1–2；
-- `可信优势` 1–2。
-
-每个事实段落保留 `[来源](URL)`、
+可自由使用三级和四级标题。每个事实段落保留 `[来源](URL)`、
 `[企业主张](URL)`、`[权威来源](URL)`、`[第三方来源](URL)` 或
 `[上传文件：filename]`。缺口使用 `[待核验]`。
 
@@ -118,8 +111,7 @@ evidence_refs(01_customer_draft.md) ⊆ evidence_refs(00_brand_facts.md)
 有资料可抓取时必须达到对应底线，并把内容分配到真实的产品、服务或事实
 条目中。不得通过重复、空泛套话、来源页导航文本或无证据扩写凑字数。
 
-正式归档继续使用 40000 个实际呈现字符上限。只有某版块确实不适用，或在
-尝试至少三个相关公开来源后仍无法取得更多
+只有某版块确实不适用，或在尝试至少三个相关公开来源后仍无法取得更多
 事实时，才可在 `contentFloorExceptions` 中声明例外。例外版块仍应保留
 已证实内容和 `[待核验]`，不得因为当前正文较短就声明例外。
 
@@ -127,14 +119,9 @@ evidence_refs(01_customer_draft.md) ⊆ evidence_refs(00_brand_facts.md)
 
 该文件提供必需的来源、内容底线例外和 Logo 获取记录：
 
-- `sources` 最多 30 条；其中公开网页最多尝试 16 个不同 URL、官方文档最多 4 份、
-  用户上传最多 10 份；
-- `queries` 最多 4 条；Logo 检查页也计入 16 个网页预算；
-- 最多展开 5 个核心产品/服务族，长尾名称必须合并保留。
-
 ```json
 {
-  "schemaVersion": 2,
+  "schemaVersion": 1,
   "company": {
     "name": "企业名称",
     "officialWebsite": "https://example.com",
@@ -149,7 +136,6 @@ evidence_refs(01_customer_draft.md) ⊆ evidence_refs(00_brand_facts.md)
     }
   ],
   "queries": ["企业名称 产品"],
-  "stopReason": "coverage_complete",
   "contentFloorExceptions": [],
   "logoAcquisition": {
     "status": "retained",
@@ -168,12 +154,8 @@ evidence_refs(01_customer_draft.md) ⊆ evidence_refs(00_brand_facts.md)
 }
 ```
 
-`stopReason` 只能为 `coverage_complete`、`source_exhausted` 或
-`budget_reached`，必须反映真实停止原因，不能用时长作为完成条件。
-
-某版块低于底线时，按以下结构记录；`reason` 必须包含至少 12 个有效字符；
-`attemptedSourceUrls` 至少三项，且每项都必须是同时登记在 `sources` 中、
-不属于 `user_upload` 的公开 HTTP(S) 来源：
+某版块低于底线时，按以下结构记录；`attemptedSourceUrls` 至少三项，且
+每项都必须同时出现在 `sources`：
 
 ```json
 {

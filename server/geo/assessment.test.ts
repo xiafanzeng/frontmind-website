@@ -368,6 +368,36 @@ describe("GEO current-state assessment task output", () => {
     ]);
   });
 
+  it("fails closed when one assessment operation returns conflicting strict candidates", () => {
+    const first = validRawOutput();
+    const second = structuredClone(first);
+    second.summary = `${second.summary} 冲突版本。`;
+
+    expect(() =>
+      parseAssessmentTaskOutput({
+        output: [
+          {
+            role: "assistant",
+            type: "output_text",
+            text: JSON.stringify(first),
+          },
+          {
+            role: "assistant",
+            type: "output_text",
+            text: JSON.stringify(second),
+          },
+        ],
+      }),
+    ).toThrowError(
+      expect.objectContaining({
+        code: "SCHEMA_MISMATCH",
+        issues: [
+          { path: "root", message: "Conflicting valid JSON candidates" },
+        ],
+      }),
+    );
+  });
+
   it("recovers unescaped ASCII quotes inside trusted assessment strings", () => {
     const raw = validV2RawOutput();
     raw.dimensions.semanticCoherence.toneConsistency.calculationBasis =
@@ -466,7 +496,7 @@ describe("GEO current-state assessment task output", () => {
     expect(parsed.question).toEqual(raw.question);
   });
 
-  it("keeps inline priority and does not download when inline JSON fully passes", async () => {
+  it("checks the remaining bounded file channel after inline JSON passes", async () => {
     const raw = validRawOutput();
     let downloadCount = 0;
     const parsed = await resolveAssessmentTaskOutput(
@@ -493,17 +523,17 @@ describe("GEO current-state assessment task output", () => {
     );
 
     expect(parsed.question.id).toBe(raw.question.id);
-    expect(downloadCount).toBe(0);
+    expect(downloadCount).toBe(1);
   });
 
-  it("continues to a file when inline JSON passes schema but fails scope", async () => {
+  it("fails closed when a scope-conflicting inline candidate accompanies a valid file", async () => {
     const raw = validRawOutput();
     const wrongScope = {
       ...raw,
       question: { ...raw.question, id: "wrong-question" },
     };
     const validatedQuestionIds: string[] = [];
-    const parsed = await resolveAssessmentTaskOutput(
+    const promise = resolveAssessmentTaskOutput(
       {
         async downloadFile() {
           return new Response(JSON.stringify(raw));
@@ -532,8 +562,8 @@ describe("GEO current-state assessment task output", () => {
       },
     );
 
+    await expect(promise).rejects.toMatchObject({ code: "SCOPE_MISMATCH" });
     expect(validatedQuestionIds).toEqual(["wrong-question", raw.question.id]);
-    expect(parsed.question.id).toBe(raw.question.id);
   });
 
   it("reports a safe scope classification when no candidate matches scope", async () => {

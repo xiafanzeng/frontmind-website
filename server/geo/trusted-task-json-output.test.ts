@@ -1,8 +1,11 @@
+import fs from "node:fs";
+import path from "node:path";
 import { describe, expect, it } from "vitest";
 import {
   parseTrustedTaskJsonCandidate,
   resolveTrustedTaskJsonOutput,
   trustedTaskJsonObjectCandidates,
+  TRUSTED_TASK_JSON_MAX_NESTING_DEPTH,
   TRUSTED_TASK_JSON_MAX_QUOTE_REPAIRS,
   TRUSTED_TASK_JSON_MAX_TOTAL_BYTES,
   TrustedTaskJsonOutputError,
@@ -41,6 +44,101 @@ describe("trusted task JSON output files", () => {
       TRUSTED_TASK_JSON_MAX_QUOTE_REPAIRS / 2 + 1,
     )}"}`;
     expect(parseTrustedTaskJsonCandidate(excessive)).toBeUndefined();
+  });
+
+  it("normalizes only bounded JSON transport and syntax faults", () => {
+    expect(
+      parseTrustedTaskJsonCandidate(
+        '\ufeff```json\n{"valid":true,"items":[1,2,],}\n```',
+      ),
+    ).toEqual({ valid: true, items: [1, 2] });
+    expect(
+      parseTrustedTaskJsonCandidate(
+        JSON.stringify('{"valid":true,"summary":"双重编码"}'),
+      ),
+    ).toEqual({ valid: true, summary: "双重编码" });
+    expect(
+      parseTrustedTaskJsonCandidate(
+        '{"valid":true,"summary":"第一行\n第二行"}',
+      ),
+    ).toEqual({ valid: true, summary: "第一行\n第二行" });
+    expect(
+      parseTrustedTaskJsonCandidate('{"valid":true,"summary":"缺少结束分隔符"'),
+    ).toBeUndefined();
+  });
+
+  it("rejects duplicate keys before strict, repaired, or double-encoded JSON can overwrite security fields", () => {
+    for (const ambiguous of [
+      '{"decision":"accept","decision":"reject"}',
+      '{"valid":true,"evidence":{"path":"first","path":"second"}}',
+      '{"valid":true,"nested":{"a":1,"\\u0061":2}}',
+      '{"valid":true,"nested":{"sourceQuestionSha256":"a","sourceQuestionSha256":"b",},}',
+      '{"valid":true,"summary":"结果为"可用"。","valid":false}',
+      JSON.stringify(
+        '{"valid":true,"evidenceRefs":[],"evidenceRefs":["forged"]}',
+      ),
+    ]) {
+      expect(parseTrustedTaskJsonCandidate(ambiguous)).toBeUndefined();
+    }
+  });
+
+  it("rejects JSON beyond the bounded nesting depth", () => {
+    const overNested = `${"[".repeat(
+      TRUSTED_TASK_JSON_MAX_NESTING_DEPTH + 2,
+    )}true${"]".repeat(TRUSTED_TASK_JSON_MAX_NESTING_DEPTH + 2)}`;
+    expect(parseTrustedTaskJsonCandidate(overNested)).toBeUndefined();
+  });
+
+  it("governs every trusted object-candidate consumer through the shared parser and conflict handling", () => {
+    const expectedConsumers = [
+      "server/geo/assessment.ts",
+      "server/geo/custom-question-classifier.ts",
+      "server/geo/forecast.ts",
+      "server/geo/monitor-question-translation.ts",
+    ];
+    const actualConsumers = fs
+      .readdirSync(path.resolve(process.cwd(), "server/geo"))
+      .filter(
+        (filename) =>
+          filename.endsWith(".ts") && !filename.endsWith(".test.ts"),
+      )
+      .map((filename) => `server/geo/${filename}`)
+      .filter((relativePath) =>
+        fs
+          .readFileSync(path.resolve(process.cwd(), relativePath), "utf8")
+          .includes("trustedTaskJsonObjectCandidates("),
+      )
+      .filter(
+        (relativePath) =>
+          relativePath !== "server/geo/trusted-task-json-output.ts",
+      )
+      .sort();
+    expect(actualConsumers).toEqual(expectedConsumers);
+
+    for (const relativePath of actualConsumers) {
+      const source = fs.readFileSync(
+        path.resolve(process.cwd(), relativePath),
+        "utf8",
+      );
+      expect(source).not.toMatch(/JSON\.parse\s*\(\s*candidate\s*\)/);
+      expect(source).not.toMatch(/JSON\.parse\s*\(\s*jsonText\s*\)/);
+      expect(source).toMatch(
+        /parseTrustedTaskJsonCandidate|inspectTrustedTaskJsonCandidate/,
+      );
+    }
+    for (const relativePath of [
+      "server/geo/assessment.ts",
+      "server/geo/custom-question-classifier.ts",
+      "server/geo/forecast.ts",
+      "server/geo/monitor-question-translation.ts",
+    ]) {
+      const source = fs.readFileSync(
+        path.resolve(process.cwd(), relativePath),
+        "utf8",
+      );
+      expect(source).toContain("Conflicting valid JSON candidates");
+      expect(source).toContain("resolveTrustedTaskJsonOutput(");
+    }
   });
 
   it("collects only located typed files at the trusted assistant boundary", () => {
@@ -260,7 +358,7 @@ describe("trusted task JSON output files", () => {
     expect(result).toMatchObject({ valid: true });
   });
 
-  it("does not inspect inline output before a preferred valid file", async () => {
+  it("checks equivalent inline output after a preferred valid file", async () => {
     let inspectedInline = false;
     const result = await resolveTrustedTaskJsonOutput(
       {
@@ -285,14 +383,52 @@ describe("trusted task JSON output files", () => {
         preferredChannel: "output_file",
         inspectInline: () => {
           inspectedInline = true;
-          throw new Error("preferred file should resolve first");
+          return { success: true, data: { valid: true, id: 7 } };
         },
         inspectParsed: inspectTestOutput,
       },
     );
 
     expect(result).toEqual({ valid: true, id: 7 });
-    expect(inspectedInline).toBe(false);
+    expect(inspectedInline).toBe(true);
+  });
+
+  it("fails closed when preferred file and inline channels contain conflicting valid JSON", async () => {
+    const promise = resolveTrustedTaskJsonOutput(
+      {
+        async downloadFile() {
+          return new Response('{"valid":true,"id":7}');
+        },
+        async downloadTaskOutput() {
+          throw new Error("URL fallback should not be used");
+        },
+      },
+      {
+        output: [
+          { type: "output_text", text: '{"valid":true,"id":8}' },
+          {
+            type: "output_file",
+            file_id: "preferred",
+            filename: "preferred.json",
+          },
+        ],
+      },
+      {
+        preferredChannel: "output_file",
+        inspectInline: () => ({
+          success: true,
+          data: { valid: true, id: 8 },
+        }),
+        inspectParsed: inspectTestOutput,
+      },
+    );
+
+    await expect(promise).rejects.toMatchObject({
+      code: "SCHEMA_MISMATCH",
+      validation: [
+        { path: ["root"], message: "Conflicting valid JSON candidates" },
+      ],
+    });
   });
 
   it("shares the three-candidate budget across inline and file output", async () => {

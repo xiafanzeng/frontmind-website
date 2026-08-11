@@ -17,6 +17,7 @@ import {
   finalizeKnowledgeBaseCandidate,
   WEBSITE_KB_FINALIZER_VERSION,
 } from "./knowledge-base-finalizer";
+import { finalizeKnowledgeBaseCandidate as finalizeKnowledgeBaseCandidateV3 } from "./knowledge-base-finalizer-v3";
 
 const factHeadings = [
   [
@@ -217,7 +218,338 @@ async function candidateZip(options?: {
   return zip.generateAsync({ type: "nodebuffer", platform: "UNIX" });
 }
 
+async function v2CandidateZip(topicProfile: "minimum" | "maximum") {
+  const zip = new JSZip();
+  const sectionTitles = customerSections.map(([title]) => title);
+  const topicCounts =
+    topicProfile === "minimum" ? [1, 1, 2, 2, 1, 1, 1] : [2, 2, 5, 3, 3, 2, 2];
+  const floors = [500, 500, 2_500, 1_000, 600, 600, 600];
+  const urls = sectionTitles.map(
+    (_, index) => `https://example.com/light-section-${index + 1}`,
+  );
+  zip.file(
+    "00_brand_facts.md",
+    factHeadings
+      .map(
+        ([heading], index) =>
+          `## ${heading}\n\n${"可核验企业事实".repeat(8)}。[来源](${urls[index % urls.length]})`,
+      )
+      .join("\n\n"),
+  );
+  zip.file(
+    "01_customer_draft.md",
+    sectionTitles
+      .map((title, sectionIndex) => {
+        const count = topicCounts[sectionIndex]!;
+        const perTopic = Math.ceil(floors[sectionIndex]! / count) + 12;
+        return [
+          `## ${title}`,
+          "",
+          ...Array.from({ length: count }, (_, topicIndex) => {
+            const characters =
+              sectionIndex === 2 && topicIndex === 0 ? 1_900 : perTopic;
+            return [
+              `### ${title}主题${topicIndex + 1}`,
+              "",
+              `${String.fromCodePoint(
+                0x4e00 + sectionIndex * 8 + topicIndex,
+              ).repeat(characters)}[来源](${urls[sectionIndex]})`,
+            ].join("\n");
+          }),
+        ].join("\n");
+      })
+      .join("\n\n"),
+  );
+  zip.file(
+    "02_run.json",
+    JSON.stringify({
+      schemaVersion: 2,
+      company: {
+        name: "轻量示例企业",
+        officialWebsite: "https://example.com/",
+        industryCluster: "C3",
+      },
+      sources: urls.map((url, index) => ({
+        title: `轻量来源 ${index + 1}`,
+        kind: "official_web",
+        status: "read",
+        url,
+      })),
+      queries: ["轻量示例企业 产品"],
+      stopReason: "coverage_complete",
+      contentFloorExceptions: [],
+      logoAcquisition: {
+        status: "unavailable",
+        attemptedPageUrls: urls.slice(0, 2),
+        reason: "两个第一方页面均未提供可解码的官方 Logo 原始资源。",
+      },
+      assets: [],
+    }),
+  );
+  return zip.generateAsync({ type: "nodebuffer", platform: "UNIX" });
+}
+
+async function mutateV2CandidateZip(
+  mutate: (fixture: {
+    run: Record<string, any>;
+    customerMarkdown: string;
+  }) => void,
+) {
+  const zip = await JSZip.loadAsync(await v2CandidateZip("minimum"));
+  const fixture = {
+    run: JSON.parse(await zip.file("02_run.json")!.async("string")) as Record<
+      string,
+      any
+    >,
+    customerMarkdown: await zip.file("01_customer_draft.md")!.async("string"),
+  };
+  mutate(fixture);
+  zip.file("02_run.json", JSON.stringify(fixture.run));
+  zip.file("01_customer_draft.md", fixture.customerMarkdown);
+  return zip.generateAsync({ type: "nodebuffer", platform: "UNIX" });
+}
+
+async function v2CandidateZipWithImage(imageBytes: Buffer) {
+  const zip = await JSZip.loadAsync(await v2CandidateZip("minimum"));
+  const run = JSON.parse(
+    await zip.file("02_run.json")!.async("string"),
+  ) as Record<string, any>;
+  run.assets = [
+    {
+      path: "assets/logo.png",
+      type: "brand_identity",
+      sourceKind: "official_web",
+      sourcePageUrl: "https://example.com/light-section-1",
+      sourceAssetUrl: "https://example.com/assets/logo.png",
+      caption: "轻量示例企业 Logo",
+    },
+  ];
+  run.logoAcquisition = {
+    status: "retained",
+    attemptedPageUrls: [
+      "https://example.com/light-section-1",
+      "https://example.com/light-section-2",
+    ],
+  };
+  zip.file("02_run.json", JSON.stringify(run));
+  zip.file("assets/logo.png", imageBytes);
+  return zip.generateAsync({ type: "nodebuffer", platform: "UNIX" });
+}
+
+const websitePresentationFloorCases = [
+  ["企业与品牌", 500, 1],
+  ["团队与组织", 500, 1],
+  ["产品与服务", 2_500, 2],
+  ["技术与交付", 1_000, 2],
+  ["客户与行业", 600, 1],
+  ["服务与合作", 600, 1],
+  ["可信优势", 600, 1],
+] as const;
+
+function replaceV2SectionAtVisibleCount(
+  markdown: string,
+  section: string,
+  targetCharacters: number,
+  topicCount: number,
+  sourceUrl: string,
+  includeGap = false,
+) {
+  const titles = Array.from(
+    { length: topicCount },
+    (_, index) => `${section}主题${index + 1}`,
+  );
+  const titleCharacters = titles.reduce(
+    (total, title) => total + Array.from(title).length,
+    0,
+  );
+  const narrativeCharacters = targetCharacters - titleCharacters;
+  if (narrativeCharacters < 0) throw new Error("invalid test floor");
+  const perTopic = Math.floor(narrativeCharacters / topicCount);
+  const remainder = narrativeCharacters % topicCount;
+  const replacement = `## ${section}\n\n${titles
+    .map(
+      (title, index) =>
+        `### ${title}\n\n${"实".repeat(
+          perTopic + (index < remainder ? 1 : 0),
+        )}${includeGap && index === 0 ? "[待核验]" : ""}[来源](${sourceUrl})`,
+    )
+    .join("\n\n")}`;
+  return markdown.replace(
+    new RegExp(`## ${section}\\n[\\s\\S]*?(?=\\n\\n## |$)`),
+    replacement,
+  );
+}
+
 describe("website knowledge-base candidate v1", () => {
+  it.each(
+    websitePresentationFloorCases.flatMap(([section, floor, topicCount]) => [
+      [section, floor, topicCount, -1, false],
+      [section, floor, topicCount, 0, true],
+      [section, floor, topicCount, 1, true],
+    ]) as Array<[string, number, number, number, boolean]>,
+  )(
+    "enforces the restored %s presentation floor at offset %i",
+    async (section, floor, topicCount, offset, accepted) => {
+      const bytes = await mutateV2CandidateZip((fixture) => {
+        const sectionIndex = websitePresentationFloorCases.findIndex(
+          ([title]) => title === section,
+        );
+        fixture.customerMarkdown = replaceV2SectionAtVisibleCount(
+          fixture.customerMarkdown,
+          section,
+          floor + offset,
+          topicCount,
+          `https://example.com/light-section-${sectionIndex + 1}`,
+        );
+      });
+      if (accepted) {
+        await expect(parseKnowledgeBaseCandidate(bytes)).resolves.toMatchObject(
+          {
+            run: { schemaVersion: 2 },
+          },
+        );
+      } else {
+        await expect(parseKnowledgeBaseCandidate(bytes)).rejects.toMatchObject({
+          category: "content",
+          message: expect.stringContaining(`${floor}-character floor`),
+        });
+      }
+    },
+  );
+
+  it("accepts a below-floor exception only with a concrete gap and three registered sources", async () => {
+    const bytes = await mutateV2CandidateZip((fixture) => {
+      fixture.customerMarkdown = replaceV2SectionAtVisibleCount(
+        fixture.customerMarkdown,
+        "企业与品牌",
+        499,
+        1,
+        "https://example.com/light-section-1",
+        true,
+      );
+      fixture.run.contentFloorExceptions = [
+        {
+          section: "企业与品牌",
+          reason: "官网、产品页和公开说明均未披露更多可核验的企业沿革事实。",
+          attemptedSourceUrls: [
+            "https://example.com/light-section-1",
+            "https://example.com/light-section-2",
+            "https://example.com/light-section-3",
+          ],
+        },
+      ];
+    });
+    await expect(parseKnowledgeBaseCandidate(bytes)).resolves.toMatchObject({
+      run: { schemaVersion: 2 },
+    });
+  });
+
+  it.each(["😀".repeat(12), "[来源](https://example.com/reason-only)"])(
+    "rejects a below-floor exception whose reason has fewer than 12 meaningful characters: %s",
+    async (reason) => {
+      const bytes = await mutateV2CandidateZip((fixture) => {
+        fixture.customerMarkdown = replaceV2SectionAtVisibleCount(
+          fixture.customerMarkdown,
+          "企业与品牌",
+          499,
+          1,
+          "https://example.com/light-section-1",
+          true,
+        );
+        fixture.run.contentFloorExceptions = [
+          {
+            section: "企业与品牌",
+            reason,
+            attemptedSourceUrls: [
+              "https://example.com/light-section-1",
+              "https://example.com/light-section-2",
+              "https://example.com/light-section-3",
+            ],
+          },
+        ];
+      });
+      await expect(parseKnowledgeBaseCandidate(bytes)).rejects.toMatchObject({
+        category: "content",
+        message: expect.stringContaining("at least 12 characters"),
+      });
+    },
+  );
+
+  it("rejects user-upload URLs as public-source attempts for a floor exception", async () => {
+    const attemptedSourceUrls = [
+      "https://uploads.example.test/one",
+      "https://uploads.example.test/two",
+      "https://uploads.example.test/three",
+    ];
+    const bytes = await mutateV2CandidateZip((fixture) => {
+      fixture.customerMarkdown = replaceV2SectionAtVisibleCount(
+        fixture.customerMarkdown,
+        "企业与品牌",
+        499,
+        1,
+        "https://example.com/light-section-1",
+        true,
+      );
+      fixture.run.sources.push(
+        ...attemptedSourceUrls.map((url, index) => ({
+          title: `上传材料 ${index + 1}`,
+          kind: "user_upload",
+          status: "read",
+          url,
+          attachmentName: `upload-${index + 1}.pdf`,
+        })),
+      );
+      fixture.run.contentFloorExceptions = [
+        {
+          section: "企业与品牌",
+          reason: "官网和公开权威页面均未披露更多可验证的企业事实。",
+          attemptedSourceUrls,
+        },
+      ];
+    });
+    await expect(parseKnowledgeBaseCandidate(bytes)).rejects.toMatchObject({
+      category: "content",
+      message: expect.stringContaining("recorded public-source attempts"),
+    });
+  });
+
+  it("revalidates floor exceptions inside the finalizer after candidate parsing", async () => {
+    const bytes = await mutateV2CandidateZip((fixture) => {
+      fixture.customerMarkdown = replaceV2SectionAtVisibleCount(
+        fixture.customerMarkdown,
+        "企业与品牌",
+        499,
+        1,
+        "https://example.com/light-section-1",
+        true,
+      );
+      fixture.run.contentFloorExceptions = [
+        {
+          section: "企业与品牌",
+          reason: "官网、产品页和公开说明均未披露更多可核验的企业沿革事实。",
+          attemptedSourceUrls: [
+            "https://example.com/light-section-1",
+            "https://example.com/light-section-2",
+            "https://example.com/light-section-3",
+          ],
+        },
+      ];
+    });
+    const parsed = await parseKnowledgeBaseCandidate(bytes);
+    if (parsed.run?.schemaVersion !== 2) throw new Error("expected v2 run");
+    parsed.run.contentFloorExceptions[0]!.reason = "资料不足";
+    await expect(
+      finalizeKnowledgeBaseCandidate({
+        candidate: parsed,
+        companyName: "轻量示例企业",
+        evaluatedAt: "2026-08-10T00:00:00.000Z",
+      }),
+    ).rejects.toMatchObject({
+      category: "content",
+      message: expect.stringContaining("at least 12 characters"),
+    });
+  });
+
   it("parses required Markdown through a single wrapper and reconstructs sources", async () => {
     const parsed = await parseKnowledgeBaseCandidate(
       await candidateZip({ omitRun: true, wrapper: true }),
@@ -359,6 +691,79 @@ describe("website knowledge-base candidate v1", () => {
       message: expect.stringContaining("symbolic link"),
     });
   });
+
+  it.each([
+    [
+      "an out-of-range H3 allocation",
+      (fixture: { run: Record<string, any>; customerMarkdown: string }) => {
+        fixture.customerMarkdown = fixture.customerMarkdown.replace(
+          "### 产品与服务主题2",
+          "#### 产品与服务主题2",
+        );
+      },
+      /must contain 2–5 unique H3 topics/i,
+    ],
+    [
+      "seventeen distinct public-page attempts",
+      (fixture: { run: Record<string, any> }) => {
+        fixture.run.sources = Array.from({ length: 17 }, (_, index) => ({
+          title: `公开页 ${index + 1}`,
+          kind: "official_web",
+          status: "read",
+          url: `https://example.com/light-section-${index + 1}`,
+        }));
+      },
+      /exceeds 16 distinct public-page attempts/i,
+    ],
+    [
+      "five public queries",
+      (fixture: { run: Record<string, any> }) => {
+        fixture.run.queries = Array.from(
+          { length: 5 },
+          (_, index) => `公开查询 ${index + 1}`,
+        );
+      },
+      /candidate contract: queries/i,
+    ],
+    [
+      "thirty-one source records",
+      (fixture: { run: Record<string, any> }) => {
+        fixture.run.sources = Array.from({ length: 31 }, (_, index) => ({
+          title: `来源 ${index + 1}`,
+          kind: "official_web",
+          status: "read",
+          url: `https://example.com/source-${index + 1}`,
+        }));
+      },
+      /candidate contract: sources/i,
+    ],
+    [
+      "more than 40,000 visible customer characters",
+      (fixture: { customerMarkdown: string }) => {
+        fixture.customerMarkdown += `\n\n${"超".repeat(40_001)}`;
+      },
+      /exceeds 40000 visible characters/i,
+    ],
+    [
+      "an accepted upload recorded as failed",
+      (fixture: { run: Record<string, any> }) => {
+        fixture.run.sources.push({
+          title: "用户上传资料",
+          kind: "user_upload",
+          status: "failed",
+          attachmentName: "catalog.pdf",
+        });
+      },
+      /must mark every user upload as read/i,
+    ],
+  ] as const)("rejects schema-v2 %s", async (_label, mutate, expectedError) => {
+    await expect(
+      parseKnowledgeBaseCandidate(await mutateV2CandidateZip(mutate)),
+    ).rejects.toMatchObject<Partial<KnowledgeBaseCandidateError>>({
+      category: "content",
+      message: expect.stringMatching(expectedError),
+    });
+  });
 });
 
 describe("website knowledge-base finalizer", () => {
@@ -482,8 +887,10 @@ describe("website knowledge-base finalizer", () => {
     });
   });
 
-  it("generates a validated deterministic schema-v3 archive without images", async () => {
-    const parsed = await parseKnowledgeBaseCandidate(await candidateZip());
+  it("generates a validated deterministic schema-v4 archive without images", async () => {
+    const parsed = await parseKnowledgeBaseCandidate(
+      await v2CandidateZip("minimum"),
+    );
     const first = await finalizeKnowledgeBaseCandidate({
       candidate: parsed,
       companyName: "示例企业",
@@ -495,13 +902,14 @@ describe("website knowledge-base finalizer", () => {
       evaluatedAt: "2026-07-30T01:00:00.000Z",
     });
 
-    expect(WEBSITE_KB_FINALIZER_VERSION).toBe("website-kb-finalizer-v3");
+    expect(WEBSITE_KB_FINALIZER_VERSION).toBe("website-kb-finalizer-v4");
     expect(first.sha256).toBe(second.sha256);
     expect(first.packageManifestSha256).toBe(
       first.manifest.packageManifestSha256,
     );
-    expect(first.manifest.archiveContractVersion).toBe(3);
-    expect(first.metrics.leafCount).toBeGreaterThanOrEqual(8);
+    expect(first.manifest.archiveContractVersion).toBe(4);
+    expect(first.metrics.leafCount).toBeGreaterThanOrEqual(10);
+    expect(first.metrics.leafCount).toBeLessThanOrEqual(20);
     expect(first.metrics.packagedImages).toBe(0);
 
     const zip = await JSZip.loadAsync(first.bytes);
@@ -518,7 +926,8 @@ describe("website knowledge-base finalizer", () => {
       await zip.file("00_package_manifest.json")!.async("string"),
     );
     expect(manifest).toMatchObject({
-      schemaVersion: 3,
+      schemaVersion: 4,
+      candidateContractVersion: 2,
       profile: "website-lead-v1",
     });
     expect(manifest.branchEvidence).toHaveLength(7);
@@ -573,7 +982,7 @@ describe("website knowledge-base finalizer", () => {
     expect(companyOverview).not.toBe(companyLeaf);
     expect(
       leaves.find((document: any) => document.branchId === "02_team"),
-    ).toMatchObject({ evidenceStatus: "needs_verification" });
+    ).toMatchObject({ evidenceStatus: "verified_first_party" });
     expect(
       leaves.find((document: any) => document.branchId === "05_manufacturing"),
     ).toMatchObject({ evidenceStatus: "not_applicable" });
@@ -599,7 +1008,7 @@ describe("website knowledge-base finalizer", () => {
     expect(
       roundTrip.sections
         .find((section) => section.title === "产品与服务")
-        ?.leaves.some((leaf) => leaf.title.includes("平台产品")),
+        ?.leaves.some((leaf) => leaf.title.includes("产品与服务主题")),
     ).toBe(true);
     const productOverview = await zip
       .file("03_products/overview.md")!
@@ -607,7 +1016,7 @@ describe("website knowledge-base finalizer", () => {
     const productLeafDocument = leaves.find(
       (document: any) =>
         document.branchId === "03_products" &&
-        document.title.includes("平台产品"),
+        document.title.includes("产品与服务主题1"),
     );
     expect(productLeafDocument).toBeTruthy();
     if (!productLeafDocument) {
@@ -616,22 +1025,215 @@ describe("website knowledge-base finalizer", () => {
     const productLeaf = await zip
       .file(productLeafDocument.path)!
       .async("string");
-    expect(productLeaf).toContain(
-      "MindNexus 智汇：把企业级 AI 工作流接入现有系统",
+    expect(productLeaf).toContain("产品与服务主题1");
+    expect(productOverview).not.toContain("产品与服务主题1");
+  });
+
+  it("rejects a schema-v1 candidate at the v4 finalizer boundary", async () => {
+    const legacyCandidate = await parseKnowledgeBaseCandidate(
+      await candidateZip(),
     );
-    expect(productLeaf).not.toMatch(/Mind。\s*$/m);
-    expect(productOverview).not.toContain(
-      "MindNexus 智汇：把企业级 AI 工作流接入现有系统",
+
+    await expect(
+      finalizeKnowledgeBaseCandidate({
+        candidate: legacyCandidate,
+        companyName: "历史企业",
+        evaluatedAt: "2026-08-10T01:00:00.000Z",
+      }),
+    ).rejects.toMatchObject({
+      category: "content",
+      message: expect.stringContaining("requires a schema-v2 candidate"),
+    });
+  });
+
+  it.each([
+    ["minimum", 9, 10],
+    ["maximum", 19, 20],
+  ] as const)(
+    "turns each schema-v2 H3 into one leaf and adds only the manufacturing leaf for the %s profile",
+    async (profile, authoredTopics, expectedLeaves) => {
+      const parsed = await parseKnowledgeBaseCandidate(
+        await v2CandidateZip(profile),
+      );
+      expect(parsed.run?.schemaVersion).toBe(2);
+      const finalized = await finalizeKnowledgeBaseCandidate({
+        candidate: parsed,
+        companyName: "轻量示例企业",
+        evaluatedAt: "2026-08-10T01:00:00.000Z",
+      });
+      expect(finalized.metrics.leafCount).toBe(expectedLeaves);
+      const zip = await JSZip.loadAsync(finalized.bytes);
+      const packageManifest = JSON.parse(
+        await zip.file("00_package_manifest.json")!.async("string"),
+      ) as {
+        schemaVersion: number;
+        candidateContractVersion: number;
+        allPaths: string[];
+        evidencePaths: string[];
+        documents: Array<{
+          kind: string;
+          title: string;
+          path: string;
+          branchId?: string;
+          sourceIds?: string[];
+          evidenceDocumentIds?: string[];
+        }>;
+      };
+      const leaves = packageManifest.documents.filter(
+        (document) => document.kind === "leaf",
+      );
+      expect(packageManifest).toMatchObject({
+        schemaVersion: 4,
+        candidateContractVersion: 2,
+      });
+      expect(leaves).toHaveLength(expectedLeaves);
+      expect(
+        leaves.filter((leaf) => leaf.branchId === "05_manufacturing"),
+      ).toHaveLength(1);
+      expect(leaves.length - 1).toBe(authoredTopics);
+      expect(
+        packageManifest.documents.filter(
+          (document) => document.kind === "overview",
+        ),
+      ).toHaveLength(7);
+      expect(packageManifest.allPaths).toContain("00_package_manifest.json");
+      expect(
+        packageManifest.evidencePaths.every((entryPath) =>
+          packageManifest.documents.some(
+            (document) =>
+              document.kind === "evidence" && document.path === entryPath,
+          ),
+        ),
+      ).toBe(true);
+
+      const longProductLeaf = leaves.find(
+        (leaf) =>
+          leaf.branchId === "03_products" && leaf.title === "产品与服务主题1",
+      );
+      expect(longProductLeaf).toBeTruthy();
+      const longMarkdown = await zip
+        .file(longProductLeaf!.path)!
+        .async("string");
+      expect(longMarkdown.length).toBeGreaterThan(1_800);
+      expect(longProductLeaf!.sourceIds).toHaveLength(1);
+      expect(longProductLeaf!.evidenceDocumentIds).toHaveLength(1);
+    },
+  );
+
+  it("keeps an oversized legacy schema-v1 candidate on the frozen v3 finalizer with every product evidence binding", async () => {
+    const parsed = await parseKnowledgeBaseCandidate(await candidateZip());
+    const productUrls = Array.from(
+      { length: 25 },
+      (_, index) => `https://example.com/legacy-product-${index + 1}`,
     );
+    parsed.customerSections.set(
+      "产品与服务",
+      productUrls
+        .map(
+          (url, index) =>
+            `### 历史产品${String(index + 1).padStart(2, "0")}\n\n产品事实${index + 1}。${String.fromCodePoint(
+              0x6000 + index,
+            ).repeat(40)}[来源](${url})`,
+        )
+        .join("\n\n"),
+    );
+    parsed.factSections.set(
+      "D03",
+      productUrls
+        .map((url, index) => `历史产品事实${index + 1}。[来源](${url})`)
+        .join("\n\n"),
+    );
+    // Reparse so source records include every newly authored URL.
+    const expandedZip = new JSZip();
+    expandedZip.file(
+      "00_brand_facts.md",
+      [
+        ...factHeadings
+          .filter(([heading]) => !heading.startsWith("D03 "))
+          .map(([heading, content]) => `## ${heading}\n\n${content}`),
+        `## D03 产品服务\n\n${parsed.factSections.get("D03")}`,
+      ].join("\n\n"),
+    );
+    expandedZip.file(
+      "01_customer_draft.md",
+      customerSections
+        .map(
+          ([heading, content]) =>
+            `## ${heading}\n\n${
+              heading === "产品与服务"
+                ? parsed.customerSections.get(heading)
+                : content
+            }`,
+        )
+        .join("\n\n"),
+    );
+    expandedZip.file(
+      "02_run.json",
+      JSON.stringify({
+        schemaVersion: 1,
+        company: { name: "历史企业", industryCluster: "C3" },
+        sources: productUrls.map((url, index) => ({
+          title: `历史产品来源${index + 1}`,
+          kind: "official_web",
+          status: "read",
+          url,
+        })),
+        queries: [],
+        assets: [],
+      }),
+    );
+    const expanded = await parseKnowledgeBaseCandidate(
+      await expandedZip.generateAsync({ type: "nodebuffer" }),
+    );
+    const finalized = await finalizeKnowledgeBaseCandidateV3({
+      candidate: expanded,
+      companyName: "历史企业",
+      evaluatedAt: "2026-08-10T01:00:00.000Z",
+    });
+    expect(finalized.metrics.leafCount).toBeLessThanOrEqual(56);
+    const zip = await JSZip.loadAsync(finalized.bytes);
+    const packageManifest = JSON.parse(
+      await zip.file("00_package_manifest.json")!.async("string"),
+    ) as {
+      documents: Array<{
+        kind: string;
+        title: string;
+        branchId?: string;
+        sourceIds?: string[];
+        evidenceDocumentIds?: string[];
+      }>;
+    };
+    const productLeaves = packageManifest.documents.filter(
+      (document) =>
+        document.kind === "leaf" && document.branchId === "03_products",
+    );
+    expect(productLeaves).toHaveLength(7);
+    expect(
+      new Set(productLeaves.flatMap((leaf) => leaf.sourceIds || [])).size,
+    ).toBeGreaterThanOrEqual(25);
+    expect(
+      new Set(productLeaves.flatMap((leaf) => leaf.evidenceDocumentIds || []))
+        .size,
+    ).toBeGreaterThanOrEqual(25);
+    expect(
+      packageManifest.documents
+        .filter((document) => document.kind === "leaf")
+        .some(
+          (leaf) =>
+            leaf.branchId !== "03_products" && leaf.title.includes("历史产品"),
+        ),
+    ).toBe(false);
   });
 
   it("preserves supported customer prose without a semantic style filter", async () => {
-    const parsed = await parseKnowledgeBaseCandidate(await candidateZip());
+    const parsed = await parseKnowledgeBaseCandidate(
+      await v2CandidateZip("minimum"),
+    );
     const semanticProse =
       "第一方页面摘录显示该服务可用，采购方应先核验供应商资质。";
     parsed.customerSections.set(
       "企业与品牌",
-      `${semanticProse}[来源](https://example.com/about)`,
+      `${parsed.customerSections.get("企业与品牌")}\n\n${semanticProse}[来源](https://example.com/light-section-1)`,
     );
 
     const finalized = await finalizeKnowledgeBaseCandidate({
@@ -655,14 +1257,16 @@ describe("website knowledge-base finalizer", () => {
   });
 
   it("uses the shared formal count for business source headings and tables", async () => {
-    const parsed = await parseKnowledgeBaseCandidate(await candidateZip());
+    const parsed = await parseKnowledgeBaseCandidate(
+      await v2CandidateZip("minimum"),
+    );
     const businessCopy = [
       "### 收入来源",
       "",
       "| 类型 | 平台价值 |",
       "| --- | --- |",
       `| 收入来源 | ${"乙".repeat(593)} |`,
-      "| 社区活力来源 | 不同来源模型 [来源](https://example.com/about) |",
+      "| 社区活力来源 | 不同来源模型 [来源](https://example.com/light-section-1) |",
     ].join("\n");
     parsed.customerSections.set("企业与品牌", businessCopy);
 
@@ -703,7 +1307,7 @@ describe("website knowledge-base finalizer", () => {
       .png()
       .toBuffer();
     const parsed = await parseKnowledgeBaseCandidate(
-      await candidateZip({ imageBytes }),
+      await v2CandidateZipWithImage(imageBytes),
     );
     const finalized = await finalizeKnowledgeBaseCandidate({
       candidate: parsed,
@@ -714,7 +1318,7 @@ describe("website knowledge-base finalizer", () => {
     expect(finalized.manifest.assets).toHaveLength(1);
     expect(finalized.manifest.assets[0]).toMatchObject({
       sectionId: "company-identity",
-      sourcePageUrl: "https://example.com/",
+      sourcePageUrl: "https://example.com/light-section-1",
     });
     const zip = await JSZip.loadAsync(finalized.bytes);
     const manifest = JSON.parse(

@@ -270,17 +270,21 @@ class MockBroker implements GeoPresalesBroker {
     reason: "问题明确指向 Acme 及其科研场景服务能力。",
     enterpriseAnchor: "Acme",
     offeringAnchor: null,
-    evidenceRefs: ["01_company_overview/overview.md"],
+    evidenceRefs: ["evidence/S001.md"],
   };
   customQuestionClassifierRawText?: string;
+  customQuestionClassifierRawTexts: string[] = [];
+  customQuestionClassifierUseOutputFile = false;
   monitorQuestionTranslationQuestionEnglish =
     "Which business problems does Acme Service Module 1 primarily solve?";
   monitorQuestionTranslationRawOutput?: unknown;
+  monitorQuestionTranslationUseOutputFile = false;
   monitorQuestionTranslationStatus: "completed" | "running" | "failed" =
     "completed";
 
   private customQuestionClassifierText() {
     return (
+      this.customQuestionClassifierRawTexts.shift() ??
       this.customQuestionClassifierRawText ??
       JSON.stringify(this.customQuestionClassifierOutput)
     );
@@ -297,6 +301,48 @@ class MockBroker implements GeoPresalesBroker {
         questionEnglish: this.monitorQuestionTranslationQuestionEnglish,
       },
     );
+  }
+
+  private customQuestionClassifierTaskOutput(taskId: string) {
+    const text = this.customQuestionClassifierText();
+    if (!this.customQuestionClassifierUseOutputFile) {
+      return [
+        {
+          role: "assistant",
+          content: [{ text }],
+        },
+      ];
+    }
+    const fileId = `${taskId}-result-json`;
+    this.downloadOverrides.set(fileId, Buffer.from(text, "utf8"));
+    return [
+      {
+        type: "output_file",
+        file_id: fileId,
+        filename: "custom-question-classification.json",
+      },
+    ];
+  }
+
+  private monitorQuestionTranslationTaskOutput(taskId: string, prompt: string) {
+    const text = this.monitorQuestionTranslationText(prompt);
+    if (!this.monitorQuestionTranslationUseOutputFile) {
+      return [
+        {
+          role: "assistant",
+          content: [{ text }],
+        },
+      ];
+    }
+    const fileId = `${taskId}-result-json`;
+    this.downloadOverrides.set(fileId, Buffer.from(text, "utf8"));
+    return [
+      {
+        type: "output_file",
+        file_id: fileId,
+        filename: "monitor-question-translation.json",
+      },
+    ];
   }
 
   async getStatus(options: { freshMonitorCredential?: boolean } = {}) {
@@ -442,16 +488,7 @@ class MockBroker implements GeoPresalesBroker {
           status: this.monitorQuestionTranslationStatus,
           output:
             this.monitorQuestionTranslationStatus === "completed"
-              ? [
-                  {
-                    role: "assistant",
-                    content: [
-                      {
-                        text: this.monitorQuestionTranslationText(input.prompt),
-                      },
-                    ],
-                  },
-                ]
+              ? this.monitorQuestionTranslationTaskOutput(id, input.prompt)
               : [],
         }
       : isCustomQuestionClassifierTask
@@ -465,12 +502,7 @@ class MockBroker implements GeoPresalesBroker {
           : {
               id,
               status: "completed",
-              output: [
-                {
-                  role: "assistant",
-                  content: [{ text: this.customQuestionClassifierText() }],
-                },
-              ],
+              output: this.customQuestionClassifierTaskOutput(id),
             }
         : isQuestionTask
           ? {
@@ -551,12 +583,7 @@ class MockBroker implements GeoPresalesBroker {
         task = {
           id: taskId,
           status: "completed",
-          output: [
-            {
-              role: "assistant",
-              content: [{ text: this.customQuestionClassifierText() }],
-            },
-          ],
+          output: this.customQuestionClassifierTaskOutput(taskId),
         };
         this.tasks.set(taskId, task);
       }
@@ -1197,6 +1224,7 @@ beforeEach(async () => {
       projectOrderRegistry,
       env: {
         NODE_ENV: "test",
+        FRONTMIND_WEBSITE_KB_V4_WRITER_ENABLED: "true",
         FRONTMIND_GEO_INVITE_CODE: "frontmind666",
         FRONTMIND_GEO_SESSION_SECRET:
           "test-session-secret-at-least-16-characters",
@@ -1576,6 +1604,14 @@ describe("GEO API", () => {
     });
     expect(created.response.status).toBe(201);
     const payload = created.body as Record<string, any>;
+    const createdProjectJson = JSON.stringify(payload.project);
+    expect(createdProjectJson).not.toContain("knowledgeBaseSkillVersion");
+    expect(createdProjectJson).not.toContain("knowledgeBaseSkillSha256");
+    const sealedValue = new GeoTokenCodec(
+      "test-session-secret-at-least-16-characters",
+    ).open<any>(payload.projectToken, "project").value;
+    expect(sealedValue.knowledgeBaseSkillVersion).toBe(7);
+    expect(sealedValue.knowledgeBaseSkillSha256).toMatch(/^[a-f0-9]{64}$/);
     expect(payload.projectToken).not.toContain("kb-1");
     expect(payload.project.kbTask.id).toBe("knowledge-base");
     expect(payload.project.kbTask.progress).toBe(25);
@@ -1624,6 +1660,210 @@ describe("GEO API", () => {
         .update(broker.taskInputUploads.get("task-input-file-1")!)
         .digest("hex"),
     );
+  });
+
+  it("uses the immutable v6 writer and v3 finalizer only when the rollout gate is explicitly disabled", async () => {
+    const legacyBroker = new MockBroker();
+    legacyBroker.archive = await fixtureLegacyCandidateArchive();
+    const secret = "legacy-writer-test-session-secret-at-least-32-characters";
+    const app = express();
+    app.use(
+      "/api/geo",
+      createGeoRouter({
+        broker: legacyBroker,
+        projectOrderRegistry,
+        customQuestionValidationStore:
+          new MemoryGeoCustomQuestionValidationStore(),
+        env: {
+          NODE_ENV: "test",
+          FRONTMIND_WEBSITE_KB_V4_WRITER_ENABLED: "false",
+          FRONTMIND_GEO_INVITE_CODE: "frontmind666",
+          FRONTMIND_GEO_SESSION_SECRET: secret,
+        },
+      }),
+    );
+    const legacyServer = app.listen(0);
+    await new Promise<void>((resolve) =>
+      legacyServer.once("listening", resolve),
+    );
+    try {
+      const origin = `http://127.0.0.1:${(legacyServer.address() as AddressInfo).port}`;
+      const invited = await fetch(`${origin}/api/geo/invite/verify`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ code: "frontmind666" }),
+      });
+      const cookie = invited.headers.get("set-cookie")!.split(";")[0]!;
+      const created = await fetch(`${origin}/api/geo/projects`, {
+        method: "POST",
+        headers: { cookie, "content-type": "application/json" },
+        body: JSON.stringify({ input: "Acme", attachments: [] }),
+      });
+      expect(created.status).toBe(201);
+      const initial = (await created.json()) as Record<string, any>;
+      const codec = new GeoTokenCodec(secret);
+      expect(
+        codec.open<any>(initial.projectToken, "project").value,
+      ).toMatchObject({ knowledgeBaseSkillVersion: 6 });
+
+      const skillArchive = legacyBroker.skillUploads.get("skill-file-1")!;
+      const skillZip = await JSZip.loadAsync(skillArchive);
+      expect(await skillZip.file("SKILL.md")!.async("string")).toContain(
+        "website-lead-candidate-v1.zip",
+      );
+      expect(
+        JSON.parse(await skillZip.file("MANIFEST.json")!.async("string")),
+      ).toMatchObject({ name: "website-one-shot-kb-builder" });
+
+      legacyBroker.tasks.set("kb-1", {
+        id: "kb-1",
+        status: "completed",
+        completed_at: "2026-08-10T00:00:00.000Z",
+        output: [
+          {
+            role: "assistant",
+            content: [
+              {
+                type: "output_file",
+                file_id: "legacy-candidate",
+                filename: "Acme_candidate.zip",
+              },
+            ],
+          },
+        ],
+      });
+      const polled = await fetch(
+        `${origin}/api/geo/projects/${encodeURIComponent(initial.projectToken)}`,
+        { headers: { cookie } },
+      );
+      expect(polled.status).toBe(200);
+      const completed = (await polled.json()) as Record<string, any>;
+      const completedValue = codec.open<any>(
+        completed.projectToken,
+        "project",
+      ).value;
+      expect(completedValue.knowledgeBaseArtifact).toMatchObject({
+        finalizerVersion: "website-kb-finalizer-v3",
+        final: { archiveContractVersion: 3 },
+      });
+      expect(JSON.stringify(completed.project)).not.toContain(
+        "knowledgeBaseSkillVersion",
+      );
+      expect(JSON.stringify(completed.project)).not.toContain(
+        "knowledgeBaseSkillSha256",
+      );
+
+      const finalizedUploadCount = legacyBroker.uploads.size;
+      const finalizedPromptCount = legacyBroker.prompts.length;
+      const switchedApp = express();
+      switchedApp.use(
+        "/api/geo",
+        createGeoRouter({
+          broker: legacyBroker,
+          projectOrderRegistry,
+          customQuestionValidationStore:
+            new MemoryGeoCustomQuestionValidationStore(),
+          env: {
+            NODE_ENV: "test",
+            FRONTMIND_WEBSITE_KB_V4_WRITER_ENABLED: "true",
+            FRONTMIND_GEO_INVITE_CODE: "frontmind666",
+            FRONTMIND_GEO_SESSION_SECRET: secret,
+          },
+        }),
+      );
+      const switchedServer = switchedApp.listen(0);
+      await new Promise<void>((resolve) =>
+        switchedServer.once("listening", resolve),
+      );
+      try {
+        const switchedOrigin = `http://127.0.0.1:${
+          (switchedServer.address() as AddressInfo).port
+        }`;
+        const replayed = await fetch(
+          `${switchedOrigin}/api/geo/projects/${encodeURIComponent(
+            completed.projectToken,
+          )}`,
+          { headers: { cookie } },
+        );
+        expect(replayed.status).toBe(200);
+        const replayedPayload = (await replayed.json()) as Record<string, any>;
+        expect(
+          codec.open<any>(replayedPayload.projectToken, "project").value
+            .knowledgeBaseArtifact,
+        ).toMatchObject({
+          finalizerVersion: "website-kb-finalizer-v3",
+          final: { archiveContractVersion: 3 },
+        });
+        expect(legacyBroker.uploads.size).toBe(finalizedUploadCount);
+        expect(legacyBroker.prompts).toHaveLength(finalizedPromptCount);
+      } finally {
+        await new Promise<void>((resolve, reject) =>
+          switchedServer.close((error) => (error ? reject(error) : resolve())),
+        );
+      }
+    } finally {
+      await new Promise<void>((resolve, reject) =>
+        legacyServer.close((error) => (error ? reject(error) : resolve())),
+      );
+    }
+  });
+
+  it("rejects a schema-v1 candidate for a project pinned to writer v7", async () => {
+    broker.archive = await fixtureLegacyCandidateArchive();
+    const { cookie } = await verifyInvite();
+    const created = await jsonRequest("/projects", cookie, {
+      method: "POST",
+      body: { input: "Acme", attachments: [] },
+    });
+    const initial = created.body as Record<string, any>;
+    const codec = new GeoTokenCodec(
+      "test-session-secret-at-least-16-characters",
+    );
+    expect(
+      codec.open<any>(initial.projectToken, "project").value,
+    ).toMatchObject({ knowledgeBaseSkillVersion: 7 });
+    broker.tasks.set("kb-1", {
+      id: "kb-1",
+      status: "completed",
+      completed_at: "2026-08-10T00:00:00.000Z",
+      output: [
+        {
+          role: "assistant",
+          content: [
+            {
+              type: "output_file",
+              file_id: "legacy-candidate-for-v7",
+              filename: "website-lead-candidate-v1.zip",
+            },
+          ],
+        },
+      ],
+    });
+
+    const polled = await jsonRequest(
+      `/projects/${encodeURIComponent(initial.projectToken)}`,
+      cookie,
+    );
+    expect(polled.response.status).toBe(200);
+    expect(polled.body).toMatchObject({
+      project: {
+        status: "failed",
+        knowledgeBaseValidationCategory: "content",
+        knowledgeBaseSupportRequired: true,
+      },
+    });
+    expect(
+      (polled.body as Record<string, any>).project.knowledgeBase,
+    ).toBeUndefined();
+    const failedValue = codec.open<any>(
+      (polled.body as Record<string, any>).projectToken,
+      "project",
+    ).value;
+    expect(failedValue).toMatchObject({
+      knowledgeBaseSkillVersion: 7,
+      knowledgeBaseCandidateFailure: { category: "content" },
+    });
+    expect(failedValue.knowledgeBaseArtifact).toBeUndefined();
   });
 
   it("renames customer uploads that collide with server-owned Skill or task-input files", async () => {
@@ -1871,7 +2111,7 @@ describe("GEO API", () => {
         companyName: "Acme",
         validationProfile: "website-lead-v1",
       }),
-    ).resolves.toMatchObject({ archiveContractVersion: 3 });
+    ).resolves.toMatchObject({ archiveContractVersion: 4 });
 
     const removed = await jsonRequest(
       `/projects/${encodeURIComponent(recommendedPayload.projectToken)}`,
@@ -1922,6 +2162,7 @@ describe("GEO API", () => {
     expect(knowledgeBase.archiveContractVersion).toBe(4);
     expect(knowledgeBase.allPaths).toBeUndefined();
     expect(knowledgeBase.evidencePaths).toBeUndefined();
+    expect(knowledgeBase.documents).toBeUndefined();
   });
 
   it("finalizes the single candidate pipeline once and serves the same final ZIP everywhere", async () => {
@@ -1998,14 +2239,14 @@ describe("GEO API", () => {
       const value = codec.open<any>(completed.projectToken, "project").value;
       expect(value).toMatchObject({
         knowledgeBaseArtifact: {
-          finalizerVersion: "website-kb-finalizer-v3",
+          finalizerVersion: "website-kb-finalizer-v4",
           candidate: {
             taskId: "kb-1",
             fileId: "candidate-v2",
             sha256: expect.stringMatching(/^[a-f0-9]{64}$/),
           },
           final: {
-            archiveContractVersion: 3,
+            archiveContractVersion: 4,
             validationProfile: "website-lead-v1",
             sha256: expect.stringMatching(/^[a-f0-9]{64}$/),
             packageManifestSha256: expect.stringMatching(/^[a-f0-9]{64}$/),
@@ -2023,7 +2264,7 @@ describe("GEO API", () => {
           generatedAt: "2026-07-30T04:00:00.000Z",
         }),
       ).resolves.toMatchObject({
-        archiveContractVersion: 3,
+        archiveContractVersion: 4,
         packageManifestSha256:
           value.knowledgeBaseArtifact.final.packageManifestSha256,
       });
@@ -2037,29 +2278,37 @@ describe("GEO API", () => {
       expect(finalBytes).not.toEqual(v2Broker.archive);
 
       const uploadCount = v2Broker.uploads.size;
-      const legacyV2Token = codec.seal(
-        "project",
-        {
-          ...value,
-          knowledgeBaseFinalization: undefined,
-          knowledgeBaseArtifact: {
-            ...value.knowledgeBaseArtifact,
-            finalizerVersion: "website-kb-finalizer-v2",
+      for (const legacyFinalizerVersion of [
+        "website-kb-finalizer-v2",
+        "website-kb-finalizer-v3",
+      ] as const) {
+        const legacyToken = codec.seal(
+          "project",
+          {
+            ...value,
+            knowledgeBaseFinalization: undefined,
+            knowledgeBaseArtifact: {
+              ...value.knowledgeBaseArtifact,
+              finalizerVersion: legacyFinalizerVersion,
+            },
           },
-        },
-        60_000,
-      );
-      const legacyV2 = await fetch(
-        `${origin}/api/geo/projects/${encodeURIComponent(legacyV2Token)}`,
-        { headers: { cookie } },
-      );
-      expect(legacyV2.status).toBe(200);
-      const legacyV2Payload = (await legacyV2.json()) as Record<string, any>;
-      expect(legacyV2Payload.project.knowledgeBaseFinalization).toMatchObject({
-        finalizationState: "completed",
-        finalizerVersion: "website-kb-finalizer-v2",
-      });
-      expect(v2Broker.uploads.size).toBe(uploadCount);
+          60_000,
+        );
+        const legacyResponse = await fetch(
+          `${origin}/api/geo/projects/${encodeURIComponent(legacyToken)}`,
+          { headers: { cookie } },
+        );
+        expect(legacyResponse.status).toBe(200);
+        const legacyPayload = (await legacyResponse.json()) as Record<
+          string,
+          any
+        >;
+        expect(legacyPayload.project.knowledgeBaseFinalization).toMatchObject({
+          finalizationState: "completed",
+          finalizerVersion: legacyFinalizerVersion,
+        });
+        expect(v2Broker.uploads.size).toBe(uploadCount);
+      }
     } finally {
       await new Promise<void>((resolve, reject) =>
         v2Server.close((error) => (error ? reject(error) : resolve())),
@@ -2408,7 +2657,7 @@ describe("GEO API", () => {
         error: "企业知识库最终整理未通过校验，请联系技术支持。",
         knowledgeBaseFinalization: {
           finalizationState: "failed_internal",
-          finalizerVersion: "website-kb-finalizer-v3",
+          finalizerVersion: "website-kb-finalizer-v4",
           candidateSha256: expect.stringMatching(/^[a-f0-9]{64}$/),
           errorCode: "KB_FINALIZER_CONTRACT_VIOLATION",
         },
@@ -3632,6 +3881,44 @@ describe("GEO API", () => {
     ).toBe(true);
   });
 
+  it("resolves a trusted translation output_file before starting overseas monitoring", async () => {
+    broker.monitorQuestionTranslationUseOutputFile = true;
+    const ready = await createReadyProject();
+    const scope = {
+      questionId: "product-scenario-01",
+      monitoringEdition: "overseas",
+      platformIds: ["chatgpt"],
+    } as const;
+    const checkout = await jsonRequest(
+      `/projects/${encodeURIComponent(ready.projectToken)}/payments`,
+      ready.cookie,
+      { method: "POST", body: { ...scope, method: "wxpay" } },
+    );
+    expect(checkout.response.status).toBe(201);
+
+    const started = await jsonRequest(
+      `/projects/${encodeURIComponent(ready.projectToken)}/monitoring`,
+      ready.cookie,
+      {
+        method: "POST",
+        body: {
+          ...scope,
+          paymentAuthorization: "zpay-signed-authorization-placeholder",
+        },
+      },
+    );
+
+    expect(started.response.status).toBe(201);
+    expect(broker.downloadedFileIds).toContain(
+      "monitor-question-translation-1-result-json",
+    );
+    expect(broker.monitorRuns.get("monitor-1")).toMatchObject({
+      question:
+        "Which business problems does Acme Service Module 1 primarily solve?",
+      platforms: ["chatgpt"],
+    });
+  });
+
   it("starts from strict typed text.value output before task status convergence", async () => {
     broker.monitorQuestionTranslationStatus = "running";
     const ready = await createReadyProject();
@@ -4305,7 +4592,7 @@ describe("GEO API", () => {
       category: "product_scenario",
       question: "Acme 在高校科研场景中能解决什么问题？",
       selectable: true,
-      evidenceRefs: ["01_company_overview/overview.md"],
+      evidenceRefs: ["evidence/S001.md"],
     });
     expect(customPayload.question).not.toHaveProperty("questionEnglish");
     expect(broker.customQuestionClassifierTaskCount).toBe(1);
@@ -5984,8 +6271,11 @@ describe("GEO API", () => {
     const failed = await jsonRequest(statusPath, ready.cookie);
     expect(failed.response.status).toBe(502);
     expect(failed.body).toMatchObject({
-      error: { code: "CUSTOM_QUESTION_CLASSIFIER_UNKNOWN_STATUS" },
-      validation: { state: "failed" },
+      error: {
+        code: "CUSTOM_QUESTION_CLASSIFIER_UNKNOWN_STATUS",
+        message: "问题验证任务返回了无法识别的状态，可重新验证当前问题",
+      },
+      validation: { state: "failed", error: { retryable: true } },
     });
     const replayed = await jsonRequest(statusPath, ready.cookie);
     expect(replayed.response.status).toBe(502);
@@ -6102,6 +6392,230 @@ describe("GEO API", () => {
     expect(broker.customQuestionClassifierTaskCount).toBe(1);
   });
 
+  it("resolves a trusted classifier output_file through the custom-question route", async () => {
+    const ready = await createReadyProject();
+    broker.customQuestionClassifierUseOutputFile = true;
+    broker.customQuestionClassifierOutput = {
+      decision: "accept",
+      category: "reputation",
+      enterpriseRelated: true,
+      reasonCode: "accepted",
+      reason: "问题明确询问 Acme 在长期业务中的服务可靠性。",
+      enterpriseAnchor: "Acme",
+      offeringAnchor: null,
+      evidenceRefs: ["evidence/S001.md"],
+    };
+
+    const accepted = await jsonRequest(
+      `/projects/${encodeURIComponent(ready.projectToken)}/questions/custom`,
+      ready.cookie,
+      {
+        method: "POST",
+        body: {
+          question: "Acme 的长期服务可靠性如何？",
+          clientRequestId: CUSTOM_QUESTION_CLIENT_REQUEST_ID,
+        },
+      },
+    );
+
+    expect(accepted.response.status).toBe(201);
+    expect(accepted.body).toMatchObject({
+      validation: { state: "completed" },
+      question: { category: "reputation" },
+    });
+    expect(broker.downloadedFileIds).toContain(
+      "custom-question-classifier-1-result-json",
+    );
+    expect(broker.customQuestionClassifierTaskCount).toBe(1);
+  });
+
+  it("automatically revalidates conflicting classifier reasons for the same question", async () => {
+    const ready = await createReadyProject();
+    const accepted = {
+      decision: "accept",
+      category: "reputation",
+      enterpriseRelated: true,
+      reasonCode: "accepted",
+      reason: "第一份结果依据企业知识库判断 Acme 可靠。",
+      enterpriseAnchor: "Acme",
+      offeringAnchor: null,
+      evidenceRefs: ["evidence/S001.md"],
+    };
+    broker.customQuestionClassifierRawTexts = [
+      `${JSON.stringify(accepted)}\n${JSON.stringify({
+        ...accepted,
+        reason: "第二份结果给出了不同的结构有效判断理由。",
+      })}`,
+      JSON.stringify({
+        ...accepted,
+        reason: "重验结果唯一且明确绑定 Acme 的服务可靠性。",
+      }),
+    ];
+
+    const started = await jsonRequest(
+      `/projects/${encodeURIComponent(ready.projectToken)}/questions/custom`,
+      ready.cookie,
+      {
+        method: "POST",
+        body: {
+          question: "Acme 靠谱吗？",
+          clientRequestId: CUSTOM_QUESTION_CLIENT_REQUEST_ID,
+        },
+      },
+    );
+    expect(started.response.status).toBe(202);
+
+    const completed = await jsonRequest(
+      `/projects/${encodeURIComponent(ready.projectToken)}/questions/custom/${CUSTOM_QUESTION_CLIENT_REQUEST_ID}`,
+      ready.cookie,
+    );
+    expect(completed.response.status).toBe(200);
+    expect(completed.body).toMatchObject({
+      validation: { state: "completed", question: "Acme 靠谱吗？" },
+      question: {
+        rationale: "重验结果唯一且明确绑定 Acme 的服务可靠性。",
+      },
+    });
+    expect(broker.customQuestionClassifierTaskCount).toBe(2);
+  });
+
+  it("automatically revalidates one irreparable format result without changing the question", async () => {
+    const ready = await createReadyProject();
+    broker.customQuestionClassifierRawTexts = [
+      "not-json",
+      JSON.stringify({
+        decision: "accept",
+        category: "reputation",
+        enterpriseRelated: true,
+        reasonCode: "accepted",
+        reason: "问题明确询问 Acme 的服务可靠性。",
+        enterpriseAnchor: "Acme",
+        offeringAnchor: null,
+        evidenceRefs: ["evidence/S001.md"],
+      }),
+    ];
+
+    const started = await jsonRequest(
+      `/projects/${encodeURIComponent(ready.projectToken)}/questions/custom`,
+      ready.cookie,
+      {
+        method: "POST",
+        body: {
+          question: "Acme 靠谱吗？",
+          clientRequestId: CUSTOM_QUESTION_CLIENT_REQUEST_ID,
+        },
+      },
+    );
+    expect(started.response.status).toBe(202);
+    expect(started.body).toMatchObject({
+      validation: {
+        state: "reserved",
+        question: "Acme 靠谱吗？",
+      },
+    });
+
+    const completed = await jsonRequest(
+      `/projects/${encodeURIComponent(ready.projectToken)}/questions/custom/${CUSTOM_QUESTION_CLIENT_REQUEST_ID}`,
+      ready.cookie,
+    );
+    expect(completed.response.status).toBe(200);
+    expect(completed.body).toMatchObject({
+      validation: { state: "completed", question: "Acme 靠谱吗？" },
+      question: { category: "reputation", question: "Acme 靠谱吗？" },
+    });
+    expect(broker.customQuestionClassifierTaskCount).toBe(2);
+    expect(paymentCheckoutCalls).toHaveLength(0);
+  });
+
+  it("returns a retryable system error only after the bounded format revalidation also fails", async () => {
+    const ready = await createReadyProject();
+    broker.customQuestionClassifierRawTexts = ["not-json", "still-not-json"];
+
+    const started = await jsonRequest(
+      `/projects/${encodeURIComponent(ready.projectToken)}/questions/custom`,
+      ready.cookie,
+      {
+        method: "POST",
+        body: {
+          question: "Acme 靠谱吗？",
+          clientRequestId: CUSTOM_QUESTION_CLIENT_REQUEST_ID,
+        },
+      },
+    );
+    expect(started.response.status).toBe(202);
+
+    const failed = await jsonRequest(
+      `/projects/${encodeURIComponent(ready.projectToken)}/questions/custom/${CUSTOM_QUESTION_CLIENT_REQUEST_ID}`,
+      ready.cookie,
+    );
+    expect(failed.response.status).toBe(502);
+    expect(failed.body).toMatchObject({
+      error: {
+        code: "CUSTOM_QUESTION_CLASSIFIER_INVALID_RESPONSE",
+        message: "验证结果格式异常，可重新验证当前问题",
+      },
+      validation: {
+        state: "failed",
+        error: { retryable: true },
+      },
+    });
+    expect(broker.customQuestionClassifierTaskCount).toBe(2);
+  });
+
+  it("replays a retained historical invalid task through the repaired parser before creating another task", async () => {
+    customQuestionValidationNowMs = Date.now();
+    const ready = await createReadyProject();
+    broker.customQuestionClassifierRawTexts = ["not-json", "still-not-json"];
+    const pathname = `/projects/${encodeURIComponent(
+      ready.projectToken,
+    )}/questions/custom`;
+    const question = "Acme 在高并发突发流量下的长期服务稳定性靠谱吗？";
+    const firstClientRequestId = CUSTOM_QUESTION_CLIENT_REQUEST_ID;
+    const secondClientRequestId = "22222222-2222-4222-8222-222222222222";
+
+    const started = await jsonRequest(pathname, ready.cookie, {
+      method: "POST",
+      body: { question, clientRequestId: firstClientRequestId },
+    });
+    expect(started.response.status).toBe(202);
+    const failed = await jsonRequest(
+      `${pathname}/${firstClientRequestId}`,
+      ready.cookie,
+    );
+    expect(failed.response.status).toBe(502);
+    expect(broker.customQuestionClassifierTaskCount).toBe(2);
+
+    broker.tasks.set("custom-question-classifier-2", {
+      id: "custom-question-classifier-2",
+      status: "completed",
+      output: [
+        {
+          role: "assistant",
+          content: [
+            {
+              text: `{"decision":"accept","category":"reputation","enterpriseRelated":true,"reasonCode":"accepted","reason":"问题明确以"Acme"为主语询问其可靠性。","enterpriseAnchor":"Acme","offeringAnchor":null,"evidenceRefs":["evidence/S001.md"]}`,
+            },
+          ],
+        },
+      ],
+    });
+
+    const replayed = await jsonRequest(pathname, ready.cookie, {
+      method: "POST",
+      body: { question, clientRequestId: secondClientRequestId },
+    });
+    expect(replayed.response.status).toBe(201);
+    expect(replayed.body).toMatchObject({
+      validation: {
+        clientRequestId: secondClientRequestId,
+        state: "completed",
+        question,
+      },
+      question: { question, category: "reputation" },
+    });
+    expect(broker.customQuestionClassifierTaskCount).toBe(2);
+  });
+
   it("fails closed when a classifier accepts a question without a verified enterprise or offering anchor", async () => {
     const ready = await createReadyProject();
     broker.customQuestionClassifierOutput = {
@@ -6112,7 +6626,7 @@ describe("GEO API", () => {
       reason: "问题看似涉及一种通用产品场景。",
       enterpriseAnchor: null,
       offeringAnchor: null,
-      evidenceRefs: ["01_company_overview/overview.md"],
+      evidenceRefs: ["evidence/S001.md"],
     };
 
     const rejected = await jsonRequest(
@@ -6134,9 +6648,9 @@ describe("GEO API", () => {
     expect(paymentCheckoutCalls).toHaveLength(0);
   });
 
-  it("fails closed when the classifier returns an evidence path outside the enterprise knowledge base", async () => {
+  it("automatically revalidates an evidence path outside the enterprise knowledge base", async () => {
     const ready = await createReadyProject();
-    broker.customQuestionClassifierOutput = {
+    const invalidEvidence = {
       decision: "accept",
       category: "reputation",
       enterpriseRelated: true,
@@ -6146,24 +6660,85 @@ describe("GEO API", () => {
       offeringAnchor: null,
       evidenceRefs: ["external/nonexistent.md"],
     };
+    broker.customQuestionClassifierRawTexts = [
+      JSON.stringify(invalidEvidence),
+      JSON.stringify({
+        ...invalidEvidence,
+        reason: "问题明确询问 Acme 在关键业务中的长期服务可靠性。",
+        evidenceRefs: ["evidence/S001.md"],
+      }),
+    ];
 
-    const rejected = await jsonRequest(
+    const started = await jsonRequest(
       `/projects/${encodeURIComponent(ready.projectToken)}/questions/custom`,
       ready.cookie,
       {
         method: "POST",
         body: {
-          question: "Acme 靠谱吗？",
+          question: "Acme 在关键业务中的长期服务可靠性如何？",
           clientRequestId: CUSTOM_QUESTION_CLIENT_REQUEST_ID,
         },
       },
     );
+    expect(started.response.status).toBe(202);
 
-    expect(rejected.response.status).toBe(502);
-    expect(rejected.body).toMatchObject({
-      error: { code: "CUSTOM_QUESTION_CLASSIFIER_INVALID_RESPONSE" },
+    const completed = await jsonRequest(
+      `/projects/${encodeURIComponent(ready.projectToken)}/questions/custom/${CUSTOM_QUESTION_CLIENT_REQUEST_ID}`,
+      ready.cookie,
+    );
+    expect(completed.response.status).toBe(200);
+    expect(completed.body).toMatchObject({
+      validation: { state: "completed" },
+      question: {
+        category: "reputation",
+        evidenceRefs: ["evidence/S001.md"],
+      },
     });
+    expect(broker.customQuestionClassifierTaskCount).toBe(2);
     expect(paymentCheckoutCalls).toHaveLength(0);
+  });
+
+  it("returns one retryable system error after both evidence outputs remain outside the knowledge base", async () => {
+    const ready = await createReadyProject();
+    const invalidEvidence = JSON.stringify({
+      decision: "accept",
+      category: "reputation",
+      enterpriseRelated: true,
+      reasonCode: "accepted",
+      reason: "问题明确询问 Acme 在关键业务中的长期服务可靠性。",
+      enterpriseAnchor: "Acme",
+      offeringAnchor: null,
+      evidenceRefs: ["external/nonexistent.md"],
+    });
+    broker.customQuestionClassifierRawTexts = [
+      invalidEvidence,
+      invalidEvidence,
+    ];
+    const pathname = `/projects/${encodeURIComponent(
+      ready.projectToken,
+    )}/questions/custom`;
+    const started = await jsonRequest(pathname, ready.cookie, {
+      method: "POST",
+      body: {
+        question: "Acme 在关键业务中的长期服务可靠性如何？",
+        clientRequestId: CUSTOM_QUESTION_CLIENT_REQUEST_ID,
+      },
+    });
+    expect(started.response.status).toBe(202);
+
+    const failed = await jsonRequest(
+      `${pathname}/${CUSTOM_QUESTION_CLIENT_REQUEST_ID}`,
+      ready.cookie,
+    );
+    expect(failed.response.status).toBe(502);
+    expect(failed.body).toMatchObject({
+      error: {
+        code: "CUSTOM_QUESTION_CLASSIFIER_INVALID_RESPONSE",
+        message: "验证结果格式异常，可重新验证当前问题",
+      },
+      validation: { state: "failed", error: { retryable: true } },
+    });
+    expect(broker.customQuestionClassifierTaskCount).toBe(2);
   });
 
   it("uses the classifier category instead of the previous regex fallback", async () => {
@@ -6176,7 +6751,7 @@ describe("GEO API", () => {
       reason: "问题要求在 Acme 与传统自建路线之间进行具体取舍。",
       enterpriseAnchor: "Acme",
       offeringAnchor: null,
-      evidenceRefs: ["01_company_overview/overview.md"],
+      evidenceRefs: ["evidence/S001.md"],
     };
 
     const accepted = await jsonRequest(
@@ -9413,7 +9988,7 @@ describe("GEO API", () => {
         },
         finalArtifact: {
           filename: "Acme_website_lead_knowledge_base.zip",
-          archiveContractVersion: 3,
+          archiveContractVersion: 4,
           validationProfile: "website-lead-v1",
           packageManifestSha256: expect.stringMatching(/^[a-f0-9]{64}$/),
           finalizerVersion: "website-kb-finalizer-v1",
@@ -10629,6 +11204,99 @@ function validForecastOutput() {
 }
 
 async function fixtureCandidateArchive() {
+  const zip = new JSZip();
+  const sectionTitles = [
+    "企业与品牌",
+    "团队与组织",
+    "产品与服务",
+    "技术与交付",
+    "客户与行业",
+    "服务与合作",
+    "可信优势",
+  ] as const;
+  const topicCounts = [1, 1, 2, 2, 1, 1, 1] as const;
+  const floors = [500, 500, 2_500, 1_000, 600, 600, 600] as const;
+  const urls = sectionTitles.map(
+    (_, index) => `https://acme.example/section-${index + 1}`,
+  );
+  const factDimensions = [
+    "企业基础",
+    "团队",
+    "产品服务",
+    "技术能力",
+    "客户案例",
+    "资质认证",
+    "财务融资",
+    "竞争信息",
+    "市场信息",
+    "品牌资产",
+    "渠道",
+    "公开意图",
+    "公共情报",
+  ] as const;
+  zip.file(
+    "00_brand_facts.md",
+    factDimensions
+      .map((title, index) => {
+        const dimension = String(index + 1).padStart(2, "0");
+        return `## D${dimension} ${title}\n\n${"可核验企业事实".repeat(8)}。[来源](${urls[index % urls.length]})`;
+      })
+      .join("\n\n"),
+  );
+  zip.file(
+    "01_customer_draft.md",
+    sectionTitles
+      .map((title, sectionIndex) => {
+        const topicCount = topicCounts[sectionIndex];
+        const perTopic = Math.ceil(floors[sectionIndex] / topicCount) + 12;
+        return [
+          `## ${title}`,
+          "",
+          ...Array.from({ length: topicCount }, (_, topicIndex) =>
+            [
+              `### ${title}主题${topicIndex + 1}`,
+              "",
+              `${String.fromCodePoint(
+                0x4e00 + sectionIndex * 8 + topicIndex,
+              ).repeat(
+                sectionIndex === 2 && topicIndex === 0 ? 1_900 : perTopic,
+              )}[来源](${urls[sectionIndex]})`,
+            ].join("\n"),
+          ),
+        ].join("\n");
+      })
+      .join("\n\n"),
+  );
+  zip.file(
+    "02_run.json",
+    JSON.stringify({
+      schemaVersion: 2,
+      company: {
+        name: "Acme",
+        officialWebsite: "https://acme.example/",
+        industryCluster: "C3",
+      },
+      sources: urls.map((url, index) => ({
+        title: `Acme 公开来源 ${index + 1}`,
+        kind: "official_web",
+        status: "read",
+        url,
+      })),
+      queries: ["Acme 产品"],
+      stopReason: "coverage_complete",
+      contentFloorExceptions: [],
+      logoAcquisition: {
+        status: "unavailable",
+        attemptedPageUrls: urls.slice(0, 2),
+        reason: "两个第一方页面均未提供可解码的官方 Logo 原始资源。",
+      },
+      assets: [],
+    }),
+  );
+  return zip.generateAsync({ type: "nodebuffer" });
+}
+
+async function fixtureLegacyCandidateArchive() {
   const zip = new JSZip();
   const source = "https://acme.example";
   const facts = [

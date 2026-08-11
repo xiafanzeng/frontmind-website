@@ -83,6 +83,10 @@ import {
   WEBSITE_KB_FINALIZER_VERSION,
 } from "./knowledge-base-finalizer";
 import {
+  finalizeKnowledgeBaseCandidate as finalizeKnowledgeBaseCandidateV3,
+  WEBSITE_KB_FINALIZER_VERSION as WEBSITE_KB_FINALIZER_V3_VERSION,
+} from "./knowledge-base-finalizer-v3";
+import {
   createGeoPaymentGatewayFromEnv,
   geoServiceMonthlyPriceFen,
   type GeoPaymentCheckout,
@@ -100,7 +104,7 @@ import {
   parseQuestionSetFromTask,
 } from "./output";
 import {
-  parseCustomQuestionClassificationTaskOutput,
+  resolveCustomQuestionClassificationTaskOutput,
   validateAcceptedCustomQuestionGrounding,
 } from "./custom-question-classifier";
 import {
@@ -118,7 +122,7 @@ import {
 import {
   buildGeoMonitorQuestionTranslationPrompt,
   geoMonitorQuestionTranslationOperationKey,
-  parseGeoMonitorQuestionTranslationTaskOutput,
+  resolveGeoMonitorQuestionTranslationTaskOutput,
 } from "./monitor-question-translation";
 import {
   trustedAssistantOutputFiles,
@@ -142,6 +146,10 @@ import {
   CUSTOM_QUESTION_CLASSIFIER_SKILL_ARCHIVE_FILENAME,
   QUESTION_SKILL_ARCHIVE_FILENAME,
   WEBSITE_KB_SKILL_ARCHIVE_FILENAME,
+  resolveWebsiteKnowledgeBaseWriterVersion,
+  WEBSITE_KB_LEGACY_SKILL_VERSION,
+  WEBSITE_KB_SKILL_VERSION,
+  type WebsiteKnowledgeBaseWriterVersion,
 } from "./skills";
 import {
   createGeoAccountProvisioner,
@@ -298,6 +306,8 @@ type ProjectTokenValue = {
   knowledgeBaseTaskId: string;
   knowledgeBaseSubmittedAt?: string;
   knowledgeBaseValidationProfile?: "website-lead-v1";
+  knowledgeBaseSkillVersion?: number;
+  knowledgeBaseSkillSha256?: string;
   knowledgeBaseCandidateFailure?: {
     category: "unsafe" | "structure" | "content";
     message: string;
@@ -307,11 +317,14 @@ type ProjectTokenValue = {
     finalizerVersion: string;
     candidateSha256?: string;
     errorCode?: "KB_FINALIZER_CONTRACT_VIOLATION";
+    skillVersion?: number;
+    skillSha256?: string;
     updatedAt: string;
   };
   knowledgeBaseArtifact?: {
     finalizerVersion:
       | "website-kb-finalizer-v2"
+      | "website-kb-finalizer-v3"
       | typeof WEBSITE_KB_FINALIZER_VERSION;
     candidate: {
       taskId: string;
@@ -325,12 +338,13 @@ type ProjectTokenValue = {
       filename: string;
       sha256: string;
       packageManifestSha256: string;
-      archiveContractVersion: 3;
+      archiveContractVersion: 3 | 4;
       validationProfile: "website-lead-v1";
       finalizedAt: string;
     };
   };
   uploadFileIds?: string[];
+  uploadFilenames?: string[];
   archiveFileIds?: string[];
   temporaryFileIds?: string[];
   questionTaskId?: string;
@@ -577,8 +591,10 @@ export function createGeoRouter(options: GeoRouterOptions = {}): Router {
   const customQuestionValidationStore =
     options.customQuestionValidationStore ??
     createGeoCustomQuestionValidationStore({ env });
-  const knowledgeBaseFinalizer =
+  const knowledgeBaseFinalizerV4 =
     options.knowledgeBaseFinalizer ?? finalizeKnowledgeBaseCandidate;
+  const websiteKnowledgeBaseWriterVersion =
+    resolveWebsiteKnowledgeBaseWriterVersion(env);
   const legacyCustomQuestionCompatibilityWaitMs =
     options.legacyCustomQuestionCompatibilityWaitMs ??
     GEO_LEGACY_CUSTOM_QUESTION_COMPATIBILITY_WAIT_MS;
@@ -703,12 +719,24 @@ export function createGeoRouter(options: GeoRouterOptions = {}): Router {
     if (normalizeTaskStatus(task.status) !== "completed") {
       return { value };
     }
+    const selectedSkillVersion =
+      value.knowledgeBaseSkillVersion ?? WEBSITE_KB_LEGACY_SKILL_VERSION;
+    const selectedFinalizerVersion =
+      selectedSkillVersion === WEBSITE_KB_SKILL_VERSION
+        ? WEBSITE_KB_FINALIZER_VERSION
+        : WEBSITE_KB_FINALIZER_V3_VERSION;
+    const selectedFinalizer =
+      selectedSkillVersion === WEBSITE_KB_SKILL_VERSION
+        ? knowledgeBaseFinalizerV4
+        : finalizeKnowledgeBaseCandidateV3;
     const existingArtifact = value.knowledgeBaseArtifact;
     if (
       existingArtifact?.candidate.taskId === value.knowledgeBaseTaskId &&
-      ["website-kb-finalizer-v2", WEBSITE_KB_FINALIZER_VERSION].includes(
-        existingArtifact.finalizerVersion,
-      )
+      [
+        "website-kb-finalizer-v2",
+        "website-kb-finalizer-v3",
+        WEBSITE_KB_FINALIZER_VERSION,
+      ].includes(existingArtifact.finalizerVersion)
     ) {
       const descriptor = resolveKnowledgeBaseArtifact(value, task);
       if (!descriptor) return { value };
@@ -729,6 +757,8 @@ export function createGeoRouter(options: GeoRouterOptions = {}): Router {
                 state: "completed",
                 finalizerVersion: existingArtifact.finalizerVersion,
                 candidateSha256: existingArtifact.candidate.sha256,
+                skillVersion: value.knowledgeBaseSkillVersion,
+                skillSha256: value.knowledgeBaseSkillSha256,
                 updatedAt: existingArtifact.final.finalizedAt,
               },
             },
@@ -751,7 +781,7 @@ export function createGeoRouter(options: GeoRouterOptions = {}): Router {
     if (
       value.knowledgeBaseFinalization?.state === "failed_internal" &&
       value.knowledgeBaseFinalization.finalizerVersion ===
-        WEBSITE_KB_FINALIZER_VERSION &&
+        selectedFinalizerVersion &&
       value.knowledgeBaseFinalization.candidateSha256
     ) {
       return { value };
@@ -842,6 +872,44 @@ export function createGeoRouter(options: GeoRouterOptions = {}): Router {
       const parseStartedAt = Date.now();
       try {
         candidate = await parseKnowledgeBaseCandidate(bytes);
+        const expectedCandidateSchemaVersion =
+          selectedSkillVersion === WEBSITE_KB_SKILL_VERSION ? 2 : 1;
+        if (candidate.run?.schemaVersion !== expectedCandidateSchemaVersion) {
+          throw new KnowledgeBaseCandidateError(
+            `Website knowledge-base Skill v${selectedSkillVersion} requires candidate schema v${expectedCandidateSchemaVersion}`,
+            "content",
+          );
+        }
+        if (candidate.run?.schemaVersion === 2) {
+          const expectedUploads = new Set(
+            (value.uploadFilenames || []).map((filename) =>
+              filename.normalize("NFKC").trim().toLowerCase(),
+            ),
+          );
+          const recordedUploads = new Set(
+            candidate.run.sources
+              .filter(
+                (source) =>
+                  source.kind === "user_upload" && source.status === "read",
+              )
+              .map((source) =>
+                source.attachmentName?.normalize("NFKC").trim().toLowerCase(),
+              )
+              .filter((filename): filename is string => Boolean(filename)),
+          );
+          if (
+            expectedUploads.size !== (value.uploadFileIds || []).length ||
+            recordedUploads.size !== expectedUploads.size ||
+            Array.from(expectedUploads).some(
+              (filename) => !recordedUploads.has(filename),
+            )
+          ) {
+            throw new KnowledgeBaseCandidateError(
+              "Website v2 candidate did not record every accepted user upload",
+              "content",
+            );
+          }
+        }
         candidateParseMs = Date.now() - parseStartedAt;
         candidateDescriptor = descriptor;
         candidateBytes = bytes;
@@ -905,7 +973,7 @@ export function createGeoRouter(options: GeoRouterOptions = {}): Router {
     const recordedFinalization = value.knowledgeBaseFinalization;
     if (
       recordedFinalization?.state === "failed_internal" &&
-      recordedFinalization.finalizerVersion === WEBSITE_KB_FINALIZER_VERSION &&
+      recordedFinalization.finalizerVersion === selectedFinalizerVersion &&
       recordedFinalization.candidateSha256 === candidateSha
     ) {
       return { value };
@@ -918,7 +986,7 @@ export function createGeoRouter(options: GeoRouterOptions = {}): Router {
       value.projectId,
       value.knowledgeBaseTaskId,
       candidateSha,
-      WEBSITE_KB_FINALIZER_VERSION,
+      selectedFinalizerVersion,
     ].join(":");
     const now = Date.now();
     pruneExpiringMap(knowledgeBaseFinalizations, now, 200);
@@ -961,7 +1029,7 @@ export function createGeoRouter(options: GeoRouterOptions = {}): Router {
         taskId: value.knowledgeBaseTaskId,
         candidateSha,
         filename: selectedCandidateDescriptor.filename,
-        finalizerVersion: WEBSITE_KB_FINALIZER_VERSION,
+        finalizerVersion: selectedFinalizerVersion,
         candidateRoot:
           selectedCandidate.diagnostics.find((item) =>
             item.startsWith("Selected candidate root:"),
@@ -1001,14 +1069,14 @@ export function createGeoRouter(options: GeoRouterOptions = {}): Router {
       let finalized;
       const finalizeStartedAt = Date.now();
       try {
-        finalized = await knowledgeBaseFinalizer({
+        finalized = await selectedFinalizer({
           candidate: selectedCandidate,
           companyName: finalCompanyName,
           evaluatedAt,
         });
       } catch (error) {
         console.error("[GEO API] KB_FINALIZER_CONTRACT_VIOLATION", {
-          finalizerVersion: WEBSITE_KB_FINALIZER_VERSION,
+          finalizerVersion: selectedFinalizerVersion,
           candidateSha,
           error: error instanceof Error ? error.message : String(error),
         });
@@ -1018,9 +1086,11 @@ export function createGeoRouter(options: GeoRouterOptions = {}): Router {
             knowledgeBaseCandidateFailure: undefined,
             knowledgeBaseFinalization: {
               state: "failed_internal" as const,
-              finalizerVersion: WEBSITE_KB_FINALIZER_VERSION,
+              finalizerVersion: selectedFinalizerVersion,
               candidateSha256: candidateSha,
               errorCode: "KB_FINALIZER_CONTRACT_VIOLATION" as const,
+              skillVersion: value.knowledgeBaseSkillVersion,
+              skillSha256: value.knowledgeBaseSkillSha256,
               updatedAt: new Date().toISOString(),
             },
           },
@@ -1033,7 +1103,7 @@ export function createGeoRouter(options: GeoRouterOptions = {}): Router {
       )}_website_lead_knowledge_base.zip`;
       const file = await broker.createFile({
         projectId: value.projectId,
-        idempotencyKey: `geo:${value.projectId}:knowledge-base-final:${candidateSha}:${WEBSITE_KB_FINALIZER_VERSION}`,
+        idempotencyKey: `geo:${value.projectId}:knowledge-base-final:${candidateSha}:${selectedFinalizerVersion}`,
         filename,
         mimeType: "application/zip",
         sizeBytes: finalized.bytes.length,
@@ -1057,16 +1127,73 @@ export function createGeoRouter(options: GeoRouterOptions = {}): Router {
           expectedSha256: finalized.sha256,
           expectedPackageManifestSha256: finalized.packageManifestSha256,
         });
+        const finalizedAt = new Date().toISOString();
+        const submittedAtMs = Date.parse(value.knowledgeBaseSubmittedAt || "");
+        const finalizedAtMs = Date.parse(finalizedAt);
+        const totalDurationMs = Number.isFinite(submittedAtMs)
+          ? finalizedAtMs - submittedAtMs
+          : undefined;
+        const publicPageCount = new Set(
+          selectedCandidate.sources
+            .filter(
+              (source) =>
+                !["official_document", "user_upload"].includes(source.kind),
+            )
+            .map((source) => source.normalizedUrl || source.url)
+            .filter((url): url is string => Boolean(url)),
+        ).size;
+        const officialDocumentCount = selectedCandidate.sources.filter(
+          (source) => source.kind === "official_document",
+        ).length;
+        const uploadCount = new Set(
+          selectedCandidate.sources
+            .filter((source) => source.kind === "user_upload")
+            .map((source) => source.attachmentName)
+            .filter((name): name is string => Boolean(name)),
+        ).size;
+        const productFamilyCount =
+          verifiedManifest.sections.find(
+            (section) => section.id === "products-services",
+          )?.leaves?.length || 0;
+        if (totalDurationMs !== undefined && totalDurationMs > 30 * 60_000) {
+          console.warn("[GEO KB]", {
+            event: "website_knowledge_base_long_run",
+            projectId: value.projectId,
+            taskId: value.knowledgeBaseTaskId,
+            submittedAt: value.knowledgeBaseSubmittedAt,
+            finalizedAt,
+            totalDurationMs,
+            thresholdMs: 30 * 60_000,
+            cancelled: false,
+          });
+        }
         console.info("[GEO KB]", {
           event: "knowledge_base_finalized",
           projectId: value.projectId,
           taskId: value.knowledgeBaseTaskId,
           candidateSha,
-          finalizerVersion: WEBSITE_KB_FINALIZER_VERSION,
+          finalizerVersion: selectedFinalizerVersion,
           finalSha: finalized.sha256,
           packageManifestSha: finalized.packageManifestSha256,
+          skillVersion: selectedSkillVersion,
+          skillSha256: value.knowledgeBaseSkillSha256,
+          archiveContractVersion: verifiedManifest.archiveContractVersion,
+          submittedAt: value.knowledgeBaseSubmittedAt,
+          upstreamCompletedAt: evaluatedAt,
+          finalizedAt,
+          totalDurationMs,
           tier: finalized.assessment.tier,
           leafCount: finalized.metrics.leafCount,
+          publicPageCount,
+          queryCount: selectedCandidate.run?.queries.length || 0,
+          officialDocumentCount,
+          uploadCount,
+          sourceCount: selectedCandidate.sources.length,
+          productFamilyCount,
+          stopReason:
+            selectedCandidate.run?.schemaVersion === 2
+              ? selectedCandidate.run.stopReason
+              : "legacy_candidate",
           customerCharacters: finalized.metrics.customerCharacters,
           evidenceCharacters: finalized.metrics.evidenceCharacters,
           discoveredImages: selectedCandidate.assets.length,
@@ -1100,8 +1227,10 @@ export function createGeoRouter(options: GeoRouterOptions = {}): Router {
         knowledgeBaseCandidateFailure: undefined,
         knowledgeBaseFinalization: {
           state: "completed",
-          finalizerVersion: WEBSITE_KB_FINALIZER_VERSION,
+          finalizerVersion: selectedFinalizerVersion,
           candidateSha256: candidateSha,
+          skillVersion: value.knowledgeBaseSkillVersion,
+          skillSha256: value.knowledgeBaseSkillSha256,
           updatedAt: new Date().toISOString(),
         },
         archiveFileIds: Array.from(
@@ -1114,7 +1243,7 @@ export function createGeoRouter(options: GeoRouterOptions = {}): Router {
           ]),
         ),
         knowledgeBaseArtifact: {
-          finalizerVersion: WEBSITE_KB_FINALIZER_VERSION,
+          finalizerVersion: selectedFinalizerVersion,
           candidate: {
             taskId: value.knowledgeBaseTaskId,
             outputItemId: selectedCandidateDescriptor.outputItemId,
@@ -1129,7 +1258,8 @@ export function createGeoRouter(options: GeoRouterOptions = {}): Router {
             filename: file.filename || filename,
             sha256: finalized.sha256,
             packageManifestSha256: finalized.packageManifestSha256,
-            archiveContractVersion: 3,
+            archiveContractVersion:
+              verifiedManifest.archiveContractVersion === 4 ? 4 : 3,
             validationProfile: "website-lead-v1",
             finalizedAt: new Date().toISOString(),
           },
@@ -1910,7 +2040,7 @@ export function createGeoRouter(options: GeoRouterOptions = {}): Router {
           fileId: artifact.final.fileId,
           filename: artifact.final.filename,
           sha256: artifact.final.sha256,
-          archiveContractVersion: 3,
+          archiveContractVersion: artifact.final.archiveContractVersion,
           validationProfile: "website-lead-v1",
           packageManifestSha256: artifact.final.packageManifestSha256,
           finalizerVersion: importFinalizerVersion,
@@ -2454,12 +2584,26 @@ export function createGeoRouter(options: GeoRouterOptions = {}): Router {
           ),
         }),
       );
+      const normalizedAttachmentNames = customerAttachments.map((attachment) =>
+        attachment.filename.normalize("NFKC").trim().toLowerCase(),
+      );
+      if (
+        new Set(normalizedAttachmentNames).size !==
+        normalizedAttachmentNames.length
+      ) {
+        throw new GeoHttpError(
+          "上传文件名不得重复，请重命名后重试",
+          422,
+          "DUPLICATE_ATTACHMENT_FILENAME",
+        );
+      }
       const promptInput = {
         ...input,
         attachments: customerAttachments.map(({ filename }) => ({ filename })),
       };
       const created = await createWebsiteKnowledgeBaseTaskWithSkill(broker, {
         projectId,
+        skillVersion: websiteKnowledgeBaseWriterVersion,
         prompt: await buildWebsiteKnowledgeBasePrompt(promptInput),
         taskInput: buildWebsiteKnowledgeBaseTaskInput(promptInput),
         attachments: customerAttachments,
@@ -2489,7 +2633,12 @@ export function createGeoRouter(options: GeoRouterOptions = {}): Router {
         knowledgeBaseTaskId: taskId,
         knowledgeBaseSubmittedAt: new Date().toISOString(),
         knowledgeBaseValidationProfile: "website-lead-v1",
+        knowledgeBaseSkillVersion: created.skillVersion,
+        knowledgeBaseSkillSha256: created.skillSha256,
         uploadFileIds: uploads.map((upload) => upload.fileId),
+        uploadFilenames: customerAttachments.map(
+          (attachment) => attachment.filename,
+        ),
         temporaryFileIds: created.generatedAttachments.map(
           (attachment) => attachment.file_id,
         ),
@@ -3544,6 +3693,134 @@ export function createGeoRouter(options: GeoRouterOptions = {}): Router {
           record: receipt.record,
         });
         return;
+      }
+      const retainedInvalid =
+        await customQuestionValidationStore.findReplayableInvalid(
+          trackedValue.projectId,
+          ownerSessionHash,
+          questionHash,
+        );
+      if (retainedInvalid?.taskId) {
+        try {
+          const retainedTask = await getResolvedTask(
+            broker,
+            retainedInvalid.taskId,
+          );
+          const retainedClassification =
+            await resolveCustomQuestionClassificationTaskOutput(
+              broker,
+              retainedTask,
+              { taskId: retainedInvalid.taskId },
+            );
+          if (retainedClassification?.decision === "reject") {
+            const rejected = rejectedCustomQuestionError(
+              retainedClassification.category,
+              trackedValue.companyName,
+            );
+            throw new GeoHttpError(
+              rejected.message,
+              rejected.status,
+              rejected.code,
+            );
+          }
+          if (retainedClassification?.decision === "accept") {
+            const retainedManifest = await loadKnowledgeBaseManifest(
+              broker,
+              trackedValue.knowledgeBaseTaskId,
+              knowledgeBaseTask,
+              trackedValue.companyName,
+              archive,
+              trackedValue.knowledgeBaseValidationProfile,
+            );
+            const retainedGrounding = validateAcceptedCustomQuestionGrounding(
+              retainedClassification,
+              {
+                question: input.question,
+                companyName: trackedValue.companyName,
+                manifest: retainedManifest,
+              },
+            );
+            if (retainedGrounding.ok) {
+              const retainedResult = GeoQuestionSchema.parse({
+                id: customQuestionId(input.question),
+                category: retainedClassification.category,
+                question: input.question,
+                rationale: retainedClassification.reason,
+                ...(retainedClassification.enterpriseAnchor
+                  ? {
+                      enterpriseAnchor: retainedClassification.enterpriseAnchor,
+                    }
+                  : {}),
+                ...(retainedClassification.offeringAnchor
+                  ? { offeringAnchor: retainedClassification.offeringAnchor }
+                  : {}),
+                evidenceRefs: retainedClassification.evidenceRefs,
+                selectable: true,
+              });
+              const replayReservation =
+                await customQuestionValidationStore.reserve(
+                  reservationInput(
+                    new Date(
+                      Date.now() + CUSTOM_QUESTION_TERMINAL_RETENTION_MS,
+                    ).toISOString(),
+                  ),
+                );
+              const replayLease =
+                await customQuestionValidationStore.tryAcquireLease(
+                  trackedValue.projectId,
+                  clientRequestId,
+                  CUSTOM_QUESTION_CLASSIFIER_LEASE_MS,
+                );
+              if (replayLease) {
+                let replayRecord: GeoCustomQuestionValidationRecord;
+                try {
+                  replayRecord = await customQuestionValidationStore.update(
+                    {
+                      ...replayReservation.record,
+                      state: "completed",
+                      result: retainedResult,
+                      expiresAt: new Date(
+                        Date.now() + CUSTOM_QUESTION_TERMINAL_RETENTION_MS,
+                      ).toISOString(),
+                      lastObservedStatus: "completed",
+                      cleanupCompleted: true,
+                    },
+                    replayLease,
+                  );
+                } finally {
+                  await customQuestionValidationStore
+                    .releaseLease(replayLease)
+                    .catch(() => undefined);
+                }
+                await sendCustomQuestionValidationObservation({
+                  res,
+                  projectToken: req.params.projectToken,
+                  value: trackedValue,
+                  context: {
+                    trackedValue,
+                    knowledgeBaseTask,
+                    questionTask,
+                  },
+                  record: replayRecord,
+                  completedStatus: 201,
+                });
+                return;
+              }
+            }
+          }
+        } catch (error) {
+          if (error instanceof GeoHttpError && error.status === 422)
+            throw error;
+          console.warn("[GEO custom question]", {
+            event: "retained_classifier_replay_deferred",
+            projectId: trackedValue.projectId,
+            taskId: retainedInvalid.taskId,
+            diagnosticCode:
+              error instanceof GeoBrokerError
+                ? error.code
+                : "RETAINED_REPLAY_DEFERRED",
+          });
+        }
       }
       const reservation = await customQuestionValidationStore.reserve(
         reservationInput(
@@ -7574,7 +7851,9 @@ async function buildProjectView(
       finalizerVersion:
         value.knowledgeBaseFinalization?.finalizerVersion ??
         value.knowledgeBaseArtifact?.finalizerVersion ??
-        WEBSITE_KB_FINALIZER_VERSION,
+        (value.knowledgeBaseSkillVersion === WEBSITE_KB_SKILL_VERSION
+          ? WEBSITE_KB_FINALIZER_VERSION
+          : WEBSITE_KB_FINALIZER_V3_VERSION),
       candidateSha256:
         value.knowledgeBaseFinalization?.candidateSha256 ??
         value.knowledgeBaseArtifact?.candidate.sha256,
@@ -8110,6 +8389,7 @@ function omitKnowledgeEvidencePaths(manifest: KnowledgeBaseManifest) {
   const {
     evidencePaths: _evidencePaths,
     allPaths: _allPaths,
+    documents: _documents,
     generatedAt: rawGeneratedAt,
     sources,
     ...publicManifest
@@ -8436,10 +8716,13 @@ async function resolveMonitorQuestionForEdition(
   // An idempotent create replay can already contain the complete answer even
   // while the status endpoint is still eventually consistent. A strict schema
   // plus source digest makes that complete typed assistant output authoritative.
-  const createdTranslation = parseGeoMonitorQuestionTranslationTaskOutput(
-    task,
-    question.question,
-  );
+  const createdTranslation =
+    await resolveGeoMonitorQuestionTranslationTaskOutput(
+      broker,
+      task,
+      question.question,
+      { taskId: taskIdFrom(task) || undefined },
+    );
   if (createdTranslation) return createdTranslation;
   const createdStatus = normalizeTaskStatus(task.status);
   if (["failed", "cancelled"].includes(createdStatus)) throw failed();
@@ -8461,9 +8744,11 @@ async function resolveMonitorQuestionForEdition(
       continue;
     }
 
-    const translated = parseGeoMonitorQuestionTranslationTaskOutput(
+    const translated = await resolveGeoMonitorQuestionTranslationTaskOutput(
+      broker,
       resolved,
       question.question,
+      { taskId },
     );
     if (translated) return translated;
 
@@ -8753,7 +9038,77 @@ async function advanceCustomQuestionValidation(input: {
       });
       return exhausted ? cleanup(record) : record;
     };
+    const scheduleFormatRetryOrFail = async () => {
+      if (record.formatRetryCount === 0 && record.taskId) {
+        const temporaryFileIds = [
+          ...record.orphanedTemporaryFileIds,
+          ...(record.skillAttachment?.temporary
+            ? [record.skillAttachment.fileId]
+            : []),
+          ...(record.promptInputAttachment?.temporary
+            ? [record.promptInputAttachment.fileId]
+            : []),
+          ...(record.archiveAttachment?.temporary
+            ? [record.archiveAttachment.fileId]
+            : []),
+        ];
+        return await persist({
+          ...record,
+          state: "reserved",
+          taskId: undefined,
+          priorTaskIds: [record.taskId],
+          formatRetryCount: 1,
+          archiveAttachment: undefined,
+          skillAttachment: undefined,
+          promptInputAttachment: undefined,
+          archiveStagingAttachment: undefined,
+          skillStagingAttachment: undefined,
+          promptInputStagingAttachment: undefined,
+          orphanedTemporaryFileIds: Array.from(new Set(temporaryFileIds)).slice(
+            -20,
+          ),
+          attachmentRebuildCount: Math.min(
+            10,
+            record.attachmentRebuildCount + 1,
+          ),
+          cleanupCompleted: false,
+          error: undefined,
+          transientErrorCount: 0,
+          firstTransientErrorAt: undefined,
+          lastTransientError: "验证结果格式异常，正在自动重新验证同一问题。",
+        });
+      }
+      record = await persist({
+        ...record,
+        state: "failed",
+        expiresAt: new Date(
+          validationNow() + CUSTOM_QUESTION_TERMINAL_RETENTION_MS,
+        ).toISOString(),
+        error: {
+          code: "CUSTOM_QUESTION_CLASSIFIER_INVALID_RESPONSE",
+          message: "验证结果格式异常，可重新验证当前问题",
+          status: 502,
+          retryable: true,
+        },
+      });
+      return await cleanup(record);
+    };
 
+    if (
+      record.state === "failed" &&
+      record.error?.code === "CUSTOM_QUESTION_CLASSIFIER_INVALID_RESPONSE" &&
+      record.taskId &&
+      record.formatRetryCount === 0
+    ) {
+      // Old Website builds marked a completed-but-malformed provider result as
+      // terminal. Keep the retained task and replay its output through the new
+      // bounded parser before creating any replacement model task.
+      record = await persist({
+        ...record,
+        state: "submitted",
+        error: undefined,
+      });
+    }
     if (isTerminalCustomQuestionValidation(record)) {
       return await cleanup(record);
     }
@@ -9114,9 +9469,9 @@ async function advanceCustomQuestionValidation(input: {
         lastObservedStatus: rawStatus,
         error: {
           code: "CUSTOM_QUESTION_CLASSIFIER_FAILED",
-          message: "该问题未能通过验证，请修改问题后重新提交",
-          status: 422,
-          retryable: false,
+          message: "问题验证服务执行失败，可重新验证当前问题",
+          status: 502,
+          retryable: true,
         },
       });
       return await cleanup(record);
@@ -9140,9 +9495,9 @@ async function advanceCustomQuestionValidation(input: {
           lastObservedStatus: rawStatus,
           error: {
             code: "CUSTOM_QUESTION_CLASSIFIER_UNKNOWN_STATUS",
-            message: "问题验证任务返回了无法识别的状态，请重新提交问题",
+            message: "问题验证任务返回了无法识别的状态，可重新验证当前问题",
             status: 502,
-            retryable: false,
+            retryable: true,
           },
         });
         return await cleanup(record);
@@ -9168,8 +9523,19 @@ async function advanceCustomQuestionValidation(input: {
         "问题验证结果持续无法读取，请重试当前问题",
       );
     }
-    const classification =
-      parseCustomQuestionClassificationTaskOutput(resolvedTask);
+    record = await persist({
+      ...record,
+      state: "submitted",
+      lastObservedStatus: "completed",
+      transientErrorCount: 0,
+      firstTransientErrorAt: undefined,
+      lastTransientError: undefined,
+    });
+    const classification = await resolveCustomQuestionClassificationTaskOutput(
+      input.broker,
+      resolvedTask,
+      { taskId: record.taskId },
+    );
     if (!classification) {
       console.warn("[GEO custom question]", {
         event: "classifier_output_rejected",
@@ -9177,20 +9543,7 @@ async function advanceCustomQuestionValidation(input: {
         taskId: record.taskId,
         diagnosticCode: "CUSTOM_QUESTION_CLASSIFIER_INVALID_RESPONSE",
       });
-      record = await persist({
-        ...record,
-        state: "failed",
-        expiresAt: new Date(
-          validationNow() + CUSTOM_QUESTION_TERMINAL_RETENTION_MS,
-        ).toISOString(),
-        error: {
-          code: "CUSTOM_QUESTION_CLASSIFIER_INVALID_RESPONSE",
-          message: "问题验证结果无法读取，请修改问题后重新提交",
-          status: 502,
-          retryable: false,
-        },
-      });
-      return await cleanup(record);
+      return await scheduleFormatRetryOrFail();
     }
 
     if (classification.decision === "reject") {
@@ -9241,26 +9594,21 @@ async function advanceCustomQuestionValidation(input: {
             : "CUSTOM_QUESTION_ENTERPRISE_ANCHOR_MISSING",
         reason: grounding.reason,
       });
+      if (grounding.kind === "invalid_evidence") {
+        return await scheduleFormatRetryOrFail();
+      }
       record = await persist({
         ...record,
-        state: grounding.kind === "invalid_evidence" ? "failed" : "rejected",
+        state: "rejected",
         expiresAt: new Date(
           validationNow() + CUSTOM_QUESTION_TERMINAL_RETENTION_MS,
         ).toISOString(),
-        error:
-          grounding.kind === "invalid_evidence"
-            ? {
-                code: "CUSTOM_QUESTION_CLASSIFIER_INVALID_RESPONSE",
-                message: "问题验证结果未通过知识库证据校验，请重新提交问题",
-                status: 502,
-                retryable: false,
-              }
-            : {
-                code: "CUSTOM_QUESTION_ENTERPRISE_UNRELATED",
-                message: `该问题与「${record.companyName}」没有明确关系，请重新输入与当前企业相关的非行业排名类问题。`,
-                status: 422,
-                retryable: false,
-              },
+        error: {
+          code: "CUSTOM_QUESTION_ENTERPRISE_UNRELATED",
+          message: `该问题与「${record.companyName}」没有明确关系，请重新输入与当前企业相关的非行业排名类问题。`,
+          status: 422,
+          retryable: false,
+        },
       });
       return await cleanup(record);
     }
@@ -9749,13 +10097,21 @@ async function createWebsiteKnowledgeBaseTaskWithSkill(
   broker: GeoPresalesBroker,
   input: {
     projectId: string;
+    skillVersion: WebsiteKnowledgeBaseWriterVersion;
     prompt: string;
     taskInput: GeoTaskSkillPackage;
     attachments: Array<{ file_id: string; filename: string }>;
     idempotencyKey: string;
   },
 ) {
-  const { taskInput, ...taskInputWithoutGeneratedAttachment } = input;
+  const { taskInput, skillVersion, ...taskInputWithoutGeneratedAttachment } =
+    input;
+  const skillArchive =
+    await buildWebsiteKnowledgeBaseSkillArchive(skillVersion);
+  const skillSha256 = crypto
+    .createHash("sha256")
+    .update(skillArchive)
+    .digest("hex");
   const result = await createGeoTaskWithSkillPackages(
     broker,
     {
@@ -9765,7 +10121,7 @@ async function createWebsiteKnowledgeBaseTaskWithSkill(
     [
       {
         filename: WEBSITE_KB_SKILL_ARCHIVE_FILENAME,
-        body: await buildWebsiteKnowledgeBaseSkillArchive(),
+        body: skillArchive,
       },
       taskInput,
     ],
@@ -9774,6 +10130,8 @@ async function createWebsiteKnowledgeBaseTaskWithSkill(
     task: result.task,
     skillAttachment: result.skillAttachments[0]!,
     generatedAttachments: result.skillAttachments,
+    skillVersion,
+    skillSha256,
   };
 }
 

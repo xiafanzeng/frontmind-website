@@ -2,8 +2,10 @@ import { describe, expect, it } from "vitest";
 import type { KnowledgeBaseManifest } from "./archive";
 import {
   parseCustomQuestionClassificationTaskOutput,
+  resolveCustomQuestionClassificationTaskOutput,
   validateAcceptedCustomQuestionGrounding,
 } from "./custom-question-classifier";
+import { TRUSTED_TASK_JSON_MAX_TOTAL_BYTES } from "./trusted-task-json-output";
 
 const manifest: KnowledgeBaseManifest = {
   companyName: "超前智能",
@@ -25,6 +27,42 @@ const manifest: KnowledgeBaseManifest = {
   evidencePaths: [
     "01_company_overview/overview.md",
     "03_products/knowledge-base.md",
+  ],
+};
+
+const v4Manifest: KnowledgeBaseManifest = {
+  ...manifest,
+  archiveContractVersion: 4,
+  allPaths: [
+    "00_package_manifest.json",
+    "README.md",
+    "01_company_overview/overview.md",
+    "03_products/knowledge-base.md",
+    "evidence/S001.md",
+    "assets/logo.png",
+  ],
+  evidencePaths: ["evidence/S001.md"],
+  documents: [
+    {
+      path: "README.md",
+      kind: "readme",
+      customerVisible: true,
+    },
+    {
+      path: "01_company_overview/overview.md",
+      kind: "overview",
+      customerVisible: true,
+    },
+    {
+      path: "03_products/knowledge-base.md",
+      kind: "leaf",
+      customerVisible: true,
+    },
+    {
+      path: "evidence/S001.md",
+      kind: "evidence",
+      customerVisible: false,
+    },
   ],
 };
 
@@ -92,7 +130,7 @@ describe("custom GEO question classifier contract", () => {
     ).toBeNull();
   });
 
-  it("infers an enterprise rejection when explanatory prose breaks JSON quoting", () => {
+  it("repairs an otherwise strict rejection when a quoted name is not escaped", () => {
     const classification = parseCustomQuestionClassificationTaskOutput(
       assistantTextTask(
         `{"decision":"reject","category":"unrelated","enterpriseRelated":false,"reasonCode":"enterprise_unrelated","reason":"问题询问"FrontMind"是什么企业，该名称在硅基流动企业知识库中无任何记录，既非硅基流动的产品、服务、别名，也未与硅基流动存在任何可验证的关联路径，无法将其绑定至被评估企业。","enterpriseAnchor":null,"offeringAnchor":null,"evidenceRefs":[]}`,
@@ -110,28 +148,218 @@ describe("custom GEO question classifier contract", () => {
     });
   });
 
-  it("uses a clear rejection meaning without requiring the full JSON shape", () => {
-    const classification = parseCustomQuestionClassificationTaskOutput(
-      assistantTextTask(
-        "decision: reject\nreasonCode: enterprise_unrelated\n当前问题无法绑定至被评估企业。",
+  it("does not invent a rejection from prose or an incomplete shape", () => {
+    expect(
+      parseCustomQuestionClassificationTaskOutput(
+        assistantTextTask(
+          "decision: reject\nreasonCode: enterprise_unrelated\n当前问题无法绑定至被评估企业。",
+        ),
       ),
-    );
-
-    expect(classification).toMatchObject({
-      decision: "reject",
-      category: "unrelated",
-      reasonCode: "enterprise_unrelated",
-    });
+    ).toBeNull();
   });
 
-  it("does not infer a malformed accepted classification", () => {
+  it("repairs a malformed accepted classification before strict validation", () => {
     const classification = parseCustomQuestionClassificationTaskOutput(
       assistantTextTask(
         `{"decision":"accept","category":"product_scenario","enterpriseRelated":true,"reasonCode":"accepted","reason":"问题询问"企业知识库"的具体能力。","enterpriseAnchor":"超前智能","offeringAnchor":"企业知识库","evidenceRefs":["03_products/knowledge-base.md"]}`,
       ),
     );
 
-    expect(classification).toBeNull();
+    expect(classification).toMatchObject({
+      decision: "accept",
+      category: "product_scenario",
+      reason: '问题询问"企业知识库"的具体能力。',
+      evidenceRefs: ["03_products/knowledge-base.md"],
+    });
+  });
+
+  it.each([
+    `{"decision":"accept","category":"reputation","enterpriseRelated":true,"reasonCode":"accepted","reason":"问题明确以"硅基流动"为主语，询问其可靠性/信誉，知识库中存在关于硅基流动多轮融资、安全认证、服务稳定性及客户规模的具体事实，可支撑对该企业信誉的判定。","enterpriseAnchor":"硅基流动","offeringAnchor":null,"evidenceRefs":["08_competitive_advantages/013-3d826344f0.md","01_company_overview/001-cba3ec0725.md","evidence/S001.md"]}`,
+    `{"decision":"accept","category":"reputation","enterpriseRelated":true,"reasonCode":"accepted","reason":"问题明确以"硅基流动"为主语询问其可信度与可靠性，知识库中存在关于该企业安全认证、融资记录、服务稳定性及用户规模的具体证据，属于声誉类问题。","enterpriseAnchor":"硅基流动","offeringAnchor":null,"evidenceRefs":["08_competitive_advantages/013-3d826344f0.md","01_company_overview/001-cba3ec0725.md","evidence/S001.md"]}`,
+  ])("repairs a retained SiliconFlow production accept fixture", (raw) => {
+    expect(
+      parseCustomQuestionClassificationTaskOutput(assistantTextTask(raw)),
+    ).toMatchObject({
+      decision: "accept",
+      category: "reputation",
+      enterpriseRelated: true,
+      enterpriseAnchor: "硅基流动",
+      evidenceRefs: [
+        "08_competitive_advantages/013-3d826344f0.md",
+        "01_company_overview/001-cba3ec0725.md",
+        "evidence/S001.md",
+      ],
+    });
+  });
+
+  it("fails closed when multiple valid assistant results conflict", () => {
+    const accepted = {
+      decision: "accept",
+      category: "reputation",
+      enterpriseRelated: true,
+      reasonCode: "accepted",
+      reason: "问题明确询问超前智能的可信优势。",
+      enterpriseAnchor: "超前智能",
+      offeringAnchor: null,
+      evidenceRefs: ["01_company_overview/overview.md"],
+    };
+    const task = {
+      status: "completed",
+      output: [
+        {
+          role: "assistant",
+          content: [
+            { type: "output_text", text: JSON.stringify(accepted) },
+            {
+              type: "output_text",
+              text: JSON.stringify({
+                ...accepted,
+                category: "product_scenario",
+              }),
+            },
+          ],
+        },
+      ],
+    };
+    expect(parseCustomQuestionClassificationTaskOutput(task)).toBeNull();
+  });
+
+  it("treats different valid reasons as a security-field conflict", () => {
+    const accepted = {
+      decision: "accept",
+      category: "reputation",
+      enterpriseRelated: true,
+      reasonCode: "accepted",
+      reason: "第一份结果依据企业知识库判断可信。",
+      enterpriseAnchor: "超前智能",
+      offeringAnchor: null,
+      evidenceRefs: ["01_company_overview/overview.md"],
+    };
+    expect(
+      parseCustomQuestionClassificationTaskOutput({
+        output: [
+          {
+            role: "assistant",
+            content: [
+              { type: "output_text", text: JSON.stringify(accepted) },
+              {
+                type: "output_text",
+                text: JSON.stringify({
+                  ...accepted,
+                  reason: "第二份结果依据另一套理由判断可信。",
+                }),
+              },
+            ],
+          },
+        ],
+      }),
+    ).toBeNull();
+  });
+
+  it("resolves one trusted classifier output_file", async () => {
+    const accepted = {
+      decision: "accept",
+      category: "reputation",
+      enterpriseRelated: true,
+      reasonCode: "accepted",
+      reason: "问题明确询问超前智能的可信优势。",
+      enterpriseAnchor: "超前智能",
+      offeringAnchor: null,
+      evidenceRefs: ["01_company_overview/overview.md"],
+    };
+    await expect(
+      resolveCustomQuestionClassificationTaskOutput(
+        {
+          async downloadFile() {
+            return new Response(JSON.stringify(accepted));
+          },
+          async downloadTaskOutput() {
+            throw new Error("URL fallback should not be used");
+          },
+        },
+        {
+          id: "classifier-file-task",
+          output: [
+            {
+              type: "output_file",
+              file_id: "classifier-result",
+              filename: "classifier.json",
+            },
+          ],
+        },
+      ),
+    ).resolves.toEqual(accepted);
+  });
+
+  it("fails closed when classifier inline and output_file channels conflict", async () => {
+    const accepted = {
+      decision: "accept",
+      category: "reputation",
+      enterpriseRelated: true,
+      reasonCode: "accepted",
+      reason: "问题明确询问超前智能的可信优势。",
+      enterpriseAnchor: "超前智能",
+      offeringAnchor: null,
+      evidenceRefs: ["01_company_overview/overview.md"],
+    };
+    await expect(
+      resolveCustomQuestionClassificationTaskOutput(
+        {
+          async downloadFile() {
+            return new Response(
+              JSON.stringify({
+                ...accepted,
+                reason: "文件通道给出了不同但结构有效的判断理由。",
+              }),
+            );
+          },
+          async downloadTaskOutput() {
+            throw new Error("URL fallback should not be used");
+          },
+        },
+        {
+          id: "classifier-conflict-task",
+          output: [
+            { type: "output_text", text: JSON.stringify(accepted) },
+            {
+              type: "output_file",
+              file_id: "classifier-result",
+              filename: "classifier.json",
+            },
+          ],
+        },
+      ),
+    ).resolves.toBeNull();
+  });
+
+  it("rejects a classifier output_file above the shared byte budget", async () => {
+    await expect(
+      resolveCustomQuestionClassificationTaskOutput(
+        {
+          async downloadFile() {
+            return new Response("{}", {
+              headers: {
+                "content-length": String(
+                  TRUSTED_TASK_JSON_MAX_TOTAL_BYTES + 1,
+                ),
+              },
+            });
+          },
+          async downloadTaskOutput() {
+            throw new Error("URL fallback should not be used");
+          },
+        },
+        {
+          output: [
+            {
+              type: "output_file",
+              file_id: "oversized-classifier-result",
+              filename: "classifier.json",
+            },
+          ],
+        },
+      ),
+    ).resolves.toBeNull();
   });
 
   it("accepts an exact company anchor and a real ZIP evidence path", () => {
@@ -193,7 +421,7 @@ describe("custom GEO question classifier contract", () => {
     },
   );
 
-  it("uses only schema-v4 evidencePaths instead of accepting every allPaths entry", () => {
+  it("rejects an internal schema-v4 document even when allPaths contains it", () => {
     const classification = parseCustomQuestionClassificationTaskOutput(
       assistantTask({
         decision: "accept",
@@ -214,17 +442,12 @@ describe("custom GEO question classifier contract", () => {
       validateAcceptedCustomQuestionGrounding(classification, {
         question: "超前智能靠谱吗？",
         companyName: "超前智能",
-        manifest: {
-          ...manifest,
-          archiveContractVersion: 4,
-          allPaths: [...manifest.evidencePaths, "README.md"],
-          evidencePaths: ["03_products/knowledge-base.md"],
-        },
+        manifest: v4Manifest,
       }),
     ).toMatchObject({ ok: false, kind: "invalid_evidence" });
   });
 
-  it("accepts a schema-v4 path that is present in both inventories", () => {
+  it("accepts registered schema-v4 customer leaf and evidence Markdown together", () => {
     const classification = parseCustomQuestionClassificationTaskOutput(
       assistantTask({
         decision: "accept",
@@ -234,7 +457,10 @@ describe("custom GEO question classifier contract", () => {
         reason: "问题明确询问超前智能的企业知识库产品能力。",
         enterpriseAnchor: "超前智能",
         offeringAnchor: "企业知识库",
-        evidenceRefs: ["03_products/knowledge-base.md"],
+        evidenceRefs: [
+          "03_products/knowledge-base.md",
+          "evidence/S001.md",
+        ],
       }),
     );
     if (!classification || classification.decision !== "accept") {
@@ -245,15 +471,38 @@ describe("custom GEO question classifier contract", () => {
       validateAcceptedCustomQuestionGrounding(classification, {
         question: "超前智能的企业知识库有哪些能力？",
         companyName: "超前智能",
-        manifest: {
-          ...manifest,
-          archiveContractVersion: 4,
-          allPaths: [...manifest.evidencePaths, "README.md"],
-          evidencePaths: ["03_products/knowledge-base.md"],
-        },
+        manifest: v4Manifest,
       }),
     ).toEqual({ ok: true });
   });
+
+  it.each(["assets/logo.png", "00_package_manifest.json"])(
+    "rejects schema-v4 asset or internal evidence reference %s",
+    (evidenceRef) => {
+      const classification = parseCustomQuestionClassificationTaskOutput(
+        assistantTask({
+          decision: "accept",
+          category: "reputation",
+          enterpriseRelated: true,
+          reasonCode: "accepted",
+          reason: "问题明确询问超前智能的可信优势。",
+          enterpriseAnchor: "超前智能",
+          offeringAnchor: null,
+          evidenceRefs: [evidenceRef],
+        }),
+      );
+      if (!classification || classification.decision !== "accept") {
+        throw new Error("expected accepted fixture");
+      }
+      expect(
+        validateAcceptedCustomQuestionGrounding(classification, {
+          question: "超前智能靠谱吗？",
+          companyName: "超前智能",
+          manifest: v4Manifest,
+        }),
+      ).toMatchObject({ ok: false, kind: "invalid_evidence" });
+    },
+  );
 
   it("fails closed for an unrelated question even if the model says accept", () => {
     const classification = parseCustomQuestionClassificationTaskOutput(

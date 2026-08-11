@@ -28,6 +28,8 @@ import {
   loadGeoCustomQuestionClassifierSkill,
   loadGeoQuestionRecommenderSkill,
   loadWebsiteKnowledgeBaseSkill,
+  resolveWebsiteKnowledgeBaseWriterVersion,
+  CUSTOM_QUESTION_CLASSIFIER_SKILL_VERSION,
 } from "./geo/skills";
 import { loadGeoCurrentStateEvaluatorSkill } from "./geo/assessment";
 import { loadGeoOptimizationOutcomeForecasterSkill } from "./geo/forecast";
@@ -44,23 +46,34 @@ import {
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
-const GEO_RUNTIME_SKILLS = [
-  { name: "website-one-shot-kb-builder", version: 6 },
-  { name: "geo-question-recommender", version: 1 },
-  { name: "geo-custom-question-classifier", version: 1 },
-  { name: "geo-current-state-evaluator", version: 3 },
-  { name: "geo-optimization-outcome-forecaster", version: 1 },
-] as const;
+function geoRuntimeSkills() {
+  const websiteKnowledgeBaseWriterVersion =
+    resolveWebsiteKnowledgeBaseWriterVersion(process.env);
+  return [
+    {
+      name: "website-one-shot-kb-builder",
+      version: websiteKnowledgeBaseWriterVersion,
+    },
+    { name: "geo-question-recommender", version: 1 },
+    {
+      name: "geo-custom-question-classifier",
+      version: CUSTOM_QUESTION_CLASSIFIER_SKILL_VERSION,
+    },
+    { name: "geo-current-state-evaluator", version: 3 },
+    { name: "geo-optimization-outcome-forecaster", version: 1 },
+  ] as const;
+}
 
 async function getGeoRuntimeSkillReadiness() {
+  const runtimeSkills = geoRuntimeSkills();
   const contents = await Promise.all([
-    loadWebsiteKnowledgeBaseSkill(),
+    loadWebsiteKnowledgeBaseSkill(runtimeSkills[0].version),
     loadGeoQuestionRecommenderSkill(),
     loadGeoCustomQuestionClassifierSkill(),
     loadGeoCurrentStateEvaluatorSkill(),
     loadGeoOptimizationOutcomeForecasterSkill(),
   ]);
-  return GEO_RUNTIME_SKILLS.map((skill, index) => ({
+  return runtimeSkills.map((skill, index) => ({
     ...skill,
     status: "ok" as const,
     contentHash: createHash("sha256")

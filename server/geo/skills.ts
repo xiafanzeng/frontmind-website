@@ -5,6 +5,7 @@ import JSZip from "jszip";
 
 export type GeoSkillArchiveDefinition = {
   name: string;
+  sourceDirectory?: string;
   cacheKey?: string;
   files: readonly string[];
 };
@@ -19,6 +20,34 @@ const WEBSITE_KB_SKILL: GeoSkillArchiveDefinition = {
     "scripts/build_candidate.py",
   ],
 };
+const WEBSITE_KB_SKILL_V6: GeoSkillArchiveDefinition = {
+  name: "website-one-shot-kb-builder",
+  sourceDirectory: "website-one-shot-kb-builder/legacy-v6",
+  cacheKey: "website-one-shot-kb-builder:v6",
+  files: WEBSITE_KB_SKILL.files,
+};
+export const WEBSITE_KB_LEGACY_SKILL_VERSION = 6 as const;
+export const WEBSITE_KB_SKILL_VERSION = 7 as const;
+export const CUSTOM_QUESTION_CLASSIFIER_SKILL_VERSION = 2 as const;
+export type WebsiteKnowledgeBaseWriterVersion =
+  | typeof WEBSITE_KB_LEGACY_SKILL_VERSION
+  | typeof WEBSITE_KB_SKILL_VERSION;
+
+export function resolveWebsiteKnowledgeBaseWriterVersion(
+  env: NodeJS.ProcessEnv = process.env,
+): WebsiteKnowledgeBaseWriterVersion {
+  const configured = env.FRONTMIND_WEBSITE_KB_V4_WRITER_ENABLED?.trim();
+  if (!configured) {
+    return WEBSITE_KB_SKILL_VERSION;
+  }
+  if (["1", "true", "on"].includes(configured.toLowerCase())) {
+    return WEBSITE_KB_SKILL_VERSION;
+  }
+  if (["0", "false", "off"].includes(configured.toLowerCase())) {
+    return WEBSITE_KB_LEGACY_SKILL_VERSION;
+  }
+  throw new Error("FRONTMIND_WEBSITE_KB_V4_WRITER_ENABLED is invalid");
+}
 
 const QUESTION_SKILL: GeoSkillArchiveDefinition = {
   name: "geo-question-recommender",
@@ -70,7 +99,9 @@ async function readSkillEntries(definition: GeoSkillArchiveDefinition) {
   let lastError: unknown;
   for (const root of skillRootCandidates()) {
     try {
-      const skillRoot = await fs.realpath(path.resolve(root, definition.name));
+      const skillRoot = await fs.realpath(
+        path.resolve(root, definition.sourceDirectory || definition.name),
+      );
       const expectedRoot = `${skillRoot}${path.sep}`;
       return await Promise.all(
         definition.files.map(async (relativePath) => {
@@ -122,8 +153,18 @@ async function loadSkill(definition: GeoSkillArchiveDefinition) {
   return value;
 }
 
-export function loadWebsiteKnowledgeBaseSkill() {
-  return loadSkill(WEBSITE_KB_SKILL);
+function websiteKnowledgeBaseSkillDefinition(
+  version: WebsiteKnowledgeBaseWriterVersion,
+) {
+  return version === WEBSITE_KB_SKILL_VERSION
+    ? WEBSITE_KB_SKILL
+    : WEBSITE_KB_SKILL_V6;
+}
+
+export function loadWebsiteKnowledgeBaseSkill(
+  version: WebsiteKnowledgeBaseWriterVersion = WEBSITE_KB_SKILL_VERSION,
+) {
+  return loadSkill(websiteKnowledgeBaseSkillDefinition(version));
 }
 
 export async function buildGeoSkillArchive(
@@ -175,8 +216,10 @@ export async function buildGeoSkillArchive(
   });
 }
 
-export function buildWebsiteKnowledgeBaseSkillArchive() {
-  return buildGeoSkillArchive(WEBSITE_KB_SKILL);
+export function buildWebsiteKnowledgeBaseSkillArchive(
+  version: WebsiteKnowledgeBaseWriterVersion = WEBSITE_KB_SKILL_VERSION,
+) {
+  return buildGeoSkillArchive(websiteKnowledgeBaseSkillDefinition(version));
 }
 
 export function loadGeoQuestionRecommenderSkill() {

@@ -73,6 +73,13 @@ function manifestEvidenceCharacterCount(markdown: string) {
   ).length;
 }
 
+function bomCrlfJson(value: unknown) {
+  return Buffer.concat([
+    Buffer.from([0xef, 0xbb, 0xbf]),
+    Buffer.from(JSON.stringify(value, null, 2).replace(/\n/g, "\r\n")),
+  ]);
+}
+
 const validCompletenessInput = {
   counts: {
     totalLeaves: 46,
@@ -207,7 +214,11 @@ async function buildWebsiteLeadBudgetFixture(options?: {
   const schemaVersion = options?.schemaVersion ?? 1;
   const usesStructuredManifest = schemaVersion !== 1;
   const usesV3ValidationRules = schemaVersion >= 3;
-  const leafCount = options?.leafCount ?? 40;
+  const officialPagesCompleted =
+    options?.officialPagesCompleted ?? (schemaVersion === 4 ? 1 : 100);
+  const webQueriesCompleted =
+    options?.webQueriesCompleted ?? (schemaVersion === 4 ? 1 : 12);
+  const leafCount = options?.leafCount ?? (schemaVersion === 4 ? 20 : 40);
   const imageCount = options?.imageCount ?? 1;
   const documentCount = options?.documentCount ?? 0;
   const zip = new JSZip();
@@ -292,8 +303,11 @@ async function buildWebsiteLeadBudgetFixture(options?: {
       },
       acquisition: {
         officialPages: {
-          completed: options?.officialPagesCompleted ?? 100,
-          total: Math.max(options?.officialPagesCompleted ?? 100, 100),
+          completed: officialPagesCompleted,
+          total:
+            schemaVersion === 4
+              ? officialPagesCompleted
+              : Math.max(officialPagesCompleted, 100),
         },
         images: {
           completed: options?.imageCompletedOverride ?? imageCount,
@@ -304,8 +318,8 @@ async function buildWebsiteLeadBudgetFixture(options?: {
           total: documentCount,
         },
         webQueries: {
-          completed: options?.webQueriesCompleted ?? 12,
-          total: options?.webQueriesCompleted ?? 12,
+          completed: webQueriesCompleted,
+          total: webQueriesCompleted,
         },
       },
       gaps: [],
@@ -336,7 +350,9 @@ async function buildWebsiteLeadBudgetFixture(options?: {
   );
   addManifestMarkdown(
     "00_source_index.md",
-    "# 来源索引\n\n- 企业官网：https://example.com/",
+    schemaVersion === 4
+      ? "# 来源索引\n\n- [source-official] 企业官网｜official_web｜read｜https://example.com/"
+      : "# 来源索引\n\n- 企业官网：https://example.com/",
     {
       id: "doc-sources",
       kind: "index",
@@ -520,6 +536,16 @@ async function buildWebsiteLeadBudgetFixture(options?: {
       [publicBranch, branchId],
     ] of v2DisplayBranches.entries()) {
       const evidence = v2EvidenceByPublicBranch.get(publicBranch)!;
+      const overviewEvidence = [
+        evidence,
+        ...(publicBranch === "core-capabilities"
+          ? [v2EvidenceByCanonicalBranch.get("05_manufacturing")!]
+          : []),
+      ];
+      const overviewEvidenceCharacters = overviewEvidence.reduce(
+        (total, entry) => total + entry.characters,
+        0,
+      );
       const narrativeCharacters = options?.v2OverviewNarrativeCharacters ?? 200;
       const documentId = `doc-overview-${publicBranch}`;
       const narrative = String.fromCodePoint(0x5600 + index).repeat(
@@ -554,7 +580,7 @@ async function buildWebsiteLeadBudgetFixture(options?: {
             ? 0
             : Math.min(
                 publicBranch === "products-services" ? 3_000 : 1_500,
-                Math.max(120, Math.ceil(evidence.characters * 0.25)),
+                Math.max(120, Math.ceil(overviewEvidenceCharacters * 0.25)),
               ),
           evidenceDocumentIds: [evidence.id],
           customerVisible: true,
@@ -684,6 +710,7 @@ async function buildWebsiteLeadBudgetFixture(options?: {
       },
       ...(schemaVersion === 4
         ? {
+            candidateContractVersion: 2,
             allPaths: archiveAllPaths,
             evidencePaths: packageDocuments
               .filter((document) => document.kind === "evidence")
@@ -720,7 +747,7 @@ async function buildWebsiteLeadBudgetFixture(options?: {
               inspectedCandidateImages: imageCount,
               eligibleFirstPartyImages,
               rejectedCandidateImages: 0,
-              scannedSourcePages: options?.officialPagesCompleted ?? 100,
+              scannedSourcePages: officialPagesCompleted,
               discoveryMethods: [
                 "img",
                 "srcset_or_lazy",
@@ -1405,6 +1432,119 @@ describe("knowledge-base ZIP manifest", () => {
     ).toBe(true);
   });
 
+  it("accepts one UTF-8 BOM and CRLF in both strict ZIP JSON manifests while hashing raw bytes", async () => {
+    const zip = await JSZip.loadAsync(
+      await buildWebsiteLeadBudgetFixture({
+        schemaVersion: 4,
+        imageCount: 0,
+      }),
+    );
+    const root = "Bounded_knowledge_base";
+    const manifestPath = `${root}/00_package_manifest.json`;
+    const completenessPath = `${root}/00_completeness.json`;
+    const packageManifest = JSON.parse(
+      await zip.file(manifestPath)!.async("string"),
+    );
+    const completeness = JSON.parse(
+      await zip.file(completenessPath)!.async("string"),
+    );
+    const rawManifest = bomCrlfJson(packageManifest);
+    zip.file(manifestPath, rawManifest);
+    zip.file(completenessPath, bomCrlfJson(completeness));
+
+    const parsed = await parseKnowledgeBaseArchive(
+      Buffer.from(await zip.generateAsync({ type: "uint8array" })),
+      {
+        companyName: "BomCrlfContract",
+        validationProfile: "website-lead-v1",
+      },
+    );
+
+    expect(parsed.archiveContractVersion).toBe(4);
+    expect(parsed.completeness?.counts.totalLeaves).toBe(20);
+    expect(parsed.packageManifestSha256).toBe(
+      createHash("sha256").update(rawManifest).digest("hex"),
+    );
+  });
+
+  it("rejects a second leading BOM instead of relaxing strict ZIP JSON", async () => {
+    const zip = await JSZip.loadAsync(
+      await buildWebsiteLeadBudgetFixture({
+        schemaVersion: 4,
+        imageCount: 0,
+      }),
+    );
+    const manifestPath = "Bounded_knowledge_base/00_package_manifest.json";
+    const packageManifest = JSON.parse(
+      await zip.file(manifestPath)!.async("string"),
+    );
+    const oneBom = bomCrlfJson(packageManifest);
+    zip.file(
+      manifestPath,
+      Buffer.concat([Buffer.from([0xef, 0xbb, 0xbf]), oneBom]),
+    );
+
+    await expect(
+      parseKnowledgeBaseArchive(
+        Buffer.from(await zip.generateAsync({ type: "uint8array" })),
+        {
+          companyName: "DoubleBomContract",
+          validationProfile: "website-lead-v1",
+        },
+      ),
+    ).rejects.toThrow(/package manifest is invalid/i);
+  });
+
+  it("does not let a BOM parsing view bypass document-path collisions", async () => {
+    const zip = await JSZip.loadAsync(
+      await buildWebsiteLeadBudgetFixture({
+        schemaVersion: 4,
+        imageCount: 0,
+      }),
+    );
+    const manifestPath = "Bounded_knowledge_base/00_package_manifest.json";
+    const packageManifest = JSON.parse(
+      await zip.file(manifestPath)!.async("string"),
+    );
+    packageManifest.documents[1].path = packageManifest.documents[0].path;
+    zip.file(manifestPath, bomCrlfJson(packageManifest));
+
+    await expect(
+      parseKnowledgeBaseArchive(
+        Buffer.from(await zip.generateAsync({ type: "uint8array" })),
+        {
+          companyName: "BomCollisionContract",
+          validationProfile: "website-lead-v1",
+        },
+      ),
+    ).rejects.toThrow(/duplicate document IDs or paths/i);
+  });
+
+  it("does not let a BOM parsing view bypass unsafe document paths", async () => {
+    const zip = await JSZip.loadAsync(
+      await buildWebsiteLeadBudgetFixture({
+        schemaVersion: 4,
+        imageCount: 0,
+      }),
+    );
+    const manifestPath = "Bounded_knowledge_base/00_package_manifest.json";
+    const packageManifest = JSON.parse(
+      await zip.file(manifestPath)!.async("string"),
+    );
+    packageManifest.documents[0].path = "../README.md";
+    zip.file(manifestPath, bomCrlfJson(packageManifest));
+
+    await expect(
+      parseKnowledgeBaseArchive(
+        Buffer.from(await zip.generateAsync({ type: "uint8array" })),
+        {
+          companyName: "BomTraversalContract",
+          validationProfile: "website-lead-v1",
+        },
+      ),
+    ).rejects.toThrow(/unsafe path|path traversal/i);
+  });
+
   it("rejects a schema-v4 evidence path absent from allPaths", async () => {
     const zip = await JSZip.loadAsync(
       await buildWebsiteLeadBudgetFixture({
@@ -1883,6 +2023,205 @@ describe("knowledge-base ZIP manifest", () => {
       assets: [],
     });
   });
+
+  it.each([10, 20])(
+    "accepts schema-v4 with %s true leaves and keeps seven overviews outside totalLeaves",
+    async (leafCount) => {
+      const archive = await buildWebsiteLeadBudgetFixture({
+        schemaVersion: 4,
+        leafCount,
+        imageCount: 0,
+        eligibleFirstPartyImages: 0,
+      });
+      const zip = await JSZip.loadAsync(archive);
+      const packageManifest = JSON.parse(
+        await zip
+          .file("Bounded_knowledge_base/00_package_manifest.json")!
+          .async("string"),
+      ) as { documents: Array<{ kind: string }> };
+      const completeness = JSON.parse(
+        await zip
+          .file("Bounded_knowledge_base/00_completeness.json")!
+          .async("string"),
+      ) as { counts: { totalLeaves: number } };
+
+      expect(
+        packageManifest.documents.filter(
+          (document) => document.kind === "leaf",
+        ),
+      ).toHaveLength(leafCount);
+      expect(
+        packageManifest.documents.filter(
+          (document) => document.kind === "overview",
+        ),
+      ).toHaveLength(7);
+      expect(completeness.counts.totalLeaves).toBe(leafCount);
+      await expect(
+        parseKnowledgeBaseArchive(archive, {
+          companyName: `SchemaV4Boundary${leafCount}`,
+          validationProfile: "website-lead-v1",
+        }),
+      ).resolves.toMatchObject({
+        archiveContractVersion: 4,
+        completeness: { counts: { totalLeaves: leafCount } },
+      });
+    },
+  );
+
+  it.each([9, 21])(
+    "rejects schema-v4 with %s true leaves",
+    async (leafCount) => {
+      const archive = await buildWebsiteLeadBudgetFixture({
+        schemaVersion: 4,
+        leafCount,
+        imageCount: 0,
+        eligibleFirstPartyImages: 0,
+      });
+      await expect(
+        parseKnowledgeBaseArchive(archive, {
+          companyName: `SchemaV4Rejected${leafCount}`,
+          validationProfile: "website-lead-v1",
+        }),
+      ).rejects.toThrow(/10–20 (?:content|true leaf)/i);
+    },
+  );
+
+  it("rejects a schema-v4 archive that declares legacy candidate contract v1", async () => {
+    const zip = await JSZip.loadAsync(
+      await buildWebsiteLeadBudgetFixture({
+        schemaVersion: 4,
+        leafCount: 20,
+        imageCount: 0,
+        eligibleFirstPartyImages: 0,
+      }),
+    );
+    const manifestPath = "Bounded_knowledge_base/00_package_manifest.json";
+    const manifest = JSON.parse(
+      await zip.file(manifestPath)!.async("string"),
+    ) as { candidateContractVersion: number };
+    manifest.candidateContractVersion = 1;
+    zip.file(manifestPath, JSON.stringify(manifest));
+
+    await expect(
+      parseKnowledgeBaseArchive(
+        Buffer.from(await zip.generateAsync({ type: "uint8array" })),
+        {
+          companyName: "SchemaV4LegacyCandidateRejected",
+          validationProfile: "website-lead-v1",
+        },
+      ),
+    ).rejects.toThrow(/package manifest is invalid/i);
+  });
+
+  it.each([
+    ["five public-web queries", 1, 5, /exceeds 4 public-web queries/i],
+    ["thirty-one source records", 31, 1, /exceeds 30 source records/i],
+  ] as const)(
+    "rejects schema-v4 candidate-contract-v2 with %s",
+    async (_label, sourceCount, webQueryCount, expectedError) => {
+      const zip = await JSZip.loadAsync(
+        await buildWebsiteLeadBudgetFixture({
+          schemaVersion: 4,
+          leafCount: 20,
+          imageCount: 0,
+          eligibleFirstPartyImages: 0,
+        }),
+      );
+      const root = "Bounded_knowledge_base/";
+      const manifestPath = `${root}00_package_manifest.json`;
+      const completenessPath = `${root}00_completeness.json`;
+      const manifest = JSON.parse(
+        await zip.file(manifestPath)!.async("string"),
+      ) as {
+        candidateContractVersion?: number;
+        counts: { evidenceCharacters: number };
+        imageSelection: { scannedSourcePages: number };
+        documents: Array<{ path: string; customerVisible: boolean }>;
+      };
+      const completeness = JSON.parse(
+        await zip.file(completenessPath)!.async("string"),
+      ) as {
+        acquisition: {
+          officialPages: { completed: number; total: number };
+          documents: { completed: number; total: number };
+          webQueries: { completed: number; total: number };
+        };
+      };
+      const sourceRows = Array.from({ length: sourceCount }, (_, index) => {
+        const id = index === 0 ? "source-official" : `source-${index + 1}`;
+        return `- [${id}] 公开来源 ${index + 1}｜official_web｜read｜https://example.com/source-${index + 1}`;
+      });
+      zip.file(
+        `${root}00_source_index.md`,
+        ["# 来源索引", "", ...sourceRows].join("\n"),
+      );
+      manifest.candidateContractVersion = 2;
+      manifest.imageSelection.scannedSourcePages = sourceCount;
+      completeness.acquisition.officialPages = {
+        completed: sourceCount,
+        total: sourceCount,
+      };
+      completeness.acquisition.documents = { completed: 0, total: 0 };
+      completeness.acquisition.webQueries = {
+        completed: webQueryCount,
+        total: webQueryCount,
+      };
+      manifest.counts.evidenceCharacters = (
+        await Promise.all(
+          manifest.documents
+            .filter(
+              (document) =>
+                !document.customerVisible && document.path.endsWith(".md"),
+            )
+            .map(async (document) =>
+              manifestEvidenceCharacterCount(
+                await zip.file(`${root}${document.path}`)!.async("string"),
+              ),
+            ),
+        )
+      ).reduce((total, characters) => total + characters, 0);
+      zip.file(manifestPath, JSON.stringify(manifest));
+      zip.file(completenessPath, JSON.stringify(completeness));
+
+      await expect(
+        parseKnowledgeBaseArchive(
+          Buffer.from(await zip.generateAsync({ type: "uint8array" })),
+          {
+            companyName: `StrictV4${sourceCount}-${webQueryCount}`,
+            validationProfile: "website-lead-v1",
+          },
+        ),
+      ).rejects.toThrow(expectedError);
+    },
+  );
+
+  it.each([2, 3] as const)(
+    "keeps schema-v%s historical 8–56 leaf compatibility",
+    async (schemaVersion) => {
+      for (const leafCount of [8, 9, 21, 56]) {
+        const archive = await buildWebsiteLeadBudgetFixture({
+          schemaVersion,
+          leafCount,
+          imageCount: 0,
+          eligibleFirstPartyImages: 0,
+          // Schema v2 derives the core-capabilities overview minimum from
+          // both technology and manufacturing evidence once both branches
+          // are present. Keep this historical-compatibility fixture above
+          // that real combined minimum.
+          v2OverviewNarrativeCharacters: 300,
+        });
+        await expect(
+          parseKnowledgeBaseArchive(archive, {
+            companyName: `SchemaV${schemaVersion}Legacy${leafCount}`,
+            validationProfile: "website-lead-v1",
+          }),
+        ).resolves.toMatchObject({
+          archiveContractVersion: schemaVersion,
+          completeness: { counts: { totalLeaves: leafCount } },
+        });
+      }
+    },
+  );
 
   it("allows neutral negative facts and internal verification gaps", async () => {
     const zip = await JSZip.loadAsync(await buildWebsiteLeadBudgetFixture());

@@ -11,6 +11,21 @@ export const TRUSTED_TASK_JSON_MAX_FILE_CANDIDATES =
   TRUSTED_TASK_JSON_MAX_CANDIDATES;
 export const TRUSTED_TASK_JSON_MAX_TOTAL_BYTES = 4 * 1024 * 1024;
 export const TRUSTED_TASK_JSON_MAX_QUOTE_REPAIRS = 128;
+export const TRUSTED_TASK_JSON_MAX_NESTING_DEPTH = 128;
+export const TRUSTED_TASK_JSON_PARSER_VERSION = 2 as const;
+
+export type TrustedTaskJsonRepairKind =
+  | "strict"
+  | "bom_or_wrapper"
+  | "trailing_comma"
+  | "string_syntax"
+  | "double_encoded";
+
+export type ParsedTrustedTaskJsonCandidate = Readonly<{
+  value: unknown;
+  canonicalJson: string;
+  repairKind: TrustedTaskJsonRepairKind;
+}>;
 
 export type TrustedTaskJsonOutputValidationCode =
   | "OUTPUT_FILE_UNAVAILABLE"
@@ -79,6 +94,7 @@ export type TrustedTaskJsonInlineInspectionContext = Readonly<{
 export type ResolveTrustedTaskJsonOutputOptions<T> = Readonly<{
   taskId?: string;
   preferredChannel?: "inline" | "output_file";
+  canonicalize?: (value: T) => string;
   inspectInline: (
     task: unknown,
     context: TrustedTaskJsonInlineInspectionContext,
@@ -233,23 +249,292 @@ export function trustedTaskJsonObjectCandidates(value: string) {
 export function parseTrustedTaskJsonCandidate(
   value: string,
 ): unknown | undefined {
+  return inspectTrustedTaskJsonCandidate(value)?.value;
+}
+
+/**
+ * Normalizes syntax only. It never supplies a field, delimiter, enum, boolean,
+ * evidence path, or other business value. Callers must still run their strict
+ * schema and scope/grounding checks after this function returns.
+ */
+export function inspectTrustedTaskJsonCandidate(
+  value: string,
+): ParsedTrustedTaskJsonCandidate | undefined {
   if (Buffer.byteLength(value, "utf8") > TRUSTED_TASK_JSON_MAX_TOTAL_BYTES) {
     return undefined;
   }
-  try {
-    return JSON.parse(value) as unknown;
-  } catch {
-    const repaired = repairUnescapedJsonStringQuotes(value);
-    if (!repaired) return undefined;
+
+  const parse = (
+    candidate: string,
+    repairKind: TrustedTaskJsonRepairKind,
+  ): ParsedTrustedTaskJsonCandidate | undefined => {
     try {
-      return JSON.parse(repaired) as unknown;
+      const parsed = parseJsonWithoutDuplicateKeys(candidate);
+      if (parsed === undefined) return undefined;
+      if (typeof parsed === "string") {
+        const decoded = parseOneDoubleEncodedJson(parsed);
+        if (decoded === undefined) return undefined;
+        return {
+          value: decoded,
+          canonicalJson: canonicalJson(decoded),
+          repairKind: "double_encoded",
+        };
+      }
+      return {
+        value: parsed,
+        canonicalJson: canonicalJson(parsed),
+        repairKind,
+      };
     } catch {
       return undefined;
     }
+  };
+
+  const strict = parse(value, "strict");
+  if (strict) return strict;
+
+  const stripped = stripTrustedJsonTransportWrapper(value);
+  if (stripped !== value) {
+    const wrapped = parse(stripped, "bom_or_wrapper");
+    if (wrapped) return wrapped;
+  }
+
+  for (const candidate of Array.from(new Set([value, stripped]))) {
+    const withoutTrailingCommas = removeJsonTrailingCommas(candidate);
+    if (withoutTrailingCommas !== candidate) {
+      const parsed = parse(withoutTrailingCommas, "trailing_comma");
+      if (parsed) return parsed;
+    }
+    const repairedStrings = repairJsonStringSyntax(withoutTrailingCommas);
+    if (!repairedStrings) continue;
+    const parsed = parse(repairedStrings, "string_syntax");
+    if (parsed) return parsed;
+  }
+
+  return undefined;
+}
+
+function stripTrustedJsonTransportWrapper(value: string) {
+  const withoutBom = value.replace(/^\ufeff/, "").trim();
+  const fenced = withoutBom.match(/^```(?:json)?\s*([\s\S]*?)\s*```$/i);
+  return (fenced?.[1] ?? withoutBom).trim();
+}
+
+function parseOneDoubleEncodedJson(value: string) {
+  if (Buffer.byteLength(value, "utf8") > TRUSTED_TASK_JSON_MAX_TOTAL_BYTES) {
+    return undefined;
+  }
+  const candidate = stripTrustedJsonTransportWrapper(value);
+  const strict = parseJsonWithoutDuplicateKeys(candidate);
+  if (strict !== undefined) {
+    return typeof strict === "string" ? undefined : strict;
+  }
+  const withoutTrailingCommas = removeJsonTrailingCommas(candidate);
+  const trailingCommaNormalized = parseJsonWithoutDuplicateKeys(
+    withoutTrailingCommas,
+  );
+  if (trailingCommaNormalized !== undefined) {
+    return typeof trailingCommaNormalized === "string"
+      ? undefined
+      : trailingCommaNormalized;
+  }
+  const repaired = repairJsonStringSyntax(withoutTrailingCommas);
+  if (!repaired) return undefined;
+  try {
+    const parsed = parseJsonWithoutDuplicateKeys(repaired);
+    if (parsed === undefined) return undefined;
+    return typeof parsed === "string" ? undefined : parsed;
+  } catch {
+    return undefined;
   }
 }
 
-function repairUnescapedJsonStringQuotes(value: string) {
+/**
+ * JSON.parse silently keeps the last value for duplicate object keys. Model
+ * output must never get that ambiguity: a repeated decision, evidence list,
+ * request digest, or nested field is rejected before object construction.
+ * This scanner validates the complete JSON grammar with bounded nesting and
+ * decodes object keys so escaped aliases such as `a` and `\u0061` collide.
+ */
+function parseJsonWithoutDuplicateKeys(value: string): unknown | undefined {
+  let index = 0;
+  let duplicateKey = false;
+
+  const skipWhitespace = () => {
+    while (
+      index < value.length &&
+      /[\u0009\u000a\u000d\u0020]/.test(value[index]!)
+    ) {
+      index += 1;
+    }
+  };
+
+  const parseString = () => {
+    if (value[index] !== '"') throw new SyntaxError("Expected JSON string");
+    const start = index;
+    index += 1;
+    while (index < value.length) {
+      const character = value[index]!;
+      if (character === '"') {
+        index += 1;
+        const parsed = JSON.parse(value.slice(start, index)) as unknown;
+        if (typeof parsed !== "string") throw new SyntaxError("Invalid string");
+        return parsed;
+      }
+      if (character.charCodeAt(0) < 0x20) {
+        throw new SyntaxError("Unescaped JSON control character");
+      }
+      if (character !== "\\") {
+        index += 1;
+        continue;
+      }
+      index += 1;
+      const escaped = value[index];
+      if (
+        !escaped ||
+        !['"', "\\", "/", "b", "f", "n", "r", "t", "u"].includes(escaped)
+      ) {
+        throw new SyntaxError("Invalid JSON escape");
+      }
+      index += 1;
+      if (escaped === "u") {
+        const hex = value.slice(index, index + 4);
+        if (!/^[a-fA-F0-9]{4}$/.test(hex)) {
+          throw new SyntaxError("Invalid JSON unicode escape");
+        }
+        index += 4;
+      }
+    }
+    throw new SyntaxError("Unterminated JSON string");
+  };
+
+  const parseValue = (depth: number): void => {
+    if (depth > TRUSTED_TASK_JSON_MAX_NESTING_DEPTH) {
+      throw new SyntaxError("JSON nesting limit exceeded");
+    }
+    skipWhitespace();
+    const character = value[index];
+    if (character === '"') {
+      parseString();
+      return;
+    }
+    if (character === "{") {
+      index += 1;
+      skipWhitespace();
+      const keys = new Set<string>();
+      if (value[index] === "}") {
+        index += 1;
+        return;
+      }
+      while (index < value.length) {
+        skipWhitespace();
+        const key = parseString();
+        if (keys.has(key)) duplicateKey = true;
+        keys.add(key);
+        skipWhitespace();
+        if (value[index] !== ":") throw new SyntaxError("Expected colon");
+        index += 1;
+        parseValue(depth + 1);
+        skipWhitespace();
+        if (value[index] === "}") {
+          index += 1;
+          return;
+        }
+        if (value[index] !== ",") throw new SyntaxError("Expected comma");
+        index += 1;
+      }
+      throw new SyntaxError("Unterminated JSON object");
+    }
+    if (character === "[") {
+      index += 1;
+      skipWhitespace();
+      if (value[index] === "]") {
+        index += 1;
+        return;
+      }
+      while (index < value.length) {
+        parseValue(depth + 1);
+        skipWhitespace();
+        if (value[index] === "]") {
+          index += 1;
+          return;
+        }
+        if (value[index] !== ",") throw new SyntaxError("Expected comma");
+        index += 1;
+      }
+      throw new SyntaxError("Unterminated JSON array");
+    }
+    for (const literal of ["true", "false", "null"]) {
+      if (value.startsWith(literal, index)) {
+        index += literal.length;
+        return;
+      }
+    }
+    const number = value
+      .slice(index)
+      .match(/^-?(?:0|[1-9]\d*)(?:\.\d+)?(?:[eE][+-]?\d+)?/)?.[0];
+    if (!number) throw new SyntaxError("Invalid JSON value");
+    index += number.length;
+  };
+
+  try {
+    skipWhitespace();
+    parseValue(0);
+    skipWhitespace();
+    if (index !== value.length || duplicateKey) return undefined;
+    return JSON.parse(value) as unknown;
+  } catch {
+    return undefined;
+  }
+}
+
+function canonicalJson(value: unknown) {
+  return JSON.stringify(sortJsonValue(value));
+}
+
+export function canonicalTrustedTaskJson(value: unknown) {
+  return canonicalJson(value);
+}
+
+function sortJsonValue(value: unknown): unknown {
+  if (Array.isArray(value)) return value.map(sortJsonValue);
+  if (!value || typeof value !== "object") return value;
+  return Object.fromEntries(
+    Object.entries(value as Record<string, unknown>)
+      .sort(([left], [right]) => left.localeCompare(right))
+      .map(([key, child]) => [key, sortJsonValue(child)]),
+  );
+}
+
+function removeJsonTrailingCommas(value: string) {
+  let result = "";
+  let inString = false;
+  let escaped = false;
+  for (let index = 0; index < value.length; index += 1) {
+    const character = value[index]!;
+    if (inString) {
+      result += character;
+      if (escaped) escaped = false;
+      else if (character === "\\") escaped = true;
+      else if (character === '"') inString = false;
+      continue;
+    }
+    if (character === '"') {
+      inString = true;
+      result += character;
+      continue;
+    }
+    if (character === ",") {
+      let next = index + 1;
+      while (next < value.length && /\s/.test(value[next]!)) next += 1;
+      if (["}", "]"].includes(value[next] || "")) continue;
+    }
+    result += character;
+  }
+  return result;
+}
+
+function repairJsonStringSyntax(value: string) {
   let result = "";
   let inString = false;
   let escaped = false;
@@ -298,6 +583,19 @@ function repairUnescapedJsonStringQuotes(value: string) {
       continue;
     }
     if (character !== '"') {
+      if (character.charCodeAt(0) < 0x20) {
+        repairCount += 1;
+        if (repairCount > TRUSTED_TASK_JSON_MAX_QUOTE_REPAIRS) return undefined;
+        result +=
+          character === "\n"
+            ? "\\n"
+            : character === "\r"
+              ? "\\r"
+              : character === "\t"
+                ? "\\t"
+                : `\\u${character.charCodeAt(0).toString(16).padStart(4, "0")}`;
+        continue;
+      }
       result += character;
       continue;
     }
@@ -411,7 +709,9 @@ function candidateByteLength(value: unknown) {
  * other channel. Inline JSON and trusted output_file candidates share a
  * three-candidate, four-MiB budget. Files must be complete UTF-8 JSON; the
  * same bounded in-string quote recovery is available to both transport paths.
- * The first candidate in channel order passing schema and scope wins.
+ * Equivalent valid candidates may repeat across channels. Distinct valid
+ * candidates, or a passing candidate accompanied by a scope-conflicting one,
+ * fail closed instead of selecting whichever provider envelope appeared first.
  */
 export async function resolveTrustedTaskJsonOutput<T>(
   downloader: TrustedTaskOutputDownloader,
@@ -419,6 +719,9 @@ export async function resolveTrustedTaskJsonOutput<T>(
   options: ResolveTrustedTaskJsonOutputOptions<T>,
 ): Promise<T> {
   const failures: CandidateFailure[] = [];
+  const validCandidates = new Map<string, T>();
+  const canonicalize =
+    options.canonicalize ?? ((value: T) => canonicalTrustedTaskJson(value));
   const preferOutputFile = options.preferredChannel === "output_file";
   const budget = {
     remaining: TRUSTED_TASK_JSON_MAX_TOTAL_BYTES,
@@ -451,7 +754,9 @@ export async function resolveTrustedTaskJsonOutput<T>(
       inlineInspected = true;
       inline = options.inspectInline(task, inlineContext);
     }
-    if (inline?.success) return inline.data;
+    if (inline?.success) {
+      validCandidates.set(canonicalize(inline.data), inline.data);
+    }
     if (inline && !inline.success) {
       failures.push({
         code: inline.code,
@@ -459,11 +764,10 @@ export async function resolveTrustedTaskJsonOutput<T>(
         channel: "inline",
       });
     }
-    return undefined;
+    return;
   };
   if (!preferOutputFile) {
-    const resolvedInline = resolveInline();
-    if (resolvedInline !== undefined) return resolvedInline;
+    resolveInline();
   }
 
   const descriptors = trustedAssistantOutputFiles(task).slice(
@@ -524,7 +828,10 @@ export async function resolveTrustedTaskJsonOutput<T>(
     }
 
     const inspection = options.inspectParsed(parsed);
-    if (inspection.success) return inspection.data;
+    if (inspection.success) {
+      validCandidates.set(canonicalize(inspection.data), inspection.data);
+      continue;
+    }
     failures.push({
       code: inspection.code,
       validation: inspection.validation,
@@ -533,8 +840,25 @@ export async function resolveTrustedTaskJsonOutput<T>(
   }
 
   if (preferOutputFile) {
-    const resolvedInline = resolveInline();
-    if (resolvedInline !== undefined) return resolvedInline;
+    resolveInline();
+  }
+
+  const hasScopeConflict = failures.some(
+    (failure) => failure.code === "SCOPE_MISMATCH",
+  );
+  if (validCandidates.size === 1 && !hasScopeConflict) {
+    return validCandidates.values().next().value!;
+  }
+  if (validCandidates.size > 1) {
+    throw new TrustedTaskJsonOutputError(
+      "SCHEMA_MISMATCH",
+      [{ path: ["root"], message: "Conflicting valid JSON candidates" }],
+      {
+        channel: preferOutputFile ? "output_file" : "inline",
+        byteCount: TRUSTED_TASK_JSON_MAX_TOTAL_BYTES - budget.remaining,
+        fileCandidateCount: descriptors.length,
+      },
+    );
   }
 
   const semanticFailure = bestFailure(

@@ -24,9 +24,12 @@ import {
   loadGeoCustomQuestionClassifierSkill,
   loadGeoQuestionRecommenderSkill,
   loadWebsiteKnowledgeBaseSkill,
+  resolveWebsiteKnowledgeBaseWriterVersion,
   CUSTOM_QUESTION_CLASSIFIER_SKILL_ARCHIVE_FILENAME,
   QUESTION_SKILL_ARCHIVE_FILENAME,
+  WEBSITE_KB_LEGACY_SKILL_VERSION,
   WEBSITE_KB_SKILL_ARCHIVE_FILENAME,
+  WEBSITE_KB_SKILL_VERSION,
 } from "./skills";
 import { loadGeoCurrentStateEvaluatorSkill } from "./assessment";
 import { parseKnowledgeBaseCandidate } from "./knowledge-base-candidate";
@@ -41,7 +44,172 @@ const websiteKnowledgeBaseReferenceRoot = path.resolve(
   "references",
 );
 
+const websiteV2FixtureFactHeadings = [
+  "D01 企业基础",
+  "D02 团队",
+  "D03 产品服务",
+  "D04 技术能力",
+  "D05 客户案例",
+  "D06 资质认证",
+  "D07 财务融资",
+  "D08 竞争信息",
+  "D09 市场信息",
+  "D10 品牌资产",
+  "D11 渠道",
+  "D12 公开意图",
+  "D13 公共情报",
+] as const;
+
+const websiteV2FixtureSections = [
+  ["企业与品牌", 500, 1],
+  ["团队与组织", 500, 1],
+  ["产品与服务", 2_500, 2],
+  ["技术与交付", 1_000, 2],
+  ["客户与行业", 600, 1],
+  ["服务与合作", 600, 1],
+  ["可信优势", 600, 1],
+] as const;
+
+function writeWebsiteV2PythonBudgetFixture(root: string) {
+  const urls = websiteV2FixtureSections.map(
+    (_, index) => `https://example.com/budget-${index + 1}`,
+  );
+  fs.writeFileSync(
+    path.join(root, "00_brand_facts.md"),
+    websiteV2FixtureFactHeadings
+      .map(
+        (heading, index) =>
+          `## ${heading}\n\n${String.fromCodePoint(0x5000 + index).repeat(
+            40,
+          )}[来源](${urls[index % urls.length]})`,
+      )
+      .join("\n\n"),
+  );
+  fs.writeFileSync(
+    path.join(root, "01_customer_draft.md"),
+    websiteV2FixtureSections
+      .map(([heading, floor, topicCount], sectionIndex) => {
+        const perTopic = Math.ceil(floor / topicCount) + 8;
+        return `## ${heading}\n\n${Array.from(
+          { length: topicCount },
+          (_, topicIndex) =>
+            `### ${heading}主题${topicIndex + 1}\n\n${String.fromCodePoint(
+              0x5400 + sectionIndex * 4 + topicIndex,
+            ).repeat(perTopic)}[来源](${urls[sectionIndex]})`,
+        ).join("\n\n")}`;
+      })
+      .join("\n\n"),
+  );
+  fs.writeFileSync(
+    path.join(root, "02_run.json"),
+    JSON.stringify({
+      schemaVersion: 2,
+      company: {
+        name: "预算门禁示例企业",
+        officialWebsite: "https://example.com",
+        industryCluster: "C3",
+      },
+      sources: urls.map((url, index) => ({
+        title: `预算来源 ${index + 1}`,
+        kind: "official_web",
+        status: "read",
+        url,
+      })),
+      queries: ["预算门禁示例企业 产品"],
+      stopReason: "coverage_complete",
+      contentFloorExceptions: [],
+      logoAcquisition: {
+        status: "unavailable",
+        attemptedPageUrls: urls.slice(0, 2),
+        reason: "已检查两个官网页面，均未发现可解码的官方 Logo 原图。",
+      },
+      assets: [],
+    }),
+  );
+}
+
 describe("website one-shot knowledge-base skill", () => {
+  it("defaults to v7 and only rolls the writer back when the gate is explicitly disabled", () => {
+    expect(resolveWebsiteKnowledgeBaseWriterVersion({})).toBe(
+      WEBSITE_KB_SKILL_VERSION,
+    );
+    expect(
+      resolveWebsiteKnowledgeBaseWriterVersion({ NODE_ENV: "production" }),
+    ).toBe(WEBSITE_KB_SKILL_VERSION);
+    for (const enabled of ["1", "true", "on", " TRUE "]) {
+      expect(
+        resolveWebsiteKnowledgeBaseWriterVersion({
+          FRONTMIND_WEBSITE_KB_V4_WRITER_ENABLED: enabled,
+        }),
+      ).toBe(WEBSITE_KB_SKILL_VERSION);
+    }
+    for (const disabled of ["0", "false", "off", " OFF "]) {
+      expect(
+        resolveWebsiteKnowledgeBaseWriterVersion({
+          FRONTMIND_WEBSITE_KB_V4_WRITER_ENABLED: disabled,
+        }),
+      ).toBe(WEBSITE_KB_LEGACY_SKILL_VERSION);
+    }
+    expect(() =>
+      resolveWebsiteKnowledgeBaseWriterVersion({
+        FRONTMIND_WEBSITE_KB_V4_WRITER_ENABLED: "maybe",
+      }),
+    ).toThrow("FRONTMIND_WEBSITE_KB_V4_WRITER_ENABLED is invalid");
+  });
+
+  it("keeps the origin/main v6 source snapshot immutable and packages it under the public Skill name", async () => {
+    const expectedHashes = new Map([
+      [
+        "SKILL.md",
+        "de9450fb5a0a4bd04deb8595eabc539995eff1fdbc32db12aba2d8aa61a8368c",
+      ],
+      [
+        "agents/openai.yaml",
+        "7a2006846a731bcb08a9f521bd14db2aa5eb3017c8e7fb985a349a75e59c49d9",
+      ],
+      [
+        "references/dimensions.md",
+        "0605dcc0eaa12acb099f2c5ff24ee01ab0dd679adf0b63232bc56e652c51f1ad",
+      ],
+      [
+        "references/candidate-format.md",
+        "3c80241f9975738a7d479a20ce0710779dc1489d98eb81628443056fd859c978",
+      ],
+      [
+        "scripts/build_candidate.py",
+        "733f40d1fbf098f90a201fc56538940d8953f1df44b51925d10536de715d77ae",
+      ],
+    ]);
+    const sourceRoot = path.resolve(
+      process.cwd(),
+      "server/skills/website-one-shot-kb-builder/legacy-v6",
+    );
+    for (const [relativePath, expectedHash] of expectedHashes) {
+      expect(
+        crypto
+          .createHash("sha256")
+          .update(fs.readFileSync(path.join(sourceRoot, relativePath)))
+          .digest("hex"),
+      ).toBe(expectedHash);
+    }
+
+    const archive = await buildWebsiteKnowledgeBaseSkillArchive(
+      WEBSITE_KB_LEGACY_SKILL_VERSION,
+    );
+    const zip = await (await import("jszip")).default.loadAsync(archive);
+    const manifest = JSON.parse(
+      (await zip.file("MANIFEST.json")?.async("string")) || "{}",
+    ) as Record<string, unknown>;
+    expect(manifest).toMatchObject({
+      schemaVersion: 1,
+      name: "website-one-shot-kb-builder",
+      entrypoint: "SKILL.md",
+    });
+    expect(await zip.file("SKILL.md")?.async("string")).toContain(
+      "website-lead-candidate-v1.zip",
+    );
+  });
+
   it("hashes the exact source and packaged skill contents reported by healthz", async () => {
     const relativeFiles = [
       "SKILL.md",
@@ -73,7 +241,7 @@ describe("website one-shot knowledge-base skill", () => {
   it("keeps the Base skill focused on research and candidate output", async () => {
     const skill = await loadWebsiteKnowledgeBaseSkill();
     expect(Buffer.byteLength(skill, "utf8")).toBeGreaterThanOrEqual(9_000);
-    expect(Buffer.byteLength(skill, "utf8")).toBeLessThanOrEqual(40_000);
+    expect(Buffer.byteLength(skill, "utf8")).toBeLessThanOrEqual(50_000);
     for (const invariant of [
       "ordinary Agent browsing",
       "D01–D13",
@@ -85,6 +253,8 @@ describe("website one-shot knowledge-base skill", () => {
       "Do not collect or package favicons",
       "logoAcquisition.status",
       "6300 visible characters",
+      "9–19 third-level topics",
+      "16 distinct public webpage URLs",
       "contentFloorExceptions",
       "cross-file evidence-reference subset",
       "scripts/build_candidate.py",
@@ -219,12 +389,17 @@ describe("website one-shot knowledge-base skill", () => {
         ["服务与合作", 600],
         ["可信优势", 600],
       ]);
+      const topicCounts = [1, 1, 2, 2, 1, 1, 1];
       const customer = Array.from(contentFloors)
         .map(
           ([title, floor], index) =>
-            `## ${title}\n\n${`可核验的企业业务产品技术客户服务事实说明${index + 1}`.repeat(
-              Math.ceil(floor / 20) + 1,
-            )}。[来源](https://example.com/section-${index + 1})`,
+            `## ${title}\n\n${Array.from(
+              { length: topicCounts[index]! },
+              (_, topicIndex) =>
+                `### ${title}主题${topicIndex + 1}\n\n${`可核验的企业业务产品技术客户服务事实说明${index + 1}`.repeat(
+                  Math.ceil(floor / 20 / topicCounts[index]!) + 1,
+                )}。[来源](https://example.com/section-${index + 1})`,
+            ).join("\n\n")}`,
         )
         .join("\n\n");
       fs.writeFileSync(path.join(temporaryRoot, "00_brand_facts.md"), facts);
@@ -241,19 +416,28 @@ describe("website one-shot knowledge-base skill", () => {
       fs.writeFileSync(
         path.join(temporaryRoot, "02_run.json"),
         JSON.stringify({
-          schemaVersion: 1,
+          schemaVersion: 2,
           company: {
             name: "示例企业",
             officialWebsite: "https://example.com",
             industryCluster: "C3",
           },
-          sources: Array.from(contentFloors).map((_, index) => ({
-            title: `版块来源 ${index + 1}`,
-            kind: "official_web",
-            status: "read",
-            url: `https://example.com/section-${index + 1}`,
-          })),
+          sources: [
+            ...Array.from(contentFloors).map((_, index) => ({
+              title: `版块来源 ${index + 1}`,
+              kind: "official_web",
+              status: "read",
+              url: `https://example.com/section-${index + 1}`,
+            })),
+            {
+              title: "企业官网",
+              kind: "official_web",
+              status: "read",
+              url: "https://example.com",
+            },
+          ],
           queries: ["示例企业 产品"],
+          stopReason: "coverage_complete",
           contentFloorExceptions: [],
           logoAcquisition: {
             status: "retained",
@@ -312,6 +496,183 @@ describe("website one-shot knowledge-base skill", () => {
       fs.rmSync(temporaryRoot, { recursive: true, force: true });
     }
   });
+
+  it.each([
+    [
+      "an out-of-range H3 allocation",
+      (root: string) => {
+        const customerPath = path.join(root, "01_customer_draft.md");
+        fs.writeFileSync(
+          customerPath,
+          fs
+            .readFileSync(customerPath, "utf8")
+            .replace("### 产品与服务主题2", "#### 产品与服务主题2"),
+        );
+      },
+      "must contain 2–5 H3 topics",
+    ],
+    [
+      "seventeen public-page attempts",
+      (root: string) => {
+        const runPath = path.join(root, "02_run.json");
+        const run = JSON.parse(fs.readFileSync(runPath, "utf8"));
+        run.sources = Array.from({ length: 17 }, (_, index) => ({
+          title: `公开页 ${index + 1}`,
+          kind: "official_web",
+          status: "read",
+          url: `https://example.com/budget-${index + 1}`,
+        }));
+        fs.writeFileSync(runPath, JSON.stringify(run));
+      },
+      "exceeds 16 distinct public-page attempts",
+    ],
+    [
+      "five public queries",
+      (root: string) => {
+        const runPath = path.join(root, "02_run.json");
+        const run = JSON.parse(fs.readFileSync(runPath, "utf8"));
+        run.queries = Array.from(
+          { length: 5 },
+          (_, index) => `公开查询 ${index + 1}`,
+        );
+        fs.writeFileSync(runPath, JSON.stringify(run));
+      },
+      "queries must contain at most 4 text items",
+    ],
+    [
+      "thirty-one source records",
+      (root: string) => {
+        const runPath = path.join(root, "02_run.json");
+        const run = JSON.parse(fs.readFileSync(runPath, "utf8"));
+        run.sources = Array.from({ length: 31 }, (_, index) => ({
+          title: `来源 ${index + 1}`,
+          kind: "official_web",
+          status: "read",
+          url: `https://example.com/source-${index + 1}`,
+        }));
+        fs.writeFileSync(runPath, JSON.stringify(run));
+      },
+      "sources must be an array of at most 30",
+    ],
+    [
+      "more than 40,000 visible customer characters",
+      (root: string) => {
+        const customerPath = path.join(root, "01_customer_draft.md");
+        fs.appendFileSync(customerPath, `\n\n${"超".repeat(40_001)}`);
+      },
+      "exceeds 40000 visible characters",
+    ],
+    [
+      "an accepted upload recorded as failed",
+      (root: string) => {
+        const runPath = path.join(root, "02_run.json");
+        const run = JSON.parse(fs.readFileSync(runPath, "utf8"));
+        run.sources.push({
+          title: "用户上传资料",
+          kind: "user_upload",
+          status: "failed",
+          attachmentName: "catalog.pdf",
+        });
+        fs.writeFileSync(runPath, JSON.stringify(run));
+      },
+      "user_upload must have status read",
+    ],
+    [
+      "a floor exception with a short reason",
+      (root: string) => {
+        const customerPath = path.join(root, "01_customer_draft.md");
+        fs.writeFileSync(
+          customerPath,
+          fs
+            .readFileSync(customerPath, "utf8")
+            .replace(
+              /^## 企业与品牌[\s\S]*?(?=^## 团队与组织)/m,
+              "## 企业与品牌\n\n### 企业与品牌主题1\n\n资料暂缺。[待核验]\n\n",
+            ),
+        );
+        const runPath = path.join(root, "02_run.json");
+        const run = JSON.parse(fs.readFileSync(runPath, "utf8"));
+        run.contentFloorExceptions = [
+          {
+            section: "企业与品牌",
+            reason: "😀".repeat(12),
+            attemptedSourceUrls: run.sources
+              .slice(0, 3)
+              .map((source: { url: string }) => source.url),
+          },
+        ];
+        fs.writeFileSync(runPath, JSON.stringify(run));
+      },
+      "reason must be concrete",
+    ],
+    [
+      "user-upload URLs used as floor-exception attempts",
+      (root: string) => {
+        const customerPath = path.join(root, "01_customer_draft.md");
+        fs.writeFileSync(
+          customerPath,
+          fs
+            .readFileSync(customerPath, "utf8")
+            .replace(
+              /^## 企业与品牌[\s\S]*?(?=^## 团队与组织)/m,
+              "## 企业与品牌\n\n### 企业与品牌主题1\n\n资料暂缺。[待核验]\n\n",
+            ),
+        );
+        const runPath = path.join(root, "02_run.json");
+        const run = JSON.parse(fs.readFileSync(runPath, "utf8"));
+        const attemptedSourceUrls = [
+          "https://uploads.example.test/one",
+          "https://uploads.example.test/two",
+          "https://uploads.example.test/three",
+        ];
+        run.sources.push(
+          ...attemptedSourceUrls.map((url: string, index: number) => ({
+            title: `上传材料 ${index + 1}`,
+            kind: "user_upload",
+            status: "read",
+            url,
+            attachmentName: `upload-${index + 1}.pdf`,
+          })),
+        );
+        run.contentFloorExceptions = [
+          {
+            section: "企业与品牌",
+            reason: "官网和公开权威页面均未披露更多可验证的企业事实。",
+            attemptedSourceUrls,
+          },
+        ];
+        fs.writeFileSync(runPath, JSON.stringify(run));
+      },
+      "references URLs absent from sources",
+    ],
+  ] as const)(
+    "rejects schema-v2 %s in the bundled Python packager",
+    async (_label, mutate, expectedError) => {
+      const temporaryRoot = fs.mkdtempSync(
+        path.join(os.tmpdir(), "website-kb-skill-budget-"),
+      );
+      try {
+        writeWebsiteV2PythonBudgetFixture(temporaryRoot);
+        mutate(temporaryRoot);
+        await expect(
+          execFileAsync("python3", [
+            path.resolve(
+              process.cwd(),
+              "server/skills/website-one-shot-kb-builder/scripts/build_candidate.py",
+            ),
+            "--input-dir",
+            temporaryRoot,
+            "--output",
+            path.join(temporaryRoot, "website-lead-candidate-v1.zip"),
+          ]),
+        ).rejects.toMatchObject({
+          stderr: expect.stringContaining(expectedError),
+        });
+      } finally {
+        fs.rmSync(temporaryRoot, { recursive: true, force: true });
+      }
+    },
+  );
 
   it("rejects customer evidence references absent from the brand facts", async () => {
     const temporaryRoot = fs.mkdtempSync(
@@ -416,7 +777,14 @@ describe("website one-shot knowledge-base skill", () => {
         "服务与合作",
         "可信优势",
       ]
-        .map((title) => `## ${title}\n\n内容很少。[待核验]`)
+        .map((title, index) => {
+          const topicCount = [1, 1, 2, 2, 1, 1, 1][index]!;
+          return `## ${title}\n\n${Array.from(
+            { length: topicCount },
+            (_, topicIndex) =>
+              `### ${title}主题${topicIndex + 1}\n\n内容很少。[待核验]`,
+          ).join("\n\n")}`;
+        })
         .join("\n\n");
       fs.writeFileSync(path.join(temporaryRoot, "00_brand_facts.md"), facts);
       fs.writeFileSync(
@@ -426,13 +794,14 @@ describe("website one-shot knowledge-base skill", () => {
       fs.writeFileSync(
         path.join(temporaryRoot, "02_run.json"),
         JSON.stringify({
-          schemaVersion: 1,
+          schemaVersion: 2,
           company: {
             name: "示例企业",
             officialWebsite: "https://example.com",
           },
           sources: [],
           queries: [],
+          stopReason: "source_exhausted",
           contentFloorExceptions: [],
           logoAcquisition: { status: "retained", attemptedPageUrls: [] },
           assets: [],
@@ -460,7 +829,7 @@ describe("website one-shot knowledge-base skill", () => {
       fs.writeFileSync(
         path.join(temporaryRoot, "02_run.json"),
         JSON.stringify({
-          schemaVersion: 1,
+          schemaVersion: 2,
           company: {
             name: "示例企业",
             officialWebsite: "https://example.com",
@@ -480,6 +849,7 @@ describe("website one-shot knowledge-base skill", () => {
             },
           ],
           queries: [],
+          stopReason: "source_exhausted",
           contentFloorExceptions: [],
           logoAcquisition: {
             status: "unavailable",
@@ -523,7 +893,7 @@ describe("website one-shot knowledge-base skill", () => {
     for (const cluster of ["C1", "C2", "C3", "C4", "C5", "C6"]) {
       expect(dimensions).toContain(cluster);
     }
-    expect(candidateFormat).toContain('"schemaVersion": 1');
+    expect(candidateFormat).toContain('"schemaVersion": 2');
     expect(candidateFormat).toMatch(/\| 企业与品牌\s+\|\s+210 \|\s+500 \|/);
     expect(candidateFormat).toMatch(/\| 合计\s+\|\s+2954 \|\s+6300 \|/);
     expect(candidateFormat).toContain("logoAcquisition");
@@ -678,6 +1048,9 @@ describe("GEO custom-question classifier skill", () => {
     expect(prompt).toContain("企业相关性");
     expect(prompt).toContain("行业排名");
     expect(prompt).toContain("单个 JSON 对象");
+    expect(prompt.split("\n").at(-1)).toBe(
+      "生成后必须自行 serialize 并重新 parse，按 strict schema 核验全部字段、证据路径与企业锚点；只输出一次单个有效 JSON 对象，服务端仍会执行最终权威校验。",
+    );
     expect(prompt).not.toContain("# FILE:");
     expect(Buffer.byteLength(prompt, "utf8")).toBeLessThan(4 * 1024);
   });
