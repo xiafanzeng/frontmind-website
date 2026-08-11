@@ -8,6 +8,7 @@ import {
   determineBsasGrade,
 } from "./assessment";
 import {
+  canonicalTrustedTaskJson,
   parseTrustedTaskJsonCandidate,
   resolveTrustedTaskJsonOutput,
   trustedTaskJsonObjectCandidates,
@@ -714,13 +715,20 @@ function inspectInlineForecastTaskOutput(
 
   let sawParsedJson = false;
   let validation: unknown;
+  const validCandidates = new Map<string, ForecastRawTaskOutput>();
   for (const item of trustedItems.filter(
     isTrustedStructuredForecastOutputItem,
   )) {
     if (!context.takeCandidate(item)) break;
     sawParsedJson = true;
     const inspection = inspectParsedForecastTaskOutput(item);
-    if (inspection.success) return inspection;
+    if (inspection.success) {
+      validCandidates.set(
+        canonicalTrustedTaskJson(inspection.data),
+        inspection.data,
+      );
+      continue;
+    }
     validation = inspection.validation;
   }
   for (const candidate of trustedTexts) {
@@ -731,9 +739,27 @@ function inspectInlineForecastTaskOutput(
       if (parsed === undefined) continue;
       sawParsedJson = true;
       const inspection = inspectParsedForecastTaskOutput(parsed);
-      if (inspection.success) return inspection;
+      if (inspection.success) {
+        validCandidates.set(
+          canonicalTrustedTaskJson(inspection.data),
+          inspection.data,
+        );
+        continue;
+      }
       validation = inspection.validation;
     }
+  }
+  if (validCandidates.size === 1) {
+    return { success: true, data: validCandidates.values().next().value! };
+  }
+  if (validCandidates.size > 1) {
+    return {
+      success: false,
+      code: "SCHEMA_MISMATCH",
+      validation: [
+        { path: ["root"], message: "Conflicting valid JSON candidates" },
+      ],
+    };
   }
   return {
     success: false,
@@ -745,9 +771,12 @@ function inspectInlineForecastTaskOutput(
 export function parseOptimizationOutcomeForecastTaskOutput(
   value: unknown,
 ): ForecastRawTaskOutput {
+  const validCandidates = new Map<string, ForecastRawTaskOutput>();
   for (const item of trustedAssistantOutputItems(value)) {
     const parsed = ForecastRawTaskOutputSchema.safeParse(item);
-    if (parsed.success) return parsed.data;
+    if (parsed.success) {
+      validCandidates.set(canonicalTrustedTaskJson(parsed.data), parsed.data);
+    }
   }
 
   for (const candidate of trustedAssistantOutputTexts(value)) {
@@ -755,8 +784,14 @@ export function parseOptimizationOutcomeForecastTaskOutput(
       const candidateValue = parseTrustedTaskJsonCandidate(jsonText);
       if (candidateValue === undefined) continue;
       const parsed = ForecastRawTaskOutputSchema.safeParse(candidateValue);
-      if (parsed.success) return parsed.data;
+      if (parsed.success) {
+        validCandidates.set(canonicalTrustedTaskJson(parsed.data), parsed.data);
+      }
     }
+  }
+
+  if (validCandidates.size === 1) {
+    return validCandidates.values().next().value!;
   }
 
   throw new Error(FORECAST_TASK_OUTPUT_ERROR_MESSAGE);

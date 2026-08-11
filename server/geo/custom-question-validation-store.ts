@@ -99,7 +99,12 @@ const CustomQuestionValidationRecordSchema = z
       .max(20)
       .default([]),
     attachmentRebuildCount: z.number().int().min(0).max(10).default(0),
+    formatRetryCount: z.number().int().min(0).max(1).default(0),
     taskId: z.string().min(1).max(200).optional(),
+    priorTaskIds: z
+      .array(z.string().min(1).max(200))
+      .max(1)
+      .default([]),
     result: GeoQuestionSchema.optional(),
     completionMode: z.literal("existing_recommended_question").optional(),
     error: StoredErrorSchema.optional(),
@@ -256,6 +261,11 @@ export interface GeoCustomQuestionValidationStore {
   getActive(
     projectId: string,
   ): Promise<GeoCustomQuestionValidationRecord | undefined>;
+  findReplayableInvalid(
+    projectId: string,
+    ownerSessionHash: string,
+    questionHash: string,
+  ): Promise<GeoCustomQuestionValidationRecord | undefined>;
   ensureActive(
     projectId: string,
     clientRequestId: string,
@@ -381,7 +391,9 @@ function isPristineReservationLoser(record: GeoCustomQuestionValidationRecord) {
     !record.promptInputStagingAttachment &&
     record.orphanedTemporaryFileIds.length === 0 &&
     record.attachmentRebuildCount === 0 &&
+    record.formatRetryCount === 0 &&
     !record.taskId &&
+    record.priorTaskIds.length === 0 &&
     !record.result &&
     !record.error &&
     record.unknownStatusCount === 0 &&
@@ -454,7 +466,10 @@ function projectDeletionTargetsFromRecords(
   return {
     taskIds: Array.from(
       new Set(
-        records.flatMap((record) => (record.taskId ? [record.taskId] : [])),
+        records.flatMap((record) => [
+          ...record.priorTaskIds,
+          ...(record.taskId ? [record.taskId] : []),
+        ]),
       ),
     ),
     temporaryFileIds: Array.from(
@@ -482,6 +497,8 @@ function initialRecord(
     state: "reserved",
     orphanedTemporaryFileIds: [],
     attachmentRebuildCount: 0,
+    formatRetryCount: 0,
+    priorTaskIds: [],
     unknownStatusCount: 0,
     transientErrorCount: 0,
     cleanupCompleted: false,
@@ -1121,6 +1138,30 @@ export class MemoryGeoCustomQuestionValidationStore
       if (records.length >= limit) break;
     }
     return records;
+  }
+
+  async findReplayableInvalid(
+    projectId: string,
+    ownerSessionHash: string,
+    questionHash: string,
+  ) {
+    const now = this.now();
+    return Array.from(this.records.values())
+      .filter(
+        (record) =>
+          record.projectId === projectId &&
+          record.ownerSessionHash === ownerSessionHash &&
+          record.questionHash === questionHash &&
+          record.taskId &&
+          record.error?.code ===
+            "CUSTOM_QUESTION_CLASSIFIER_INVALID_RESPONSE" &&
+          Date.parse(record.expiresAt) > now,
+      )
+      .sort(
+        (left, right) =>
+          Date.parse(right.updatedAt) - Date.parse(left.updatedAt),
+      )
+      .map(cloneRecord)[0];
   }
 
   async tryAcquireLease(
@@ -1926,6 +1967,29 @@ export class FileGeoCustomQuestionValidationStore
       if (records.length >= limit) break;
     }
     return records;
+  }
+
+  async findReplayableInvalid(
+    projectId: string,
+    ownerSessionHash: string,
+    questionHash: string,
+  ) {
+    await this.assertDirectory();
+    const now = this.now();
+    return (await this.readProjectRecords(projectId))
+      .filter(
+        (record) =>
+          record.ownerSessionHash === ownerSessionHash &&
+          record.questionHash === questionHash &&
+          record.taskId &&
+          record.error?.code ===
+            "CUSTOM_QUESTION_CLASSIFIER_INVALID_RESPONSE" &&
+          Date.parse(record.expiresAt) > now,
+      )
+      .sort(
+        (left, right) =>
+          Date.parse(right.updatedAt) - Date.parse(left.updatedAt),
+      )[0];
   }
 
   async tryAcquireLease(
@@ -3045,6 +3109,7 @@ export function geoCustomQuestionOperationKey(record: {
   projectId: string;
   clientRequestId: string;
   questionHash: string;
+  formatRetryCount?: number;
 }) {
   return [
     "geo",
@@ -3052,6 +3117,7 @@ export function geoCustomQuestionOperationKey(record: {
     "custom-question-classifier",
     record.clientRequestId,
     record.questionHash.slice(0, 24),
+    `format-${record.formatRetryCount ?? 0}`,
   ].join(":");
 }
 

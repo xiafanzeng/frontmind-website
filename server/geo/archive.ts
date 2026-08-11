@@ -28,9 +28,18 @@ const MAX_TOTAL_ASSET_PREVIEW_BYTES = 16 * 1024 * 1024;
 const MAX_RASTER_DECODE_PIXELS = 40_000_000;
 const MIN_KNOWLEDGE_LEAVES = 8;
 const WEBSITE_LEAD_MAX_KNOWLEDGE_LEAVES = 56;
+const WEBSITE_LEAD_V4_MIN_KNOWLEDGE_LEAVES = 10;
+const WEBSITE_LEAD_V4_MAX_KNOWLEDGE_LEAVES = 20;
+const WEBSITE_LEAD_V4_MAX_SOURCE_RECORDS = 30;
+const WEBSITE_LEAD_V4_MAX_PUBLIC_PAGE_ATTEMPTS = 16;
+const WEBSITE_LEAD_V4_MAX_WEB_QUERIES = 4;
+const WEBSITE_LEAD_V4_MAX_OFFICIAL_DOCUMENTS = 4;
+const WEBSITE_LEAD_V4_MAX_USER_UPLOADS = 10;
+const WEBSITE_LEAD_V4_MAX_PRODUCT_FAMILIES = 5;
 const WEBSITE_LEAD_MAX_FILES = 150;
 const WEBSITE_LEAD_MAX_IMAGES = 48;
 const WEBSITE_LEAD_MAX_DOCUMENTS = 22;
+const WEBSITE_LEAD_V4_MAX_PACKAGED_DOCUMENTS = 64;
 const WEBSITE_LEAD_MAX_NARRATIVE_CHARACTERS = 18_000;
 const WEBSITE_LEAD_MIN_EVIDENCE_LEAF_CHARACTERS = 120;
 const WEBSITE_LEAD_V2_MAX_NARRATIVE_CHARACTERS = 40_000;
@@ -454,19 +463,16 @@ const PackageArchivePathSchema = z
   });
 
 /**
- * Consumer-first path inventory contract. The current finalizer deliberately
- * continues to emit schema v3; schema v4 is accepted here so a future provider
- * can distinguish the complete ZIP inventory from paths that may ground model
- * evidence without changing the legacy evidencePaths meaning in place.
+ * Consumer-first path inventory contract. Schema v4 distinguishes the full
+ * ZIP inventory from documents that may ground model evidence without
+ * changing the legacy evidencePaths meaning in place.
  */
 export const WebsiteLeadPackageManifestV4InputSchema =
   WebsiteLeadPackageManifestV3InputSchema.extend({
     schemaVersion: z.literal(4),
+    candidateContractVersion: z.literal(2),
     allPaths: z.array(PackageArchivePathSchema).min(1).max(MAX_ENTRY_COUNT),
-    evidencePaths: z
-      .array(PackageArchivePathSchema)
-      .min(1)
-      .max(MAX_ENTRY_COUNT),
+    evidencePaths: z.array(PackageArchivePathSchema).max(MAX_ENTRY_COUNT),
   }).strict();
 
 const WebsiteLeadPackageManifestInputSchema = z.discriminatedUnion(
@@ -884,6 +890,20 @@ export type KnowledgeBaseManifest = {
     sourcePageUrl?: string;
     sourceAssetUrl?: string;
     ownership?: "first_party" | "third_party" | "unknown";
+  }>;
+  /** Server-only v4 document registry used to bind downstream evidence. */
+  documents?: Array<{
+    path: string;
+    kind:
+      | "overview"
+      | "leaf"
+      | "evidence"
+      | "report"
+      | "index"
+      | "tree"
+      | "source_index"
+      | "readme";
+    customerVisible: boolean;
   }>;
   /**
    * Server-only complete ZIP inventory. Present only for the explicit v4 path
@@ -1506,7 +1526,14 @@ async function parseKnowledgeBaseArchiveInternal(
     sources,
     assets,
     ...(packageManifest?.schemaVersion === 4
-      ? { allPaths: files.map((file) => file.path) }
+      ? {
+          allPaths: files.map((file) => file.path),
+          documents: packageManifest.documents.map((document) => ({
+            path: document.path,
+            kind: document.kind,
+            customerVisible: document.customerVisible,
+          })),
+        }
       : {}),
     evidencePaths:
       packageManifest?.schemaVersion === 4
@@ -1534,7 +1561,7 @@ async function parseWebsiteLeadPackageManifest(
       file.entry,
       MAX_PACKAGE_MANIFEST_BYTES,
     );
-    const text = new TextDecoder("utf-8", { fatal: true }).decode(bytes);
+    const text = decodeStrictJsonTextView(bytes);
     const parsed = WebsiteLeadPackageManifestInputSchema.parse(
       JSON.parse(text),
     );
@@ -1614,7 +1641,7 @@ async function parseKnowledgeBaseCompleteness(
 
   try {
     const bytes = await readZipEntryLimited(file.entry, MAX_COMPLETENESS_BYTES);
-    const text = new TextDecoder("utf-8", { fatal: true }).decode(bytes);
+    const text = decodeStrictJsonTextView(bytes);
     const input: unknown = JSON.parse(text);
     const canonical = KnowledgeBaseCompletenessInputSchema.safeParse(input);
     if (canonical.success) {
@@ -1729,6 +1756,19 @@ async function parseKnowledgeBaseCompleteness(
       ? error
       : new Error("Knowledge-base completeness manifest is invalid");
   }
+}
+
+/**
+ * JSON metadata inside a ZIP may carry one ordinary UTF-8 BOM. Strip it only
+ * from the parsing view: callers still hash and verify the original bytes.
+ * A second BOM remains visible and therefore fails strict JSON.parse.
+ */
+function decodeStrictJsonTextView(bytes: Buffer) {
+  const text = new TextDecoder("utf-8", {
+    fatal: true,
+    ignoreBOM: true,
+  }).decode(bytes);
+  return text.startsWith("\ufeff") ? text.slice(1) : text;
 }
 
 function buildKnowledgeBaseCompleteness(
@@ -2311,11 +2351,20 @@ async function validateWebsiteLeadPackageBudgets(
       `New website knowledge-base archive exceeds ${WEBSITE_LEAD_MAX_FILES} files`,
     );
   }
+  const minimumLeaves =
+    packageManifest.schemaVersion === 4
+      ? WEBSITE_LEAD_V4_MIN_KNOWLEDGE_LEAVES
+      : MIN_KNOWLEDGE_LEAVES;
+  const maximumLeaves =
+    packageManifest.schemaVersion === 4
+      ? WEBSITE_LEAD_V4_MAX_KNOWLEDGE_LEAVES
+      : WEBSITE_LEAD_MAX_KNOWLEDGE_LEAVES;
   if (
-    contract.completeness.counts.totalLeaves > WEBSITE_LEAD_MAX_KNOWLEDGE_LEAVES
+    contract.completeness.counts.totalLeaves < minimumLeaves ||
+    contract.completeness.counts.totalLeaves > maximumLeaves
   ) {
     throw new Error(
-      `New website knowledge-base archive exceeds ${WEBSITE_LEAD_MAX_KNOWLEDGE_LEAVES} content leaves`,
+      `New website knowledge-base archive must contain ${minimumLeaves}–${maximumLeaves} content leaves`,
     );
   }
   for (const prefix of WEBSITE_LEAD_CONTENT_PREFIXES) {
@@ -2497,11 +2546,11 @@ async function validateWebsiteLeadPackageBudgets(
   );
   if (packageManifest.schemaVersion !== 1) {
     if (
-      leafDocuments.length < MIN_KNOWLEDGE_LEAVES ||
-      leafDocuments.length > WEBSITE_LEAD_MAX_KNOWLEDGE_LEAVES
+      leafDocuments.length < minimumLeaves ||
+      leafDocuments.length > maximumLeaves
     ) {
       throw new Error(
-        `New website knowledge-base must contain ${MIN_KNOWLEDGE_LEAVES}–${WEBSITE_LEAD_MAX_KNOWLEDGE_LEAVES} true leaf documents in addition to its overviews`,
+        `New website knowledge-base must contain ${minimumLeaves}–${maximumLeaves} true leaf documents in addition to its overviews`,
       );
     }
     if (contract.completeness.counts.totalLeaves !== leafDocuments.length) {
@@ -3118,19 +3167,95 @@ async function validateWebsiteLeadPackageBudgets(
   const documentCount = files.filter(({ path: entryPath }) =>
     isDocumentPath(entryPath),
   ).length;
-  if (documentCount > WEBSITE_LEAD_MAX_DOCUMENTS) {
+  const maximumPackagedDocuments =
+    packageManifest.schemaVersion === 4
+      ? WEBSITE_LEAD_V4_MAX_PACKAGED_DOCUMENTS
+      : WEBSITE_LEAD_MAX_DOCUMENTS;
+  if (documentCount > maximumPackagedDocuments) {
     throw new Error(
-      `New website knowledge-base archive exceeds ${WEBSITE_LEAD_MAX_DOCUMENTS} packaged documents`,
+      `New website knowledge-base archive exceeds ${maximumPackagedDocuments} packaged documents`,
     );
   }
 
   const acquisition = contract.completeness.acquisition;
+  // Schema v4 was introduced together with candidate contract v2 and has
+  // never been published with a legacy candidate payload. Keep every v4
+  // archive on the bounded Website contract instead of allowing a manifest
+  // field to turn the resource gates off.
+  const strictWebsiteV2Candidate = packageManifest.schemaVersion === 4;
+  if (strictWebsiteV2Candidate) {
+    const sourceIndex = markdownFiles.get("00_source_index.md") || "";
+    const sourceRows = sourceIndex
+      .split(/\r?\n/)
+      .map((line) =>
+        line.match(
+          /^- \[[A-Za-z][A-Za-z0-9_-]{0,79}] .*?｜(official_web|official_document|user_upload|authoritative|reputable_media|other)｜(read|partial|failed)｜(.+)$/,
+        ),
+      )
+      .filter((match): match is RegExpMatchArray => Boolean(match));
+    if (sourceRows.length > WEBSITE_LEAD_V4_MAX_SOURCE_RECORDS) {
+      throw new Error(
+        `New website knowledge-base archive exceeds ${WEBSITE_LEAD_V4_MAX_SOURCE_RECORDS} source records`,
+      );
+    }
+    const publicPageRows = sourceRows.filter(
+      (match) =>
+        !["official_document", "user_upload"].includes(match[1]!) &&
+        /^https?:\/\//i.test(match[3]!),
+    );
+    const officialDocumentRows = sourceRows.filter(
+      (match) => match[1] === "official_document",
+    );
+    const userUploadRows = sourceRows.filter(
+      (match) => match[1] === "user_upload",
+    );
+    if (publicPageRows.length > WEBSITE_LEAD_V4_MAX_PUBLIC_PAGE_ATTEMPTS) {
+      throw new Error(
+        `New website knowledge-base archive exceeds ${WEBSITE_LEAD_V4_MAX_PUBLIC_PAGE_ATTEMPTS} public-page attempts`,
+      );
+    }
+    if (officialDocumentRows.length > WEBSITE_LEAD_V4_MAX_OFFICIAL_DOCUMENTS) {
+      throw new Error(
+        `New website knowledge-base archive exceeds ${WEBSITE_LEAD_V4_MAX_OFFICIAL_DOCUMENTS} official documents`,
+      );
+    }
+    if (userUploadRows.length > WEBSITE_LEAD_V4_MAX_USER_UPLOADS) {
+      throw new Error(
+        `New website knowledge-base archive exceeds ${WEBSITE_LEAD_V4_MAX_USER_UPLOADS} user uploads`,
+      );
+    }
+    if (
+      (acquisition.officialPages?.total ?? 0) !== publicPageRows.length ||
+      (acquisition.documents?.total ?? 0) !==
+        officialDocumentRows.length + userUploadRows.length
+    ) {
+      throw new Error(
+        "New website knowledge-base acquisition totals do not match its source ledger",
+      );
+    }
+    if (
+      packageManifest.imageSelection.productFamilies.length >
+      WEBSITE_LEAD_V4_MAX_PRODUCT_FAMILIES
+    ) {
+      throw new Error(
+        `New website knowledge-base archive exceeds ${WEBSITE_LEAD_V4_MAX_PRODUCT_FAMILIES} core product families`,
+      );
+    }
+  }
   if (
     (acquisition.officialPages?.completed ?? 0) >
-    WEBSITE_LEAD_MAX_OFFICIAL_PAGES
+      (strictWebsiteV2Candidate
+        ? WEBSITE_LEAD_V4_MAX_PUBLIC_PAGE_ATTEMPTS
+        : WEBSITE_LEAD_MAX_OFFICIAL_PAGES) ||
+    (acquisition.officialPages?.total ?? 0) >
+      (strictWebsiteV2Candidate
+        ? WEBSITE_LEAD_V4_MAX_PUBLIC_PAGE_ATTEMPTS
+        : WEBSITE_LEAD_MAX_OFFICIAL_PAGES)
   ) {
     throw new Error(
-      `New website knowledge-base archive exceeds ${WEBSITE_LEAD_MAX_OFFICIAL_PAGES} successfully parsed official pages`,
+      strictWebsiteV2Candidate
+        ? `New website knowledge-base archive exceeds ${WEBSITE_LEAD_V4_MAX_PUBLIC_PAGE_ATTEMPTS} public pages`
+        : `New website knowledge-base archive exceeds ${WEBSITE_LEAD_MAX_OFFICIAL_PAGES} successfully parsed official pages`,
     );
   }
   if ((acquisition.images?.completed ?? 0) > WEBSITE_LEAD_MAX_IMAGES) {
@@ -3389,17 +3514,26 @@ async function validateWebsiteLeadPackageBudgets(
   }
   // The manifest combines up to ten user uploads with up to twelve linked
   // official documents, so the machine-readable completed count may be 22.
-  if ((acquisition.documents?.completed ?? 0) > WEBSITE_LEAD_MAX_DOCUMENTS) {
-    throw new Error(
-      `New website knowledge-base archive exceeds ${WEBSITE_LEAD_MAX_DOCUMENTS} parsed documents`,
-    );
-  }
+  const maximumParsedDocuments = strictWebsiteV2Candidate
+    ? WEBSITE_LEAD_V4_MAX_OFFICIAL_DOCUMENTS + WEBSITE_LEAD_V4_MAX_USER_UPLOADS
+    : WEBSITE_LEAD_MAX_DOCUMENTS;
   if (
-    (acquisition.webQueries?.completed ?? 0) > WEBSITE_LEAD_MAX_WEB_QUERIES ||
-    (acquisition.webQueries?.total ?? 0) > WEBSITE_LEAD_MAX_WEB_QUERIES
+    (acquisition.documents?.completed ?? 0) > maximumParsedDocuments ||
+    (acquisition.documents?.total ?? 0) > maximumParsedDocuments
   ) {
     throw new Error(
-      `New website knowledge-base archive exceeds ${WEBSITE_LEAD_MAX_WEB_QUERIES} public-web queries`,
+      `New website knowledge-base archive exceeds ${maximumParsedDocuments} parsed documents`,
+    );
+  }
+  const maximumWebQueries = strictWebsiteV2Candidate
+    ? WEBSITE_LEAD_V4_MAX_WEB_QUERIES
+    : WEBSITE_LEAD_MAX_WEB_QUERIES;
+  if (
+    (acquisition.webQueries?.completed ?? 0) > maximumWebQueries ||
+    (acquisition.webQueries?.total ?? 0) > maximumWebQueries
+  ) {
+    throw new Error(
+      `New website knowledge-base archive exceeds ${maximumWebQueries} public-web queries`,
     );
   }
 

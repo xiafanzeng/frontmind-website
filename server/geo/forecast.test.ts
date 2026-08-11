@@ -546,6 +546,29 @@ describe("GEO optimization forecast schema and parser", () => {
     expect(parsed.roadmap.map((phase) => phase.phase)).toEqual([1, 2, 3, 4]);
   });
 
+  it("fails closed when one forecast operation returns conflicting strict candidates", () => {
+    const first = rawForecast();
+    const second = structuredClone(first);
+    second.summary = `${second.summary} Conflicting version.`;
+
+    expect(() =>
+      parseOptimizationOutcomeForecastTaskOutput({
+        output: [
+          {
+            role: "assistant",
+            type: "output_text",
+            text: JSON.stringify(first),
+          },
+          {
+            role: "assistant",
+            type: "output_text",
+            text: JSON.stringify(second),
+          },
+        ],
+      }),
+    ).toThrow("strict geo-optimization-outcome-forecaster JSON");
+  });
+
   it("uses the shared bounded recovery for inline forecast string quotes", () => {
     const raw = rawForecast();
     raw.summary = '规划结果为"可执行但仍需复测"，不得视为结果保证。';
@@ -605,7 +628,7 @@ describe("GEO optimization forecast schema and parser", () => {
     ]);
   });
 
-  it("prefers a valid typed output_file and safely falls back to inline JSON", async () => {
+  it("fails on conflicting valid channels and safely falls back when the file is unavailable", async () => {
     const inline = rawForecast();
     inline.summary =
       "这是 inline 通道中的完整预测摘要，仅用于验证安全回退逻辑。";
@@ -613,7 +636,7 @@ describe("GEO optimization forecast schema and parser", () => {
     fromFile.summary =
       "这是 typed output_file 中的完整预测摘要，应作为首选结果。";
 
-    const preferred = await resolveOptimizationOutcomeForecastTaskOutput(
+    const conflicting = resolveOptimizationOutcomeForecastTaskOutput(
       {
         async downloadFile() {
           return new Response(JSON.stringify(fromFile));
@@ -633,7 +656,9 @@ describe("GEO optimization forecast schema and parser", () => {
         ],
       },
     );
-    expect(preferred.summary).toBe(fromFile.summary);
+    await expect(conflicting).rejects.toMatchObject({
+      code: "SCHEMA_MISMATCH",
+    });
 
     const fallback = await resolveOptimizationOutcomeForecastTaskOutput(
       {

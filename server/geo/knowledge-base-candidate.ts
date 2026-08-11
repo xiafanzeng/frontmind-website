@@ -11,6 +11,12 @@ const MAX_SINGLE_TEXT_BYTES = 2 * 1024 * 1024;
 const MAX_SINGLE_ASSET_BYTES = 8 * 1024 * 1024;
 const MAX_SINGLE_ENTRY_BYTES = 100 * 1024 * 1024;
 const MAX_COMPRESSION_RATIO = 200;
+const WEBSITE_V2_MAX_SOURCE_RECORDS = 30;
+const WEBSITE_V2_MAX_PUBLIC_PAGE_ATTEMPTS = 16;
+const WEBSITE_V2_MAX_WEB_QUERIES = 4;
+const WEBSITE_V2_MAX_OFFICIAL_DOCUMENTS = 4;
+const WEBSITE_V2_MAX_USER_UPLOADS = 10;
+const WEBSITE_V2_MAX_CUSTOMER_CHARACTERS = 40_000;
 const UNSAFE_EXTRA_EXTENSIONS = new Set([
   ".app",
   ".bat",
@@ -65,6 +71,32 @@ export const CUSTOMER_SECTIONS = [
   "可信优势",
 ] as const;
 
+export const WEBSITE_V2_SECTION_CONTENT_FLOORS: Record<
+  (typeof CUSTOMER_SECTIONS)[number],
+  number
+> = {
+  企业与品牌: 500,
+  团队与组织: 500,
+  产品与服务: 2_500,
+  技术与交付: 1_000,
+  客户与行业: 600,
+  服务与合作: 600,
+  可信优势: 600,
+};
+
+export const WEBSITE_V2_SECTION_H3_RANGES: Record<
+  (typeof CUSTOMER_SECTIONS)[number],
+  readonly [minimum: number, maximum: number]
+> = {
+  企业与品牌: [1, 2],
+  团队与组织: [1, 2],
+  产品与服务: [2, 5],
+  技术与交付: [2, 3],
+  客户与行业: [1, 3],
+  服务与合作: [1, 2],
+  可信优势: [1, 2],
+};
+
 const CandidateSourceSchema = z
   .object({
     title: z.string().trim().min(1).max(500),
@@ -96,9 +128,8 @@ const CandidateAssetSchema = z
   })
   .passthrough();
 
-const CandidateRunSchema = z
+const CandidateRunBaseSchema = z
   .object({
-    schemaVersion: z.literal(1),
     company: z
       .object({
         name: z.string().trim().min(1).max(200),
@@ -108,15 +139,59 @@ const CandidateRunSchema = z
           .optional(),
       })
       .passthrough(),
-    sources: z.array(CandidateSourceSchema).max(500).optional().default([]),
-    queries: z
-      .array(z.string().trim().min(1).max(500))
-      .max(100)
-      .optional()
-      .default([]),
     assets: z.array(CandidateAssetSchema).max(1).optional().default([]),
   })
   .passthrough();
+
+const ContentFloorExceptionSchema = z
+  .object({
+    section: z.enum(CUSTOMER_SECTIONS),
+    reason: z.string().trim().min(1).max(1_000),
+    attemptedSourceUrls: z
+      .array(z.string().trim().min(1).max(4_000))
+      .min(3)
+      .max(16),
+  })
+  .passthrough();
+
+const CandidateRunV1Schema = CandidateRunBaseSchema.extend({
+  schemaVersion: z.literal(1),
+  sources: z.array(CandidateSourceSchema).max(500).optional().default([]),
+  queries: z
+    .array(z.string().trim().min(1).max(500))
+    .max(100)
+    .optional()
+    .default([]),
+}).passthrough();
+
+const CandidateRunV2Schema = CandidateRunBaseSchema.extend({
+  schemaVersion: z.literal(2),
+  sources: z
+    .array(CandidateSourceSchema)
+    .max(WEBSITE_V2_MAX_SOURCE_RECORDS)
+    .optional()
+    .default([]),
+  queries: z
+    .array(z.string().trim().min(1).max(500))
+    .max(WEBSITE_V2_MAX_WEB_QUERIES)
+    .optional()
+    .default([]),
+  contentFloorExceptions: z
+    .array(ContentFloorExceptionSchema)
+    .max(CUSTOMER_SECTIONS.length)
+    .optional()
+    .default([]),
+  stopReason: z.enum([
+    "coverage_complete",
+    "source_exhausted",
+    "budget_reached",
+  ]),
+}).passthrough();
+
+const CandidateRunSchema = z.discriminatedUnion("schemaVersion", [
+  CandidateRunV1Schema,
+  CandidateRunV2Schema,
+]);
 
 export type CandidateSource = z.infer<typeof CandidateSourceSchema> & {
   normalizedUrl?: string;
@@ -305,21 +380,31 @@ function sectionMap(markdown: string) {
   return sections;
 }
 
+function effectiveCharacterText(value: string) {
+  return value
+    .replace(/<!--[\s\S]*?-->/g, "")
+    .replace(/!\[[^\]]*]\([^)]*\)/g, "")
+    .replace(/\[(?:来源|企业主张|权威来源|第三方来源)]\([^)]*\)/g, "")
+    .replace(/https?:\/\/[^\s)>\]]+/gi, "")
+    .replace(/^#{1,6}\s+/gm, "")
+    .replace(/^\s*\|?[\s:|-]+\|?\s*$/gm, "")
+    .replace(/\[(?:待核验|上传文件：[^\]]+)]/g, "")
+    .replace(/\s/g, "")
+    .replace(
+      /[!"#$%&'()*+,\-./:;<=>?@[\\\]^_`{|}~，。！？；：“”‘’（）【】《》…—·]/g,
+      "",
+    );
+}
+
 function effectiveCharacters(value: string) {
-  return Array.from(
-    value
-      .replace(/<!--[\s\S]*?-->/g, "")
-      .replace(/!\[[^\]]*]\([^)]*\)/g, "")
-      .replace(/\[(?:来源|企业主张|权威来源|第三方来源)]\([^)]*\)/g, "")
-      .replace(/https?:\/\/[^\s)>\]]+/gi, "")
-      .replace(/^#{1,6}\s+/gm, "")
-      .replace(/^\s*\|?[\s:|-]+\|?\s*$/gm, "")
-      .replace(/\[(?:待核验|上传文件：[^\]]+)]/g, "")
-      .replace(/\s/g, "")
-      .replace(
-        /[!"#$%&'()*+,\-./:;<=>?@[\\\]^_`{|}~，。！？；：“”‘’（）【】《》…—·]/g,
-        "",
-      ),
+  return Array.from(effectiveCharacterText(value)).length;
+}
+
+const MEANINGFUL_REASON_CHARACTER = new RegExp("[\\p{L}\\p{N}_]", "u");
+
+function meaningfulReasonCharacterCount(value: string) {
+  return Array.from(effectiveCharacterText(value)).filter((character) =>
+    MEANINGFUL_REASON_CHARACTER.test(character),
   ).length;
 }
 
@@ -507,6 +592,214 @@ function canonicalMarkdown(
       return `## ${title}\n\n${sections.get(key) || gapFor(title)}`;
     })
     .join("\n\n");
+}
+
+function thirdLevelHeadings(markdown: string) {
+  return Array.from(markdown.matchAll(/^###\s+(.+?)\s*$/gm)).map((match) =>
+    match[1]!.normalize("NFKC").trim(),
+  );
+}
+
+function normalizedRunUrl(value: string | undefined) {
+  return publicHttpUrl(value)?.replace(/\/$/, "");
+}
+
+/**
+ * Enforces the v7 Website light-research contract. Legacy schema-v1
+ * candidates remain recoverable so an already-running v6 task can still be
+ * finalized by the new deterministic finalizer.
+ */
+export function validateWebsiteV2Candidate(candidate: ParsedCandidate) {
+  if (candidate.run?.schemaVersion !== 2) return;
+  const run = candidate.run;
+  const sources = candidate.sources;
+  if (sources.length > WEBSITE_V2_MAX_SOURCE_RECORDS) {
+    throw new KnowledgeBaseCandidateError(
+      `Website v2 candidate exceeds ${WEBSITE_V2_MAX_SOURCE_RECORDS} source records`,
+      "content",
+    );
+  }
+
+  const invalidSource = sources.find((source) => {
+    if (source.kind === "user_upload") return !source.attachmentName;
+    return source.url !== undefined && !publicHttpUrl(source.url);
+  });
+  if (invalidSource) {
+    throw new KnowledgeBaseCandidateError(
+      "Website v2 candidate contains an invalid source location",
+      "content",
+    );
+  }
+  if (
+    sources.some(
+      (source) => source.kind === "user_upload" && source.status !== "read",
+    )
+  ) {
+    throw new KnowledgeBaseCandidateError(
+      "Website v2 candidate must mark every user upload as read",
+      "content",
+    );
+  }
+
+  const publicPageUrls = new Set(
+    sources
+      .filter(
+        (source) =>
+          source.kind !== "official_document" && source.kind !== "user_upload",
+      )
+      .map((source) => normalizedRunUrl(source.url))
+      .filter((value): value is string => Boolean(value)),
+  );
+  const logoAcquisition = (
+    run as CandidateRun & {
+      logoAcquisition?: { attemptedPageUrls?: unknown };
+    }
+  ).logoAcquisition;
+  if (Array.isArray(logoAcquisition?.attemptedPageUrls)) {
+    for (const attempted of logoAcquisition.attemptedPageUrls) {
+      if (typeof attempted !== "string" || !publicHttpUrl(attempted)) {
+        throw new KnowledgeBaseCandidateError(
+          "Website v2 candidate contains an invalid Logo page attempt",
+          "content",
+        );
+      }
+      publicPageUrls.add(normalizedRunUrl(attempted)!);
+    }
+  }
+  if (publicPageUrls.size > WEBSITE_V2_MAX_PUBLIC_PAGE_ATTEMPTS) {
+    throw new KnowledgeBaseCandidateError(
+      `Website v2 candidate exceeds ${WEBSITE_V2_MAX_PUBLIC_PAGE_ATTEMPTS} distinct public-page attempts`,
+      "content",
+    );
+  }
+  if (run.queries.length > WEBSITE_V2_MAX_WEB_QUERIES) {
+    throw new KnowledgeBaseCandidateError(
+      `Website v2 candidate exceeds ${WEBSITE_V2_MAX_WEB_QUERIES} web queries`,
+      "content",
+    );
+  }
+  if (
+    sources.filter((source) => source.kind === "official_document").length >
+    WEBSITE_V2_MAX_OFFICIAL_DOCUMENTS
+  ) {
+    throw new KnowledgeBaseCandidateError(
+      `Website v2 candidate exceeds ${WEBSITE_V2_MAX_OFFICIAL_DOCUMENTS} official documents`,
+      "content",
+    );
+  }
+  const uploadNames = new Set(
+    sources
+      .filter((source) => source.kind === "user_upload")
+      .map((source) =>
+        source.attachmentName?.normalize("NFKC").trim().toLowerCase(),
+      )
+      .filter((value): value is string => Boolean(value)),
+  );
+  if (uploadNames.size > WEBSITE_V2_MAX_USER_UPLOADS) {
+    throw new KnowledgeBaseCandidateError(
+      `Website v2 candidate exceeds ${WEBSITE_V2_MAX_USER_UPLOADS} user uploads`,
+      "content",
+    );
+  }
+  if (
+    run.sources.filter((source) => source.kind === "user_upload").length >
+    WEBSITE_V2_MAX_USER_UPLOADS
+  ) {
+    throw new KnowledgeBaseCandidateError(
+      `Website v2 candidate exceeds ${WEBSITE_V2_MAX_USER_UPLOADS} user-upload records`,
+      "content",
+    );
+  }
+
+  let totalHeadings = 0;
+  let totalCharacters = 0;
+  const exceptions = new Map(
+    run.contentFloorExceptions.map((exception) => [
+      exception.section,
+      exception,
+    ]),
+  );
+  if (exceptions.size !== run.contentFloorExceptions.length) {
+    throw new KnowledgeBaseCandidateError(
+      "Website v2 candidate contains duplicate content-floor exceptions",
+      "content",
+    );
+  }
+  const sourceUrls = new Set(
+    sources
+      .filter((source) => source.kind !== "user_upload")
+      .map((source) => normalizedRunUrl(source.url))
+      .filter((value): value is string => Boolean(value)),
+  );
+  for (const section of CUSTOMER_SECTIONS) {
+    const markdown = candidate.customerSections.get(section) || "";
+    const headings = thirdLevelHeadings(markdown);
+    const [minimumHeadings, maximumHeadings] =
+      WEBSITE_V2_SECTION_H3_RANGES[section];
+    if (
+      headings.length < minimumHeadings ||
+      headings.length > maximumHeadings ||
+      new Set(headings.map((title) => title.toLowerCase())).size !==
+        headings.length
+    ) {
+      throw new KnowledgeBaseCandidateError(
+        `Website v2 section ${section} must contain ${minimumHeadings}–${maximumHeadings} unique H3 topics`,
+        "content",
+      );
+    }
+    totalHeadings += headings.length;
+    const characters = effectiveCharacters(markdown);
+    totalCharacters += characters;
+    const floor = WEBSITE_V2_SECTION_CONTENT_FLOORS[section];
+    const exception = exceptions.get(section);
+    if (characters >= floor) {
+      if (exception) {
+        throw new KnowledgeBaseCandidateError(
+          `Website v2 content-floor exception is unnecessary for ${section}`,
+          "content",
+        );
+      }
+      continue;
+    }
+    if (!exception || !/\[待核验]/.test(markdown)) {
+      throw new KnowledgeBaseCandidateError(
+        `Website v2 section ${section} is below its ${floor}-character floor without a valid gap`,
+        "content",
+      );
+    }
+    if (meaningfulReasonCharacterCount(exception.reason) < 12) {
+      throw new KnowledgeBaseCandidateError(
+        `Website v2 content-floor exception for ${section} must give a concrete reason of at least 12 characters`,
+        "content",
+      );
+    }
+    const attempted = new Set(
+      exception.attemptedSourceUrls
+        .map((url) => normalizedRunUrl(url))
+        .filter((value): value is string => Boolean(value)),
+    );
+    if (
+      attempted.size < 3 ||
+      Array.from(attempted).some((url) => !sourceUrls.has(url))
+    ) {
+      throw new KnowledgeBaseCandidateError(
+        `Website v2 content-floor exception for ${section} must cite three recorded public-source attempts`,
+        "content",
+      );
+    }
+  }
+  if (totalHeadings < 9 || totalHeadings > 19) {
+    throw new KnowledgeBaseCandidateError(
+      "Website v2 customer draft must contain 9–19 H3 topics in total",
+      "content",
+    );
+  }
+  if (totalCharacters > WEBSITE_V2_MAX_CUSTOMER_CHARACTERS) {
+    throw new KnowledgeBaseCandidateError(
+      `Website v2 customer draft exceeds ${WEBSITE_V2_MAX_CUSTOMER_CHARACTERS} visible characters`,
+      "content",
+    );
+  }
 }
 
 export async function parseKnowledgeBaseCandidate(
@@ -732,12 +1025,26 @@ export async function parseKnowledgeBaseCandidate(
   if (runEntry) {
     try {
       const runBytes = await readLimited(runEntry, MAX_SINGLE_TEXT_BYTES);
-      const parsed = CandidateRunSchema.safeParse(
-        JSON.parse(decodeUtf8(runBytes, "02_run.json")),
-      );
+      const rawRun = JSON.parse(decodeUtf8(runBytes, "02_run.json"));
+      const parsed = CandidateRunSchema.safeParse(rawRun);
       if (parsed.success) run = parsed.data;
-      else diagnostics.push("02_run.json did not match candidate schema");
-    } catch {
+      else if (
+        rawRun &&
+        typeof rawRun === "object" &&
+        (rawRun as { schemaVersion?: unknown }).schemaVersion === 2
+      ) {
+        throw new KnowledgeBaseCandidateError(
+          `Website v2 02_run.json violates the candidate contract: ${parsed.error.issues
+            .slice(0, 3)
+            .map((issue) => issue.path.join("."))
+            .join(", ")}`,
+          "content",
+        );
+      } else {
+        diagnostics.push("02_run.json did not match candidate schema");
+      }
+    } catch (error) {
+      if (error instanceof KnowledgeBaseCandidateError) throw error;
       diagnostics.push("02_run.json could not be parsed and was ignored");
     }
   }
@@ -805,7 +1112,7 @@ export async function parseKnowledgeBaseCandidate(
       ),
   ).length;
 
-  return {
+  const candidate: ParsedCandidate = {
     profile: WEBSITE_KB_CANDIDATE_PROFILE,
     factsMarkdown,
     customerMarkdown,
@@ -822,4 +1129,6 @@ export async function parseKnowledgeBaseCandidate(
       coveredFactDimensions,
     },
   };
+  validateWebsiteV2Candidate(candidate);
+  return candidate;
 }

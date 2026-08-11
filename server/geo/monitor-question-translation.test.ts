@@ -4,7 +4,9 @@ import {
   geoMonitorQuestionSourceDigest,
   geoMonitorQuestionTranslationOperationKey,
   parseGeoMonitorQuestionTranslationTaskOutput,
+  resolveGeoMonitorQuestionTranslationTaskOutput,
 } from "./monitor-question-translation";
+import { TRUSTED_TASK_JSON_MAX_TOTAL_BYTES } from "./trusted-task-json-output";
 
 const sourceQuestion = "硅基流动的 SiliconCloud 平台稳定吗？";
 
@@ -141,6 +143,155 @@ describe("overseas monitor question translation", () => {
         productionSourceQuestion,
       ),
     ).toBe("Is SiliconFlow reliable?");
+  });
+
+  it("repairs unescaped quotes and rejects conflicting translations", () => {
+    const digest = geoMonitorQuestionSourceDigest(sourceQuestion);
+    const malformed = `{"schemaVersion":1,"sourceQuestionSha256":"${digest}","questionEnglish":"Is "SiliconFlow" reliable?"}`;
+    expect(
+      parseGeoMonitorQuestionTranslationTaskOutput(
+        {
+          output: [
+            {
+              role: "assistant",
+              content: [{ type: "output_text", text: malformed }],
+            },
+          ],
+        },
+        sourceQuestion,
+      ),
+    ).toBe('Is "SiliconFlow" reliable?');
+
+    expect(
+      parseGeoMonitorQuestionTranslationTaskOutput(
+        {
+          output: [
+            {
+              role: "assistant",
+              content: [
+                {
+                  type: "output_text",
+                  text: JSON.stringify({
+                    schemaVersion: 1,
+                    sourceQuestionSha256: digest,
+                    questionEnglish: "Is SiliconFlow reliable?",
+                  }),
+                },
+                {
+                  type: "output_text",
+                  text: JSON.stringify({
+                    schemaVersion: 1,
+                    sourceQuestionSha256: digest,
+                    questionEnglish: "Can SiliconFlow be trusted?",
+                  }),
+                },
+              ],
+            },
+          ],
+        },
+        sourceQuestion,
+      ),
+    ).toBeUndefined();
+  });
+
+  it("resolves one trusted translation output_file", async () => {
+    const output = {
+      schemaVersion: 1,
+      sourceQuestionSha256: geoMonitorQuestionSourceDigest(sourceQuestion),
+      questionEnglish: "Is SiliconFlow's SiliconCloud platform stable?",
+    };
+    await expect(
+      resolveGeoMonitorQuestionTranslationTaskOutput(
+        {
+          async downloadFile() {
+            return new Response(JSON.stringify(output));
+          },
+          async downloadTaskOutput() {
+            throw new Error("URL fallback should not be used");
+          },
+        },
+        {
+          id: "translation-file-task",
+          output: [
+            {
+              type: "output_file",
+              file_id: "translation-result",
+              filename: "translation.json",
+            },
+          ],
+        },
+        sourceQuestion,
+      ),
+    ).resolves.toBe(output.questionEnglish);
+  });
+
+  it("fails closed when translation inline and output_file channels conflict", async () => {
+    const digest = geoMonitorQuestionSourceDigest(sourceQuestion);
+    const inline = {
+      schemaVersion: 1,
+      sourceQuestionSha256: digest,
+      questionEnglish: "Is SiliconFlow reliable?",
+    };
+    await expect(
+      resolveGeoMonitorQuestionTranslationTaskOutput(
+        {
+          async downloadFile() {
+            return new Response(
+              JSON.stringify({
+                ...inline,
+                questionEnglish: "Can SiliconFlow be trusted?",
+              }),
+            );
+          },
+          async downloadTaskOutput() {
+            throw new Error("URL fallback should not be used");
+          },
+        },
+        {
+          id: "translation-conflict-task",
+          output: [
+            { type: "output_text", text: JSON.stringify(inline) },
+            {
+              type: "output_file",
+              file_id: "translation-result",
+              filename: "translation.json",
+            },
+          ],
+        },
+        sourceQuestion,
+      ),
+    ).resolves.toBeUndefined();
+  });
+
+  it("rejects a translation output_file above the shared byte budget", async () => {
+    await expect(
+      resolveGeoMonitorQuestionTranslationTaskOutput(
+        {
+          async downloadFile() {
+            return new Response("{}", {
+              headers: {
+                "content-length": String(
+                  TRUSTED_TASK_JSON_MAX_TOTAL_BYTES + 1,
+                ),
+              },
+            });
+          },
+          async downloadTaskOutput() {
+            throw new Error("URL fallback should not be used");
+          },
+        },
+        {
+          output: [
+            {
+              type: "output_file",
+              file_id: "oversized-translation-result",
+              filename: "translation.json",
+            },
+          ],
+        },
+        sourceQuestion,
+      ),
+    ).resolves.toBeUndefined();
   });
 
   it("ignores user-authored output even when it matches the schema", () => {

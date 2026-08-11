@@ -1,10 +1,15 @@
 import { z } from "zod";
 import type { KnowledgeBaseManifest } from "./archive";
+import type { GeoPresalesBroker } from "./broker";
+import { trustedAssistantOutputTexts } from "./trusted-task-output";
 import {
-  trustedAssistantOutputItems,
-  trustedAssistantOutputTexts,
-} from "./trusted-task-output";
-import { trustedTaskJsonObjectCandidates } from "./trusted-task-json-output";
+  inspectTrustedTaskJsonCandidate,
+  resolveTrustedTaskJsonOutput,
+  trustedTaskJsonObjectCandidates,
+  TrustedTaskJsonOutputError,
+  type TrustedTaskJsonCandidateInspection,
+  type TrustedTaskJsonInlineInspectionContext,
+} from "./trusted-task-json-output";
 
 const AcceptedCustomQuestionClassificationSchema = z
   .object({
@@ -121,73 +126,104 @@ const GENERIC_ANCHORS = new Set(
 export function parseCustomQuestionClassificationTaskOutput(
   task: unknown,
 ): CustomQuestionClassification | null {
-  for (const item of trustedAssistantOutputItems(task)) {
-    const parsed = CustomQuestionClassificationSchema.safeParse(item);
-    if (parsed.success) return parsed.data;
-  }
+  const inspection = inspectInlineCustomQuestionClassification(task);
+  return inspection?.success ? inspection.data : null;
+}
+
+function inspectInlineCustomQuestionClassification(
+  task: unknown,
+  context?: TrustedTaskJsonInlineInspectionContext,
+):
+  | TrustedTaskJsonCandidateInspection<CustomQuestionClassification>
+  | undefined {
+  const texts = trustedAssistantOutputTexts(task);
+  if (texts.length === 0) return undefined;
+  const valid = new Map<string, CustomQuestionClassification>();
+  let sawParsedJson = false;
+  let validation: unknown;
   for (const text of trustedAssistantOutputTexts(task)) {
+    if (context && !context.canInspectText(text)) break;
     for (const candidate of trustedTaskJsonObjectCandidates(text)) {
-      const parsed = parseClassificationJsonCandidate(candidate);
-      if (parsed) return parsed;
+      if (context && !context.takeCandidate(candidate)) break;
+      const normalized = inspectTrustedTaskJsonCandidate(candidate);
+      if (!normalized) continue;
+      sawParsedJson = true;
+      const inspection = inspectParsedCustomQuestionClassification(
+        normalized.value,
+      );
+      if (inspection.success) {
+        valid.set(classificationSecurityKey(inspection.data), inspection.data);
+      } else {
+        validation = inspection.validation;
+      }
     }
   }
-  return null;
-}
-
-function parseClassificationJsonCandidate(
-  candidate: string,
-): CustomQuestionClassification | undefined {
-  try {
-    const parsed = CustomQuestionClassificationSchema.safeParse(
-      JSON.parse(candidate),
-    );
-    if (parsed.success) return parsed.data;
-  } catch {
-    // A malformed accepted result must never grant access to payment or
-    // monitoring. The semantic fallback below can only preserve rejection.
+  if (valid.size === 1) {
+    return { success: true, data: valid.values().next().value! };
   }
-  return inferRejectedClassification(candidate);
+  if (valid.size > 1) {
+    return {
+      success: false,
+      code: "SCHEMA_MISMATCH",
+      validation: [
+        { path: ["root"], message: "Conflicting valid JSON candidates" },
+      ],
+    };
+  }
+  return {
+    success: false,
+    code: sawParsedJson ? "SCHEMA_MISMATCH" : "INVALID_JSON",
+    validation,
+  };
 }
 
-function inferRejectedClassification(
-  candidate: string,
-): CustomQuestionClassification | undefined {
-  if (candidate.length > 32 * 1024) return undefined;
-  if (!/\breject\b/i.test(candidate)) return undefined;
+function inspectParsedCustomQuestionClassification(
+  candidate: unknown,
+): TrustedTaskJsonCandidateInspection<CustomQuestionClassification> {
+  const parsed = CustomQuestionClassificationSchema.safeParse(candidate);
+  return parsed.success
+    ? { success: true, data: parsed.data }
+    : {
+        success: false,
+        code: "SCHEMA_MISMATCH",
+        validation: parsed.error.issues.map((issue) => ({
+          path: issue.path,
+          message: issue.message,
+        })),
+      };
+}
 
-  const category = /enterprise[_-]?unrelated/i.test(candidate)
-    ? "unrelated"
-    : /industry[_-]?ranking/i.test(candidate)
-      ? "industry_ranking"
-      : /\bambiguous\b/i.test(candidate)
-        ? "ambiguous"
-        : undefined;
-  if (!category) return undefined;
+export async function resolveCustomQuestionClassificationTaskOutput(
+  broker: Pick<GeoPresalesBroker, "downloadFile" | "downloadTaskOutput">,
+  task: unknown,
+  options: Readonly<{ taskId?: string }> = {},
+): Promise<CustomQuestionClassification | null> {
+  try {
+    return await resolveTrustedTaskJsonOutput(broker, task, {
+      taskId: options.taskId,
+      inspectInline: inspectInlineCustomQuestionClassification,
+      inspectParsed: inspectParsedCustomQuestionClassification,
+      canonicalize: classificationSecurityKey,
+    });
+  } catch (error) {
+    if (error instanceof TrustedTaskJsonOutputError) return null;
+    throw error;
+  }
+}
 
-  const reasonCode =
-    category === "unrelated"
-      ? "enterprise_unrelated"
-      : category === "industry_ranking"
-        ? "industry_ranking"
-        : "ambiguous";
-  const reason =
-    category === "unrelated"
-      ? "模型判定该问题无法绑定至当前企业知识库。"
-      : category === "industry_ranking"
-        ? "模型判定该问题属于行业排名或开放推荐方向。"
-        : "模型无法确认该问题与当前企业知识库的明确关系。";
-
-  return CustomQuestionClassificationSchema.parse({
-    decision: "reject",
-    category,
-    enterpriseRelated:
-      category === "industry_ranking" &&
-      /enterpriseRelated\s*["']?\s*:\s*true/i.test(candidate),
-    reasonCode,
-    reason,
-    enterpriseAnchor: null,
-    offeringAnchor: null,
-    evidenceRefs: [],
+function classificationSecurityKey(value: CustomQuestionClassification) {
+  return JSON.stringify({
+    decision: value.decision,
+    category: value.category,
+    enterpriseRelated: value.enterpriseRelated,
+    reasonCode: value.reasonCode,
+    reason: value.reason,
+    enterpriseAnchor: value.enterpriseAnchor,
+    offeringAnchor: value.offeringAnchor,
+    evidenceRefs: [...value.evidenceRefs].sort(),
+    ...(value.decision === "accept" && value.questionEnglish
+      ? { questionEnglish: value.questionEnglish }
+      : {}),
   });
 }
 
@@ -271,9 +307,36 @@ function customQuestionEvidenceAllowlist(manifest: KnowledgeBaseManifest) {
     // field. Preserve that behavior until their producers and tasks retire.
     return manifest.evidencePaths;
   }
-  if (!manifest.allPaths) return [];
+  if (!manifest.allPaths || !manifest.documents) return [];
   const allPaths = new Set(manifest.allPaths);
-  return manifest.evidencePaths.filter((entryPath) => allPaths.has(entryPath));
+  const registeredEvidencePaths = new Set(
+    manifest.documents
+      .filter(
+        (document) =>
+          document.kind === "evidence" &&
+          !document.customerVisible &&
+          /\.md$/i.test(document.path) &&
+          allPaths.has(document.path),
+      )
+      .map((document) => document.path),
+  );
+  const allowlist = new Set(
+    manifest.documents
+      .filter(
+        (document) =>
+          document.customerVisible &&
+          ["leaf", "overview"].includes(document.kind) &&
+          /^(?:0[1-8])_[^/]+\/.+\.md$/i.test(document.path) &&
+          allPaths.has(document.path),
+      )
+      .map((document) => document.path),
+  );
+  for (const entryPath of manifest.evidencePaths) {
+    if (allPaths.has(entryPath) && registeredEvidencePaths.has(entryPath)) {
+      allowlist.add(entryPath);
+    }
+  }
+  return Array.from(allowlist);
 }
 
 function normalizeAnchorText(value: string) {

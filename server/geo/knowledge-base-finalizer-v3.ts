@@ -5,21 +5,19 @@ import sharp from "sharp";
 import {
   KnowledgeBaseCompletenessInputSchema,
   parseKnowledgeBaseArchive,
-  WebsiteLeadPackageManifestV4InputSchema,
+  WebsiteLeadPackageManifestV3InputSchema,
   websiteLeadNarrativeCharacterCountForLeaf,
   type KnowledgeBaseManifest,
 } from "./archive";
 import {
   CUSTOMER_SECTIONS,
   FACT_DIMENSIONS,
-  KnowledgeBaseCandidateError,
-  validateWebsiteV2Candidate,
   type CandidateAsset,
   type CandidateSource,
   type ParsedCandidate,
 } from "./knowledge-base-candidate";
 
-export const WEBSITE_KB_FINALIZER_VERSION = "website-kb-finalizer-v4";
+export const WEBSITE_KB_FINALIZER_VERSION = "website-kb-finalizer-v3";
 const ZIP_DATE = new Date("1980-01-01T00:00:00.000Z");
 
 type EvidenceStatus =
@@ -538,137 +536,6 @@ function mergeSmallChunks(
   return output;
 }
 
-function mergeAdjacentLeaves(
-  leaves: LeafDraft[],
-  leftIndex: number,
-  evidenceById: Map<string, { document: PackageDocument; characters: number }>,
-  sourceRecords: SourceRecord[],
-) {
-  const left = leaves[leftIndex]!;
-  const right = leaves[leftIndex + 1]!;
-  if (left.branchId !== right.branchId) {
-    throw new Error("Website leaf merge must stay within one canonical branch");
-  }
-  left.title = `${left.title}与${right.title}`;
-  left.narrative = `${left.narrative}\n\n${right.narrative}`.trim();
-  left.rawMarkdown = `${left.rawMarkdown}\n\n${right.rawMarkdown}`.trim();
-  left.sourceIds = Array.from(new Set([...left.sourceIds, ...right.sourceIds]));
-  left.evidenceDocumentIds = Array.from(
-    new Set([...left.evidenceDocumentIds, ...right.evidenceDocumentIds]),
-  );
-  left.assetIds = Array.from(new Set([...left.assetIds, ...right.assetIds]));
-  left.productFamilyIds = Array.from(
-    new Set([
-      ...(left.productFamilyIds || []),
-      ...(right.productFamilyIds || []),
-    ]),
-  );
-  left.evidenceCharacters = left.evidenceDocumentIds.reduce(
-    (total, id) => total + (evidenceById.get(id)?.characters || 0),
-    0,
-  );
-  left.status = left.sourceIds.length
-    ? sourceStatus(left.sourceIds, sourceRecords)
-    : left.status === "not_applicable" && right.status === "not_applicable"
-      ? "not_applicable"
-      : "needs_verification";
-  leaves.splice(leftIndex + 1, 1);
-}
-
-function lastAdjacentPairForBranch(
-  leaves: LeafDraft[],
-  branchId: CanonicalBranchId,
-) {
-  for (let index = leaves.length - 2; index >= 0; index -= 1) {
-    if (
-      leaves[index]!.branchId === branchId &&
-      leaves[index + 1]!.branchId === branchId
-    ) {
-      return index;
-    }
-  }
-  return -1;
-}
-
-function normalizeWebsiteLightLeaves(
-  leaves: LeafDraft[],
-  evidenceById: Map<string, { document: PackageDocument; characters: number }>,
-  sourceRecords: SourceRecord[],
-) {
-  while (leaves.filter((leaf) => leaf.branchId === "03_products").length > 5) {
-    const index = lastAdjacentPairForBranch(leaves, "03_products");
-    if (index < 0) throw new Error("Could not merge adjacent product leaves");
-    mergeAdjacentLeaves(leaves, index, evidenceById, sourceRecords);
-  }
-
-  while (leaves.length > 20) {
-    const branchCounts = new Map<CanonicalBranchId, number>();
-    for (const leaf of leaves) {
-      branchCounts.set(
-        leaf.branchId,
-        (branchCounts.get(leaf.branchId) || 0) + 1,
-      );
-    }
-    const branch = Array.from(branchCounts.entries())
-      .filter(([, count]) => count > 1)
-      .sort(
-        ([leftId, leftCount], [rightId, rightCount]) =>
-          rightCount - leftCount || rightId.localeCompare(leftId),
-      )[0]?.[0];
-    if (!branch) throw new Error("Could not reduce Website leaves to 20");
-    const index = lastAdjacentPairForBranch(leaves, branch);
-    if (index < 0) throw new Error(`Could not merge adjacent ${branch} leaves`);
-    mergeAdjacentLeaves(leaves, index, evidenceById, sourceRecords);
-  }
-
-  const fallbackGaps: Array<
-    Pick<LeafDraft, "title" | "branchId" | "displayBranchId" | "narrative">
-  > = [
-    {
-      title: "适用场景边界",
-      branchId: "03_products",
-      displayBranchId: "products-services",
-      narrative: "公开资料暂未完整披露产品与服务的适用场景边界。",
-    },
-    {
-      title: "部署与交付边界",
-      branchId: "04_technology",
-      displayBranchId: "core-capabilities",
-      narrative: "公开资料暂未完整披露部署、交付与支持边界。",
-    },
-  ];
-  for (const gap of fallbackGaps) {
-    if (leaves.length >= 10) break;
-    if (leaves.some((leaf) => leaf.title === gap.title)) continue;
-    leaves.push({
-      id: "pending",
-      ...gap,
-      rawMarkdown: "",
-      status: "needs_verification",
-      sourceIds: [],
-      evidenceDocumentIds: [],
-      evidenceCharacters: 0,
-      order: 0,
-      assetIds: [],
-      ...(gap.branchId === "03_products" ? { productFamilyIds: [] } : {}),
-    });
-  }
-  if (leaves.length < 10) {
-    throw new Error("Could not expand Website candidate to ten honest leaves");
-  }
-
-  const productLeaves = leaves.filter(
-    (leaf) => leaf.branchId === "03_products",
-  );
-  productLeaves.forEach((leaf, index) => {
-    leaf.productFamilyIds = [`family-${String(index + 1).padStart(2, "0")}`];
-  });
-  leaves.forEach((leaf, index) => {
-    leaf.id = `doc-leaf-${String(index + 1).padStart(3, "0")}`;
-    leaf.order = index + 1;
-  });
-}
-
 function titleSlug(value: string) {
   const ascii = value
     .normalize("NFKC")
@@ -1116,13 +983,6 @@ export async function finalizeKnowledgeBaseCandidate(input: {
   companyName: string;
   evaluatedAt: string;
 }): Promise<FinalizedKnowledgeBase> {
-  if (input.candidate.run?.schemaVersion !== 2) {
-    throw new KnowledgeBaseCandidateError(
-      "Website v4 finalizer requires a schema-v2 candidate",
-      "content",
-    );
-  }
-  validateWebsiteV2Candidate(input.candidate);
   const evaluatedAt = isoDate(input.evaluatedAt);
   const date = evaluatedAt.slice(0, 10);
   const sourceRecords = buildSources(input.candidate);
@@ -1196,14 +1056,22 @@ export async function finalizeKnowledgeBaseCandidate(input: {
     if (initialChunks[0]?.intro) {
       introByDisplay.set(displayBranchId, initialChunks[0].intro);
     }
-    // A customer H3 is the stable semantic unit. Do not split long prose or
-    // separate supported paragraphs from gaps into additional leaves.
-    for (const chunk of initialChunks) {
+    const expanded = initialChunks.flatMap((chunk) =>
+      splitLargeChunk(chunk.title, chunk.markdown),
+    );
+    const split = mergeSmallChunks(
+      expanded.flatMap((chunk) =>
+        splitSupportedAndGaps(chunk.title, chunk.markdown),
+      ),
+    );
+    for (const chunk of split) {
       leafSequence += 1;
-      const sourceIds = sourceIdsForMarkdown(chunk.markdown, sourceRecords);
-      const status = sourceIds.length
-        ? sourceStatus(sourceIds, sourceRecords)
-        : "needs_verification";
+      const sourceIds = chunk.gap
+        ? []
+        : sourceIdsForMarkdown(chunk.markdown, sourceRecords);
+      const status = chunk.gap
+        ? "needs_verification"
+        : sourceStatus(sourceIds, sourceRecords);
       const supported =
         status !== "needs_verification" && status !== "not_applicable";
       const evidenceEntries = sourceIds
@@ -1300,7 +1168,30 @@ export async function finalizeKnowledgeBaseCandidate(input: {
     assetIds: [],
   });
 
-  normalizeWebsiteLightLeaves(leafDrafts, evidenceById, sourceRecords);
+  while (leafDrafts.length > 56) {
+    let mergeIndex = leafDrafts.length - 2;
+    while (
+      mergeIndex > 0 &&
+      leafDrafts[mergeIndex]!.branchId !== leafDrafts[mergeIndex + 1]!.branchId
+    ) {
+      mergeIndex -= 1;
+    }
+    const left = leafDrafts[mergeIndex]!;
+    const right = leafDrafts[mergeIndex + 1]!;
+    left.title = `${left.title}与${right.title}`;
+    left.narrative = `${left.narrative}\n\n${right.narrative}`;
+    left.sourceIds = Array.from(
+      new Set([...left.sourceIds, ...right.sourceIds]),
+    );
+    left.evidenceDocumentIds = Array.from(
+      new Set([...left.evidenceDocumentIds, ...right.evidenceDocumentIds]),
+    );
+    left.evidenceCharacters = left.evidenceDocumentIds.reduce(
+      (total, id) => total + (evidenceById.get(id)?.characters || 0),
+      0,
+    );
+    leafDrafts.splice(mergeIndex + 1, 1);
+  }
 
   for (const entry of Array.from(evidenceById.values())) {
     const linkedLeafIds = leafDrafts
@@ -1545,28 +1436,27 @@ export async function finalizeKnowledgeBaseCandidate(input: {
         Boolean(entry.sourcePageUrl || entry.sourceDocumentPath),
     ),
   ];
-  const publicPages = sourceRecords.filter(
+  const officialPages = sourceRecords.filter(
     (record) =>
-      !["official_document", "user_upload"].includes(record.source.kind) &&
+      ["official_web", "official_document"].includes(record.source.kind) &&
       Boolean(record.source.normalizedUrl || record.source.url),
   );
-  const publicPagesCompleted = publicPages.filter(
-    (record) => record.source.status !== "failed",
-  ).length;
+  const officialPagesCompleted = Math.min(
+    120,
+    officialPages.filter((record) => record.source.status !== "failed").length,
+  );
   markdownByPath.set(
     "00_crawl_coverage_report.md",
     [
       `# ${input.companyName} 官网抓取覆盖报告`,
       "",
-      `成功读取公开网页：${publicPagesCompleted}`,
-      "",
-      `尝试公开网页：${publicPages.length}`,
+      `成功读取官网页面：${officialPagesCompleted}`,
       "",
       `发现图片：${candidateLedger.length}`,
       "",
       `成功下载图片：${assetResult.finalized.length}`,
       "",
-      `公开搜索词：${input.candidate.run?.queries.length || 0}`,
+      `公开搜索词：${Math.min(12, input.candidate.run?.queries.length || 0)}`,
     ].join("\n"),
   );
 
@@ -1650,11 +1540,7 @@ export async function finalizeKnowledgeBaseCandidate(input: {
   const uploadedSources = sourceRecords.filter(
     (record) => record.source.kind === "user_upload",
   );
-  const officialDocumentSources = sourceRecords.filter(
-    (record) => record.source.kind === "official_document",
-  );
-  const documentSources = [...uploadedSources, ...officialDocumentSources];
-  const queries = input.candidate.run?.queries.length || 0;
+  const queries = Math.min(12, input.candidate.run?.queries.length || 0);
   const completeness = KnowledgeBaseCompletenessInputSchema.parse({
     counts: {
       totalLeaves: leafDocuments.length,
@@ -1662,18 +1548,18 @@ export async function finalizeKnowledgeBaseCandidate(input: {
     },
     acquisition: {
       officialPages: {
-        completed: publicPagesCompleted,
-        total: publicPages.length,
+        completed: officialPagesCompleted,
+        total: Math.min(120, officialPages.length),
       },
       images: {
         completed: assetResult.finalized.length,
         total: candidateLedger.length,
       },
       documents: {
-        completed: documentSources.filter(
+        completed: uploadedSources.filter(
           (record) => record.source.status !== "failed",
         ).length,
-        total: documentSources.length,
+        total: uploadedSources.length,
       },
       webQueries: { completed: queries, total: queries },
     },
@@ -1691,16 +1577,13 @@ export async function finalizeKnowledgeBaseCandidate(input: {
     evaluatedAt,
   });
 
-  const productFamilies = leafDrafts
-    .filter((leaf) => leaf.branchId === "03_products")
-    .map((leaf) => ({
-      id: leaf.productFamilyIds![0]!,
-      name: leaf.title,
-      officialVisualFound: false,
-      checkedSources: leaf.sourceIds.length,
-      assetIds: [] as string[],
-      gapReason: "Website 轻量知识库只保留企业 Logo，不打包产品视觉素材。",
-    }));
+  const productAssetIds = assetResult.finalized
+    .filter((entry) =>
+      ["product_ui", "product_diagram", "case_photo"].includes(
+        entry.asset.assetType,
+      ),
+    )
+    .map((entry) => entry.asset.id);
   const imageSelection = {
     status:
       assetResult.finalized.length > 0 &&
@@ -1716,12 +1599,30 @@ export async function finalizeKnowledgeBaseCandidate(input: {
     rejectedCandidateImages: candidateLedger.filter(
       (entry) => entry.status === "rejected",
     ).length,
-    scannedSourcePages: publicPagesCompleted,
+    scannedSourcePages: officialPagesCompleted,
     discoveryMethods: Array.from(
       new Set(candidateLedger.map((entry) => entry.method)),
     ),
     candidates: candidateLedger,
-    productFamilies,
+    productFamilies: [
+      {
+        id: "family-primary",
+        name: "核心产品与服务",
+        officialVisualFound: productAssetIds.length > 0,
+        checkedSources: sourceRecords.filter((record) =>
+          ["official_web", "official_document", "user_upload"].includes(
+            record.source.kind,
+          ),
+        ).length,
+        assetIds: productAssetIds,
+        ...(productAssetIds.length
+          ? {}
+          : {
+              gapReason:
+                "已检查候选包登记的第一方页面与附件，未发现可交付的核心产品视觉。",
+            }),
+      },
+    ],
     ...(!(
       assetResult.finalized.length > 0 &&
       assetResult.rejected.length === 0 &&
@@ -1738,34 +1639,19 @@ export async function finalizeKnowledgeBaseCandidate(input: {
       : {}),
   };
 
-  const allPaths = [
-    ...Array.from(markdownByPath.keys()),
-    "00_completeness.json",
-    "00_package_manifest.json",
-    ...assetResult.finalized.map((entry) => entry.asset.path),
-  ].sort((left, right) => left.localeCompare(right));
-  const evidencePaths = documents
-    .filter(
-      (document) => document.kind === "evidence" && !document.customerVisible,
-    )
-    .map((document) => document.path)
-    .sort((left, right) => left.localeCompare(right));
-  const packageManifest = WebsiteLeadPackageManifestV4InputSchema.parse({
-    schemaVersion: 4 as const,
-    candidateContractVersion: 2 as const,
+  const packageManifest = WebsiteLeadPackageManifestV3InputSchema.parse({
+    schemaVersion: 3 as const,
     profile: "website-lead-v1" as const,
     documents,
     assets: assetResult.finalized.map((entry) => entry.asset),
     counts: {
-      totalFiles: allPaths.length,
+      totalFiles: documents.length + 2 + assetResult.finalized.length,
       customerVisibleCharacters: customerCharacters,
       evidenceCharacters: packagedEvidenceCharacters,
       packagedImages: assetResult.finalized.length,
     },
     branchEvidence,
     imageSelection,
-    allPaths,
-    evidencePaths,
   });
   const packageManifestText = `${JSON.stringify(packageManifest, null, 2)}\n`;
   const packageManifestSha256 = createHash("sha256")

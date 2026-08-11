@@ -46,21 +46,6 @@ CUSTOMER_CONTENT_FLOORS = {
     "服务与合作": 600,
     "可信优势": 600,
 }
-CUSTOMER_H3_RANGES = {
-    "企业与品牌": (1, 2),
-    "团队与组织": (1, 2),
-    "产品与服务": (2, 5),
-    "技术与交付": (2, 3),
-    "客户与行业": (1, 3),
-    "服务与合作": (1, 2),
-    "可信优势": (1, 2),
-}
-MAX_CUSTOMER_CHARACTERS = 40000
-MAX_SOURCE_RECORDS = 30
-MAX_PUBLIC_PAGE_ATTEMPTS = 16
-MAX_WEB_QUERIES = 4
-MAX_OFFICIAL_DOCUMENTS = 4
-MAX_USER_UPLOADS = 10
 EVIDENCE_MARKER = re.compile(
     r"\[(?:来源|企业主张|权威来源|第三方来源)\]\(https?://[^)\s]+\)"
     r"|\[上传文件：[^\]]+\]|\[待核验\]"
@@ -191,10 +176,7 @@ def validate_content_floors(customer: bytes, run_value: dict[str, object]) -> No
     source_urls = {
         normalized_url(source["url"])
         for source in run_value.get("sources", [])
-        if isinstance(source, dict)
-        and source.get("kind") != "user_upload"
-        and isinstance(source.get("url"), str)
-        and public_http_url(source["url"])
+        if isinstance(source, dict) and isinstance(source.get("url"), str)
     }
     exceptions: dict[str, dict[str, object]] = {}
     for index, exception in enumerate(raw_exceptions):
@@ -255,42 +237,6 @@ def validate_content_floors(customer: bytes, run_value: dict[str, object]) -> No
             raise CandidateError(
                 f"below-floor exception section must include [待核验]: {heading}"
             )
-
-    total = sum(
-        meaningful_character_count(parsed[heading]) for heading in CUSTOMER_HEADINGS
-    )
-    if total > MAX_CUSTOMER_CHARACTERS:
-        raise CandidateError(
-            f"01_customer_draft.md exceeds {MAX_CUSTOMER_CHARACTERS} visible characters: {total}"
-        )
-
-
-def validate_customer_topics(customer: bytes) -> None:
-    parsed = sections(customer.decode("utf-8"))
-    total = 0
-    for heading, (minimum, maximum) in CUSTOMER_H3_RANGES.items():
-        titles = [
-            match.group(1).strip()
-            for match in re.finditer(
-                r"^###\s+(.+?)\s*$", parsed[heading], re.MULTILINE
-            )
-        ]
-        normalized = [
-            unicodedata.normalize("NFKC", title).casefold() for title in titles
-        ]
-        if len(titles) < minimum or len(titles) > maximum:
-            raise CandidateError(
-                f"01_customer_draft.md section {heading} must contain {minimum}–{maximum} H3 topics"
-            )
-        if len(set(normalized)) != len(normalized):
-            raise CandidateError(
-                f"01_customer_draft.md section {heading} contains duplicate H3 topics"
-            )
-        total += len(titles)
-    if total < 9 or total > 19:
-        raise CandidateError(
-            f"01_customer_draft.md must contain 9–19 H3 topics in total: {total}"
-        )
 
 
 def safe_logo_path(value: str) -> str | None:
@@ -362,16 +308,8 @@ def validate_run(
         value = json.loads(data)
     except json.JSONDecodeError as error:
         raise CandidateError(f"02_run.json is invalid JSON: {error}") from error
-    if not isinstance(value, dict) or value.get("schemaVersion") != 2:
-        raise CandidateError("02_run.json must be an object with schemaVersion 2")
-    if value.get("stopReason") not in {
-        "coverage_complete",
-        "source_exhausted",
-        "budget_reached",
-    }:
-        raise CandidateError(
-            "02_run.json stopReason must be coverage_complete, source_exhausted, or budget_reached"
-        )
+    if not isinstance(value, dict) or value.get("schemaVersion") != 1:
+        raise CandidateError("02_run.json must be an object with schemaVersion 1")
     company = value.get("company")
     if not isinstance(company, dict):
         raise CandidateError("02_run.json company must be an object")
@@ -383,10 +321,8 @@ def validate_run(
     if industry_cluster is not None and industry_cluster not in INDUSTRY_CLUSTERS:
         raise CandidateError("company.industryCluster is invalid")
     sources = value.get("sources", [])
-    if not isinstance(sources, list) or len(sources) > MAX_SOURCE_RECORDS:
-        raise CandidateError(
-            f"02_run.json sources must be an array of at most {MAX_SOURCE_RECORDS}"
-        )
+    if not isinstance(sources, list) or len(sources) > 500:
+        raise CandidateError("02_run.json sources must be an array of at most 500")
     for index, source in enumerate(sources):
         if not isinstance(source, dict):
             raise CandidateError(f"sources[{index}] must be an object")
@@ -405,43 +341,13 @@ def validate_run(
                 f"sources[{index}].attachmentName",
                 512,
             )
-        if source.get("kind") == "user_upload" and attachment_name is None:
-            raise CandidateError(
-                f"sources[{index}] user_upload requires attachmentName"
-            )
-        if source.get("kind") == "user_upload" and source.get("status") != "read":
-            raise CandidateError(
-                f"sources[{index}] user_upload must have status read"
-            )
     queries = value.get("queries", [])
     if (
         not isinstance(queries, list)
-        or len(queries) > MAX_WEB_QUERIES
+        or len(queries) > 100
         or any(not isinstance(item, str) or not item.strip() or len(item) > 500 for item in queries)
     ):
-        raise CandidateError(
-            f"02_run.json queries must contain at most {MAX_WEB_QUERIES} text items"
-        )
-    official_documents = [
-        source
-        for source in sources
-        if isinstance(source, dict) and source.get("kind") == "official_document"
-    ]
-    if len(official_documents) > MAX_OFFICIAL_DOCUMENTS:
-        raise CandidateError(
-            f"02_run.json exceeds {MAX_OFFICIAL_DOCUMENTS} official documents"
-        )
-    user_upload_names = {
-        unicodedata.normalize("NFKC", source["attachmentName"]).casefold()
-        for source in sources
-        if isinstance(source, dict)
-        and source.get("kind") == "user_upload"
-        and isinstance(source.get("attachmentName"), str)
-    }
-    if len(user_upload_names) > MAX_USER_UPLOADS:
-        raise CandidateError(
-            f"02_run.json exceeds {MAX_USER_UPLOADS} user uploads"
-        )
+        raise CandidateError("02_run.json queries must contain at most 100 text items")
     assets = value.get("assets", [])
     if not isinstance(assets, list) or len(assets) > 1:
         raise CandidateError("02_run.json assets must contain at most one logo")
@@ -464,27 +370,6 @@ def validate_run(
                 f"logoAcquisition.attemptedPageUrls[{index}] must be HTTP(S)"
             )
         normalized_attempted_pages.append(normalized_url(attempted_page_url))
-    source_urls = {
-        normalized_url(source["url"])
-        for source in sources
-        if isinstance(source, dict) and isinstance(source.get("url"), str)
-    }
-    if not set(normalized_attempted_pages).issubset(source_urls):
-        raise CandidateError(
-            "logoAcquisition attempted pages must also appear in sources"
-        )
-    public_page_attempts = {
-        normalized_url(source["url"])
-        for source in sources
-        if isinstance(source, dict)
-        and source.get("kind") not in {"official_document", "user_upload"}
-        and isinstance(source.get("url"), str)
-    }
-    public_page_attempts.update(normalized_attempted_pages)
-    if len(public_page_attempts) > MAX_PUBLIC_PAGE_ATTEMPTS:
-        raise CandidateError(
-            f"02_run.json exceeds {MAX_PUBLIC_PAGE_ATTEMPTS} distinct public-page attempts"
-        )
     if assets:
         if logo_status != "retained":
             raise CandidateError(
@@ -547,6 +432,15 @@ def validate_run(
             raise CandidateError(
                 "unavailable logo must record at least two distinct first-party page attempts"
             )
+        source_urls = {
+            normalized_url(source["url"])
+            for source in sources
+            if isinstance(source, dict) and isinstance(source.get("url"), str)
+        }
+        if not set(normalized_attempted_pages).issubset(source_urls):
+            raise CandidateError(
+                "logoAcquisition attempted pages must also appear in sources"
+            )
         if isinstance(official_website, str):
             official_host = urlparse(official_website).hostname or ""
             attempted_hosts = [
@@ -596,7 +490,6 @@ def build(input_dir: Path, output: Path) -> None:
     )
     validate_evidence_closure(facts, customer)
     run, logo, run_value = validate_run(input_dir / "02_run.json", input_dir)
-    validate_customer_topics(customer)
     validate_content_floors(customer, run_value)
     entries: list[tuple[str, bytes]] = [
         ("00_brand_facts.md", facts),

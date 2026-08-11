@@ -6,7 +6,7 @@ description: "Build a source-grounded Simplified Chinese enterprise knowledge-ba
 # Website Enterprise Knowledge Base
 
 Produce one evidence-grounded candidate ZIP. The service, not this skill,
-creates the final schema-v4 archive and all frontend manifests.
+creates the final schema-v3 archive and all frontend manifests.
 
 Run this Skill only with the `frontmind-base` model profile. The Website creates
 exactly one enterprise knowledge-base generation task. Do not request,
@@ -31,7 +31,7 @@ recommend, or perform automatic recovery, regeneration, or a second attempt.
    product text.
 3. Write the two fixed Markdown files.
 4. Record source, content-floor, and Logo acquisition results in
-   `02_run.json`, including the real budget/coverage stop reason.
+   `02_run.json`.
 5. Run `scripts/build_candidate.py` and attach its single validated output ZIP.
 
 Read `references/dimensions.md` completely before research. It defines the S1
@@ -61,34 +61,6 @@ Consolidate aliases, duplicate pages, translations, pagination, and repeated
 SKUs. Do not infer missing team, customer, price, performance, finance,
 certification, or competitive information.
 
-This is the lightweight Website profile. Apply these hard acquisition budgets
-across the entire run, including Logo discovery:
-
-- attempt no more than 16 distinct public webpage URLs;
-- run no more than 4 public-web queries;
-- read no more than 4 official documents and 10 user uploads;
-- record no more than 30 total sources;
-- expand no more than 5 core product or service families, while retaining all
-  long-tail product names inside the nearest family summary;
-- retain no more than the one permitted official Logo.
-
-Read all accepted uploads before public research. A homepage/header and a
-second first-party Logo check both count toward the 16-page budget. Reusing a
-source across sections does not consume another source or page attempt. Record
-every accepted upload once in `sources` with its exact filename, even when it
-only establishes a gap and supplies no publishable fact.
-
-Write exactly 9–19 third-level topics across the fixed seven customer sections.
-Each H3 becomes exactly one final knowledge leaf; do not create heading-free
-sections or split one topic into continuation headings. Use these ranges:
-
-- `企业与品牌` 1–2; `团队与组织` 1–2; `产品与服务` 2–5;
-- `技术与交付` 2–3; `客户与行业` 1–3; `服务与合作` 1–2;
-- `可信优势` 1–2.
-
-Keep supported facts and any unresolved boundary for the same topic in that
-single H3. Do not create a separate “资料缺口” H3.
-
 ## Customer-content floor
 
 The deterministic packager measures customer-visible Chinese characters,
@@ -106,8 +78,7 @@ delivery thresholds:
 - `可信优势`: 600 (baseline 345)
 
 The combined floor is 6300 visible characters when all seven sections have
-obtainable facts. The formal archive keeps its existing 40000-character upper
-bound. Research until each applicable section reaches its floor.
+obtainable facts. Research until each applicable section reaches its floor.
 Distribute product content across the real product or service families; do not
 meet a floor with repetition, generic filler, invented facts, or copied source
 boilerplate.
@@ -115,9 +86,7 @@ boilerplate.
 Use `contentFloorExceptions` only when the section is genuinely inapplicable
 or the facts remain unobtainable after at least three relevant public-source
 attempts. Keep the supported facts, include `[待核验]`, and record the exact
-section, a concrete reason of at least 12 meaningful characters, and all
-attempted URLs in `02_run.json`. Every attempted URL must be a registered
-public HTTP(S) source in `sources` whose kind is not `user_upload`. A thin
+section, a concrete reason, and all attempted URLs in `02_run.json`. A thin
 section is not itself an exception, and a large or well-documented company
 must not use an exception merely to finish early.
 
@@ -185,4 +154,4 @@ reported error and rerun it. Never hand-compress the working directory.
 Return exactly one file named `website-lead-candidate-v1.zip`. Do not attach a
 Skill ZIP, working directory, cache, source-page export, log, or second archive.
 Do not create final directories, completeness files, package manifests, status
-counts, hashes, evidence-document links, or a schema-v4 archive.
+counts, hashes, evidence-document links, or a schema-v3 archive.
