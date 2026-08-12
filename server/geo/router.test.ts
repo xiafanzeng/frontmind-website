@@ -1,6 +1,9 @@
 import { createHash } from "node:crypto";
+import { promises as fs } from "node:fs";
 import type { AddressInfo } from "node:net";
 import type { Server } from "node:http";
+import os from "node:os";
+import path from "node:path";
 import { deflateSync } from "node:zlib";
 import express from "express";
 import JSZip from "jszip";
@@ -31,6 +34,11 @@ import {
   geoCustomQuestionRequestHash,
   MemoryGeoCustomQuestionValidationStore,
 } from "./custom-question-validation-store";
+import {
+  FileGeoMonitorFreeReservationStore,
+  MemoryGeoMonitorFreeReservationStore,
+  type GeoMonitorFreeReservationStore,
+} from "./monitor-free-reservation-store";
 import { parseKnowledgeBaseArchive } from "./archive";
 import { finalizeKnowledgeBaseCandidate } from "./knowledge-base-finalizer";
 import { buildValidQuestionSet } from "./question-set.test-fixture";
@@ -759,6 +767,8 @@ let projectOrders: Map<string, GeoProjectOrder>;
 let projectOrderRegistry: GeoProjectOrderRegistry;
 let paymentGateway: GeoPaymentGateway;
 let customQuestionValidationStore: MemoryGeoCustomQuestionValidationStore;
+let monitorFreeReservationStore: GeoMonitorFreeReservationStore;
+const temporaryMonitorStoreDirectories: string[] = [];
 let customQuestionValidationNowMs: number;
 let knowledgeBaseFinalizerOverride:
   | typeof finalizeKnowledgeBaseCandidate
@@ -774,6 +784,7 @@ beforeEach(async () => {
   knowledgeBaseFinalizerOverride = undefined;
   customQuestionValidationNowMs = Date.parse("2026-08-01T00:00:00.000Z");
   customQuestionValidationStore = new MemoryGeoCustomQuestionValidationStore();
+  monitorFreeReservationStore = new MemoryGeoMonitorFreeReservationStore();
   broker.archive = await fixtureCandidateArchive();
   paymentCalls = [];
   paymentCheckoutCalls = [];
@@ -1044,6 +1055,7 @@ beforeEach(async () => {
     createGeoRouter({
       broker,
       customQuestionValidationStore,
+      monitorFreeReservationStore,
       customQuestionValidationNow: () => customQuestionValidationNowMs,
       knowledgeBaseFinalizer: (input) =>
         knowledgeBaseFinalizerOverride
@@ -1240,6 +1252,11 @@ beforeEach(async () => {
 afterEach(async () => {
   await new Promise<void>((resolve, reject) =>
     server.close((error) => (error ? reject(error) : resolve())),
+  );
+  await Promise.all(
+    temporaryMonitorStoreDirectories
+      .splice(0)
+      .map((directory) => fs.rm(directory, { recursive: true, force: true })),
   );
 });
 
@@ -3201,21 +3218,24 @@ describe("GEO API", () => {
     expect(deleted.body).toMatchObject({ ok: true });
   });
 
-  it("physically deletes a project with a pending monitoring order and permanently fences its old token", async () => {
+  it("physically deletes a project with a legacy pending monitoring order and permanently fences its old token", async () => {
     const ready = await createReadyProject();
-    const checkout = await jsonRequest(
-      `/projects/${encodeURIComponent(ready.projectToken)}/payments`,
-      ready.cookie,
-      {
-        method: "POST",
-        body: {
-          questionId: "product-scenario-01",
-          platformIds: ["doubao"],
-          method: "alipay",
-        },
-      },
-    );
-    expect(checkout.response.status).toBe(201);
+    const projectId = new GeoTokenCodec(
+      "test-session-secret-at-least-16-characters",
+    ).open<{ projectId: string }>(ready.projectToken, "project").value
+      .projectId;
+    projectOrders.set("legacy-pending-monitor-order", {
+      orderId: "legacy-pending-monitor-order",
+      projectId,
+      purchaseType: "monitoring",
+      amountFen: 200,
+      authorizationDigest: createHash("sha256")
+        .update("legacy-pending-authorization")
+        .digest("hex"),
+      state: "pending",
+      checkoutExpiresAt: "2027-07-23T10:00:00.000Z",
+      eventAt: "2026-08-01T00:00:00.000Z",
+    });
 
     const pendingDelete = await jsonRequest(
       `/projects/${encodeURIComponent(ready.projectToken)}`,
@@ -3223,7 +3243,7 @@ describe("GEO API", () => {
       { method: "DELETE" },
     );
     expect(pendingDelete.response.status).toBe(200);
-    expect(pendingDelete.body).toMatchObject({ ok: true, deletedOrders: 2 });
+    expect(pendingDelete.body).toMatchObject({ ok: true, deletedOrders: 1 });
     expect(projectOrders.size).toBe(0);
 
     const fencedRead = await jsonRequest(
@@ -3378,104 +3398,6 @@ describe("GEO API", () => {
     expect(removed.body).toMatchObject({ ok: true });
     expect(broker.tasks.has("kb-1")).toBe(false);
     expect(broker.tasks.has("question-1")).toBe(false);
-  });
-
-  it("closes a durable checkout intent after an explicit gateway failure and does not leave a phantom delete block", async () => {
-    const ready = await createReadyProject();
-    paymentGateway.createCheckout = async () => {
-      throw new Error("gateway rejected checkout");
-    };
-
-    const checkout = await jsonRequest(
-      `/projects/${encodeURIComponent(ready.projectToken)}/payments`,
-      ready.cookie,
-      {
-        method: "POST",
-        body: {
-          questionId: "product-scenario-01",
-          platformIds: ["doubao"],
-          method: "alipay",
-        },
-      },
-    );
-    expect(checkout.response.status).toBe(500);
-    expect(Array.from(projectOrders.values())).toEqual([
-      expect.objectContaining({ state: "closed" }),
-    ]);
-
-    const removed = await jsonRequest(
-      `/projects/${encodeURIComponent(ready.projectToken)}`,
-      ready.cookie,
-      { method: "DELETE" },
-    );
-    expect(removed.response.status).toBe(200);
-  });
-
-  it("never calls the payment gateway when the durable checkout intent cannot be written", async () => {
-    const ready = await createReadyProject();
-    const originalUpsert = projectOrderRegistry.upsert;
-    projectOrderRegistry.upsert = async () => {
-      throw new Error("intent database unavailable");
-    };
-    const originalCreateCheckout = paymentGateway.createCheckout;
-    paymentGateway.createCheckout = vi.fn(originalCreateCheckout);
-
-    const checkout = await jsonRequest(
-      `/projects/${encodeURIComponent(ready.projectToken)}/payments`,
-      ready.cookie,
-      {
-        method: "POST",
-        body: {
-          questionId: "product-scenario-01",
-          platformIds: ["doubao"],
-          method: "alipay",
-        },
-      },
-    );
-    expect(checkout.response.status).toBe(503);
-    expect(paymentGateway.createCheckout).not.toHaveBeenCalled();
-    expect(projectOrders.size).toBe(0);
-
-    projectOrderRegistry.upsert = originalUpsert;
-    const removed = await jsonRequest(
-      `/projects/${encodeURIComponent(ready.projectToken)}`,
-      ready.cookie,
-      { method: "DELETE" },
-    );
-    expect(removed.response.status).toBe(200);
-  });
-
-  it("physically deletes a durable pending intent when checkout commit is unavailable", async () => {
-    const ready = await createReadyProject();
-    projectOrderRegistry.commitIntent = async () => {
-      throw new Error("commit result unavailable");
-    };
-
-    const checkout = await jsonRequest(
-      `/projects/${encodeURIComponent(ready.projectToken)}/payments`,
-      ready.cookie,
-      {
-        method: "POST",
-        body: {
-          questionId: "product-scenario-01",
-          platformIds: ["doubao"],
-          method: "alipay",
-        },
-      },
-    );
-    expect(checkout.response.status).toBe(503);
-    expect(Array.from(projectOrders.values())).toEqual([
-      expect.objectContaining({ state: "pending" }),
-    ]);
-
-    const removed = await jsonRequest(
-      `/projects/${encodeURIComponent(ready.projectToken)}`,
-      ready.cookie,
-      { method: "DELETE" },
-    );
-    expect(removed.response.status).toBe(200);
-    expect(removed.body).toMatchObject({ ok: true, deletedOrders: 1 });
-    expect(projectOrders.size).toBe(0);
   });
 
   it("deduplicates a replayed initial project request within the same session", async () => {
@@ -3642,221 +3564,84 @@ describe("GEO API", () => {
     expect(broker.monitorCreates).toBe(0);
   });
 
-  it("creates a server-priced ZPAY checkout and exposes authenticated status only", async () => {
+  it("keeps authenticated status recovery for a historical monitoring order", async () => {
     const ready = await createReadyProject();
-    const scope = {
-      questionId: "product-scenario-01",
-      platformIds: ["doubao", "deepseek"],
-    };
-    const created = await jsonRequest(
-      `/projects/${encodeURIComponent(ready.projectToken)}/payments`,
-      ready.cookie,
-      {
-        method: "POST",
-        body: { ...scope, method: "wxpay" },
-      },
-    );
-
-    expect(created.response.status).toBe(201);
-    expect(created.body).toMatchObject({
-      payment: {
-        amountFen: 400,
-        unitPriceFen: 200,
-        answersPerPlatform: 5,
-        action: "https://zpayz.cn/submit.php",
-        method: "POST",
-        fields: { type: "wxpay", money: "4.00" },
-      },
-    });
-    expect(paymentCheckoutCalls).toHaveLength(1);
-    expect(paymentCheckoutCalls[0]).toMatchObject({
-      projectId: expect.any(String),
-      questionId: scope.questionId,
-      platformIds: scope.platformIds,
-      expectedAmountFen: 400,
-      method: "wxpay",
-    });
-    expect(paymentCheckoutCalls[0].ownerSessionId).toBeTruthy();
-
-    const replayed = await jsonRequest(
-      `/projects/${encodeURIComponent(ready.projectToken)}/payments`,
-      ready.cookie,
-      {
-        method: "POST",
-        body: { ...scope, method: "wxpay" },
-      },
-    );
-    expect(replayed.response.status).toBe(200);
-    expect((replayed.body as any).payment.orderId).toBe(
-      (created.body as any).payment.orderId,
-    );
-    const switchedMethod = await jsonRequest(
-      `/projects/${encodeURIComponent(ready.projectToken)}/payments`,
-      ready.cookie,
-      {
-        method: "POST",
-        body: { ...scope, method: "alipay" },
-      },
-    );
-    expect(switchedMethod.response.status).toBe(409);
-    expect(switchedMethod.body).toMatchObject({
-      error: { code: "PAYMENT_METHOD_LOCKED" },
-    });
-    expect(paymentCheckoutCalls).toHaveLength(1);
-
-    paymentAccepted = false;
-    const switchedCheckout = await jsonRequest(
-      `/projects/${encodeURIComponent(ready.projectToken)}/payments/switch`,
-      ready.cookie,
-      {
-        method: "POST",
-        body: {
-          ...scope,
-          authorization: "zpay-signed-authorization-placeholder",
-          method: "alipay",
-        },
-      },
-    );
-    expect(switchedCheckout.response.status).toBe(200);
-    expect(switchedCheckout.body).toMatchObject({
-      payment: {
-        authorization: "zpay-signed-authorization-placeholder",
-        orderId: "zpay-order-001",
-        amountFen: 400,
-        unitPriceFen: 200,
-        answersPerPlatform: 5,
-        fields: { type: "alipay" },
-      },
-    });
-    expect(paymentSwitchCalls).toHaveLength(1);
-    expect(paymentSwitchCalls[0]).toMatchObject({
-      authorization: "zpay-signed-authorization-placeholder",
-      projectId: paymentCheckoutCalls[0].projectId,
-      questionId: scope.questionId,
-      platformIds: scope.platformIds,
-      expectedAmountFen: 400,
-      method: "alipay",
+    const projectId = new GeoTokenCodec(
+      "test-session-secret-at-least-16-characters",
+    ).open<{ projectId: string }>(ready.projectToken, "project").value
+      .projectId;
+    const authorization = "historical-monitoring-authorization";
+    projectOrders.set("historical-monitoring-order", {
+      orderId: "historical-monitoring-order",
+      projectId,
+      purchaseType: "monitoring",
+      amountFen: 400,
+      authorizationDigest: createHash("sha256")
+        .update(authorization)
+        .digest("hex"),
+      state: "pending",
       checkoutExpiresAt: "2027-07-23T10:00:00.000Z",
+      eventAt: "2026-08-01T00:00:00.000Z",
     });
+    paymentAccepted = false;
 
     const status = await jsonRequest(
-      `/projects/${encodeURIComponent(ready.projectToken)}/payments/status`,
+      "/projects/" +
+        encodeURIComponent(ready.projectToken) +
+        "/payments/status",
       ready.cookie,
       {
         method: "POST",
         body: {
-          ...scope,
-          authorization: "zpay-signed-authorization-placeholder",
+          questionId: "product-scenario-01",
+          platformIds: ["doubao", "deepseek"],
+          authorization,
         },
       },
     );
+
     expect(status.response.status).toBe(200);
     expect(status.body).toMatchObject({
       payment: { status: "pending", amountFen: 400 },
     });
+    expect(paymentStatusCalls).toHaveLength(1);
     expect(paymentStatusCalls[0]).toMatchObject({
-      projectId: paymentCheckoutCalls[0].projectId,
-      questionId: scope.questionId,
-      platformIds: scope.platformIds,
+      projectId,
+      questionId: "product-scenario-01",
+      platformIds: ["doubao", "deepseek"],
       expectedAmountFen: 400,
     });
-    expect(paymentStatusCalls[0].ownerSessionId).toBeTruthy();
+    expect(paymentCheckoutCalls).toHaveLength(0);
+    expect(paymentSwitchCalls).toHaveLength(0);
     expect(broker.monitorCreates).toBe(0);
   });
 
-  it("binds the overseas edition to ChatGPT, the English prompt, and the ¥5 checkout", async () => {
+  it("binds free overseas monitoring to ChatGPT and the translated English prompt", async () => {
     const ready = await createReadyProject();
     const sourceQuestion = "Acme 的服务模块 1 主要解决哪些业务问题？";
-    const scope = {
-      questionId: "product-scenario-01",
-      monitoringEdition: "overseas",
-      platformIds: ["chatgpt"],
-    } as const;
-
-    const created = await jsonRequest(
-      `/projects/${encodeURIComponent(ready.projectToken)}/payments`,
-      ready.cookie,
-      { method: "POST", body: { ...scope, method: "wxpay" } },
-    );
-
-    expect(created.response.status).toBe(201);
-    expect(created.body).toMatchObject({
-      payment: {
-        amountFen: 500,
-        unitPriceFen: 500,
-        monitoringEdition: "overseas",
-        answersPerPlatform: 5,
-      },
-    });
-    expect(paymentCheckoutCalls.at(-1)).toMatchObject({
-      monitoringEdition: "overseas",
-      platformIds: ["chatgpt"],
-      expectedAmountFen: 500,
-    });
-    expect(broker.monitorQuestionTranslationTaskCount).toBe(1);
-
-    const originalPayment = (created.body as any).payment;
-    paymentAccepted = false;
-    const switched = await jsonRequest(
-      `/projects/${encodeURIComponent(ready.projectToken)}/payments/switch`,
-      ready.cookie,
-      {
-        method: "POST",
-        body: {
-          ...scope,
-          authorization: originalPayment.authorization,
-          method: "alipay",
-        },
-      },
-    );
-    expect(switched.response.status).toBe(200);
-    expect(switched.body).toMatchObject({
-      payment: {
-        authorization: originalPayment.authorization,
-        orderId: originalPayment.orderId,
-        expiresAt: originalPayment.expiresAt,
-        amountFen: 500,
-        unitPriceFen: 500,
-        monitoringEdition: "overseas",
-        fields: {
-          type: "alipay",
-          param: originalPayment.authorization,
-          out_trade_no: originalPayment.orderId,
-        },
-      },
-    });
-    expect(paymentSwitchCalls.at(-1)).toMatchObject({
-      monitoringEdition: "overseas",
-      platformIds: ["chatgpt"],
-      expectedAmountFen: 500,
-      checkoutExpiresAt: originalPayment.expiresAt,
-      method: "alipay",
-    });
-    paymentAccepted = true;
-
     const started = await jsonRequest(
-      `/projects/${encodeURIComponent(ready.projectToken)}/monitoring`,
+      "/projects/" + encodeURIComponent(ready.projectToken) + "/monitoring",
       ready.cookie,
       {
         method: "POST",
         body: {
-          ...scope,
-          paymentAuthorization: originalPayment.authorization,
+          schemaVersion: 2,
+          clientRequestId: "81818181-8181-4181-8181-818181818181",
+          questionId: "product-scenario-01",
+          monitoringEdition: "overseas",
+          platformIds: ["chatgpt"],
         },
       },
     );
 
     expect(started.response.status).toBe(201);
     expect(started.body).toMatchObject({
+      state: "started",
       project: {
         monitoringEdition: "overseas",
-        selectedQuestionId: scope.questionId,
+        selectedQuestionId: "product-scenario-01",
         selectedPlatformIds: ["chatgpt"],
       },
-    });
-    expect(paymentCalls.at(-1)).toMatchObject({
-      monitoringEdition: "overseas",
-      expectedAmountFen: 500,
     });
     expect(broker.monitorQuestionTranslationTaskCount).toBe(1);
     expect(broker.monitorCreates).toBe(1);
@@ -3870,40 +3655,24 @@ describe("GEO API", () => {
         "Which business problems does Acme Service Module 1 primarily solve?",
       platforms: ["chatgpt"],
     });
-    const startedPayload = started.body as Record<string, any>;
-    expect(JSON.stringify(startedPayload.project.monitoring)).not.toContain(
-      "Which business problems does Acme Service Module 1 primarily solve?",
-    );
-    expect(
-      startedPayload.project.questions.every(
-        (question: Record<string, unknown>) => !("questionEnglish" in question),
-      ),
-    ).toBe(true);
+    expect(paymentCalls).toHaveLength(0);
+    expect(paymentCheckoutCalls).toHaveLength(0);
   });
 
-  it("resolves a trusted translation output_file before starting overseas monitoring", async () => {
+  it("resolves a trusted translation output_file before starting free overseas monitoring", async () => {
     broker.monitorQuestionTranslationUseOutputFile = true;
     const ready = await createReadyProject();
-    const scope = {
-      questionId: "product-scenario-01",
-      monitoringEdition: "overseas",
-      platformIds: ["chatgpt"],
-    } as const;
-    const checkout = await jsonRequest(
-      `/projects/${encodeURIComponent(ready.projectToken)}/payments`,
-      ready.cookie,
-      { method: "POST", body: { ...scope, method: "wxpay" } },
-    );
-    expect(checkout.response.status).toBe(201);
-
     const started = await jsonRequest(
-      `/projects/${encodeURIComponent(ready.projectToken)}/monitoring`,
+      "/projects/" + encodeURIComponent(ready.projectToken) + "/monitoring",
       ready.cookie,
       {
         method: "POST",
         body: {
-          ...scope,
-          paymentAuthorization: "zpay-signed-authorization-placeholder",
+          schemaVersion: 2,
+          clientRequestId: "82828282-8282-4282-8282-828282828282",
+          questionId: "product-scenario-01",
+          monitoringEdition: "overseas",
+          platformIds: ["chatgpt"],
         },
       },
     );
@@ -3917,37 +3686,38 @@ describe("GEO API", () => {
         "Which business problems does Acme Service Module 1 primarily solve?",
       platforms: ["chatgpt"],
     });
+    expect(paymentCalls).toHaveLength(0);
   });
 
-  it("starts from strict typed text.value output before task status convergence", async () => {
+  it("starts free overseas monitoring from strict typed text.value output before task status convergence", async () => {
     broker.monitorQuestionTranslationStatus = "running";
     const ready = await createReadyProject();
-    const scope = {
-      questionId: "product-scenario-01",
-      monitoringEdition: "overseas",
-      platformIds: ["chatgpt"],
-    } as const;
-    const checkout = await jsonRequest(
-      `/projects/${encodeURIComponent(ready.projectToken)}/payments`,
-      ready.cookie,
-      { method: "POST", body: { ...scope, method: "wxpay" } },
-    );
-    expect(checkout.response.status).toBe(201);
+    const createTask = broker.createTask.bind(broker);
+    broker.createTask = async (input) => {
+      const task = await createTask(input);
+      if (
+        input.prompt.includes("frontmind.geo.monitor-question-translation.v1")
+      ) {
+        task.status = "running";
+        task.output = monitorTranslationTaskOutput(
+          "Acme 的服务模块 1 主要解决哪些业务问题？",
+          "Which business problems does Acme Service Module 1 primarily solve?",
+        );
+      }
+      return task;
+    };
 
-    const task = broker.tasks.get("monitor-question-translation-1")!;
-    task.status = "running";
-    task.output = monitorTranslationTaskOutput(
-      "Acme 的服务模块 1 主要解决哪些业务问题？",
-      "Which business problems does Acme Service Module 1 primarily solve?",
-    );
     const started = await jsonRequest(
-      `/projects/${encodeURIComponent(ready.projectToken)}/monitoring`,
+      "/projects/" + encodeURIComponent(ready.projectToken) + "/monitoring",
       ready.cookie,
       {
         method: "POST",
         body: {
-          ...scope,
-          paymentAuthorization: "zpay-signed-authorization-placeholder",
+          schemaVersion: 2,
+          clientRequestId: "83838383-8383-4383-8383-838383838383",
+          questionId: "product-scenario-01",
+          monitoringEdition: "overseas",
+          platformIds: ["chatgpt"],
         },
       },
     );
@@ -3961,481 +3731,36 @@ describe("GEO API", () => {
     });
   });
 
-  it("waits inside one paid request for a running translation to complete", async () => {
-    broker.monitorQuestionTranslationStatus = "running";
-    const ready = await createReadyProject();
-    const scope = {
-      questionId: "product-scenario-01",
-      monitoringEdition: "overseas",
-      platformIds: ["chatgpt"],
-    } as const;
-    const checkout = await jsonRequest(
-      `/projects/${encodeURIComponent(ready.projectToken)}/payments`,
-      ready.cookie,
-      { method: "POST", body: { ...scope, method: "wxpay" } },
-    );
-    expect(checkout.response.status).toBe(201);
-    const task = broker.tasks.get("monitor-question-translation-1")!;
-    const getTask = vi.spyOn(broker, "getTask");
-    const complete = setTimeout(() => {
-      task.status = "completed";
-      task.output = monitorTranslationTaskOutput(
-        "Acme 的服务模块 1 主要解决哪些业务问题？",
-        "Which business problems does Acme Service Module 1 primarily solve?",
-      );
-    }, 12);
-
-    const started = await jsonRequest(
-      `/projects/${encodeURIComponent(ready.projectToken)}/monitoring`,
-      ready.cookie,
-      {
-        method: "POST",
-        body: {
-          ...scope,
-          paymentAuthorization: "zpay-signed-authorization-placeholder",
-        },
-      },
-    );
-    clearTimeout(complete);
-
-    expect(started.response.status).toBe(201);
-    expect(getTask.mock.calls.length).toBeGreaterThan(1);
-    expect(broker.monitorCreates).toBe(1);
-  });
-
-  it("keeps overseas checkout available when translation prewarming is deferred", async () => {
-    const ready = await createReadyProject();
-    broker.createTaskErrors.push(
-      new GeoBrokerError(
-        "translation queue unavailable",
-        503,
-        "AGENT_UNAVAILABLE",
-      ),
-    );
-    const scope = {
-      questionId: "product-scenario-01",
-      monitoringEdition: "overseas",
-      platformIds: ["chatgpt"],
-    } as const;
-
-    const checkout = await jsonRequest(
-      `/projects/${encodeURIComponent(ready.projectToken)}/payments`,
-      ready.cookie,
-      { method: "POST", body: { ...scope, method: "wxpay" } },
-    );
-    expect(checkout.response.status).toBe(201);
-    expect(paymentCheckoutCalls).toHaveLength(1);
-    expect(broker.monitorQuestionTranslationTaskCount).toBe(0);
-
-    const started = await jsonRequest(
-      `/projects/${encodeURIComponent(ready.projectToken)}/monitoring`,
-      ready.cookie,
-      {
-        method: "POST",
-        body: {
-          ...scope,
-          paymentAuthorization: "zpay-signed-authorization-placeholder",
-        },
-      },
-    );
-    expect(started.response.status).toBe(201);
-    expect(broker.monitorQuestionTranslationTaskCount).toBe(1);
-    expect(broker.monitorCreates).toBe(1);
-  });
-
-  it("fails closed after payment when the monitoring-time translation is not source-bound", async () => {
+  it("fails closed before free overseas monitoring when translation is not source-bound", async () => {
     broker.monitorQuestionTranslationRawOutput = {
       schemaVersion: 1,
       sourceQuestionSha256: "0".repeat(64),
       questionEnglish: "Is this unrelated platform stable?",
     };
     const ready = await createReadyProject();
-    const scope = {
-      questionId: "product-scenario-01",
-      monitoringEdition: "overseas",
-      platformIds: ["chatgpt"],
-    } as const;
-    const checkout = await jsonRequest(
-      `/projects/${encodeURIComponent(ready.projectToken)}/payments`,
-      ready.cookie,
-      {
-        method: "POST",
-        body: { ...scope, method: "wxpay" },
-      },
-    );
-    expect(checkout.response.status).toBe(201);
-    expect(paymentCheckoutCalls).toHaveLength(1);
-
     const started = await jsonRequest(
-      `/projects/${encodeURIComponent(ready.projectToken)}/monitoring`,
+      "/projects/" + encodeURIComponent(ready.projectToken) + "/monitoring",
       ready.cookie,
       {
         method: "POST",
         body: {
-          ...scope,
-          paymentAuthorization: "zpay-signed-authorization-placeholder",
+          schemaVersion: 2,
+          clientRequestId: "84848484-8484-4484-8484-848484848484",
+          questionId: "product-scenario-01",
+          monitoringEdition: "overseas",
+          platformIds: ["chatgpt"],
         },
       },
     );
+
     expect(started.response.status).toBe(502);
     expect(started.body).toMatchObject({
       error: { code: "QUESTION_TRANSLATION_FAILED" },
     });
-    expect(paymentCalls).toHaveLength(1);
     expect(broker.monitorQuestionTranslationTaskCount).toBe(1);
     expect(broker.monitorCreates).toBe(0);
-    expect(projectOrders.get("zpay-order-001")?.state).toBe("review_required");
-  });
-
-  it("keeps a paid order retryable without duplicating a pending translation task", async () => {
-    broker.monitorQuestionTranslationStatus = "running";
-    const ready = await createReadyProject();
-    const scope = {
-      questionId: "product-scenario-01",
-      monitoringEdition: "overseas",
-      platformIds: ["chatgpt"],
-    } as const;
-    const checkout = await jsonRequest(
-      `/projects/${encodeURIComponent(ready.projectToken)}/payments`,
-      ready.cookie,
-      { method: "POST", body: { ...scope, method: "wxpay" } },
-    );
-    expect(checkout.response.status).toBe(201);
-
-    for (let attempt = 0; attempt < 7; attempt += 1) {
-      const retried = await jsonRequest(
-        `/projects/${encodeURIComponent(ready.projectToken)}/monitoring`,
-        ready.cookie,
-        {
-          method: "POST",
-          body: {
-            ...scope,
-            paymentAuthorization: "zpay-signed-authorization-placeholder",
-          },
-        },
-      );
-      expect(retried.response.status).toBe(503);
-      expect(retried.body).toMatchObject({
-        error: { code: "QUESTION_TRANSLATION_PENDING" },
-      });
-      expect(JSON.stringify(retried.body)).not.toMatch(
-        /英文监控问题|翻译|技术支持|请求过于频繁/,
-      );
-    }
-
-    expect(broker.monitorQuestionTranslationTaskCount).toBe(1);
-    expect(broker.monitorCreates).toBe(0);
-    expect(paymentCalls).toHaveLength(7);
-    expect(projectOrders.get("zpay-order-001")?.state).toBe("paid");
-  });
-
-  it("rescues a paid order after the old hourly monitor-create quota is exhausted", async () => {
-    const ready = await createReadyProject();
-    const scope = {
-      questionId: "product-scenario-01",
-      monitoringEdition: "overseas",
-      platformIds: ["chatgpt"],
-    } as const;
-    const checkout = await jsonRequest(
-      `/projects/${encodeURIComponent(ready.projectToken)}/payments`,
-      ready.cookie,
-      { method: "POST", body: { ...scope, method: "wxpay" } },
-    );
-    expect(checkout.response.status).toBe(201);
-
-    paymentAccepted = false;
-    for (let attempt = 0; attempt < 6; attempt += 1) {
-      const denied = await jsonRequest(
-        `/projects/${encodeURIComponent(ready.projectToken)}/monitoring`,
-        ready.cookie,
-        {
-          method: "POST",
-          body: {
-            ...scope,
-            paymentAuthorization: "zpay-signed-authorization-placeholder",
-          },
-        },
-      );
-      expect(denied.response.status).not.toBe(429);
-    }
-
-    paymentAccepted = true;
-    const paid = await jsonRequest(
-      `/projects/${encodeURIComponent(ready.projectToken)}/payments/status`,
-      ready.cookie,
-      {
-        method: "POST",
-        body: {
-          ...scope,
-          authorization: "zpay-signed-authorization-placeholder",
-        },
-      },
-    );
-    expect(paid.body).toMatchObject({ payment: { status: "paid" } });
-
-    const started = await jsonRequest(
-      `/projects/${encodeURIComponent(ready.projectToken)}/monitoring`,
-      ready.cookie,
-      {
-        method: "POST",
-        body: {
-          ...scope,
-          paymentAuthorization: "zpay-signed-authorization-placeholder",
-        },
-      },
-    );
-    expect(started.response.status).toBe(201);
-    expect(broker.monitorQuestionTranslationTaskCount).toBe(1);
-    expect(broker.monitorCreates).toBe(1);
-    expect(
-      Array.from(projectOrders.values()).filter(
-        (order) => order.orderId === "zpay-order-001",
-      ),
-    ).toHaveLength(1);
-  });
-
-  it("rejects stale or already-paid authorizations before switching channels", async () => {
-    const ready = await createReadyProject();
-    const scope = {
-      questionId: "product-scenario-01",
-      platformIds: ["doubao"],
-    };
-    const created = await jsonRequest(
-      `/projects/${encodeURIComponent(ready.projectToken)}/payments`,
-      ready.cookie,
-      {
-        method: "POST",
-        body: { ...scope, method: "alipay" },
-      },
-    );
-    expect(created.response.status).toBe(201);
-
-    const stale = await jsonRequest(
-      `/projects/${encodeURIComponent(ready.projectToken)}/payments/switch`,
-      ready.cookie,
-      {
-        method: "POST",
-        body: {
-          ...scope,
-          authorization: "stale-payment-authorization",
-          method: "wxpay",
-        },
-      },
-    );
-    expect(stale.response.status).toBe(409);
-    expect(stale.body).toMatchObject({
-      error: { code: "PAYMENT_CHECKOUT_NOT_FOUND" },
-    });
-    expect(paymentSwitchCalls).toHaveLength(0);
-
-    const paid = await jsonRequest(
-      `/projects/${encodeURIComponent(ready.projectToken)}/payments/switch`,
-      ready.cookie,
-      {
-        method: "POST",
-        body: {
-          ...scope,
-          authorization: "zpay-signed-authorization-placeholder",
-          method: "wxpay",
-        },
-      },
-    );
-    expect(paid.response.status).toBe(409);
-    expect(paid.body).toMatchObject({
-      error: { code: "PAYMENT_ALREADY_CONFIRMED" },
-    });
-    expect(paymentSwitchCalls).toHaveLength(1);
-    expect(paymentStatusCalls).toHaveLength(1);
-    expect(projectOrders.get("zpay-order-001")).toMatchObject({
-      state: "paid",
-      paidAt: "2026-07-22T10:05:00.000Z",
-    });
-  });
-
-  it("single-flights concurrent payment switches for one monitoring scope", async () => {
-    const ready = await createReadyProject();
-    const scope = {
-      questionId: "product-scenario-01",
-      platformIds: ["doubao"] as GeoMonitorPlatformId[],
-    };
-    paymentAccepted = false;
-    const created = await jsonRequest(
-      `/projects/${encodeURIComponent(ready.projectToken)}/payments`,
-      ready.cookie,
-      {
-        method: "POST",
-        body: { ...scope, method: "alipay" },
-      },
-    );
-    expect(created.response.status).toBe(201);
-
-    let signalSwitchStarted!: () => void;
-    const switchStarted = new Promise<void>((resolve) => {
-      signalSwitchStarted = resolve;
-    });
-    let resolveSwitch!: (checkout: GeoPaymentCheckout) => void;
-    const switchResult = new Promise<GeoPaymentCheckout>((resolve) => {
-      resolveSwitch = resolve;
-    });
-    paymentGateway.switchCheckoutMethod = async (input) => {
-      paymentSwitchCalls.push(input);
-      signalSwitchStarted();
-      return switchResult;
-    };
-
-    const switchPath = `/projects/${encodeURIComponent(
-      ready.projectToken,
-    )}/payments/switch`;
-    const switchBody = {
-      ...scope,
-      authorization: "zpay-signed-authorization-placeholder",
-    };
-    const first = jsonRequest(switchPath, ready.cookie, {
-      method: "POST",
-      body: { ...switchBody, method: "wxpay" },
-    });
-    await switchStarted;
-    const replayed = jsonRequest(switchPath, ready.cookie, {
-      method: "POST",
-      body: { ...switchBody, method: "wxpay" },
-    });
-    const conflicting = await jsonRequest(switchPath, ready.cookie, {
-      method: "POST",
-      body: { ...switchBody, method: "alipay" },
-    });
-
-    expect(conflicting.response.status).toBe(409);
-    expect(conflicting.body).toMatchObject({
-      error: { code: "PAYMENT_SWITCH_IN_PROGRESS" },
-    });
-    expect(paymentSwitchCalls).toHaveLength(1);
-
-    resolveSwitch({
-      authorization: "zpay-signed-authorization-placeholder",
-      orderId: "zpay-order-001",
-      amountFen: 200,
-      expiresAt: "2027-07-23T10:00:00.000Z",
-      action: "https://zpayz.cn/submit.php",
-      method: "POST",
-      fields: {
-        pid: "merchant-test",
-        type: "wxpay",
-        out_trade_no: "zpay-order-001",
-        money: "2.00",
-        param: "zpay-signed-authorization-placeholder",
-        sign: "test-switch-signature",
-        sign_type: "MD5",
-      },
-    });
-    const [firstResult, replayedResult] = await Promise.all([first, replayed]);
-    expect(firstResult.response.status).toBe(200);
-    expect(replayedResult.response.status).toBe(200);
-    expect(firstResult.body).toEqual(replayedResult.body);
-    expect(firstResult.body).toMatchObject({
-      payment: {
-        orderId: "zpay-order-001",
-        fields: { type: "wxpay" },
-      },
-    });
-    expect(paymentSwitchCalls).toHaveLength(1);
-  });
-
-  it("rejects a switched checkout whose signed form no longer matches the authorization", async () => {
-    const ready = await createReadyProject();
-    const scope = {
-      questionId: "product-scenario-01",
-      platformIds: ["doubao"],
-    };
-    paymentAccepted = false;
-    const created = await jsonRequest(
-      `/projects/${encodeURIComponent(ready.projectToken)}/payments`,
-      ready.cookie,
-      {
-        method: "POST",
-        body: { ...scope, method: "alipay" },
-      },
-    );
-    expect(created.response.status).toBe(201);
-
-    const switchCheckoutMethod =
-      paymentGateway.switchCheckoutMethod.bind(paymentGateway);
-    paymentGateway.switchCheckoutMethod = async (input) => {
-      const checkout = await switchCheckoutMethod(input);
-      return {
-        ...checkout,
-        fields: {
-          ...checkout.fields,
-          param: "tampered-payment-authorization",
-        },
-      };
-    };
-    const switched = await jsonRequest(
-      `/projects/${encodeURIComponent(ready.projectToken)}/payments/switch`,
-      ready.cookie,
-      {
-        method: "POST",
-        body: {
-          ...scope,
-          authorization: "zpay-signed-authorization-placeholder",
-          method: "wxpay",
-        },
-      },
-    );
-
-    expect(switched.response.status).toBe(502);
-    expect(switched.body).toMatchObject({
-      error: { code: "PAYMENT_SWITCH_INVALID" },
-    });
-  });
-
-  it("blocks checkout before charging when the dedicated monitor API is not ready", async () => {
-    const ready = await createReadyProject();
-    broker.monitorCredentialConfigured = false;
-
-    const response = await jsonRequest(
-      `/projects/${encodeURIComponent(ready.projectToken)}/payments`,
-      ready.cookie,
-      {
-        method: "POST",
-        body: {
-          questionId: "product-scenario-01",
-          platformIds: ["doubao"],
-          method: "wxpay",
-        },
-      },
-    );
-
-    expect(response.response.status).toBe(503);
-    expect(response.body).toMatchObject({
-      error: { code: "MONITOR_PROVIDER_NOT_READY" },
-    });
-    expect(paymentCheckoutCalls).toHaveLength(0);
-    expect(broker.freshMonitorCredentialChecks).toContain(true);
-  });
-
-  it("blocks checkout when the monitor key exists but provider authentication rejects it", async () => {
-    const ready = await createReadyProject();
-    broker.monitorCredentialAuthenticated = false;
-
-    const response = await jsonRequest(
-      `/projects/${encodeURIComponent(ready.projectToken)}/payments`,
-      ready.cookie,
-      {
-        method: "POST",
-        body: {
-          questionId: "product-scenario-01",
-          platformIds: ["doubao"],
-          method: "wxpay",
-        },
-      },
-    );
-
-    expect(response.response.status).toBe(503);
-    expect(response.body).toMatchObject({
-      error: { code: "MONITOR_PROVIDER_NOT_READY" },
-    });
-    expect(paymentCheckoutCalls).toHaveLength(0);
-    expect(broker.freshMonitorCredentialChecks).toContain(true);
+    expect(paymentCalls).toHaveLength(0);
+    expect(projectOrders.size).toBe(0);
   });
 
   it("persists an existing recommended question as a no-active terminal receipt that old clients may ACK", async () => {
@@ -4565,17 +3890,17 @@ describe("GEO API", () => {
     expect(broker.customQuestionClassifierTaskCount).toBe(1);
   });
 
-  it("binds a validated custom question to the project, payment, monitor, and assessment", async () => {
+  it("binds a validated custom question to free monitoring and assessment", async () => {
     const ready = await createReadyProject();
     broker.customQuestionClassifierOutput = {
       ...broker.customQuestionClassifierOutput,
-      // Rolling-release compatibility: old completed classifier tasks may
-      // still contain this field, but it must not be persisted or exposed.
       questionEnglish:
         "What problems can Acme solve in university research scenarios?",
     };
     const custom = await jsonRequest(
-      `/projects/${encodeURIComponent(ready.projectToken)}/questions/custom`,
+      "/projects/" +
+        encodeURIComponent(ready.projectToken) +
+        "/questions/custom",
       ready.cookie,
       {
         method: "POST",
@@ -4595,69 +3920,33 @@ describe("GEO API", () => {
       evidenceRefs: ["evidence/S001.md"],
     });
     expect(customPayload.question).not.toHaveProperty("questionEnglish");
-    expect(broker.customQuestionClassifierTaskCount).toBe(1);
-    expect(
-      broker.taskAttachments
-        .at(-1)
-        ?.some(
-          (attachment) =>
-            attachment.filename === "geo-custom-question-classifier.skill.zip",
-        ),
-    ).toBe(true);
     expect(customPayload.project.questions).toHaveLength(21);
     expect(
       customPayload.project.questions.some(
         (question: Record<string, unknown>) => "questionEnglish" in question,
       ),
     ).toBe(false);
-    expect(customPayload.projectToken).not.toBe(ready.projectToken);
 
     const questionId = customPayload.question.id as string;
-    const staleTokenCheckout = await jsonRequest(
-      `/projects/${encodeURIComponent(ready.projectToken)}/payments`,
-      ready.cookie,
-      {
-        method: "POST",
-        body: { questionId, platformIds: ["doubao"], method: "alipay" },
-      },
-    );
-    expect(staleTokenCheckout.response.status).toBe(400);
-    expect(staleTokenCheckout.body).toMatchObject({
-      error: { code: "QUESTION_NOT_OWNED" },
-    });
-
-    const checkout = await jsonRequest(
-      `/projects/${encodeURIComponent(customPayload.projectToken)}/payments`,
-      ready.cookie,
-      {
-        method: "POST",
-        body: { questionId, platformIds: ["doubao"], method: "alipay" },
-      },
-    );
-    expect(checkout.response.status).toBe(201);
-    expect(paymentCheckoutCalls.at(-1)).toMatchObject({
-      questionId,
-      expectedAmountFen: 200,
-      platformIds: ["doubao"],
-    });
-
     const started = await jsonRequest(
-      `/projects/${encodeURIComponent(customPayload.projectToken)}/monitoring`,
+      "/projects/" +
+        encodeURIComponent(customPayload.projectToken) +
+        "/monitoring",
       ready.cookie,
       {
         method: "POST",
         body: {
+          schemaVersion: 2,
+          clientRequestId: "86868686-8686-4686-8686-868686868686",
           questionId,
+          monitoringEdition: "domestic",
           platformIds: ["doubao"],
-          paymentAuthorization: "zpay-signed-authorization-placeholder",
         },
       },
     );
     expect(started.response.status).toBe(201);
-    expect(paymentCalls.at(-1)).toMatchObject({
-      questionId,
-      expectedAmountFen: 200,
-    });
+    expect(paymentCalls).toHaveLength(0);
+    expect(paymentCheckoutCalls).toHaveLength(0);
     expect(broker.monitorRuns.get("monitor-1")?.question).toBe(
       "Acme 在高校科研场景中能解决什么问题？",
     );
@@ -4674,7 +3963,9 @@ describe("GEO API", () => {
     broker.completeAssessmentImmediately = true;
     const startedPayload = started.body as Record<string, any>;
     const assessed = await jsonRequest(
-      `/projects/${encodeURIComponent(startedPayload.projectToken)}/assessment`,
+      "/projects/" +
+        encodeURIComponent(startedPayload.projectToken) +
+        "/assessment",
       ready.cookie,
       { method: "POST", body: {} },
     );
@@ -4682,13 +3973,13 @@ describe("GEO API", () => {
     expect(broker.prompts.at(-1)).not.toContain(
       "Acme 在高校科研场景中能解决什么问题？",
     );
-    const assessmentTaskInputAttachment = broker.taskAttachments
+    const taskInputAttachment = broker.taskAttachments
       .at(-1)!
       .find((attachment) => attachment.filename.endsWith("-task-input.json"))!;
     expect(
       JSON.parse(
         broker.taskInputUploads
-          .get(assessmentTaskInputAttachment.file_id)!
+          .get(taskInputAttachment.file_id)!
           .toString("utf8"),
       ).data.question.text,
     ).toBe("Acme 在高校科研场景中能解决什么问题？");
@@ -6809,6 +6100,42 @@ describe("GEO API", () => {
     expect(await ledgerUnavailable.text()).toBe("fail");
   });
 
+  it("acknowledges a late callback but moves its cutover-closed monitor order to review", async () => {
+    const codec = new GeoTokenCodec(
+      "test-session-secret-at-least-16-characters",
+    );
+    const projectId = "project-late-monitor-callback";
+    const authorization = codec.seal(
+      "payment",
+      { projectId, purchaseType: "monitoring" },
+      60 * 60 * 1000,
+    );
+    projectOrders.set("zpay-order-001", {
+      orderId: "zpay-order-001",
+      projectId,
+      purchaseType: "monitoring",
+      amountFen: 400,
+      authorizationDigest: createHash("sha256")
+        .update(authorization)
+        .digest("hex"),
+      state: "closed",
+      checkoutExpiresAt: "2027-07-23T10:00:00.000Z",
+      eventAt: "2026-08-01T00:00:00.000Z",
+    });
+
+    const response = await fetch(
+      `${baseUrl}/payments/notify?sign=mock&param=${encodeURIComponent(authorization)}`,
+    );
+
+    expect(response.status).toBe(200);
+    expect(await response.text()).toBe("success");
+    expect(projectOrders.get("zpay-order-001")?.state).toBe("review_required");
+    expect(projectOrders.get("zpay-order-001")?.paidAt).toBe(
+      "2026-07-22T10:05:00.000Z",
+    );
+    expect(broker.monitorCreates).toBe(0);
+  });
+
   it("rejects HEAD payment callbacks without executing GET verification side effects", async () => {
     for (const callback of ["notify", "return"]) {
       const response = await fetch(
@@ -6822,29 +6149,13 @@ describe("GEO API", () => {
     expect(paymentCallbackCalls).toBe(0);
   });
 
-  it("submits one 5-per-platform text search run and replays idempotently", async () => {
+  it("submits one free 5-per-platform text search run and replays idempotently", async () => {
     const ready = await createReadyProject();
-    const checkout = await jsonRequest(
-      `/projects/${encodeURIComponent(ready.projectToken)}/payments`,
-      ready.cookie,
-      {
-        method: "POST",
-        body: {
-          questionId: "product-scenario-01",
-          platformIds: [
-            "doubao",
-            "yuanbao",
-            "deepseek",
-            "baiduai",
-            "qianwen",
-            "kimi",
-          ],
-          method: "alipay",
-        },
-      },
-    );
     const body = {
+      schemaVersion: 2,
+      clientRequestId: "87878787-8787-4787-8787-878787878787",
       questionId: "product-scenario-01",
+      monitoringEdition: "domestic",
       platformIds: [
         "doubao",
         "yuanbao",
@@ -6853,15 +6164,16 @@ describe("GEO API", () => {
         "qianwen",
         "kimi",
       ],
-      paymentAuthorization: (checkout.body as any).payment.authorization,
     };
     const started = await jsonRequest(
-      `/projects/${encodeURIComponent(ready.projectToken)}/monitoring`,
+      "/projects/" + encodeURIComponent(ready.projectToken) + "/monitoring",
       ready.cookie,
       { method: "POST", body },
     );
     expect(started.response.status).toBe(201);
     expect(started.body).toMatchObject({
+      state: "started",
+      replayed: false,
       project: {
         stage: "monitoring",
         selectedQuestionId: "product-scenario-01",
@@ -6876,88 +6188,181 @@ describe("GEO API", () => {
     expect(broker.monitorCreates).toBe(1);
 
     const replayed = await jsonRequest(
-      `/projects/${encodeURIComponent(ready.projectToken)}/monitoring`,
+      "/projects/" + encodeURIComponent(ready.projectToken) + "/monitoring",
       ready.cookie,
       { method: "POST", body },
     );
-    expect(replayed.response.status).toBe(201);
+    expect(replayed.response.status).toBe(200);
+    expect(replayed.body).toMatchObject({ state: "started", replayed: true });
     expect(broker.monitorCreates).toBe(1);
+    expect(paymentCalls).toHaveLength(0);
   });
 
-  it("keeps an unconfirmed monitor submission paid without claiming fulfillment or churning the order", async () => {
+  it("keeps an unconfirmed free monitor submission in one recoverable reservation", async () => {
     const ready = await createReadyProject();
     broker.monitorCreateStatus = "submission_unknown";
-    const checkout = await jsonRequest(
-      `/projects/${encodeURIComponent(ready.projectToken)}/payments`,
+    const body = {
+      schemaVersion: 2,
+      clientRequestId: "88888888-8888-4888-8888-888888888888",
+      questionId: "product-scenario-01",
+      monitoringEdition: "domestic",
+      platformIds: ["doubao"],
+    };
+
+    const first = await jsonRequest(
+      "/projects/" + encodeURIComponent(ready.projectToken) + "/monitoring",
+      ready.cookie,
+      { method: "POST", body },
+    );
+    expect(first.response.status).toBe(202);
+    expect(first.body).toMatchObject({
+      state: "processing",
+      clientRequestId: body.clientRequestId,
+      retryAfterMs: 3_000,
+      projectToken: expect.any(String),
+    });
+
+    const replayed = await jsonRequest(
+      "/projects/" + encodeURIComponent(ready.projectToken) + "/monitoring",
       ready.cookie,
       {
         method: "POST",
         body: {
-          questionId: "product-scenario-01",
-          platformIds: ["doubao"],
-          method: "alipay",
+          ...body,
+          clientRequestId: "87878787-8787-4787-8787-878787878787",
         },
       },
     );
-    const body = {
-      questionId: "product-scenario-01",
-      platformIds: ["doubao"],
-      paymentAuthorization: (checkout.body as any).payment.authorization,
-    };
-
-    const first = await jsonRequest(
-      `/projects/${encodeURIComponent(ready.projectToken)}/monitoring`,
-      ready.cookie,
-      { method: "POST", body },
-    );
-    expect(first.response.status).toBe(503);
-    expect(first.body).toMatchObject({
-      error: { code: "MONITOR_SUBMISSION_UNCONFIRMED" },
+    expect(replayed.response.status).toBe(202);
+    expect(replayed.body).toMatchObject({
+      state: "processing",
+      clientRequestId: body.clientRequestId,
     });
-    const paidOrder = projectOrders.get("zpay-order-001");
-    expect(paidOrder).toMatchObject({ state: "paid" });
-    const paidEventAt = paidOrder?.eventAt;
+    expect(broker.monitorCreates).toBe(1);
+    expect(projectOrders.size).toBe(0);
+    expect(paymentCalls).toHaveLength(0);
+  });
 
-    const replayed = await jsonRequest(
+  it("recovers a lost provider acknowledgement after restart with the durable scope and a new client request id", async () => {
+    const ready = await createReadyProject();
+    const directory = await fs.mkdtemp(
+      path.join(os.tmpdir(), "frontmind-router-monitor-free-"),
+    );
+    temporaryMonitorStoreDirectories.push(directory);
+    monitorFreeReservationStore = new FileGeoMonitorFreeReservationStore(
+      directory,
+    );
+    await monitorFreeReservationStore.assertReady();
+    await restartWithCustomQuestionValidationStore(
+      customQuestionValidationStore,
+    );
+
+    const createMonitorRun = broker.createMonitorRun.bind(broker);
+    let loseFirstAcknowledgement = true;
+    broker.createMonitorRun = async (input) => {
+      const run = await createMonitorRun(input);
+      if (loseFirstAcknowledgement) {
+        loseFirstAcknowledgement = false;
+        throw new GeoBrokerError(
+          "provider accepted the run but the response was lost",
+          503,
+          "MONITOR_SUBMISSION_UNKNOWN",
+        );
+      }
+      return run;
+    };
+    const originalRequest = {
+      schemaVersion: 2,
+      clientRequestId: "98989898-9898-4989-8989-989898989898",
+      questionId: "product-scenario-01",
+      monitoringEdition: "domestic",
+      platformIds: ["doubao"],
+    };
+    const lost = await jsonRequest(
       `/projects/${encodeURIComponent(ready.projectToken)}/monitoring`,
       ready.cookie,
-      { method: "POST", body },
+      { method: "POST", body: originalRequest },
     );
-    expect(replayed.response.status).toBe(503);
+    expect(lost.response.status).toBe(202);
     expect(broker.monitorCreates).toBe(1);
-    expect(projectOrders.get("zpay-order-001")).toMatchObject({
-      state: "paid",
-      eventAt: paidEventAt,
+
+    monitorFreeReservationStore = new FileGeoMonitorFreeReservationStore(
+      directory,
+    );
+    await monitorFreeReservationStore.assertReady();
+    await restartWithCustomQuestionValidationStore(
+      customQuestionValidationStore,
+    );
+
+    const conflicting = await jsonRequest(
+      `/projects/${encodeURIComponent(ready.projectToken)}/monitoring`,
+      ready.cookie,
+      {
+        method: "POST",
+        body: {
+          ...originalRequest,
+          clientRequestId: "97979797-9797-4979-8979-979797979797",
+          platformIds: ["kimi"],
+        },
+      },
+    );
+    expect(conflicting.response.status).toBe(409);
+    expect(conflicting.body).toMatchObject({
+      error: { code: "MONITOR_SCOPE_CONFLICT" },
+    });
+
+    const recovered = await jsonRequest(
+      `/projects/${encodeURIComponent(ready.projectToken)}/monitoring`,
+      ready.cookie,
+      {
+        method: "POST",
+        body: {
+          ...originalRequest,
+          clientRequestId: "96969696-9696-4969-8969-969696969696",
+        },
+      },
+    );
+    expect(recovered.response.status).toBe(200);
+    expect(recovered.body).toMatchObject({
+      state: "started",
+      replayed: true,
+    });
+    expect(broker.monitorCreates).toBe(1);
+    expect(
+      Array.from(broker.monitorRuns.keys()).filter((key) =>
+        key.startsWith("geo-monitor-free:v2:"),
+      ),
+    ).toHaveLength(1);
+    const projectId = new GeoTokenCodec(
+      "test-session-secret-at-least-16-characters",
+    ).open<{ projectId: string }>(ready.projectToken, "project").value
+      .projectId;
+    await expect(
+      monitorFreeReservationStore.get(projectId),
+    ).resolves.toMatchObject({
+      clientRequestId: originalRequest.clientRequestId,
+      state: "started",
+      runId: "monitor-1",
     });
   });
 
-  it("recovers the same paid order after an explicit monitor rejection is repaired", async () => {
+  it("recovers the same free scope after an explicit monitor rejection is repaired", async () => {
     const ready = await createReadyProject();
     broker.monitorCreateError = new GeoBrokerError(
       "监控服务已明确拒绝本次提交",
       502,
       "MONITOR_SUBMISSION_REJECTED",
     );
-    const checkout = await jsonRequest(
-      `/projects/${encodeURIComponent(ready.projectToken)}/payments`,
-      ready.cookie,
-      {
-        method: "POST",
-        body: {
-          questionId: "product-scenario-01",
-          platformIds: ["doubao"],
-          method: "alipay",
-        },
-      },
-    );
     const body = {
+      schemaVersion: 2,
+      clientRequestId: "89898989-8989-4989-8989-898989898989",
       questionId: "product-scenario-01",
+      monitoringEdition: "domestic",
       platformIds: ["doubao"],
-      paymentAuthorization: (checkout.body as any).payment.authorization,
     };
 
     const rejected = await jsonRequest(
-      `/projects/${encodeURIComponent(ready.projectToken)}/monitoring`,
+      "/projects/" + encodeURIComponent(ready.projectToken) + "/monitoring",
       ready.cookie,
       { method: "POST", body },
     );
@@ -6965,62 +6370,95 @@ describe("GEO API", () => {
     expect(rejected.body).toMatchObject({
       error: { code: "MONITOR_SUBMISSION_REJECTED" },
     });
-    expect(projectOrders.get("zpay-order-001")).toMatchObject({
-      state: "review_required",
-    });
+    expect(projectOrders.size).toBe(0);
 
     broker.monitorCreateError = undefined;
     const recovered = await jsonRequest(
-      `/projects/${encodeURIComponent(ready.projectToken)}/monitoring`,
+      "/projects/" + encodeURIComponent(ready.projectToken) + "/monitoring",
       ready.cookie,
       { method: "POST", body },
     );
     expect(recovered.response.status).toBe(201);
-    expect(projectOrders.get("zpay-order-001")).toMatchObject({
-      state: "fulfilling",
+    expect(recovered.body).toMatchObject({
+      state: "started",
+      replayed: false,
     });
     expect(broker.monitorCreates).toBe(1);
   });
 
-  it("translates a thrown unknown submission into a paid unconfirmed order", async () => {
+  it("releases a pristine durable reservation after deterministic question validation fails", async () => {
     const ready = await createReadyProject();
-    broker.monitorCreateError = new GeoBrokerError(
-      "监控提交结果未知",
-      502,
-      "MONITOR_SUBMISSION_UNKNOWN",
-    );
-    const checkout = await jsonRequest(
-      `/projects/${encodeURIComponent(ready.projectToken)}/payments`,
-      ready.cookie,
-      {
-        method: "POST",
-        body: {
-          questionId: "product-scenario-01",
-          platformIds: ["doubao"],
-          method: "alipay",
-        },
-      },
-    );
-    const response = await jsonRequest(
+    const rejected = await jsonRequest(
       `/projects/${encodeURIComponent(ready.projectToken)}/monitoring`,
       ready.cookie,
       {
         method: "POST",
         body: {
-          questionId: "product-scenario-01",
+          schemaVersion: 2,
+          clientRequestId: "95959595-9595-4959-8959-959595959595",
+          questionId: "missing-question",
+          monitoringEdition: "domestic",
           platformIds: ["doubao"],
-          paymentAuthorization: (checkout.body as any).payment.authorization,
         },
       },
     );
+    expect(rejected.response.status).toBe(400);
+    expect(broker.monitorCreates).toBe(0);
 
-    expect(response.response.status).toBe(503);
-    expect(response.body).toMatchObject({
-      error: { code: "MONITOR_SUBMISSION_UNCONFIRMED" },
-    });
-    expect(projectOrders.get("zpay-order-001")).toMatchObject({
-      state: "paid",
-    });
+    const corrected = await jsonRequest(
+      `/projects/${encodeURIComponent(ready.projectToken)}/monitoring`,
+      ready.cookie,
+      {
+        method: "POST",
+        body: {
+          schemaVersion: 2,
+          clientRequestId: "94949494-9494-4949-8949-949494949494",
+          questionId: "product-scenario-01",
+          monitoringEdition: "domestic",
+          platformIds: ["doubao"],
+        },
+      },
+    );
+    expect(corrected.response.status).toBe(201);
+    expect(broker.monitorCreates).toBe(1);
+  });
+
+  it("clears a deterministic pre-submission reservation so a corrected scope is not poisoned", async () => {
+    const ready = await createReadyProject();
+    const invalid = await jsonRequest(
+      `/projects/${encodeURIComponent(ready.projectToken)}/monitoring`,
+      ready.cookie,
+      {
+        method: "POST",
+        body: {
+          schemaVersion: 2,
+          clientRequestId: "90909090-9090-4090-8090-909090909090",
+          questionId: "missing-question-01",
+          monitoringEdition: "domestic",
+          platformIds: ["doubao"],
+        },
+      },
+    );
+    expect(invalid.response.status).toBe(400);
+    expect(broker.monitorCreates).toBe(0);
+
+    const corrected = await jsonRequest(
+      `/projects/${encodeURIComponent(ready.projectToken)}/monitoring`,
+      ready.cookie,
+      {
+        method: "POST",
+        body: {
+          schemaVersion: 2,
+          clientRequestId: "91919191-9191-4191-8191-919191919191",
+          questionId: "product-scenario-02",
+          monitoringEdition: "domestic",
+          platformIds: ["doubao"],
+        },
+      },
+    );
+    expect(corrected.response.status).toBe(201);
+    expect(corrected.body).toMatchObject({ state: "started" });
+    expect(broker.monitorCreates).toBe(1);
   });
 
   it("returns completed records from the result endpoint while monitoring is still running", async () => {
@@ -10310,29 +9748,17 @@ describe("GEO API", () => {
 
     const projectToken = (recommended.body as Record<string, any>)
       .projectToken as string;
-    const checkout = await jsonRequest(
-      `/projects/${encodeURIComponent(projectToken)}/payments`,
-      cookie,
-      {
-        method: "POST",
-        body: {
-          questionId: "product-scenario-01",
-          platformIds: ["doubao"],
-          method: "alipay",
-        },
-      },
-    );
-    expect(checkout.response.status).toBe(201);
-
     const monitoring = await jsonRequest(
       `/projects/${encodeURIComponent(projectToken)}/monitoring`,
       cookie,
       {
         method: "POST",
         body: {
+          schemaVersion: 2,
+          clientRequestId: "90909090-9090-4090-8090-909090909090",
           questionId: "product-scenario-01",
+          monitoringEdition: "domestic",
           platformIds: ["doubao"],
-          paymentAuthorization: (checkout.body as any).payment.authorization,
         },
       },
     );
@@ -10567,6 +9993,536 @@ describe("GEO API", () => {
     });
     expect(broker.prompts).toHaveLength(1);
   });
+
+  it("retires monitoring checkout creation and switching before any payment side effect", async () => {
+    const ready = await createReadyProject();
+    const unavailableCreate = vi
+      .spyOn(paymentGateway, "createCheckout")
+      .mockRejectedValue(
+        new GeoPaymentVerificationError(
+          "payment configuration unavailable",
+          "PAYMENT_NOT_CONFIGURED",
+          503,
+        ),
+      );
+    const unavailableSwitch = vi
+      .spyOn(paymentGateway, "switchCheckoutMethod")
+      .mockRejectedValue(
+        new GeoPaymentVerificationError(
+          "payment configuration unavailable",
+          "PAYMENT_NOT_CONFIGURED",
+          503,
+        ),
+      );
+    const scope = {
+      questionId: "product-scenario-01",
+      monitoringEdition: "domestic",
+      platformIds: ["doubao"],
+    };
+    const created = await jsonRequest(
+      `/projects/${encodeURIComponent(ready.projectToken)}/payments`,
+      ready.cookie,
+      { method: "POST", body: { ...scope, method: "alipay" } },
+    );
+    const switched = await jsonRequest(
+      `/projects/${encodeURIComponent(ready.projectToken)}/payments/switch`,
+      ready.cookie,
+      {
+        method: "POST",
+        body: {
+          ...scope,
+          method: "wxpay",
+          authorization: "legacy-authorization-placeholder",
+        },
+      },
+    );
+
+    expect(created.response.status).toBe(410);
+    expect(created.body).toMatchObject({
+      error: { code: "MONITORING_PAYMENT_RETIRED" },
+    });
+    expect(switched.response.status).toBe(410);
+    expect(switched.body).toMatchObject({
+      error: { code: "MONITORING_PAYMENT_RETIRED" },
+    });
+    expect(paymentCheckoutCalls).toHaveLength(0);
+    expect(paymentSwitchCalls).toHaveLength(0);
+    expect(unavailableCreate).not.toHaveBeenCalled();
+    expect(unavailableSwitch).not.toHaveBeenCalled();
+    expect(projectOrders.size).toBe(0);
+  });
+
+  it("starts free domestic monitoring once with a stable scope key and no payment calls", async () => {
+    const ready = await createReadyProject();
+    const request = {
+      schemaVersion: 2,
+      clientRequestId: "22222222-2222-4222-8222-222222222222",
+      questionId: "product-scenario-01",
+      monitoringEdition: "domestic",
+      platformIds: ["doubao", "kimi"],
+    };
+    const first = await jsonRequest(
+      `/projects/${encodeURIComponent(ready.projectToken)}/monitoring`,
+      ready.cookie,
+      { method: "POST", body: request },
+    );
+    const replay = await jsonRequest(
+      `/projects/${encodeURIComponent(ready.projectToken)}/monitoring`,
+      ready.cookie,
+      { method: "POST", body: request },
+    );
+    const conflict = await jsonRequest(
+      `/projects/${encodeURIComponent(ready.projectToken)}/monitoring`,
+      ready.cookie,
+      {
+        method: "POST",
+        body: {
+          ...request,
+          clientRequestId: "33333333-3333-4333-8333-333333333333",
+          platformIds: ["doubao"],
+        },
+      },
+    );
+
+    expect(first.response.status).toBe(201);
+    expect(first.body).toMatchObject({
+      state: "started",
+      replayed: false,
+      project: {
+        monitoring: { status: "submitted", expectedRecords: 10 },
+      },
+    });
+    expect(replay.response.status).toBe(200);
+    expect(replay.body).toMatchObject({ state: "started", replayed: true });
+    expect(conflict.response.status).toBe(409);
+    expect(conflict.body).toMatchObject({
+      error: { code: "MONITOR_SCOPE_CONFLICT" },
+    });
+    expect(broker.monitorCreates).toBe(1);
+    expect(
+      Array.from(broker.monitorRuns.keys()).some((key) =>
+        key.startsWith("geo-monitor-free:v2:"),
+      ),
+    ).toBe(true);
+    expect(paymentCalls).toHaveLength(0);
+    expect(paymentCheckoutCalls).toHaveLength(0);
+    expect(paymentStatusCalls).toHaveLength(0);
+  });
+
+  it("closes a pending legacy monitoring order before starting the free scope", async () => {
+    const ready = await createReadyProject();
+    const codec = new GeoTokenCodec(
+      "test-session-secret-at-least-16-characters",
+    );
+    const { projectId } = codec.open<{ projectId: string }>(
+      ready.projectToken,
+      "project",
+    ).value;
+    const authorization = "legacy-authorization-placeholder";
+    projectOrders.set("zpay-order-001", {
+      orderId: "zpay-order-001",
+      projectId,
+      purchaseType: "monitoring",
+      amountFen: 200,
+      authorizationDigest: createHash("sha256")
+        .update(authorization)
+        .digest("hex"),
+      state: "pending",
+      checkoutExpiresAt: "2027-07-23T10:00:00.000Z",
+      eventAt: "2026-08-01T00:00:00.000Z",
+    });
+    paymentAccepted = false;
+
+    const started = await jsonRequest(
+      `/projects/${encodeURIComponent(ready.projectToken)}/monitoring`,
+      ready.cookie,
+      {
+        method: "POST",
+        body: {
+          schemaVersion: 2,
+          clientRequestId: "44444444-4444-4444-8444-444444444444",
+          questionId: "product-scenario-01",
+          monitoringEdition: "domestic",
+          platformIds: ["doubao"],
+          legacyPaymentAuthorization: authorization,
+        },
+      },
+    );
+
+    expect(started.response.status).toBe(201);
+    expect(projectOrders.get("zpay-order-001")?.state).toBe("closed");
+    expect(paymentStatusCalls).toHaveLength(1);
+    expect(paymentCalls).toHaveLength(0);
+    expect(broker.monitorCreates).toBe(1);
+  });
+
+  it("persists one overseas recovery reservation and does not consume create quota again", async () => {
+    broker.monitorQuestionTranslationStatus = "running";
+    const ready = await createReadyProject();
+    const request = {
+      schemaVersion: 2,
+      clientRequestId: "45454545-4545-4545-8545-454545454545",
+      questionId: "product-scenario-01",
+      monitoringEdition: "overseas",
+      platformIds: ["chatgpt"],
+    };
+
+    const initial = await jsonRequest(
+      `/projects/${encodeURIComponent(ready.projectToken)}/monitoring`,
+      ready.cookie,
+      { method: "POST", body: request },
+    );
+    expect(initial.response.status).toBe(202);
+    let projectToken = (initial.body as any).projectToken as string;
+    for (let attempt = 0; attempt < 30; attempt += 1) {
+      const processing = await jsonRequest(
+        `/projects/${encodeURIComponent(projectToken)}/monitoring`,
+        ready.cookie,
+        { method: "POST", body: request },
+      );
+      expect(processing.response.status).toBe(202);
+      expect(processing.body).toMatchObject({
+        state: "processing",
+        clientRequestId: request.clientRequestId,
+        retryAfterMs: 3_000,
+      });
+      projectToken = (processing.body as any).projectToken;
+      expect(projectToken).toEqual(expect.any(String));
+    }
+    const rateLimited = await jsonRequest(
+      `/projects/${encodeURIComponent(projectToken)}/monitoring`,
+      ready.cookie,
+      { method: "POST", body: request },
+    );
+    expect(rateLimited.response.status).toBe(429);
+    expect(rateLimited.body).toMatchObject({
+      error: { code: "SESSION_RATE_LIMITED" },
+    });
+    expect(broker.monitorQuestionTranslationTaskCount).toBe(1);
+    expect(broker.monitorCreates).toBe(0);
+
+    const translationTask = broker.tasks.get("monitor-question-translation-1")!;
+    translationTask.status = "completed";
+    translationTask.output = monitorTranslationTaskOutput(
+      "Acme 的服务模块 1 主要解决哪些业务问题？",
+      "Which business problems does Acme Service Module 1 primarily solve?",
+    );
+    await restartWithCustomQuestionValidationStore(
+      customQuestionValidationStore,
+    );
+
+    const recovered = await jsonRequest(
+      `/projects/${encodeURIComponent(projectToken)}/monitoring`,
+      ready.cookie,
+      { method: "POST", body: request },
+    );
+    expect(recovered.response.status).toBe(200);
+    expect(recovered.body).toMatchObject({
+      state: "started",
+      replayed: true,
+    });
+    expect(broker.monitorCreates).toBe(1);
+  });
+
+  it.each(["paid", "review_required"] as const)(
+    "fulfills a legacy %s order with its original stable key and never downgrades it",
+    async (initialState) => {
+      const ready = await createReadyProject();
+      const codec = new GeoTokenCodec(
+        "test-session-secret-at-least-16-characters",
+      );
+      const { projectId } = codec.open<{ projectId: string }>(
+        ready.projectToken,
+        "project",
+      ).value;
+      const authorization = "legacy-paid-authorization-placeholder";
+      projectOrders.set("zpay-order-001", {
+        orderId: "zpay-order-001",
+        projectId,
+        purchaseType: "monitoring",
+        amountFen: 200,
+        authorizationDigest: createHash("sha256")
+          .update(authorization)
+          .digest("hex"),
+        state: initialState,
+        checkoutExpiresAt: "2027-07-23T10:00:00.000Z",
+        eventAt: "2026-08-01T00:00:00.000Z",
+        paidAt: "2026-07-22T10:05:00.000Z",
+      });
+
+      const started = await jsonRequest(
+        `/projects/${encodeURIComponent(ready.projectToken)}/monitoring`,
+        ready.cookie,
+        {
+          method: "POST",
+          body: {
+            schemaVersion: 2,
+            clientRequestId: "56565656-5656-4656-8656-565656565656",
+            questionId: "product-scenario-01",
+            monitoringEdition: "domestic",
+            platformIds: ["doubao"],
+            legacyPaymentAuthorization: authorization,
+          },
+        },
+      );
+
+      expect(started.response.status).toBe(201);
+      expect(projectOrders.get("zpay-order-001")?.state).toBe("fulfilling");
+      expect(projectOrders.get("zpay-order-001")?.paidAt).toBe(
+        "2026-07-22T10:05:00.000Z",
+      );
+      expect(broker.monitorCreates).toBe(1);
+      expect(
+        Array.from(broker.monitorRuns.keys()).filter((key) =>
+          key.startsWith("geo-monitor:"),
+        ),
+      ).toHaveLength(1);
+      expect(
+        Array.from(broker.monitorRuns.keys()).some((key) =>
+          key.startsWith("geo-monitor-free:v2:"),
+        ),
+      ).toBe(false);
+
+      const replay = await jsonRequest(
+        `/projects/${encodeURIComponent((started.body as any).projectToken)}/monitoring`,
+        ready.cookie,
+        {
+          method: "POST",
+          body: {
+            schemaVersion: 2,
+            clientRequestId: "56565656-5656-4656-8656-565656565656",
+            questionId: "product-scenario-01",
+            monitoringEdition: "domestic",
+            platformIds: ["doubao"],
+          },
+        },
+      );
+      expect(replay.response.status).toBe(200);
+      expect(broker.monitorCreates).toBe(1);
+    },
+  );
+
+  it.each(["review_required", "fulfilling", "fulfilled"] as const)(
+    "recovers a legacy %s order across restart from its durable order key",
+    async (recoveryState) => {
+      const ready = await createReadyProject();
+      const codec = new GeoTokenCodec(
+        "test-session-secret-at-least-16-characters",
+      );
+      const { projectId } = codec.open<{ projectId: string }>(
+        ready.projectToken,
+        "project",
+      ).value;
+      const authorization = "legacy-restart-authorization-placeholder";
+      const baseOrder: GeoProjectOrder = {
+        orderId: "zpay-order-001",
+        projectId,
+        purchaseType: "monitoring",
+        amountFen: 200,
+        authorizationDigest: createHash("sha256")
+          .update(authorization)
+          .digest("hex"),
+        state: "paid",
+        checkoutExpiresAt: "2027-07-23T10:00:00.000Z",
+        eventAt: "2026-08-01T00:00:00.000Z",
+        paidAt: "2026-07-22T10:05:00.000Z",
+      };
+      projectOrders.set(baseOrder.orderId, baseOrder);
+      const request = {
+        schemaVersion: 2,
+        clientRequestId: "67676767-6767-4676-8676-676767676767",
+        questionId: "product-scenario-01",
+        monitoringEdition: "domestic",
+        platformIds: ["doubao"],
+        legacyPaymentAuthorization: authorization,
+      };
+
+      const initial = await jsonRequest(
+        `/projects/${encodeURIComponent(ready.projectToken)}/monitoring`,
+        ready.cookie,
+        { method: "POST", body: request },
+      );
+      expect(initial.response.status).toBe(201);
+      expect(broker.monitorCreates).toBe(1);
+      projectOrders.set(baseOrder.orderId, {
+        ...projectOrders.get(baseOrder.orderId)!,
+        state: recoveryState,
+        ...(recoveryState === "fulfilled"
+          ? { fulfilledAt: "2026-07-22T10:06:00.000Z" }
+          : { fulfilledAt: undefined }),
+      });
+      paymentAccepted = recoveryState !== "review_required";
+      await restartWithCustomQuestionValidationStore(
+        customQuestionValidationStore,
+      );
+
+      const recovered = await jsonRequest(
+        `/projects/${encodeURIComponent(ready.projectToken)}/monitoring`,
+        ready.cookie,
+        { method: "POST", body: request },
+      );
+
+      expect(recovered.response.status).toBe(200);
+      expect(broker.monitorCreates).toBe(1);
+      expect(projectOrders.get(baseOrder.orderId)?.state).toBe(
+        recoveryState === "fulfilled" ? "fulfilled" : "fulfilling",
+      );
+      expect(
+        Array.from(broker.monitorRuns.keys()).filter((key) =>
+          key.startsWith("geo-monitor:"),
+        ),
+      ).toHaveLength(1);
+    },
+  );
+
+  it("fails closed for a durable terminal legacy order after restart", async () => {
+    const ready = await createReadyProject();
+    const codec = new GeoTokenCodec(
+      "test-session-secret-at-least-16-characters",
+    );
+    const { projectId } = codec.open<{ projectId: string }>(
+      ready.projectToken,
+      "project",
+    ).value;
+    const authorization = "legacy-terminal-authorization-placeholder";
+    projectOrders.set("zpay-order-001", {
+      orderId: "zpay-order-001",
+      projectId,
+      purchaseType: "monitoring",
+      amountFen: 200,
+      authorizationDigest: createHash("sha256")
+        .update(authorization)
+        .digest("hex"),
+      state: "terminal_failed",
+      checkoutExpiresAt: "2027-07-23T10:00:00.000Z",
+      eventAt: "2026-08-01T00:00:00.000Z",
+      paidAt: "2026-07-22T10:05:00.000Z",
+    });
+    await restartWithCustomQuestionValidationStore(
+      customQuestionValidationStore,
+    );
+
+    const failed = await jsonRequest(
+      `/projects/${encodeURIComponent(ready.projectToken)}/monitoring`,
+      ready.cookie,
+      {
+        method: "POST",
+        body: {
+          schemaVersion: 2,
+          clientRequestId: "68686868-6868-4686-8686-686868686868",
+          questionId: "product-scenario-01",
+          monitoringEdition: "domestic",
+          platformIds: ["doubao"],
+          legacyPaymentAuthorization: authorization,
+        },
+      },
+    );
+
+    expect(failed.response.status).toBe(409);
+    expect(failed.body).toMatchObject({
+      error: { code: "LEGACY_MONITOR_TERMINAL_FAILED" },
+    });
+    expect(paymentStatusCalls).toHaveLength(0);
+    expect(broker.monitorCreates).toBe(0);
+  });
+
+  it("moves a late payment on a closed monitoring order into review without creating a run", async () => {
+    const ready = await createReadyProject();
+    const codec = new GeoTokenCodec(
+      "test-session-secret-at-least-16-characters",
+    );
+    const { projectId } = codec.open<{ projectId: string }>(
+      ready.projectToken,
+      "project",
+    ).value;
+    const authorization = "legacy-closed-authorization-placeholder";
+    projectOrders.set("zpay-order-001", {
+      orderId: "zpay-order-001",
+      projectId,
+      purchaseType: "monitoring",
+      amountFen: 200,
+      authorizationDigest: createHash("sha256")
+        .update(authorization)
+        .digest("hex"),
+      state: "closed",
+      checkoutExpiresAt: "2027-07-23T10:00:00.000Z",
+      eventAt: "2026-08-01T00:00:00.000Z",
+    });
+
+    const late = await jsonRequest(
+      `/projects/${encodeURIComponent(ready.projectToken)}/monitoring`,
+      ready.cookie,
+      {
+        method: "POST",
+        body: {
+          schemaVersion: 2,
+          clientRequestId: "78787878-7878-4787-8787-787878787878",
+          questionId: "product-scenario-01",
+          monitoringEdition: "domestic",
+          platformIds: ["doubao"],
+          legacyPaymentAuthorization: authorization,
+        },
+      },
+    );
+
+    expect(late.response.status).toBe(409);
+    expect(late.body).toMatchObject({
+      error: { code: "LEGACY_MONITOR_LATE_PAYMENT_REVIEW_REQUIRED" },
+    });
+    expect(projectOrders.get("zpay-order-001")?.state).toBe("review_required");
+    expect(projectOrders.get("zpay-order-001")?.paidAt).toBe(
+      "2026-07-22T10:05:00.000Z",
+    );
+    expect(broker.monitorCreates).toBe(0);
+  });
+
+  it("routes a status-poll payment arriving after free cutover to review without fulfillment", async () => {
+    const ready = await createReadyProject();
+    const codec = new GeoTokenCodec(
+      "test-session-secret-at-least-16-characters",
+    );
+    const { projectId } = codec.open<{ projectId: string }>(
+      ready.projectToken,
+      "project",
+    ).value;
+    const authorization = "legacy-status-late-authorization";
+    projectOrders.set("zpay-order-001", {
+      orderId: "zpay-order-001",
+      projectId,
+      purchaseType: "monitoring",
+      amountFen: 200,
+      authorizationDigest: createHash("sha256")
+        .update(authorization)
+        .digest("hex"),
+      state: "closed",
+      checkoutExpiresAt: "2027-07-23T10:00:00.000Z",
+      eventAt: "2026-08-01T00:00:00.000Z",
+    });
+
+    const status = await jsonRequest(
+      `/projects/${encodeURIComponent(ready.projectToken)}/payments/status`,
+      ready.cookie,
+      {
+        method: "POST",
+        body: {
+          questionId: "product-scenario-01",
+          monitoringEdition: "domestic",
+          platformIds: ["doubao"],
+          authorization,
+        },
+      },
+    );
+
+    expect(status.response.status).toBe(409);
+    expect(status.body).toMatchObject({
+      error: { code: "LEGACY_MONITOR_LATE_PAYMENT_REVIEW_REQUIRED" },
+    });
+    expect(projectOrders.get("zpay-order-001")?.state).toBe("review_required");
+    expect(projectOrders.get("zpay-order-001")?.paidAt).toBe(
+      "2026-07-22T10:05:00.000Z",
+    );
+    expect(broker.monitorCreates).toBe(0);
+  });
 });
 
 async function verifyInvite(existingCookie = "") {
@@ -10613,7 +10569,11 @@ async function restartWithCustomQuestionValidationStore(
     createGeoRouter({
       broker,
       customQuestionValidationStore,
+      monitorFreeReservationStore,
       projectOrderRegistry,
+      paymentGateway,
+      monitorQuestionTranslationWaitMs: 100,
+      monitorQuestionTranslationPollMs: 2,
       customQuestionValidationNow: () => customQuestionValidationNowMs,
       env: {
         NODE_ENV: "test",
@@ -10676,41 +10636,17 @@ async function startOnePlatformMonitor(
   platformIds: GeoMonitorPlatformId[] = ["doubao"],
   monitoringEdition?: GeoMonitoringEdition,
 ) {
-  const projectId = new GeoTokenCodec(
-    "test-session-secret-at-least-16-characters",
-  ).open<{ projectId: string }>(ready.projectToken, "project").value.projectId;
-  const existingOrder = Array.from(projectOrders.values()).find(
-    (order) =>
-      order.projectId === projectId && order.purchaseType === "monitoring",
-  );
-  let authorization = "zpay-signed-authorization-placeholder";
-  if (!existingOrder) {
-    const checkout = await jsonRequest(
-      `/projects/${encodeURIComponent(ready.projectToken)}/payments`,
-      ready.cookie,
-      {
-        method: "POST",
-        body: {
-          questionId,
-          platformIds,
-          ...(monitoringEdition ? { monitoringEdition } : {}),
-          method: "alipay",
-        },
-      },
-    );
-    expect(checkout.response.status).toBe(201);
-    authorization = (checkout.body as any).payment.authorization;
-  }
   const started = await jsonRequest(
     `/projects/${encodeURIComponent(ready.projectToken)}/monitoring`,
     ready.cookie,
     {
       method: "POST",
       body: {
+        schemaVersion: 2,
+        clientRequestId: crypto.randomUUID(),
         questionId,
         platformIds,
-        ...(monitoringEdition ? { monitoringEdition } : {}),
-        paymentAuthorization: authorization,
+        monitoringEdition: monitoringEdition ?? "domestic",
       },
     },
   );

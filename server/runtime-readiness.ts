@@ -17,6 +17,10 @@ export type WebsiteRuntimeReadinessOptions<
     assertReady(): Promise<void>;
     persistenceIdentity(): Promise<string>;
   };
+  monitorFreeReservationStore: {
+    assertReady(): Promise<void>;
+    persistenceIdentity(): Promise<string>;
+  };
 };
 
 /**
@@ -36,15 +40,23 @@ export async function collectWebsiteRuntimeReadiness<
     throw new Error("WEBSITE_RELEASE_IDENTITY_INVALID");
   }
   await options.assertConfiguration?.();
-  const [skills, dependencies, visitorStats, persistenceIdentity] =
-    await Promise.all([
-      options.getSkills(),
-      options.getDependencies(),
-      options.getVisitorStats(),
-      options.validationStore
-        .assertReady()
-        .then(() => options.validationStore.persistenceIdentity()),
-    ]);
+  const [
+    skills,
+    dependencies,
+    visitorStats,
+    persistenceIdentity,
+    monitorFreePersistenceIdentity,
+  ] = await Promise.all([
+    options.getSkills(),
+    options.getDependencies(),
+    options.getVisitorStats(),
+    options.validationStore
+      .assertReady()
+      .then(() => options.validationStore.persistenceIdentity()),
+    options.monitorFreeReservationStore
+      .assertReady()
+      .then(() => options.monitorFreeReservationStore.persistenceIdentity()),
+  ]);
 
   return {
     status: "ok" as const,
@@ -61,6 +73,12 @@ export async function collectWebsiteRuntimeReadiness<
         ready: true as const,
         persistenceIdentitySha256: createHash("sha256")
           .update(persistenceIdentity, "utf8")
+          .digest("hex"),
+      },
+      monitorFreeReservationStore: {
+        ready: true as const,
+        persistenceIdentitySha256: createHash("sha256")
+          .update(monitorFreePersistenceIdentity, "utf8")
           .digest("hex"),
       },
     },

@@ -14,6 +14,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { LanguageProvider } from "@/contexts/LanguageContext";
 import GeoBuildExperience, {
   geoServiceFallbackAmountFen,
+  normalizeStoredPendingGeoPayment,
   PaymentDialog,
 } from "./GeoBuildExperience";
 import { GeoApiError } from "./api";
@@ -23,6 +24,7 @@ const apiMocks = vi.hoisted(() => ({
   createGeoPaymentCheckout: vi.fn(),
   getGeoPaymentStatus: vi.fn(),
   getGeoServicePaymentStatus: vi.fn(),
+  startGeoLegacyPaidMonitoring: vi.fn(),
   startGeoMonitoring: vi.fn(),
   switchGeoPaymentCheckout: vi.fn(),
   switchGeoServicePaymentCheckout: vi.fn(),
@@ -31,6 +33,7 @@ const apiMocks = vi.hoisted(() => ({
 const storageMocks = vi.hoisted(() => ({
   listGeoProjects: vi.fn(),
   requestPersistentGeoStorage: vi.fn(),
+  saveGeoProject: vi.fn(),
 }));
 
 vi.mock("./api", async (importOriginal) => ({
@@ -38,6 +41,7 @@ vi.mock("./api", async (importOriginal) => ({
   createGeoPaymentCheckout: apiMocks.createGeoPaymentCheckout,
   getGeoPaymentStatus: apiMocks.getGeoPaymentStatus,
   getGeoServicePaymentStatus: apiMocks.getGeoServicePaymentStatus,
+  startGeoLegacyPaidMonitoring: apiMocks.startGeoLegacyPaidMonitoring,
   startGeoMonitoring: apiMocks.startGeoMonitoring,
   switchGeoPaymentCheckout: apiMocks.switchGeoPaymentCheckout,
   switchGeoServicePaymentCheckout: apiMocks.switchGeoServicePaymentCheckout,
@@ -48,6 +52,7 @@ vi.mock("./storage", async (importOriginal) => ({
   ...(await importOriginal<typeof import("./storage")>()),
   listGeoProjects: storageMocks.listGeoProjects,
   requestPersistentGeoStorage: storageMocks.requestPersistentGeoStorage,
+  saveGeoProject: storageMocks.saveGeoProject,
 }));
 
 const project: GeoProject = {
@@ -101,8 +106,11 @@ const serviceProject: GeoProject = {
 };
 
 type PaymentDialogProps = ComponentProps<typeof PaymentDialog>;
+type StoredPendingPayment = NonNullable<
+  ReturnType<typeof normalizeStoredPendingGeoPayment>
+>;
 type MonitoringPendingPayment = Extract<
-  NonNullable<PaymentDialogProps["pending"]>,
+  StoredPendingPayment,
   { kind: "monitoring" }
 >;
 type ServicePendingPayment = Extract<
@@ -192,9 +200,8 @@ function dialogProps(
 ): PaymentDialogProps {
   return {
     open: true,
-    project,
-    pending: pendingPayment(),
-    purpose: "monitoring",
+    project: serviceProject,
+    pending: servicePendingPayment(),
     creating: false,
     error: "",
     onOpenChange: vi.fn(),
@@ -223,12 +230,14 @@ beforeEach(() => {
     amountFen: 150_000,
     message: "等待支付完成",
   });
+  apiMocks.startGeoLegacyPaidMonitoring.mockReset();
   apiMocks.startGeoMonitoring.mockReset();
   apiMocks.switchGeoPaymentCheckout.mockReset();
   apiMocks.switchGeoServicePaymentCheckout.mockReset();
   apiMocks.confirmGeoServiceBankTransfer.mockReset();
   storageMocks.listGeoProjects.mockReset().mockResolvedValue([]);
   storageMocks.requestPersistentGeoStorage.mockReset().mockResolvedValue(false);
+  storageMocks.saveGeoProject.mockReset().mockResolvedValue(undefined);
 });
 
 afterEach(() => {
@@ -257,7 +266,6 @@ describe("service payment dialog", () => {
         {...dialogProps({
           project: serviceProject,
           pending: undefined,
-          purpose: "service",
           onStart,
         })}
       />,
@@ -282,12 +290,6 @@ describe("service payment dialog", () => {
     expect(onStart).toHaveBeenCalledWith("alipay");
   });
 
-  it("keeps the corporate account out of monitoring orders", () => {
-    render(<PaymentDialog {...dialogProps({ pending: undefined })} />);
-
-    expect(screen.queryByRole("button", { name: /对公账户支付/ })).toBeNull();
-  });
-
   it("confirms a direct bank transfer through a transient administrator-code dialog", async () => {
     const onConfirmBank = vi.fn().mockResolvedValue(undefined);
     const onBankConfirmationOpenChange = vi.fn();
@@ -296,7 +298,6 @@ describe("service payment dialog", () => {
         {...dialogProps({
           project: serviceProject,
           pending: undefined,
-          purpose: "service",
           onConfirmBank,
           onBankConfirmationOpenChange,
         })}
@@ -337,7 +338,6 @@ describe("service payment dialog", () => {
         {...dialogProps({
           project: serviceProject,
           pending: servicePendingPayment(),
-          purpose: "service",
           onSwitch,
         })}
       />,
@@ -645,315 +645,19 @@ describe("service payment dialog", () => {
   });
 });
 
-describe("monitoring payment dialog", () => {
-  it("shows one neutral monitor-starting state after payment", () => {
-    render(
-      <PaymentDialog
-        {...dialogProps({
-          pending: pendingPayment({
-            status: "paid",
-            activationAttempts: 0,
-            statusMessage: "付款已确认，正在启动监控",
-          }),
-          error: "",
-        })}
-      />,
-    );
-
-    expect(
-      screen.getAllByText("付款已确认，正在启动监控").length,
-    ).toBeGreaterThan(0);
-    expect(screen.queryByText(/英文监控问题|翻译|请求过于频繁/)).toBeNull();
-    expect(screen.queryByText(/技术支持/)).toBeNull();
-  });
-
-  it("retries a paid preparation response while consuming the bounded attempt budget", async () => {
-    vi.useFakeTimers();
+describe("free monitoring confirmation and service-only payment boundaries", () => {
+  it("starts free overseas monitoring without creating a checkout", async () => {
     const overseasProject: GeoProject = {
       ...project,
       monitoringEdition: "overseas",
       selectedPlatformIds: ["chatgpt"],
     };
-    const initial = pendingPayment({
-      monitoringEdition: "overseas",
-      platformIds: ["chatgpt"],
-      status: "paid",
-      activationAttempts: 0,
-      statusMessage: "付款已确认，正在启动监控",
-      checkout: {
-        ...pendingPayment().checkout,
-        amountFen: 500,
-        unitPriceFen: 500,
-        fields: { ...pendingPayment().checkout.fields, money: "5.00" },
-      },
-    });
     storageMocks.listGeoProjects.mockResolvedValue([overseasProject]);
-    apiMocks.getGeoPaymentStatus.mockResolvedValue({
-      status: "paid",
-      orderId: initial.checkout.orderId,
-      amountFen: initial.checkout.amountFen,
-      paidAt: "2026-08-08T09:00:00.000Z",
-    });
-    apiMocks.startGeoMonitoring
-      .mockRejectedValueOnce(
-        new GeoApiError(
-          "internal translation detail",
-          503,
-          "QUESTION_TRANSLATION_PENDING",
-        ),
-      )
-      .mockResolvedValueOnce({
-        ...overseasProject,
-        monitoring: {
-          runId: "monitor-run-1",
-          status: "submitted",
-          platforms: ["chatgpt"],
-          expectedRecords: 5,
-          completedRecords: 0,
-          failedRecords: 0,
-          answers: [],
-        },
-      });
-    localStorage.setItem(
-      "frontmind.geo.pending-payment.v2",
-      JSON.stringify(initial),
-    );
-
-    render(
-      <LanguageProvider initialLang="zh">
-        <GeoBuildExperience />
-      </LanguageProvider>,
-    );
-    await act(async () => {
-      await Promise.resolve();
-      await Promise.resolve();
-    });
-    await act(async () => {
-      await vi.advanceTimersByTimeAsync(1_200);
-    });
-
-    expect(apiMocks.startGeoMonitoring).toHaveBeenCalledTimes(1);
-    expect(
-      JSON.parse(
-        localStorage.getItem("frontmind.geo.pending-payment.v2") || "{}",
-      ),
-    ).toMatchObject({
-      status: "paid",
-      activationAttempts: 1,
-      statusMessage: "付款已确认，正在启动监控",
-    });
-    expect(screen.queryByRole("alert")).toBeNull();
-    expect(screen.queryByText(/翻译|技术支持|请求过于频繁/)).toBeNull();
-
-    await act(async () => {
-      await vi.advanceTimersByTimeAsync(5_000);
-    });
-    expect(apiMocks.startGeoMonitoring).toHaveBeenCalledTimes(2);
-    expect(localStorage.getItem("frontmind.geo.pending-payment.v2")).toBeNull();
-  });
-
-  it("stops an endlessly pending paid activation after the third attempt", async () => {
-    vi.useFakeTimers();
-    const overseasProject: GeoProject = {
-      ...project,
-      monitoringEdition: "overseas",
-      selectedPlatformIds: ["chatgpt"],
-    };
-    const initial = pendingPayment({
-      monitoringEdition: "overseas",
-      platformIds: ["chatgpt"],
-      status: "paid",
-      activationAttempts: 2,
-      statusMessage: "付款已确认，正在启动监控",
-    });
-    storageMocks.listGeoProjects.mockResolvedValue([overseasProject]);
-    apiMocks.getGeoPaymentStatus.mockResolvedValue({
-      status: "paid",
-      orderId: initial.checkout.orderId,
-      amountFen: initial.checkout.amountFen,
-      paidAt: "2026-08-08T09:00:00.000Z",
-    });
-    apiMocks.startGeoMonitoring.mockRejectedValue(
-      new GeoApiError(
-        "internal translation detail",
-        503,
-        "QUESTION_TRANSLATION_PENDING",
-      ),
-    );
-    localStorage.setItem(
-      "frontmind.geo.pending-payment.v2",
-      JSON.stringify(initial),
-    );
-
-    render(
-      <LanguageProvider initialLang="zh">
-        <GeoBuildExperience />
-      </LanguageProvider>,
-    );
-    await act(async () => {
-      await Promise.resolve();
-      await Promise.resolve();
-    });
-    await act(async () => {
-      await vi.advanceTimersByTimeAsync(1_200);
-    });
-
-    expect(apiMocks.startGeoMonitoring).toHaveBeenCalledTimes(1);
-    expect(
-      JSON.parse(
-        localStorage.getItem("frontmind.geo.pending-payment.v2") || "{}",
-      ),
-    ).toMatchObject({
-      status: "activation_support_required",
-      activationAttempts: 3,
-    });
-    expect(screen.getByText(/请联系技术支持并提供订单号/)).toBeTruthy();
-
-    await act(async () => {
-      await vi.advanceTimersByTimeAsync(30_000);
-    });
-    expect(apiMocks.startGeoMonitoring).toHaveBeenCalledTimes(1);
-  });
-
-  it("does not automatically replay an unconfirmed provider submission", async () => {
-    vi.useFakeTimers();
-    const overseasProject: GeoProject = {
-      ...project,
-      monitoringEdition: "overseas",
-      selectedPlatformIds: ["chatgpt"],
-    };
-    const initial = pendingPayment({
-      monitoringEdition: "overseas",
-      platformIds: ["chatgpt"],
-      status: "paid",
-      activationAttempts: 0,
-      statusMessage: "付款已确认，正在启动监控",
-    });
-    storageMocks.listGeoProjects.mockResolvedValue([overseasProject]);
-    apiMocks.getGeoPaymentStatus.mockResolvedValue({
-      status: "paid",
-      orderId: initial.checkout.orderId,
-      amountFen: initial.checkout.amountFen,
-      paidAt: "2026-08-08T09:00:00.000Z",
-    });
-    apiMocks.startGeoMonitoring.mockRejectedValue(
-      new GeoApiError(
-        "submission state cannot be confirmed",
-        503,
-        "MONITOR_SUBMISSION_UNCONFIRMED",
-      ),
-    );
-    localStorage.setItem(
-      "frontmind.geo.pending-payment.v2",
-      JSON.stringify(initial),
-    );
-
-    render(
-      <LanguageProvider initialLang="zh">
-        <GeoBuildExperience />
-      </LanguageProvider>,
-    );
-    await act(async () => {
-      await Promise.resolve();
-      await Promise.resolve();
-    });
-    await act(async () => {
-      await vi.advanceTimersByTimeAsync(1_200);
-    });
-
-    expect(apiMocks.startGeoMonitoring).toHaveBeenCalledTimes(1);
-    expect(
-      JSON.parse(
-        localStorage.getItem("frontmind.geo.pending-payment.v2") || "{}",
-      ),
-    ).toMatchObject({
-      status: "activation_support_required",
-      activationAttempts: 1,
-    });
-    await act(async () => {
-      await vi.advanceTimersByTimeAsync(30_000);
-    });
-    expect(apiMocks.startGeoMonitoring).toHaveBeenCalledTimes(1);
-  });
-
-  it("stops payment polling after the reconciliation window even when status reads keep failing", async () => {
-    vi.useFakeTimers();
-    vi.setSystemTime(new Date("2026-08-09T10:00:00.000Z"));
-    const initial = pendingPayment({
-      checkout: {
-        ...pendingPayment().checkout,
-        expiresAt: "2026-08-09T09:29:00.000Z",
-      },
-    });
-    storageMocks.listGeoProjects.mockResolvedValue([project]);
-    apiMocks.getGeoPaymentStatus.mockRejectedValue(
-      new GeoApiError("支付状态服务暂不可用", 503, "UPSTREAM_UNAVAILABLE"),
-    );
-    localStorage.setItem(
-      "frontmind.geo.pending-payment.v2",
-      JSON.stringify(initial),
-    );
-
-    render(
-      <LanguageProvider initialLang="zh">
-        <GeoBuildExperience />
-      </LanguageProvider>,
-    );
-    await act(async () => {
-      await Promise.resolve();
-      await Promise.resolve();
-    });
-    await act(async () => {
-      await vi.advanceTimersByTimeAsync(5_000);
-    });
-
-    expect(apiMocks.getGeoPaymentStatus).toHaveBeenCalledOnce();
-    expect(
-      JSON.parse(
-        localStorage.getItem("frontmind.geo.pending-payment.v2") || "{}",
-      ),
-    ).toMatchObject({ status: "reconciliation_required" });
-    expect(screen.getByText(/请联系技术支持人工核对/)).toBeTruthy();
-
-    await act(async () => {
-      await vi.advanceTimersByTimeAsync(60_000);
-    });
-    expect(apiMocks.getGeoPaymentStatus).toHaveBeenCalledOnce();
-    expect(apiMocks.startGeoMonitoring).not.toHaveBeenCalled();
-  });
-
-  it("restarts a historical paid overseas order with the same authorization", async () => {
-    vi.useFakeTimers();
-    const overseasProject: GeoProject = {
-      ...project,
-      monitoringEdition: "overseas",
-      selectedPlatformIds: ["chatgpt"],
-    };
-    const initial = pendingPayment({
-      monitoringEdition: "overseas",
-      platformIds: ["chatgpt"],
-      status: "activation_support_required",
-      activationAttempts: 3,
-      statusMessage:
-        "付款已确认，但监控任务未能自动启动：提交内容有误，请检查后重试。。请联系技术支持并提供订单号。",
-      checkout: {
-        ...pendingPayment().checkout,
-        amountFen: 500,
-        unitPriceFen: 500,
-        fields: { ...pendingPayment().checkout.fields, money: "5.00" },
-      },
-    });
-    storageMocks.listGeoProjects.mockResolvedValue([overseasProject]);
-    apiMocks.getGeoPaymentStatus.mockResolvedValue({
-      status: "paid",
-      orderId: initial.checkout.orderId,
-      amountFen: initial.checkout.amountFen,
-      paidAt: "2026-08-08T09:00:00.000Z",
-    });
     apiMocks.startGeoMonitoring.mockResolvedValue({
       ...overseasProject,
+      remoteToken: "free-monitor-started-token",
       monitoring: {
-        runId: "monitor-run-recovered",
+        runId: "free-overseas-run",
         status: "submitted",
         platforms: ["chatgpt"],
         expectedRecords: 5,
@@ -962,130 +666,6 @@ describe("monitoring payment dialog", () => {
         answers: [],
       },
     });
-    localStorage.setItem(
-      "frontmind.geo.pending-payment.v2",
-      JSON.stringify(initial),
-    );
-
-    render(
-      <LanguageProvider initialLang="zh">
-        <GeoBuildExperience />
-      </LanguageProvider>,
-    );
-    await act(async () => {
-      await Promise.resolve();
-      await Promise.resolve();
-    });
-    await act(async () => {
-      await vi.advanceTimersByTimeAsync(1_200);
-    });
-
-    expect(apiMocks.createGeoPaymentCheckout).not.toHaveBeenCalled();
-    expect(apiMocks.startGeoMonitoring).toHaveBeenCalledWith(overseasProject, {
-      questionId: initial.questionId,
-      platformIds: ["chatgpt"],
-      monitoringEdition: "overseas",
-      paymentAuthorization: initial.checkout.authorization,
-    });
-    expect(localStorage.getItem("frontmind.geo.pending-payment.v2")).toBeNull();
-  });
-
-  it("does not hide a terminal overseas translation failure as an endless start", async () => {
-    vi.useFakeTimers();
-    const overseasProject: GeoProject = {
-      ...project,
-      monitoringEdition: "overseas",
-      selectedPlatformIds: ["chatgpt"],
-    };
-    const initial = pendingPayment({
-      monitoringEdition: "overseas",
-      platformIds: ["chatgpt"],
-      status: "paid",
-      activationAttempts: 0,
-      statusMessage: "付款已确认，正在启动监控",
-      checkout: {
-        ...pendingPayment().checkout,
-        amountFen: 500,
-        unitPriceFen: 500,
-        fields: { ...pendingPayment().checkout.fields, money: "5.00" },
-      },
-    });
-    storageMocks.listGeoProjects.mockResolvedValue([overseasProject]);
-    apiMocks.getGeoPaymentStatus.mockResolvedValue({
-      status: "paid",
-      orderId: initial.checkout.orderId,
-      amountFen: initial.checkout.amountFen,
-      paidAt: "2026-08-08T09:00:00.000Z",
-    });
-    apiMocks.startGeoMonitoring.mockRejectedValue(
-      new GeoApiError(
-        "付款已确认，监控启动暂未完成；订单与处理进度已保留",
-        502,
-        "QUESTION_TRANSLATION_FAILED",
-      ),
-    );
-    localStorage.setItem(
-      "frontmind.geo.pending-payment.v2",
-      JSON.stringify(initial),
-    );
-
-    render(
-      <LanguageProvider initialLang="zh">
-        <GeoBuildExperience />
-      </LanguageProvider>,
-    );
-    await act(async () => {
-      await Promise.resolve();
-      await Promise.resolve();
-    });
-    await act(async () => {
-      await vi.advanceTimersByTimeAsync(1_200);
-    });
-
-    expect(apiMocks.startGeoMonitoring).toHaveBeenCalledTimes(1);
-    expect(
-      JSON.parse(
-        localStorage.getItem("frontmind.geo.pending-payment.v2") || "{}",
-      ),
-    ).toMatchObject({
-      status: "activation_support_required",
-      activationAttempts: 1,
-    });
-
-    await act(async () => {
-      await vi.advanceTimersByTimeAsync(30_000);
-    });
-    expect(apiMocks.startGeoMonitoring).toHaveBeenCalledTimes(1);
-  });
-
-  it("creates an overseas checkout when no English translation is stored", async () => {
-    const overseasProject: GeoProject = {
-      ...project,
-      monitoringEdition: "overseas",
-      selectedPlatformIds: ["chatgpt"],
-    };
-    const checkout = {
-      ...pendingPayment().checkout,
-      amountFen: 500,
-      unitPriceFen: 500,
-      fields: {
-        ...pendingPayment().checkout.fields,
-        money: "5.00",
-      },
-    };
-    storageMocks.listGeoProjects.mockResolvedValue([overseasProject]);
-    apiMocks.createGeoPaymentCheckout.mockResolvedValue(checkout);
-    const paymentDocument =
-      document.implementation.createHTMLDocument("FrontMind 安全支付");
-    const popup = {
-      opener: window,
-      document: paymentDocument,
-      close: vi.fn(),
-    } as unknown as Window;
-    vi.spyOn(window, "open").mockReturnValue(popup);
-    vi.spyOn(HTMLFormElement.prototype, "submit").mockImplementation(
-      () => undefined,
-    );
 
     render(
       <LanguageProvider initialLang="zh">
@@ -1095,60 +675,31 @@ describe("monitoring payment dialog", () => {
     fireEvent.click(
       await screen.findByRole("button", { name: /继续项目：硅基流动/ }),
     );
-    const checkoutButton = await screen.findByRole("button", {
-      name: "确认并支付",
-    });
-    expect((checkoutButton as HTMLButtonElement).disabled).toBe(false);
-    fireEvent.click(checkoutButton);
+    fireEvent.click(
+      await screen.findByRole("button", { name: "获取监控答案" }),
+    );
     expect(screen.queryByText(/英文翻译/)).toBeNull();
-    fireEvent.click(screen.getByRole("button", { name: /支付宝支付/ }));
+    expect(screen.queryByText(/¥|支付方式|确认并支付/)).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: /确认并获取监控答案/ }));
 
     await waitFor(() => {
-      expect(apiMocks.createGeoPaymentCheckout).toHaveBeenCalledWith(
+      expect(apiMocks.startGeoMonitoring).toHaveBeenCalledWith(
         expect.objectContaining({
           id: overseasProject.id,
           monitoringEdition: "overseas",
           selectedPlatformIds: ["chatgpt"],
         }),
-        {
+        expect.objectContaining({
+          clientRequestId: expect.any(String),
           questionId: "question-01",
           platformIds: ["chatgpt"],
           monitoringEdition: "overseas",
-          method: "alipay",
-        },
+          onProcessing: expect.any(Function),
+        }),
       );
     });
-  });
-
-  it("shows the overseas edition and ChatGPT price without exposing the translated question", () => {
-    const overseasProject: GeoProject = {
-      ...project,
-      monitoringEdition: "overseas",
-      questions: [
-        {
-          ...project.questions[0],
-          questionEnglish:
-            "Is SiliconFlow a trustworthy AI infrastructure provider?",
-        },
-      ],
-      selectedPlatformIds: ["chatgpt"],
-    };
-    render(
-      <PaymentDialog
-        {...dialogProps({
-          project: overseasProject,
-          pending: undefined,
-        })}
-      />,
-    );
-
-    expect(screen.getByText("海外版")).toBeTruthy();
-    expect(
-      screen.queryByText(
-        "Is SiliconFlow a trustworthy AI infrastructure provider?",
-      ),
-    ).toBeNull();
-    expect(screen.getByText("¥5.00")).toBeTruthy();
+    expect(apiMocks.createGeoPaymentCheckout).not.toHaveBeenCalled();
+    expect(apiMocks.switchGeoPaymentCheckout).not.toHaveBeenCalled();
   });
 
   it("keeps an alternate payment method available after closing and reopening", () => {
@@ -1169,38 +720,6 @@ describe("monitoring payment dialog", () => {
     expect(screen.getByRole("button", { name: "更换支付渠道" })).toBeTruthy();
   });
 
-  it("keeps bank transfer out of an expired monitoring checkout", () => {
-    render(
-      <PaymentDialog
-        {...dialogProps({
-          pending: pendingPayment({
-            checkout: {
-              ...pendingPayment().checkout,
-              expiresAt: "2020-01-01T00:00:00.000Z",
-            },
-          }),
-        })}
-      />,
-    );
-
-    fireEvent.click(screen.getByRole("button", { name: "更换支付渠道" }));
-    expect(screen.queryByRole("button", { name: /对公账户支付/ })).toBeNull();
-    expect(
-      (
-        screen.getByRole("button", {
-          name: /支付宝支付/,
-        }) as HTMLButtonElement
-      ).disabled,
-    ).toBe(true);
-    expect(
-      (
-        screen.getByRole("button", {
-          name: /微信支付/,
-        }) as HTMLButtonElement
-      ).disabled,
-    ).toBe(true);
-  });
-
   it("announces progress while switching an existing checkout", () => {
     render(<PaymentDialog {...dialogProps({ creating: true })} />);
 
@@ -1209,119 +728,125 @@ describe("monitoring payment dialog", () => {
     );
   });
 
-  it("replaces the persisted cashier form after switching from a reopened order", async () => {
+  it("migrates a cached monitoring checkout through the free confirmation path", async () => {
     const initial = pendingPayment();
-    const switchedCheckout = {
-      ...initial.checkout,
-      fields: {
-        ...initial.checkout.fields,
-        type: "wxpay",
-        sign: "switched-signature",
-      },
-    };
     storageMocks.listGeoProjects.mockResolvedValue([project]);
-    apiMocks.switchGeoPaymentCheckout.mockResolvedValue(switchedCheckout);
+    apiMocks.startGeoMonitoring.mockResolvedValue({
+      ...project,
+      remoteToken: "free-migration-token",
+      monitoring: {
+        runId: "free-migration-run",
+        status: "submitted",
+        platforms: ["doubao"],
+        expectedRecords: 5,
+        completedRecords: 0,
+        failedRecords: 0,
+        answers: [],
+      },
+    });
     localStorage.setItem(
       "frontmind.geo.pending-payment.v2",
       JSON.stringify(initial),
     );
-    const paymentDocument =
-      document.implementation.createHTMLDocument("FrontMind 安全支付");
-    const popup = {
-      opener: window,
-      document: paymentDocument,
-      close: vi.fn(),
-    } as unknown as Window;
-    vi.spyOn(window, "open").mockReturnValue(popup);
-    const submit = vi
-      .spyOn(HTMLFormElement.prototype, "submit")
-      .mockImplementation(() => undefined);
+    const setItem = vi.spyOn(Storage.prototype, "setItem");
+    const removeItem = vi.spyOn(Storage.prototype, "removeItem");
+    setItem.mockClear();
+    removeItem.mockClear();
 
     render(
       <LanguageProvider initialLang="zh">
         <GeoBuildExperience />
       </LanguageProvider>,
     );
+    await waitFor(() =>
+      expect(storageMocks.listGeoProjects).toHaveBeenCalled(),
+    );
+    expect(apiMocks.getGeoPaymentStatus).not.toHaveBeenCalled();
+    expect(apiMocks.startGeoLegacyPaidMonitoring).not.toHaveBeenCalled();
+    expect(apiMocks.startGeoMonitoring).not.toHaveBeenCalled();
+    expect(
+      setItem.mock.calls.filter(
+        ([key]) => key === "frontmind.geo.pending-payment.v2",
+      ),
+    ).toHaveLength(0);
+    expect(
+      removeItem.mock.calls.filter(
+        ([key]) => key === "frontmind.geo.pending-payment.v2",
+      ),
+    ).toHaveLength(0);
     fireEvent.click(
       await screen.findByRole("button", { name: /继续项目：硅基流动/ }),
     );
     fireEvent.click(
-      await screen.findByRole("button", { name: "查看支付进度" }),
+      await screen.findByRole("button", { name: "获取监控答案" }),
     );
-    fireEvent.click(screen.getByRole("button", { name: "稍后查看" }));
-    fireEvent.click(screen.getByRole("button", { name: "查看支付进度" }));
-    fireEvent.click(screen.getByRole("button", { name: "更换支付渠道" }));
-    fireEvent.click(screen.getByRole("button", { name: /微信支付/ }));
+    expect(screen.getByText(/检测到切换前的监控订单/)).toBeTruthy();
+    expect(screen.queryByText(/¥|支付方式|更换支付渠道/)).toBeNull();
+    expect(apiMocks.getGeoPaymentStatus).not.toHaveBeenCalled();
+    expect(apiMocks.startGeoLegacyPaidMonitoring).not.toHaveBeenCalled();
+    expect(apiMocks.startGeoMonitoring).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole("button", { name: /确认并获取监控答案/ }));
 
     await waitFor(() => {
-      expect(apiMocks.switchGeoPaymentCheckout).toHaveBeenCalledWith(project, {
-        questionId: "question-01",
-        platformIds: ["doubao"],
-        monitoringEdition: "domestic",
-        authorization: initial.checkout.authorization,
-        method: "wxpay",
-      });
-      expect(submit).toHaveBeenCalledTimes(1);
-      expect(
-        JSON.parse(
-          localStorage.getItem("frontmind.geo.pending-payment.v2") || "{}",
-        ).checkout.fields.type,
-      ).toBe("wxpay");
+      expect(apiMocks.startGeoMonitoring).toHaveBeenCalledWith(
+        project,
+        expect.objectContaining({
+          clientRequestId: expect.any(String),
+          questionId: "question-01",
+          platformIds: ["doubao"],
+          monitoringEdition: "domestic",
+          legacyPaymentAuthorization: initial.checkout.authorization,
+        }),
+      );
     });
-    expect(screen.getAllByText(/微信支付/).length).toBeGreaterThan(0);
+    expect(apiMocks.createGeoPaymentCheckout).not.toHaveBeenCalled();
+    expect(apiMocks.switchGeoPaymentCheckout).not.toHaveBeenCalled();
+    expect(apiMocks.getGeoPaymentStatus).not.toHaveBeenCalled();
+    expect(apiMocks.startGeoLegacyPaidMonitoring).not.toHaveBeenCalled();
+    expect(
+      removeItem.mock.calls.filter(
+        ([key]) => key === "frontmind.geo.pending-payment.v2",
+      ).length,
+    ).toBeGreaterThan(0);
+    expect(localStorage.getItem("frontmind.geo.pending-payment.v2")).toBeNull();
   });
 
-  it("does not submit a switched cashier after polling confirms payment", async () => {
+  it("persists a 202 recovery token and resumes the same request after refresh", async () => {
     const initial = pendingPayment();
-    const switchedCheckout = {
-      ...initial.checkout,
-      fields: {
-        ...initial.checkout.fields,
-        type: "wxpay" as const,
-        sign: "switched-signature",
-      },
-    };
-    let resolvePaymentStatus!: (value: {
-      status: "paid";
-      orderId: string;
-      amountFen: number;
-      paidAt: string;
-      message: string;
-    }) => void;
-    const paymentStatus = new Promise<{
-      status: "paid";
-      orderId: string;
-      amountFen: number;
-      paidAt: string;
-      message: string;
-    }>((resolve) => {
-      resolvePaymentStatus = resolve;
-    });
-    let resolveSwitch!: (value: typeof switchedCheckout) => void;
-    const switchResult = new Promise<typeof switchedCheckout>((resolve) => {
-      resolveSwitch = resolve;
-    });
     storageMocks.listGeoProjects.mockResolvedValue([project]);
-    apiMocks.getGeoPaymentStatus.mockReturnValue(paymentStatus);
-    apiMocks.startGeoMonitoring.mockImplementation(
-      () => new Promise<GeoProject>(() => undefined),
-    );
-    apiMocks.switchGeoPaymentCheckout.mockReturnValue(switchResult);
     localStorage.setItem(
       "frontmind.geo.pending-payment.v2",
       JSON.stringify(initial),
     );
-    const paymentDocument =
-      document.implementation.createHTMLDocument("FrontMind 安全支付");
-    const popup = {
-      opener: window,
-      document: paymentDocument,
-      close: vi.fn(),
-    } as unknown as Window;
-    vi.spyOn(window, "open").mockReturnValue(popup);
-    const submit = vi
-      .spyOn(HTMLFormElement.prototype, "submit")
-      .mockImplementation(() => undefined);
+    apiMocks.startGeoMonitoring.mockImplementation(
+      async (
+        operationProject: GeoProject,
+        input: {
+          clientRequestId: string;
+          questionId: string;
+          platformIds: string[];
+          monitoringEdition: string;
+          onProcessing?: (project: GeoProject) => void;
+        },
+      ) => {
+        input.onProcessing?.({
+          ...operationProject,
+          remoteToken: "durable-monitor-recovery-token",
+          monitoringRecovery: {
+            schemaVersion: 2,
+            clientRequestId: input.clientRequestId,
+            questionId: input.questionId,
+            monitoringEdition: "domestic",
+            platformIds: ["doubao"],
+          },
+        });
+        throw new GeoApiError(
+          "海外问题仍在准备中，请稍后使用同一范围重试。",
+          202,
+          "QUESTION_TRANSLATION_PENDING",
+        );
+      },
+    );
 
     render(
       <LanguageProvider initialLang="zh">
@@ -1331,53 +856,98 @@ describe("monitoring payment dialog", () => {
     fireEvent.click(
       await screen.findByRole("button", { name: /继续项目：硅基流动/ }),
     );
+    fireEvent.click(screen.getByRole("button", { name: "获取监控答案" }));
+    fireEvent.click(screen.getByRole("button", { name: /确认并获取监控答案/ }));
+
+    await waitFor(() =>
+      expect(storageMocks.saveGeoProject).toHaveBeenCalledWith(
+        expect.objectContaining({
+          remoteToken: "durable-monitor-recovery-token",
+          monitoringRecovery: expect.objectContaining({
+            clientRequestId: expect.any(String),
+          }),
+        }),
+      ),
+    );
+    const recoveredProject = storageMocks.saveGeoProject.mock.calls
+      .map(([candidate]) => candidate as GeoProject)
+      .find(
+        (candidate) =>
+          candidate.remoteToken === "durable-monitor-recovery-token",
+      )!;
+    const clientRequestId =
+      recoveredProject.monitoringRecovery!.clientRequestId;
+    expect(
+      localStorage.getItem("frontmind.geo.pending-payment.v2"),
+    ).not.toBeNull();
+    expect(apiMocks.getGeoPaymentStatus).not.toHaveBeenCalled();
+    expect(apiMocks.startGeoLegacyPaidMonitoring).not.toHaveBeenCalled();
+
+    cleanup();
+    storageMocks.listGeoProjects.mockResolvedValue([recoveredProject]);
+    apiMocks.startGeoMonitoring.mockReset().mockResolvedValue({
+      ...recoveredProject,
+      remoteToken: "free-monitor-complete-token",
+      monitoringRecovery: undefined,
+      monitoring: {
+        runId: "free-monitor-run",
+        status: "submitted",
+        platforms: ["doubao"],
+        expectedRecords: 5,
+        completedRecords: 0,
+        failedRecords: 0,
+        answers: [],
+      },
+    });
+
+    render(
+      <LanguageProvider initialLang="zh">
+        <GeoBuildExperience />
+      </LanguageProvider>,
+    );
     fireEvent.click(
-      await screen.findByRole("button", { name: "查看支付进度" }),
+      await screen.findByRole("button", { name: /继续项目：硅基流动/ }),
     );
-    fireEvent.click(screen.getByRole("button", { name: "更换支付渠道" }));
-    fireEvent.click(screen.getByRole("button", { name: /微信支付/ }));
+    fireEvent.click(screen.getByRole("button", { name: "获取监控答案" }));
+    fireEvent.click(screen.getByRole("button", { name: /确认并获取监控答案/ }));
 
-    expect(screen.getByRole("status").textContent).toContain(
-      "正在切换支付方式…",
-    );
-    await waitFor(
-      () => expect(apiMocks.getGeoPaymentStatus).toHaveBeenCalledTimes(1),
-      { timeout: 2_500 },
-    );
-
-    await act(async () => {
-      resolvePaymentStatus({
-        status: "paid",
-        orderId: initial.checkout.orderId,
-        amountFen: initial.checkout.amountFen,
-        paidAt: "2026-08-04T03:15:00.000Z",
-        message: "支付成功",
-      });
-    });
     await waitFor(() => {
-      expect(
-        screen.getAllByText("付款已确认，正在启动监控").length,
-      ).toBeGreaterThan(0);
-      expect(apiMocks.startGeoMonitoring).toHaveBeenCalledTimes(1);
-      expect(apiMocks.startGeoMonitoring).toHaveBeenCalledWith(project, {
-        questionId: "question-01",
-        platformIds: ["doubao"],
-        monitoringEdition: "domestic",
-        paymentAuthorization: initial.checkout.authorization,
-      });
-    });
-
-    await act(async () => {
-      resolveSwitch(switchedCheckout);
-    });
-    await waitFor(() => {
-      const persisted = JSON.parse(
-        localStorage.getItem("frontmind.geo.pending-payment.v2") || "{}",
+      expect(apiMocks.startGeoMonitoring).toHaveBeenCalledWith(
+        expect.objectContaining({
+          remoteToken: "durable-monitor-recovery-token",
+        }),
+        expect.objectContaining({ clientRequestId }),
       );
-      expect(submit).not.toHaveBeenCalled();
-      expect(popup.close).toHaveBeenCalledTimes(1);
-      expect(persisted.status).toBe("paid");
-      expect(persisted.checkout.fields.type).toBe("alipay");
     });
+    expect(apiMocks.getGeoPaymentStatus).not.toHaveBeenCalled();
+    expect(apiMocks.startGeoLegacyPaidMonitoring).not.toHaveBeenCalled();
+  });
+
+  it("never mounts the monitoring payment dialog for a cached checkout", async () => {
+    const initial = pendingPayment();
+    storageMocks.listGeoProjects.mockResolvedValue([project]);
+    localStorage.setItem(
+      "frontmind.geo.pending-payment.v2",
+      JSON.stringify(initial),
+    );
+
+    render(
+      <LanguageProvider initialLang="zh">
+        <GeoBuildExperience />
+      </LanguageProvider>,
+    );
+    fireEvent.click(
+      await screen.findByRole("button", { name: /继续项目：硅基流动/ }),
+    );
+
+    expect(screen.queryByRole("button", { name: "查看支付进度" })).toBeNull();
+    expect(screen.queryByText("确认问题监控订单")).toBeNull();
+    expect(screen.queryByRole("button", { name: /支付宝支付/ })).toBeNull();
+    expect(screen.getByRole("button", { name: "获取监控答案" })).toBeTruthy();
+    expect(apiMocks.getGeoPaymentStatus).not.toHaveBeenCalled();
+    expect(apiMocks.startGeoLegacyPaidMonitoring).not.toHaveBeenCalled();
+    expect(apiMocks.startGeoMonitoring).not.toHaveBeenCalled();
+    expect(apiMocks.createGeoPaymentCheckout).not.toHaveBeenCalled();
+    expect(apiMocks.switchGeoPaymentCheckout).not.toHaveBeenCalled();
   });
 });

@@ -35,6 +35,7 @@ import { loadGeoCurrentStateEvaluatorSkill } from "./geo/assessment";
 import { loadGeoOptimizationOutcomeForecasterSkill } from "./geo/forecast";
 import { assertGeoPaymentConfigurationFromEnv } from "./geo/payment";
 import { createGeoCustomQuestionValidationStore } from "./geo/custom-question-validation-store";
+import { createGeoMonitorFreeReservationStore } from "./geo/monitor-free-reservation-store";
 import { collectWebsiteRuntimeReadiness } from "./runtime-readiness";
 import { assertGeoRuntimeConfigurationFromEnv } from "./geo/runtime-config";
 import { releaseProfile } from "../config/release-profile.mjs";
@@ -96,6 +97,7 @@ async function startServer() {
   const paymentReceiptStore = createGeoPaymentReceiptStore();
   const customQuestionValidationStore =
     createGeoCustomQuestionValidationStore();
+  const monitorFreeReservationStore = createGeoMonitorFreeReservationStore();
   const customQuestionRecoveryWorker = createGeoCustomQuestionRecoveryWorker({
     broker: geoBroker,
     store: customQuestionValidationStore,
@@ -120,7 +122,12 @@ async function startServer() {
         assertGeoRuntimeConfigurationFromEnv(process.env);
       },
       validationStore: customQuestionValidationStore,
+      monitorFreeReservationStore,
     });
+  // Recover only crash-left project locks before any route can acquire one.
+  // Runtime readiness calls are idempotent and never steal a live lock.
+  await monitorFreeReservationStore.assertReady();
+  await monitorFreeReservationStore.collectGarbage();
   if (process.env.NODE_ENV === "production") {
     if (paymentMode === "zpay") {
       assertGeoPaymentConfigurationFromEnv(process.env);
@@ -189,11 +196,28 @@ async function startServer() {
       broker: geoBroker,
       projectOrderRegistry,
       customQuestionValidationStore,
+      monitorFreeReservationStore,
     }),
   );
 
   customQuestionRecoveryWorker.start();
   server.on("close", () => customQuestionRecoveryWorker.stop());
+  const sweepMonitorFreeReservations = () => {
+    void monitorFreeReservationStore.collectGarbage().catch((error) => {
+      console.error("[Monitor free reservation sweeper] failed", {
+        code:
+          error instanceof Error
+            ? error.name
+            : "MONITOR_RESERVATION_SWEEP_FAILED",
+      });
+    });
+  };
+  const monitorFreeReservationSweepTimer = setInterval(
+    sweepMonitorFreeReservations,
+    60 * 60 * 1000,
+  );
+  monitorFreeReservationSweepTimer.unref();
+  server.on("close", () => clearInterval(monitorFreeReservationSweepTimer));
 
   app.get(
     [

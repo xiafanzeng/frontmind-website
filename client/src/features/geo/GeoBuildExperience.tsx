@@ -77,14 +77,12 @@ import {
   confirmGeoServiceBankTransfer,
   createGeoServiceAccount,
   createGeoCustomQuestion,
-  createGeoPaymentCheckout,
   createGeoProject,
   createGeoServicePaymentCheckout,
   deleteGeoProject as deleteRemoteGeoProject,
   downloadGeoArchive,
   expiredGeoCustomQuestionValidation,
   getGeoProject,
-  getGeoPaymentStatus,
   getGeoServiceContractStatus,
   getGeoServicePaymentStatus,
   getGeoServiceProvisioningStatus,
@@ -104,7 +102,6 @@ import {
   startGeoQuestionRecommendation,
   startGeoService,
   submitGeoServiceContractProfile,
-  switchGeoPaymentCheckout,
   switchGeoServicePaymentCheckout,
   verifyGeoInvitation,
 } from "./api";
@@ -231,11 +228,31 @@ function monitoringPlatformSelectionIsValid(
         );
 }
 
-function monitoringAmountFen(platformIds: GeoPlatformId[]) {
-  return platformIds.reduce((total, platformId) => {
-    const platform = GEO_PLATFORMS.find((item) => item.id === platformId);
-    return total + (platform?.unitPriceCny ?? 0) * 100;
-  }, 0);
+function matchingMonitoringRecoveryClientRequestId(
+  project: GeoProject,
+  input: {
+    questionId: string;
+    monitoringEdition: GeoMonitoringEdition;
+    platformIds: GeoPlatformId[];
+  },
+) {
+  const recovery = project.monitoringRecovery;
+  if (
+    !recovery ||
+    recovery.schemaVersion !== 2 ||
+    recovery.questionId !== input.questionId ||
+    recovery.monitoringEdition !== input.monitoringEdition ||
+    recovery.platformIds.length !== input.platformIds.length ||
+    [...recovery.platformIds]
+      .sort()
+      .some(
+        (platformId, index) =>
+          platformId !== [...input.platformIds].sort()[index],
+      )
+  ) {
+    return undefined;
+  }
+  return recovery.clientRequestId;
 }
 
 export function geoServiceFallbackAmountFen(
@@ -1485,9 +1502,12 @@ function GeoBuildExperienceZh() {
   const [deleteError, setDeleteError] = useState("");
   const [deleteRemoteCompleted, setDeleteRemoteCompleted] = useState(false);
   const [pendingQuestion, setPendingQuestion] = useState<GeoQuestion>();
+  const [monitoringConfirmOpen, setMonitoringConfirmOpen] = useState(false);
+  const [monitoringStarting, setMonitoringStarting] = useState(false);
+  const [monitoringStartError, setMonitoringStartError] = useState("");
+  const [monitoringClientRequestId, setMonitoringClientRequestId] =
+    useState<string>();
   const [paymentDialogOpen, setPaymentDialogOpen] = useState(false);
-  const [paymentPurpose, setPaymentPurpose] =
-    useState<GeoPaymentPurpose>("monitoring");
   const [pendingPayment, setPendingPayment] = useState<
     PendingGeoPayment | undefined
   >(restorePendingGeoPayment);
@@ -1552,6 +1572,10 @@ function GeoBuildExperienceZh() {
     : activeProject;
 
   useEffect(() => {
+    // Legacy monitoring payment state is read-only migration input. Do not
+    // rewrite it from the new client before the user explicitly confirms the
+    // free v2 start.
+    if (pendingPayment?.kind === "monitoring") return;
     try {
       if (pendingPayment) {
         window.localStorage.setItem(
@@ -1577,9 +1601,9 @@ function GeoBuildExperienceZh() {
   useEffect(() => {
     if (
       !pendingPayment ||
+      pendingPayment.kind === "monitoring" ||
       pendingPayment.status !== "pending" ||
-      (pendingPayment.kind === "service" &&
-        pendingPayment.selectedChannel === "bank_transfer")
+      pendingPayment.selectedChannel === "bank_transfer"
     )
       return;
     const expiresAt = Date.parse(pendingPayment.checkout.expiresAt);
@@ -1610,25 +1634,24 @@ function GeoBuildExperienceZh() {
   }, [
     pendingPayment?.checkout.authorization,
     pendingPayment?.checkout.expiresAt,
-    pendingPayment?.kind === "service"
-      ? pendingPayment.selectedChannel
-      : undefined,
+    pendingPayment?.kind,
+    pendingPayment?.kind === "service" ? pendingPayment.selectedChannel : null,
     pendingPayment?.status,
   ]);
 
   useEffect(() => {
     if (!projectsHydrated || !pendingPayment) return;
+    // Cached monitoring orders are migrated only after the user confirms the
+    // separate free-monitoring dialog. Hydration must not query or mutate the
+    // retired payment flow.
+    if (pendingPayment.kind === "monitoring") return;
     if (projects.some((project) => project.id === pendingPayment.projectId))
       return;
     if (pendingPayment.projectToken) {
       setStorageNotice(
         "待支付订单的本机项目记录缺失；订单凭证已保留，系统会继续核对并在履约成功后恢复项目。",
       );
-      if (
-        pendingPayment.kind === "service" &&
-        pendingPayment.selectedChannel === "bank_transfer"
-      ) {
-        setPaymentPurpose("service");
+      if (pendingPayment.selectedChannel === "bank_transfer") {
         setPaymentError("");
         setPaymentDialogOpen(true);
       }
@@ -2669,13 +2692,12 @@ function GeoBuildExperienceZh() {
   const openPaymentDialog = () => {
     if (!activeProject) return;
     if (activeProject.monitoring?.runId) {
-      setStorageNotice("本次监控范围与付款已确认。");
+      setStorageNotice("本次监控范围已确认。");
       return;
     }
-    setPaymentPurpose(pendingPayment?.kind ?? "monitoring");
     if (isGeoStylePreviewProject(activeProject)) {
-      setPaymentError("");
-      setPaymentDialogOpen(true);
+      setMonitoringStartError("");
+      setMonitoringConfirmOpen(true);
       return;
     }
     if (
@@ -2697,12 +2719,104 @@ function GeoBuildExperienceZh() {
       setStorageNotice(GEO_MONITORING_PLATFORM_SELECTION_MESSAGE);
       return;
     }
-    if (pendingPayment && pendingPayment.projectId !== activeProject.id) {
-      setStorageNotice("另一个项目仍有待确认的支付订单，请先完成该订单。");
+    if (
+      pendingPayment?.kind === "service" &&
+      pendingPayment.projectId !== activeProject.id
+    ) {
+      setStorageNotice("另一个项目仍有待确认的服务订单，请先完成该订单。");
       return;
     }
-    setPaymentError("");
-    setPaymentDialogOpen(true);
+    closeOwnedCashierWindows();
+    setMonitoringStartError("");
+    const recoveryClientRequestId = matchingMonitoringRecoveryClientRequestId(
+      activeProject,
+      {
+        questionId: activeProject.selectedQuestionId,
+        monitoringEdition,
+        platformIds: activeProject.selectedPlatformIds,
+      },
+    );
+    setMonitoringClientRequestId(
+      (current) => current ?? recoveryClientRequestId ?? crypto.randomUUID(),
+    );
+    setMonitoringConfirmOpen(true);
+  };
+
+  const confirmFreeMonitoring = async () => {
+    const project = activeProject;
+    if (!project || monitoringStarting) return;
+    if (isGeoStylePreviewProject(project)) {
+      setMonitoringConfirmOpen(false);
+      setStorageNotice("当前为预览模式，不会创建真实监控任务。");
+      return;
+    }
+    const legacyPayment =
+      activePendingPayment?.kind === "monitoring"
+        ? activePendingPayment
+        : undefined;
+    const questionId = legacyPayment?.questionId ?? project.selectedQuestionId;
+    const platformIds =
+      legacyPayment?.platformIds ?? project.selectedPlatformIds;
+    const monitoringEdition =
+      legacyPayment?.monitoringEdition ??
+      resolveGeoMonitoringEdition(project.monitoringEdition);
+    if (!questionId || platformIds.length === 0) {
+      setMonitoringStartError("请先选择问题和至少一个监控平台。");
+      return;
+    }
+    const clientRequestId =
+      monitoringClientRequestId ??
+      matchingMonitoringRecoveryClientRequestId(project, {
+        questionId,
+        monitoringEdition,
+        platformIds,
+      }) ??
+      crypto.randomUUID();
+    setMonitoringClientRequestId(clientRequestId);
+    setMonitoringStarting(true);
+    setMonitoringStartError("");
+    try {
+      const updated = await startGeoMonitoring(project, {
+        clientRequestId,
+        questionId,
+        platformIds,
+        monitoringEdition,
+        ...(legacyPayment
+          ? {
+              legacyPaymentAuthorization: legacyPayment.checkout.authorization,
+            }
+          : {}),
+        onProcessing: (recoveringProject) => {
+          // The 202 token contains the durable reservation. Persist every
+          // rotation so a timeout, refresh, or server restart resumes the same
+          // free scope without consuming a new create allowance.
+          commitProject(recoveringProject);
+        },
+      });
+      commitProject(updated);
+      if (legacyPayment) {
+        setPendingPayment(undefined);
+        try {
+          window.localStorage.removeItem(GEO_PENDING_PAYMENT_STORAGE_KEY);
+        } catch {
+          // The server migration is already authoritative.
+        }
+      }
+      setMonitoringConfirmOpen(false);
+      setMonitoringClientRequestId(undefined);
+      setActiveStage("monitoring");
+      setStorageNotice("监控已开始，系统正在获取并留存平台回答。");
+    } catch (error) {
+      const message =
+        error instanceof GeoApiError &&
+        error.code === "LEGACY_MONITOR_PAYMENT_RECOVERY_REQUIRED"
+          ? "检测到旧版监控订单，请保留原记录并联系技术支持核对后继续。"
+          : errorMessage(error);
+      setMonitoringStartError(message);
+      setStorageNotice(message);
+    } finally {
+      setMonitoringStarting(false);
+    }
   };
 
   const openServicePaymentDialog = () => {
@@ -2754,7 +2868,6 @@ function GeoBuildExperienceZh() {
       setStorageNotice("另一个项目仍有待确认的支付订单，请先完成该订单。");
       return;
     }
-    setPaymentPurpose(pendingPayment?.kind ?? "service");
     setPaymentError("");
     setPaymentDialogOpen(true);
   };
@@ -2827,8 +2940,6 @@ function GeoBuildExperienceZh() {
     }
     if (!activeProject || !activeProject.selectedQuestionId || pendingPayment)
       return;
-    if (paymentPurpose === "monitoring" && activeProject.monitoring?.runId)
-      return;
 
     const project = activeProject;
     const questionId = project.selectedQuestionId;
@@ -2836,63 +2947,24 @@ function GeoBuildExperienceZh() {
     const monitoringEdition = resolveGeoMonitoringEdition(
       project.monitoringEdition,
     );
-    if (
-      paymentPurpose === "monitoring" &&
-      project.selectedPlatformIds.length === 0
-    )
-      return;
-    const platformIds = [...project.selectedPlatformIds];
-    if (
-      paymentPurpose === "monitoring" &&
-      !monitoringPlatformSelectionIsValid(monitoringEdition, platformIds)
-    ) {
-      setPaymentError(GEO_MONITORING_PLATFORM_SELECTION_MESSAGE);
-      return;
-    }
     const paymentWindow = preparePaymentWindow();
     if (paymentWindow) cashierWindowsRef.current.add(paymentWindow.popup);
     setPaymentCreating(true);
     setPaymentError("");
     try {
-      let checkout: GeoPaymentCheckout | GeoServicePaymentCheckout;
-      if (paymentPurpose === "service") {
-        const serviceCheckout = await createGeoServicePaymentCheckout(
-          project,
-          method,
-        );
-        checkout = serviceCheckout;
-        setPendingPayment({
-          kind: "service",
-          projectId: project.id,
-          projectToken: project.remoteToken,
-          questionId,
-          monitoringEdition,
-          category: serviceCheckout.category,
-          checkout: serviceCheckout,
-          selectedChannel: method,
-          status: "pending",
-          statusMessage: "请在新窗口完成支付",
-        });
-      } else {
-        const monitoringCheckout = await createGeoPaymentCheckout(project, {
-          questionId,
-          platformIds,
-          monitoringEdition,
-          method,
-        });
-        checkout = monitoringCheckout;
-        setPendingPayment({
-          kind: "monitoring",
-          projectId: project.id,
-          projectToken: project.remoteToken,
-          questionId,
-          monitoringEdition,
-          platformIds,
-          checkout: monitoringCheckout,
-          status: "pending",
-          statusMessage: "请在新窗口完成支付",
-        });
-      }
+      const checkout = await createGeoServicePaymentCheckout(project, method);
+      setPendingPayment({
+        kind: "service",
+        projectId: project.id,
+        projectToken: project.remoteToken,
+        questionId,
+        monitoringEdition,
+        category: checkout.category,
+        checkout,
+        selectedChannel: method,
+        status: "pending",
+        statusMessage: "请在新窗口完成支付",
+      });
       if (paymentWindow) {
         submitPaymentCheckout(checkout, paymentWindow.target);
       } else {
@@ -2952,8 +3024,8 @@ function GeoBuildExperienceZh() {
     ) {
       return;
     }
+    if (payment.kind !== "service") return;
     if (method === "bank_transfer") {
-      if (payment.kind !== "service") return;
       paymentPollingPausedRef.current = true;
       closeOwnedCashierWindows();
       setPaymentError("");
@@ -2976,18 +3048,16 @@ function GeoBuildExperienceZh() {
       return;
     }
     if (payment.checkout.fields.type === method) {
-      if (payment.kind === "service") {
-        flushSync(() => {
-          setPendingPayment((current) =>
-            current?.kind === "service" &&
-            current.status === "pending" &&
-            current.checkout.authorization === payment.checkout.authorization
-              ? { ...current, selectedChannel: method }
-              : current,
-          );
-        });
-        paymentPollingPausedRef.current = false;
-      }
+      flushSync(() => {
+        setPendingPayment((current) =>
+          current?.kind === "service" &&
+          current.status === "pending" &&
+          current.checkout.authorization === payment.checkout.authorization
+            ? { ...current, selectedChannel: method }
+            : current,
+        );
+      });
+      paymentPollingPausedRef.current = false;
       reopenPaymentCheckout();
       return;
     }
@@ -2998,19 +3068,10 @@ function GeoBuildExperienceZh() {
     setPaymentCreating(true);
     setPaymentError("");
     try {
-      const checkout =
-        payment.kind === "monitoring"
-          ? await switchGeoPaymentCheckout(project, {
-              questionId: payment.questionId,
-              platformIds: [...payment.platformIds],
-              monitoringEdition: payment.monitoringEdition,
-              authorization,
-              method,
-            })
-          : await switchGeoServicePaymentCheckout(project, {
-              authorization,
-              method,
-            });
+      const checkout = await switchGeoServicePaymentCheckout(project, {
+        authorization,
+        method,
+      });
       if (!switchedGeoCheckoutKeepsOrderFacts(payment.checkout, checkout)) {
         throw new Error(
           "支付方式切换响应与原订单不一致，已停止打开收银台；请联系技术支持并提供订单号。",
@@ -3026,15 +3087,7 @@ function GeoBuildExperienceZh() {
           ) {
             return current;
           }
-          if (current.kind === "monitoring" && payment.kind === "monitoring") {
-            checkoutAccepted = true;
-            return {
-              ...current,
-              checkout: checkout as GeoPaymentCheckout,
-              statusMessage: `已切换为${method === "wxpay" ? "微信支付" : "支付宝"}，请在新窗口完成付款`,
-            };
-          }
-          if (current.kind === "service" && payment.kind === "service") {
+          if (current.kind === "service") {
             checkoutAccepted = true;
             return {
               ...current,
@@ -3148,9 +3201,9 @@ function GeoBuildExperienceZh() {
     if (
       !projectsHydrated ||
       !pendingPayment ||
+      pendingPayment.kind === "monitoring" ||
       bankConfirmationActive ||
-      (pendingPayment.kind === "service" &&
-        pendingPayment.selectedChannel === "bank_transfer") ||
+      pendingPayment.selectedChannel === "bank_transfer" ||
       pendingPayment.status === "reconciliation_required" ||
       pendingPayment.status === "activation_support_required"
     )
@@ -3174,18 +3227,10 @@ function GeoBuildExperienceZh() {
       if (cancelled || checking) return;
       checking = true;
       try {
-        const status =
-          payment.kind === "service"
-            ? await getGeoServicePaymentStatus(
-                project,
-                payment.checkout.authorization,
-              )
-            : await getGeoPaymentStatus(project, {
-                questionId: payment.questionId,
-                platformIds: payment.platformIds,
-                monitoringEdition: payment.monitoringEdition,
-                authorization: payment.checkout.authorization,
-              });
+        const status = await getGeoServicePaymentStatus(
+          project,
+          payment.checkout.authorization,
+        );
         if (cancelled || paymentPollingPausedRef.current) return;
         if (
           status.orderId !== payment.checkout.orderId ||
@@ -3235,11 +3280,9 @@ function GeoBuildExperienceZh() {
                 status: pendingStatus,
                 statusMessage:
                   status.status === "paid"
-                    ? payment.kind === "service"
-                      ? purchaseIntent
-                        ? "付款已确认，正在绑定已有账号"
-                        : "付款已确认，正在进入账号设置"
-                      : "付款已确认，正在启动问题监控"
+                    ? purchaseIntent
+                      ? "付款已确认，正在绑定已有账号"
+                      : "付款已确认，正在进入账号设置"
                     : status.message || "等待支付完成",
                 lastCheckedAt: new Date().toISOString(),
               }
@@ -3289,75 +3332,27 @@ function GeoBuildExperienceZh() {
         }
         paymentMonitorStartInFlight.current.add(orderId);
         try {
-          const updated =
-            payment.kind === "service"
-              ? await startGeoService(
-                  project,
-                  payment.checkout.authorization,
-                  purchaseIntent,
-                )
-              : await startGeoMonitoring(project, {
-                  questionId: payment.questionId,
-                  platformIds: payment.platformIds,
-                  monitoringEdition: payment.monitoringEdition,
-                  paymentAuthorization: payment.checkout.authorization,
-                });
+          const updated = await startGeoService(
+            project,
+            payment.checkout.authorization,
+            purchaseIntent,
+          );
           if (cancelled || paymentPollingPausedRef.current) return;
           commitProject(updated);
           setPendingPayment(undefined);
           setPaymentDialogOpen(false);
-          if (payment.kind === "service") {
-            setPurchaseIntent(undefined);
-            const url = clearGeoPurchaseIntentFromUrl(window.location.href);
-            window.history.replaceState(window.history.state, "", url);
-            setActiveStage("service_activation");
-            setStorageNotice(geoPaidStartNotice(updated, payment.kind));
-          } else {
-            setActiveStage("monitoring");
-            setStorageNotice(geoPaidStartNotice(updated, payment.kind));
-          }
+          setPurchaseIntent(undefined);
+          const url = clearGeoPurchaseIntentFromUrl(window.location.href);
+          window.history.replaceState(window.history.state, "", url);
+          setActiveStage("service_activation");
+          setStorageNotice(geoPaidStartNotice(updated, "service"));
         } catch (error) {
           if (!cancelled && !paymentPollingPausedRef.current) {
-            if (
-              payment.kind === "monitoring" &&
-              isGeoMonitoringStartPendingError(error)
-            ) {
-              const retry = geoActivationRetryDecision(
-                error,
-                activationAttempts,
-              );
-              activationAttempts = retry.attempts;
-              const message = retry.terminal
-                ? `付款已确认，但监控任务未能自动启动：${errorMessage(error)}。请联系技术支持并提供订单号。`
-                : GEO_MONITORING_START_MESSAGE;
-              setPendingPayment((current) =>
-                current?.checkout.authorization ===
-                payment.checkout.authorization
-                  ? {
-                      ...current,
-                      status: retry.terminal
-                        ? "activation_support_required"
-                        : "paid",
-                      activationAttempts: retry.attempts,
-                      statusMessage: message,
-                      lastCheckedAt: new Date().toISOString(),
-                    }
-                  : current,
-              );
-              if (retry.terminal) {
-                setStorageNotice(message);
-                setPaymentError(message);
-              } else {
-                setPaymentError("");
-                schedule(retry.retryDelayMs);
-              }
-              return;
-            }
             const retry = geoActivationRetryDecision(error, activationAttempts);
             activationAttempts = retry.attempts;
             const message = retry.terminal
-              ? `付款已确认，但${payment.kind === "service" ? "服务" : "监控任务"}未能自动启动：${errorMessage(error)}。请联系技术支持并提供订单号。`
-              : `付款已确认，但${payment.kind === "service" ? "服务" : "监控任务"}暂未启动：${errorMessage(error)}（将在 ${Math.round((retry.retryDelayMs ?? 0) / 1000)} 秒后重试，最多 ${GEO_PAYMENT_ACTIVATION_MAX_ATTEMPTS} 次）`;
+              ? `付款已确认，但服务未能自动启动：${errorMessage(error)}。请联系技术支持并提供订单号。`
+              : `付款已确认，但服务暂未启动：${errorMessage(error)}（将在 ${Math.round((retry.retryDelayMs ?? 0) / 1000)} 秒后重试，最多 ${GEO_PAYMENT_ACTIVATION_MAX_ATTEMPTS} 次）`;
             setPendingPayment((current) =>
               current?.checkout.authorization === payment.checkout.authorization
                 ? {
@@ -3484,9 +3479,8 @@ function GeoBuildExperienceZh() {
     };
   }, [
     pendingPayment?.checkout.authorization,
-    pendingPayment?.kind === "service"
-      ? pendingPayment.selectedChannel
-      : undefined,
+    pendingPayment?.kind,
+    pendingPayment?.kind === "service" ? pendingPayment.selectedChannel : null,
     bankConfirmationActive,
     paymentCheckNonce,
     projectsHydrated,
@@ -4086,11 +4080,30 @@ function GeoBuildExperienceZh() {
         </DialogContent>
       </Dialog>
 
+      <MonitoringConfirmDialog
+        open={monitoringConfirmOpen}
+        project={activeProject}
+        legacyPending={
+          activePendingPayment?.kind === "monitoring"
+            ? activePendingPayment
+            : undefined
+        }
+        starting={monitoringStarting}
+        error={monitoringStartError}
+        onOpenChange={setMonitoringConfirmOpen}
+        onConfirm={confirmFreeMonitoring}
+      />
+
       <PaymentDialog
-        open={paymentDialogOpen}
-        project={paymentDialogProject}
-        pending={pendingPayment}
-        purpose={pendingPayment?.kind ?? paymentPurpose}
+        open={paymentDialogOpen && pendingPayment?.kind !== "monitoring"}
+        project={
+          pendingPayment?.kind === "service"
+            ? paymentDialogProject
+            : activeProject
+        }
+        pending={
+          pendingPayment?.kind === "service" ? pendingPayment : undefined
+        }
         creating={paymentCreating}
         error={paymentError}
         onOpenChange={setPaymentDialogOpen}
@@ -5997,11 +6010,122 @@ export function buildServiceContractHref({
   );
 }
 
+export function MonitoringConfirmDialog({
+  open,
+  project,
+  legacyPending,
+  starting,
+  error,
+  onOpenChange,
+  onConfirm,
+}: {
+  open: boolean;
+  project?: GeoProject;
+  legacyPending?: Extract<PendingGeoPayment, { kind: "monitoring" }>;
+  starting: boolean;
+  error: string;
+  onOpenChange: (open: boolean) => void;
+  onConfirm: () => void;
+}) {
+  const edition =
+    legacyPending?.monitoringEdition ??
+    resolveGeoMonitoringEdition(project?.monitoringEdition);
+  const platformIds =
+    legacyPending?.platformIds ?? project?.selectedPlatformIds ?? [];
+  const questionId = legacyPending?.questionId ?? project?.selectedQuestionId;
+  const question = project?.questions.find((item) => item.id === questionId);
+  const platformNames = platformIds
+    .map((id) => GEO_PLATFORMS.find((platform) => platform.id === id)?.name)
+    .filter(Boolean)
+    .join("、");
+
+  return (
+    <Dialog
+      open={open}
+      onOpenChange={(next) => !starting && onOpenChange(next)}
+    >
+      <DialogContent
+        className="geo-dialog geo-payment-dialog"
+        overlayClassName="geo-dialog-overlay"
+        showCloseButton={false}
+      >
+        <DialogHeader>
+          <span className="geo-dialog-mark">
+            <BarChart3 size={19} />
+          </span>
+          <DialogTitle className="geo-dialog-title">
+            确认并获取监控答案
+          </DialogTitle>
+          <DialogDescription className="geo-dialog-description">
+            问题监控现已免费。确认范围后将直接获取并留存回答，不会创建付款订单。
+          </DialogDescription>
+        </DialogHeader>
+        <section className="geo-payment-order-summary">
+          <div>
+            <span>当前问题</span>
+            <strong>{question?.question || "已选择的 GEO 优化问题"}</strong>
+          </div>
+          <dl>
+            <div>
+              <dt>监控版本</dt>
+              <dd>{monitoringEditionLabel(edition)}</dd>
+            </div>
+            <div>
+              <dt>已选平台</dt>
+              <dd>{platformNames || `${platformIds.length} 个平台`}</dd>
+            </div>
+            <div>
+              <dt>预计回答</dt>
+              <dd>{platformIds.length * 5} 次</dd>
+            </div>
+          </dl>
+          {legacyPending && (
+            <p className="geo-payment-inline-note">
+              检测到切换前的监控订单。系统会先权威核对旧状态，再免费继续；不会重复创建监控任务。
+            </p>
+          )}
+        </section>
+        {error && (
+          <p className="geo-dialog-error" role="alert">
+            {error}
+          </p>
+        )}
+        <DialogFooter className="geo-dialog-actions">
+          <button
+            type="button"
+            className="geo-secondary-button"
+            onClick={() => onOpenChange(false)}
+            disabled={starting}
+          >
+            返回修改
+          </button>
+          <button
+            type="button"
+            className="geo-primary-button"
+            onClick={onConfirm}
+            disabled={starting || platformIds.length === 0}
+          >
+            {starting ? (
+              <>
+                <LoaderCircle className="is-spinning" size={16} />
+                正在获取
+              </>
+            ) : (
+              <>
+                确认并获取监控答案 <ArrowRight size={16} />
+              </>
+            )}
+          </button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
 export function PaymentDialog({
   open,
   project,
   pending,
-  purpose,
   creating,
   error,
   onOpenChange,
@@ -6015,8 +6139,7 @@ export function PaymentDialog({
 }: {
   open: boolean;
   project?: GeoProject;
-  pending?: PendingGeoPayment;
-  purpose: GeoPaymentPurpose;
+  pending?: Extract<PendingGeoPayment, { kind: "service" }>;
   creating: boolean;
   error: string;
   onOpenChange: (open: boolean) => void;
@@ -6035,21 +6158,15 @@ export function PaymentDialog({
   const [bankConfirmationError, setBankConfirmationError] = useState("");
   const [bankConfirmationSubmitting, setBankConfirmationSubmitting] =
     useState(false);
-  const serviceOrder = purpose === "service";
   const monitoringEdition = resolveGeoMonitoringEdition(
     pending?.monitoringEdition ?? project?.monitoringEdition,
   );
 
   const method = pending?.checkout.fields.type;
   const selectedChannel: GeoServicePaymentMethod | undefined =
-    pending?.kind === "service"
-      ? pending.selectedChannel
-      : method === "wxpay"
-        ? "wxpay"
-        : method === "alipay"
-          ? "alipay"
-          : undefined;
-  const bankSelected = serviceOrder && selectedChannel === "bank_transfer";
+    pending?.selectedChannel ??
+    (method === "wxpay" ? "wxpay" : method === "alipay" ? "alipay" : undefined);
+  const bankSelected = selectedChannel === "bank_transfer";
 
   useEffect(() => {
     if (open) {
@@ -6064,32 +6181,23 @@ export function PaymentDialog({
     setBankConfirmationSubmitting(false);
     onBankConfirmationOpenChange(false);
   }, [bankSelected, onBankConfirmationOpenChange, open]);
-  const platformIds =
-    pending?.kind === "monitoring"
-      ? pending.platformIds
-      : (project?.selectedPlatformIds ?? []);
   const questionId =
     pending?.questionId ?? project?.selectedQuestionId ?? undefined;
   const question = project?.questions.find((item) => item.id === questionId);
   const amountFen =
     pending?.checkout.amountFen ??
-    (serviceOrder
-      ? (project?.serviceActivation?.amountFen ??
-        geoServiceFallbackAmountFen(
-          project?.serviceActivation?.category,
-          monitoringEdition,
-        ))
-      : monitoringAmountFen(platformIds));
+    project?.serviceActivation?.amountFen ??
+    geoServiceFallbackAmountFen(
+      project?.serviceActivation?.category,
+      monitoringEdition,
+    );
   const checkoutExpired = Boolean(
     pending && isGeoCheckoutExpired(pending.checkout),
   );
   const supportRequired =
     pending?.status === "reconciliation_required" ||
     pending?.status === "activation_support_required";
-  const category =
-    pending?.kind === "service"
-      ? pending.category
-      : project?.serviceActivation?.category;
+  const category = pending?.category ?? project?.serviceActivation?.category;
   const categoryLabel =
     GEO_QUESTION_CATEGORIES.find((item) => item.id === category)?.title ??
     "GEO 优化";
@@ -6133,7 +6241,7 @@ export function PaymentDialog({
     setBankAccountVisible(channel === "bank_transfer");
     onSwitch(channel);
   };
-  const bankAccountPanel = serviceOrder && bankAccountVisible && (
+  const bankAccountPanel = bankAccountVisible && (
     <section
       id="geo-service-bank-account"
       className="geo-service-bank-account-panel"
@@ -6193,9 +6301,7 @@ export function PaymentDialog({
             <DialogTitle className="geo-dialog-title">
               {pending
                 ? pending.status === "paid"
-                  ? serviceOrder
-                    ? "付款已确认，正在进入账号开通流程"
-                    : GEO_MONITORING_START_MESSAGE
+                  ? "付款已确认，正在进入账号开通流程"
                   : supportRequired
                     ? pending.status === "activation_support_required"
                       ? "付款后续处理需要支持"
@@ -6205,58 +6311,34 @@ export function PaymentDialog({
                       : checkoutExpired
                         ? "核对最终支付结果"
                         : "等待支付确认"
-                : serviceOrder
-                  ? "确认一个月 GEO 优化服务"
-                  : "确认问题监控订单"}
+                : "确认一个月 GEO 优化服务"}
             </DialogTitle>
             <DialogDescription className="geo-dialog-description">
-              {serviceOrder
-                ? "合同已在企业微信确认。请核对所选问题、服务周期与金额；付款到账后即可创建企业服务账号与看板。"
-                : "确认监控范围与金额，付款完成后将自动开始获取平台回答。"}
+              合同已在企业微信确认。请核对所选问题、服务周期与金额；付款到账后即可创建企业服务账号与看板。
             </DialogDescription>
           </DialogHeader>
 
           <section className="geo-payment-order-summary">
             <div>
-              <span>{serviceOrder ? "本次优化问题" : "本次监控问题"}</span>
+              <span>本次优化问题</span>
               <strong>{question?.question || "已选择的 GEO 优化问题"}</strong>
             </div>
             <dl>
               <div>
-                <dt>{serviceOrder ? "服务版本" : "监控版本"}</dt>
+                <dt>服务版本</dt>
                 <dd>{monitoringEditionLabel(monitoringEdition)}</dd>
               </div>
-              {serviceOrder ? (
-                <>
-                  <div>
-                    <dt>问题类型</dt>
-                    <dd>{categoryLabel}</dd>
-                  </div>
-                  <div>
-                    <dt>服务周期</dt>
-                    <dd>1 个月</dd>
-                  </div>
-                </>
-              ) : (
-                <>
-                  <div>
-                    <dt>监控平台</dt>
-                    <dd>{platformIds.length} 个</dd>
-                  </div>
-                  <div>
-                    <dt>回答样本</dt>
-                    <dd>{platformIds.length * 5} 次</dd>
-                  </div>
-                </>
-              )}
+              <div>
+                <dt>问题类型</dt>
+                <dd>{categoryLabel}</dd>
+              </div>
+              <div>
+                <dt>服务周期</dt>
+                <dd>1 个月</dd>
+              </div>
               <div>
                 <dt>应付金额</dt>
-                <dd>
-                  ¥
-                  {serviceOrder
-                    ? (amountFen / 100).toLocaleString("zh-CN")
-                    : (amountFen / 100).toFixed(2)}
-                </dd>
+                <dd>¥{(amountFen / 100).toLocaleString("zh-CN")}</dd>
               </div>
             </dl>
           </section>
@@ -6264,7 +6346,7 @@ export function PaymentDialog({
           {!pending ? (
             <section className="geo-payment-methods" aria-label="选择支付方式">
               <p>选择支付方式，在新窗口完成付款。</p>
-              <div className={serviceOrder ? "has-bank-account" : undefined}>
+              <div className="has-bank-account">
                 <button
                   type="button"
                   className="method-alipay"
@@ -6289,22 +6371,20 @@ export function PaymentDialog({
                   <strong>微信支付</strong>
                   <small>使用微信完成付款</small>
                 </button>
-                {serviceOrder && (
-                  <button
-                    type="button"
-                    className="method-bank-account"
-                    aria-expanded={bankAccountVisible}
-                    aria-controls="geo-service-bank-account"
-                    onClick={() => setBankAccountVisible(true)}
-                    disabled={creating}
-                  >
-                    <span aria-hidden="true">
-                      <Landmark />
-                    </span>
-                    <strong>对公账户支付</strong>
-                    <small>查看账户并在到账后确认</small>
-                  </button>
-                )}
+                <button
+                  type="button"
+                  className="method-bank-account"
+                  aria-expanded={bankAccountVisible}
+                  aria-controls="geo-service-bank-account"
+                  onClick={() => setBankAccountVisible(true)}
+                  disabled={creating}
+                >
+                  <span aria-hidden="true">
+                    <Landmark />
+                  </span>
+                  <strong>对公账户支付</strong>
+                  <small>查看账户并在到账后确认</small>
+                </button>
               </div>
               {bankAccountPanel}
               {creating && (
@@ -6332,9 +6412,7 @@ export function PaymentDialog({
               <div>
                 <strong>
                   {pending.status === "paid"
-                    ? serviceOrder
-                      ? "付款已确认，正在进入账号开通流程"
-                      : "付款已确认，正在启动监控"
+                    ? "付款已确认，正在进入账号开通流程"
                     : pending.status === "activation_support_required"
                       ? "付款已确认，后续启动需要人工处理"
                       : pending.status === "reconciliation_required"
@@ -6371,7 +6449,7 @@ export function PaymentDialog({
                 <p>
                   选择当前在线渠道会重新打开收银台；选择其他在线渠道会保留原订单并更新收银台。
                 </p>
-                <div className={serviceOrder ? "has-bank-account" : undefined}>
+                <div className="has-bank-account">
                   <button
                     type="button"
                     className="method-alipay"
@@ -6404,22 +6482,20 @@ export function PaymentDialog({
                         : "切换到微信"}
                     </small>
                   </button>
-                  {serviceOrder && (
-                    <button
-                      type="button"
-                      className="method-bank-account"
-                      onClick={() => selectPendingChannel("bank_transfer")}
-                      disabled={creating}
-                    >
-                      <span aria-hidden="true">
-                        <Landmark />
-                      </span>
-                      <strong>对公账户支付</strong>
-                      <small>
-                        {bankSelected ? "当前渠道，查看账户" : "改为对公转账"}
-                      </small>
-                    </button>
-                  )}
+                  <button
+                    type="button"
+                    className="method-bank-account"
+                    onClick={() => selectPendingChannel("bank_transfer")}
+                    disabled={creating}
+                  >
+                    <span aria-hidden="true">
+                      <Landmark />
+                    </span>
+                    <strong>对公账户支付</strong>
+                    <small>
+                      {bankSelected ? "当前渠道，查看账户" : "改为对公转账"}
+                    </small>
+                  </button>
                 </div>
               </section>
             )}
@@ -6701,7 +6777,6 @@ export function MonitoringSetup({
       : project.selectedPlatformIds;
   const selectedCount = selectedPlatformIds.length;
   const answers = selectedCount * 5;
-  const total = monitoringAmountFen(selectedPlatformIds) / 100;
   const validSelection = monitoringPlatformSelectionIsValid(
     monitoringEdition,
     selectedPlatformIds,
@@ -6792,9 +6867,7 @@ export function MonitoringSetup({
                 <strong>{platform.name}</strong>
                 <small>获取 5 次回答</small>
               </span>
-              <span className="geo-platform-price">
-                ¥{platform.unitPriceCny}
-              </span>
+              <span className="geo-platform-price">5 次回答</span>
               <span className="geo-platform-check">
                 {selected && <Check size={13} />}
               </span>
@@ -6818,7 +6891,7 @@ export function MonitoringSetup({
             <small>
               {locked
                 ? "每次回答及采集时间均已留档"
-                : "支付后将保留每次回答及采集时间"}
+                : "确认后将保留每次回答及采集时间"}
             </small>
           </span>
         </div>
@@ -6841,12 +6914,10 @@ export function MonitoringSetup({
           </span>
         </div>
         <div className="geo-checkout-total">
-          <span>本次监控费用</span>
-          <strong>¥{total}</strong>
+          <span>本次监控</span>
+          <strong>免费获取</strong>
           <small>
-            {monitoringEdition === "overseas"
-              ? "ChatGPT · 5 次回答"
-              : `¥2 × ${selectedCount} 个平台`}
+            {selectedCount} 个平台 · {answers} 次回答
           </small>
         </div>
         <button
@@ -6855,19 +6926,19 @@ export function MonitoringSetup({
           disabled={selectedCount === 0 || !validSelection || locked}
           title={
             locked
-              ? "付款已确认，本次监控范围不可修改"
+              ? "监控已开始，本次监控范围不可修改"
               : selectedCount === 0
                 ? "请先选择至少一个监控平台"
                 : paymentPending
-                  ? "查看当前订单的支付进度"
-                  : "确认订单并选择支付方式"
+                  ? "核对切换前的监控订单并免费继续"
+                  : "确认范围并获取监控答案"
           }
         >
           {locked
-            ? "已完成付款"
+            ? "监控已开始"
             : paymentPending
-              ? "查看支付进度"
-              : "确认并支付"}
+              ? "获取监控答案"
+              : "获取监控答案"}
         </button>
       </footer>
     </div>

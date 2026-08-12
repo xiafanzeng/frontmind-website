@@ -792,38 +792,29 @@ export const CreateServiceAccountRequestSchema = z.union([
   CreateServiceAccountRequestV1Schema,
 ]);
 
-export const StartMonitoringRequestSchema = z
-  .object({
-    questionId: z.string().trim().min(4).max(80),
-    monitoringEdition: GeoMonitoringEditionSchema,
-    platformIds: z
-      .array(GeoMonitorPlatformSchema)
-      .min(1)
-      .max(GEO_MONITOR_PLATFORM_IDS.length),
-    paymentAuthorization: z.string().trim().min(16).max(4096),
-  })
-  .strict()
-  .superRefine(({ platformIds }, context) => {
-    if (new Set(platformIds).size !== platformIds.length) {
-      context.addIssue({
-        code: "custom",
-        path: ["platformIds"],
-        message: "platformIds must be unique",
-      });
-    }
-  })
-  .superRefine(({ monitoringEdition, platformIds }, context) => {
-    if (!isValidGeoMonitoringScope(monitoringEdition, platformIds)) {
-      context.addIssue({
-        code: "custom",
-        path: ["platformIds"],
-        message:
-          monitoringEdition === "overseas"
-            ? "overseas monitoring requires ChatGPT only"
-            : "domestic monitoring does not support overseas platforms",
-      });
-    }
-  });
+const StartMonitoringRequestV1Schema = GeoPaymentScopeSchema.safeExtend({
+  paymentAuthorization: z.string().trim().min(16).max(4096),
+}).strict();
+
+/**
+ * Monitoring v2 is deliberately payment-free.  The optional legacy
+ * capability is accepted only so a cached client can reconcile an order that
+ * predates the free-monitoring cutover; new clients never create or persist
+ * one.
+ */
+export const StartMonitoringRequestV2Schema = GeoPaymentScopeSchema.safeExtend({
+  schemaVersion: z.literal(2),
+  clientRequestId: z.string().uuid(),
+  // Unlike the cached v1 contract, v2 never guesses a market.  The edition is
+  // part of the durable free-monitoring scope and therefore must be explicit.
+  monitoringEdition: z.enum(GEO_MONITORING_EDITIONS),
+  legacyPaymentAuthorization: z.string().trim().min(16).max(4096).optional(),
+}).strict();
+
+export const StartMonitoringRequestSchema = z.union([
+  StartMonitoringRequestV2Schema,
+  StartMonitoringRequestV1Schema,
+]);
 
 export type StartMonitoringRequest = z.infer<
   typeof StartMonitoringRequestSchema

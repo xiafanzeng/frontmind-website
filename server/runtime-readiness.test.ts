@@ -4,6 +4,7 @@ import { collectWebsiteRuntimeReadiness } from "./runtime-readiness";
 describe("Website runtime readiness", () => {
   it("reports deep dependencies and hashes the private persistence identity", async () => {
     const assertReady = vi.fn(async () => undefined);
+    const assertMonitorFreeReady = vi.fn(async () => undefined);
     const readiness = await collectWebsiteRuntimeReadiness({
       releaseChannel: "development",
       paymentMode: "zpay",
@@ -17,9 +18,14 @@ describe("Website runtime readiness", () => {
         assertReady,
         persistenceIdentity: async () => "private-store-identity",
       },
+      monitorFreeReservationStore: {
+        assertReady: assertMonitorFreeReady,
+        persistenceIdentity: async () => "monitor-free-store-identity",
+      },
     });
 
     expect(assertReady).toHaveBeenCalledOnce();
+    expect(assertMonitorFreeReady).toHaveBeenCalledOnce();
     expect(readiness).toMatchObject({
       status: "ok",
       channel: "development",
@@ -35,6 +41,11 @@ describe("Website runtime readiness", () => {
           ready: true,
           persistenceIdentitySha256:
             "081f96b84cfd9c324883029d8e83b40e3778cb0ee3a29c9b281c41965693eab7",
+        },
+        monitorFreeReservationStore: {
+          ready: true,
+          persistenceIdentitySha256:
+            "4d14840838860539e14c41357960c5b3680903892b537dedb922732a734f4fd9",
         },
       },
     });
@@ -55,6 +66,10 @@ describe("Website runtime readiness", () => {
         validationStore: {
           assertReady: async () => undefined,
           persistenceIdentity: async () => "store",
+        },
+        monitorFreeReservationStore: {
+          assertReady: async () => undefined,
+          persistenceIdentity: async () => "monitor-store",
         },
       }),
     ).rejects.toThrow("agent unavailable");
@@ -78,6 +93,10 @@ describe("Website runtime readiness", () => {
           assertReady: async () => undefined,
           persistenceIdentity: async () => "store",
         },
+        monitorFreeReservationStore: {
+          assertReady: async () => undefined,
+          persistenceIdentity: async () => "monitor-store",
+        },
       }),
     ).rejects.toThrow("GEO_RUNTIME_CONFIGURATION_INVALID");
     expect(getDependencies).not.toHaveBeenCalled();
@@ -97,6 +116,10 @@ describe("Website runtime readiness", () => {
         validationStore: {
           assertReady: async () => undefined,
           persistenceIdentity: async () => "store",
+        },
+        monitorFreeReservationStore: {
+          assertReady: async () => undefined,
+          persistenceIdentity: async () => "monitor-store",
         },
       }),
     ).rejects.toThrow("WEBSITE_RELEASE_IDENTITY_INVALID");
