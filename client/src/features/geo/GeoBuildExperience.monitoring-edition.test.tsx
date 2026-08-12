@@ -3,7 +3,7 @@
 import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-import { MonitoringSetup } from "./GeoBuildExperience";
+import { MonitoringConfirmDialog, MonitoringSetup } from "./GeoBuildExperience";
 import type { GeoProject } from "./types";
 
 const baseProject: GeoProject = {
@@ -65,7 +65,7 @@ describe("GEO monitoring edition setup", () => {
     expect(screen.queryByText("Is Example Company trustworthy?")).toBeNull();
   });
 
-  it("shows only ChatGPT and the five-yuan total overseas without exposing the translation", () => {
+  it("shows only ChatGPT and the free answer total overseas without exposing the translation", () => {
     renderSetup({
       ...baseProject,
       monitoringEdition: "overseas",
@@ -87,12 +87,12 @@ describe("GEO monitoring edition setup", () => {
     expect(
       screen.getByText("可选择国内版或海外版进行监控及后续服务"),
     ).toBeTruthy();
-    expect(screen.getAllByText("¥5")).toHaveLength(2);
-    expect(screen.getByText("ChatGPT · 5 次回答")).toBeTruthy();
+    expect(screen.queryByText(/¥|支付/)).toBeNull();
+    expect(screen.getByText("免费获取")).toBeTruthy();
     expect(
       (
         screen.getByRole("button", {
-          name: "确认并支付",
+          name: "获取监控答案",
         }) as HTMLButtonElement
       ).disabled,
     ).toBe(false);
@@ -110,11 +110,11 @@ describe("GEO monitoring edition setup", () => {
     expect(
       (
         screen.getByRole("button", {
-          name: "确认并支付",
+          name: "获取监控答案",
         }) as HTMLButtonElement
       ).disabled,
     ).toBe(false);
-    fireEvent.click(screen.getByRole("button", { name: "确认并支付" }));
+    fireEvent.click(screen.getByRole("button", { name: "获取监控答案" }));
     expect(onCheckout).toHaveBeenCalledOnce();
   });
 
@@ -123,5 +123,29 @@ describe("GEO monitoring edition setup", () => {
 
     fireEvent.click(screen.getByRole("button", { name: "海外版" }));
     expect(onChangeEdition).toHaveBeenCalledWith("overseas");
+  });
+
+  it("confirms the free scope without exposing any monitoring payment action", () => {
+    const onConfirm = vi.fn();
+    render(
+      <MonitoringConfirmDialog
+        open
+        project={{
+          ...baseProject,
+          selectedPlatformIds: ["doubao", "kimi"],
+        }}
+        starting={false}
+        error=""
+        onOpenChange={vi.fn()}
+        onConfirm={onConfirm}
+      />,
+    );
+
+    expect(screen.getByText("国内版")).toBeTruthy();
+    expect(screen.getByText("豆包、Kimi")).toBeTruthy();
+    expect(screen.getByText("10 次")).toBeTruthy();
+    expect(screen.queryByText(/¥|支付方式|确认并支付/)).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: /确认并获取监控答案/ }));
+    expect(onConfirm).toHaveBeenCalledOnce();
   });
 });

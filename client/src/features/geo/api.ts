@@ -3228,6 +3228,9 @@ export function normalizeGeoProject(
             ? monitoring.platforms
             : (fallback?.selectedPlatformIds ?? []);
     })(),
+    monitoringRecovery: monitoring?.runId
+      ? undefined
+      : fallback?.monitoringRecovery,
     monitoring,
     assessment,
     optimizationForecast,
@@ -4146,26 +4149,69 @@ export async function getGeoServiceProvisioningStatus(
 export async function startGeoMonitoring(
   project: GeoProject,
   input: {
+    clientRequestId: string;
     questionId: string;
     platformIds: GeoPlatformId[];
     monitoringEdition: GeoMonitoringEdition;
-    paymentAuthorization: string;
+    legacyPaymentAuthorization?: string;
+    onProcessing?: (project: GeoProject) => void;
   },
 ): Promise<GeoProject> {
-  const payload = await requestJson(
-    `/projects/${encodeURIComponent(project.remoteToken)}/monitoring`,
-    {
-      method: "POST",
-      timeoutMs: GEO_MONITOR_START_TIMEOUT_MS,
-      body: JSON.stringify({
-        questionId: input.questionId,
-        platformIds: input.platformIds,
-        monitoringEdition: input.monitoringEdition,
-        paymentAuthorization: input.paymentAuthorization,
-      }),
-    },
-  );
-  return normalizeRequiredProjectResponse(payload, project);
+  let projectToken = project.remoteToken;
+  let recoveryProject = project;
+  const body = JSON.stringify({
+    schemaVersion: 2,
+    clientRequestId: input.clientRequestId,
+    questionId: input.questionId,
+    platformIds: input.platformIds,
+    monitoringEdition: input.monitoringEdition,
+    ...(input.legacyPaymentAuthorization
+      ? { legacyPaymentAuthorization: input.legacyPaymentAuthorization }
+      : {}),
+  });
+  const deadline = Date.now() + 5 * 60_000;
+  while (true) {
+    const payload = await requestJson(
+      `/projects/${encodeURIComponent(projectToken)}/monitoring`,
+      {
+        method: "POST",
+        timeoutMs: GEO_MONITOR_START_TIMEOUT_MS,
+        body,
+      },
+    );
+    const record = asRecord(payload);
+    if (textValue(record.state) !== "processing") {
+      return normalizeRequiredProjectResponse(payload, recoveryProject);
+    }
+    const recoveryProjectToken = textValue(record.projectToken);
+    if (recoveryProjectToken && recoveryProjectToken !== projectToken) {
+      projectToken = recoveryProjectToken;
+      recoveryProject = {
+        ...recoveryProject,
+        remoteToken: projectToken,
+        monitoringRecovery: {
+          schemaVersion: 2,
+          clientRequestId: input.clientRequestId,
+          questionId: input.questionId,
+          monitoringEdition: input.monitoringEdition,
+          platformIds: [...input.platformIds],
+        },
+      };
+      input.onProcessing?.(recoveryProject);
+    }
+    const retryAfterMs = Math.min(
+      10_000,
+      Math.max(500, numberValue(record.retryAfterMs) ?? 3_000),
+    );
+    if (Date.now() + retryAfterMs > deadline) {
+      throw new GeoApiError(
+        "海外问题仍在准备中，请稍后使用同一范围重试。",
+        202,
+        "QUESTION_TRANSLATION_PENDING",
+      );
+    }
+    await waitForGeoCustomQuestionPoll(retryAfterMs);
+  }
 }
 
 export async function startGeoCurrentAssessment(

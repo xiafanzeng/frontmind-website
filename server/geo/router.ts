@@ -120,6 +120,12 @@ import {
   type GeoCustomQuestionValidationStore,
 } from "./custom-question-validation-store";
 import {
+  createGeoMonitorFreeReservationStore,
+  GeoMonitorFreeReservationStoreError,
+  type GeoMonitorFreeReservationRecord,
+  type GeoMonitorFreeReservationStore,
+} from "./monitor-free-reservation-store";
+import {
   buildGeoMonitorQuestionTranslationPrompt,
   geoMonitorQuestionTranslationOperationKey,
   resolveGeoMonitorQuestionTranslationTaskOutput,
@@ -240,6 +246,12 @@ const CUSTOM_QUESTION_CLASSIFIER_LEASE_RENEW_MS = 10_000;
 const CUSTOM_QUESTION_VALIDATION_TTL_MS = 24 * 60 * 60 * 1000;
 const CUSTOM_QUESTION_TERMINAL_RETENTION_MS = 24 * 60 * 60 * 1000;
 const SESSION_RATE_LIMIT_WINDOW_MS = 60 * 60 * 1000;
+const FREE_MONITOR_RECOVERY_RATE_LIMIT = 30;
+const FREE_MONITOR_RECOVERY_RATE_WINDOW_MS = 60 * 1000;
+// A reservation only bridges the client's bounded recovery loop. Keeping the
+// process-local flight short prevents a deterministic bad request from
+// blocking a corrected scope for the lifetime of the project capability.
+const FREE_MONITOR_START_FLIGHT_TTL_MS = 10 * 60 * 1000;
 const MONITOR_QUESTION_TRANSLATION_WAIT_MS = 25_000;
 const MONITOR_QUESTION_TRANSLATION_POLL_MS = 1_000;
 const PAID_MONITOR_START_RATE_LIMIT = 30;
@@ -361,6 +373,12 @@ type ProjectTokenValue = {
   monitorAuthorizationDigest?: string;
   monitorCheckoutExpiresAt?: string;
   monitorPaidAt?: string;
+  monitorFreeReservation?: {
+    schemaVersion: 2;
+    clientRequestId: string;
+    scopeHash: string;
+    createdAt: string;
+  };
   assessmentTaskId?: string;
   assessmentSubmittedAt?: string;
   assessmentAttempt?: number;
@@ -437,6 +455,7 @@ type GeoRouterOptions = {
   knowledgeImporter?: GeoKnowledgeImporter;
   projectOrderRegistry?: GeoProjectOrderRegistry;
   customQuestionValidationStore?: GeoCustomQuestionValidationStore;
+  monitorFreeReservationStore?: GeoMonitorFreeReservationStore;
   knowledgeBaseFinalizer?: typeof finalizeKnowledgeBaseCandidate;
   legacyCustomQuestionCompatibilityWaitMs?: number;
   legacyCustomQuestionCompatibilityPollMs?: number;
@@ -463,6 +482,15 @@ type MonitoringPaymentSwitchFlight = {
   method: GeoPaymentMethod;
   expiresAt: number;
   promise: Promise<GeoPaymentCheckout>;
+};
+
+type FreeMonitoringStart = {
+  clientRequestId: string;
+  scopeHash: string;
+  idempotencyKey: string;
+  expiresAt: number;
+  promise?: Promise<BrokerMonitorRun>;
+  run?: BrokerMonitorRun;
 };
 
 type ProjectOrderProtection = {
@@ -591,6 +619,9 @@ export function createGeoRouter(options: GeoRouterOptions = {}): Router {
   const customQuestionValidationStore =
     options.customQuestionValidationStore ??
     createGeoCustomQuestionValidationStore({ env });
+  const monitorFreeReservationStore =
+    options.monitorFreeReservationStore ??
+    createGeoMonitorFreeReservationStore({ env });
   const knowledgeBaseFinalizerV4 =
     options.knowledgeBaseFinalizer ?? finalizeKnowledgeBaseCandidate;
   const websiteKnowledgeBaseWriterVersion =
@@ -636,6 +667,10 @@ export function createGeoRouter(options: GeoRouterOptions = {}): Router {
     string,
     MonitoringPaymentSwitchFlight
   >();
+  // Dashboard Dev currently runs one Website Node process.  This flight is a
+  // local contention guard; the broker idempotency key remains the durable
+  // duplicate-submission boundary across process restarts.
+  const freeMonitoringStarts = new Map<string, FreeMonitoringStart>();
   const servicePaymentSwitches = new Map<
     string,
     MonitoringPaymentSwitchFlight
@@ -2388,6 +2423,48 @@ export function createGeoRouter(options: GeoRouterOptions = {}): Router {
     res.setHeader("Allow", "GET");
     res.status(405).end();
   };
+  const reconcileClosedMonitoringCallback = async (
+    parameters: Record<string, string>,
+    result: {
+      status: "pending" | "paid" | "review_required";
+      orderId: string;
+      paidAt?: string;
+    },
+  ) => {
+    if (result.status !== "paid" && result.status !== "review_required") {
+      return false;
+    }
+    const authorization = parameters.param;
+    if (!authorization) return false;
+    let capability: { projectId?: string; purchaseType?: string };
+    try {
+      capability = codec.open<typeof capability>(
+        authorization,
+        "payment",
+      ).value;
+    } catch {
+      return false;
+    }
+    if (!capability.projectId || capability.purchaseType === "service") {
+      return false;
+    }
+    const projectOrders = await readProjectOrders(capability.projectId);
+    const authorizationDigest = sha256(authorization);
+    const matchingOrder = projectOrders.orders.find(
+      (order) =>
+        order.purchaseType === "monitoring" &&
+        order.orderId === result.orderId &&
+        safeSecretEqual(order.authorizationDigest, authorizationDigest),
+    );
+    if (matchingOrder?.state !== "closed") return false;
+    await transitionProjectOrder(
+      capability.projectId,
+      matchingOrder.orderId,
+      "review_required",
+      { paidAt: result.paidAt },
+    );
+    return true;
+  };
   // Express normally treats HEAD as GET when no explicit HEAD handler exists.
   // Keep callback verification side effects exclusive to the signed GET path,
   // even if a reverse-proxy method gate is accidentally removed later.
@@ -2396,12 +2473,12 @@ export function createGeoRouter(options: GeoRouterOptions = {}): Router {
 
   router.get("/payments/notify", async (req, res) => {
     try {
-      const result = await paymentGateway.verifyCallback(
-        paymentCallbackParameters(req.query),
-      );
+      const parameters = paymentCallbackParameters(req.query);
+      const result = await paymentGateway.verifyCallback(parameters);
       if (!["paid", "review_required"].includes(result.status)) {
         throw new Error("payment is not complete");
       }
+      await reconcileClosedMonitoringCallback(parameters, result);
       res.status(200).type("text/plain").send("success");
     } catch (error) {
       console.warn(
@@ -2417,11 +2494,14 @@ export function createGeoRouter(options: GeoRouterOptions = {}): Router {
   router.get("/payments/return", async (req, res) => {
     let returnStatus: "paid" | "review_required" | "unverified" = "unverified";
     try {
-      const result = await paymentGateway.verifyCallback(
-        paymentCallbackParameters(req.query),
-      );
+      const parameters = paymentCallbackParameters(req.query);
+      const result = await paymentGateway.verifyCallback(parameters);
       if (result.status === "paid" || result.status === "review_required") {
-        returnStatus = result.status;
+        const lateClosedMonitoring = await reconcileClosedMonitoringCallback(
+          parameters,
+          result,
+        );
+        returnStatus = lateClosedMonitoring ? "review_required" : result.status;
       }
     } catch {
       returnStatus = "unverified";
@@ -3019,6 +3099,17 @@ export function createGeoRouter(options: GeoRouterOptions = {}): Router {
       const value = openOwnedProject(req, res);
       if (
         await customQuestionValidationStore.isProjectDeletionFenced(
+          value.projectId,
+        )
+      ) {
+        throw new GeoHttpError(
+          "该项目已删除，不能继续访问或创建新任务",
+          410,
+          "PROJECT_DELETED",
+        );
+      }
+      if (
+        await monitorFreeReservationStore.isProjectDeletionFenced(
           value.projectId,
         )
       ) {
@@ -4078,75 +4169,15 @@ export function createGeoRouter(options: GeoRouterOptions = {}): Router {
     "/projects/:projectToken/payments",
     requireConfiguration,
     requireSession,
-    requireCostRate("payment-create", 10),
     asyncHandler(async (req, res) => {
-      const value = openOwnedProject(req, res);
-      const input = CreatePaymentRequestSchema.parse(req.body);
-      if (value.monitorRunId) {
-        throw new GeoHttpError(
-          "该项目的监控任务已经创建，无需重复支付",
-          409,
-          "MONITOR_ALREADY_CREATED",
-        );
-      }
-      const { question } = await resolveMonitorQuestion(
-        value,
-        input.questionId,
+      openOwnedProject(req, res);
+      throw new GeoHttpError(
+        "问题监控现已免费，请直接获取监控答案",
+        410,
+        "MONITORING_PAYMENT_RETIRED",
       );
-      await assertMonitorProviderReady();
-      const platformIds = input.platformIds as GeoMonitorPlatformId[];
-      const expectedAmountFen = geoMonitoringPriceFen(
-        input.monitoringEdition,
-        platformIds,
-      );
-      if (expectedAmountFen === undefined) {
-        throw new GeoHttpError(
-          "监控版本与平台范围不匹配",
-          400,
-          "MONITOR_SCOPE_INVALID",
-        );
-      }
-      if (input.monitoringEdition === "overseas") {
-        await prewarmMonitorQuestionTranslation(broker, value, question);
-      }
-      const ownerSessionId = String(res.locals.geoSessionId || "");
-      const checkout = await createDurableCheckout({
-        locks: monitoringOrderLocks,
-        lockKey: JSON.stringify({
-          ownerSessionId,
-          projectId: value.projectId,
-          questionId: input.questionId,
-          monitoringEdition: input.monitoringEdition,
-          platformIds: [...platformIds].sort(),
-        }),
-        value,
-        purchaseType: "monitoring",
-        amountFen: expectedAmountFen,
-        method: input.method,
-        methodLockedCode: "PAYMENT_METHOD_LOCKED",
-        createCheckout: () =>
-          paymentGateway.createCheckout({
-            ownerSessionId,
-            projectId: value.projectId,
-            questionId: input.questionId,
-            platformIds,
-            monitoringEdition: input.monitoringEdition,
-            expectedAmountFen,
-            method: input.method,
-          }),
-      });
-      trackProjectOrder(value, { monitoring: {} });
-      res.status(checkout.replayed ? 200 : 201).json({
-        payment: {
-          ...checkout.payment,
-          monitoringEdition: input.monitoringEdition,
-          unitPriceFen: input.monitoringEdition === "overseas" ? 500 : 200,
-          answersPerPlatform: 5,
-        },
-      });
     }),
   );
-
   router.post(
     "/projects/:projectToken/payments/status",
     requireConfiguration,
@@ -4177,6 +4208,27 @@ export function createGeoRouter(options: GeoRouterOptions = {}): Router {
         expectedAmountFen,
       });
       if (payment.status === "paid" || payment.status === "review_required") {
+        const authorizationDigest = sha256(input.authorization);
+        const projectOrders = await readProjectOrders(value.projectId);
+        const matchingOrder = projectOrders.orders.find(
+          (order) =>
+            order.purchaseType === "monitoring" &&
+            order.orderId === payment.orderId &&
+            safeSecretEqual(order.authorizationDigest, authorizationDigest),
+        );
+        if (matchingOrder?.state === "closed") {
+          await transitionProjectOrder(
+            value.projectId,
+            matchingOrder.orderId,
+            "review_required",
+            { paidAt: payment.paidAt },
+          );
+          throw new GeoHttpError(
+            "旧版监控订单关闭后收到付款结果，需要人工退款复核",
+            409,
+            "LEGACY_MONITOR_LATE_PAYMENT_REVIEW_REQUIRED",
+          );
+        }
         await transitionProjectOrder(
           value.projectId,
           payment.orderId,
@@ -4192,202 +4244,15 @@ export function createGeoRouter(options: GeoRouterOptions = {}): Router {
     "/projects/:projectToken/payments/switch",
     requireConfiguration,
     requireSession,
-    requireCostRate("payment-switch", 10),
     asyncHandler(async (req, res) => {
-      const value = openOwnedProject(req, res);
-      const input = SwitchPaymentRequestSchema.parse(req.body);
-      if (value.monitorRunId) {
-        throw new GeoHttpError(
-          "该项目的监控任务已经创建，无需更换支付方式",
-          409,
-          "MONITOR_ALREADY_CREATED",
-        );
-      }
-      const { question } = await resolveMonitorQuestion(
-        value,
-        input.questionId,
+      openOwnedProject(req, res);
+      throw new GeoHttpError(
+        "问题监控现已免费，请直接获取监控答案",
+        410,
+        "MONITORING_PAYMENT_RETIRED",
       );
-      await assertMonitorProviderReady();
-
-      const platformIds = input.platformIds as GeoMonitorPlatformId[];
-      const expectedAmountFen = geoMonitoringPriceFen(
-        input.monitoringEdition,
-        platformIds,
-      );
-      if (expectedAmountFen === undefined) {
-        throw new GeoHttpError(
-          "监控版本与平台范围不匹配",
-          400,
-          "MONITOR_SCOPE_INVALID",
-        );
-      }
-      const authorizationDigest = sha256(input.authorization);
-      const projectOrders = await readProjectOrders(value.projectId);
-      const currentOrder = projectOrders.orders.find(
-        (order) =>
-          order.purchaseType === "monitoring" &&
-          safeSecretEqual(order.authorizationDigest, authorizationDigest),
-      );
-      if (!currentOrder) {
-        throw new GeoHttpError(
-          "未找到可更换支付方式的监控订单，请刷新后重试",
-          409,
-          "PAYMENT_CHECKOUT_NOT_FOUND",
-        );
-      }
-      if (currentOrder.state !== "pending") {
-        throw new GeoHttpError(
-          "当前订单已经进入付款或处理流程，不能再更换支付方式",
-          409,
-          "PAYMENT_ALREADY_CONFIRMED",
-        );
-      }
-      if (currentOrder.amountFen !== expectedAmountFen) {
-        throw new GeoHttpError(
-          "支付订单与本次监控范围不匹配",
-          409,
-          "PAYMENT_SCOPE_MISMATCH",
-        );
-      }
-
-      const ownerSessionId = String(res.locals.geoSessionId || "");
-      const switchInput = {
-        authorization: input.authorization,
-        ownerSessionId,
-        projectId: value.projectId,
-        questionId: input.questionId,
-        monitoringEdition: input.monitoringEdition,
-        platformIds,
-        expectedAmountFen,
-        method: input.method,
-        checkoutExpiresAt: currentOrder.checkoutExpiresAt,
-      };
-      const statusInput = {
-        authorization: input.authorization,
-        ownerSessionId,
-        projectId: value.projectId,
-        questionId: input.questionId,
-        monitoringEdition: input.monitoringEdition,
-        platformIds,
-        expectedAmountFen,
-      };
-      const lockKey = JSON.stringify({
-        ownerSessionId,
-        projectId: value.projectId,
-        questionId: input.questionId,
-        monitoringEdition: input.monitoringEdition,
-        platformIds: [...platformIds].sort(),
-      });
-      const switchStartedAt = Date.now();
-      pruneExpiringMap(monitoringPaymentSwitches, switchStartedAt, 20_000);
-      const activeSwitch = monitoringPaymentSwitches.get(lockKey);
-      let checkout: GeoPaymentCheckout;
-      if (activeSwitch) {
-        if (
-          !safeSecretEqual(
-            activeSwitch.authorizationDigest,
-            authorizationDigest,
-          ) ||
-          activeSwitch.method !== input.method
-        ) {
-          throw new GeoHttpError(
-            "当前支付方式正在切换，请等待完成后重试",
-            409,
-            "PAYMENT_SWITCH_IN_PROGRESS",
-          );
-        }
-        checkout = await activeSwitch.promise;
-      } else {
-        const promise = (async () => {
-          try {
-            return await paymentGateway.switchCheckoutMethod(switchInput);
-          } catch (error) {
-            if (
-              error instanceof GeoPaymentVerificationError &&
-              error.code === "PAYMENT_ALREADY_CONFIRMED"
-            ) {
-              const payment = await paymentGateway.getStatus(statusInput);
-              if (
-                (payment.status === "paid" ||
-                  payment.status === "review_required") &&
-                payment.orderId === currentOrder.orderId &&
-                payment.amountFen === currentOrder.amountFen
-              ) {
-                await transitionProjectOrder(
-                  value.projectId,
-                  currentOrder.orderId,
-                  payment.status,
-                  { paidAt: payment.paidAt },
-                );
-              }
-            }
-            throw error;
-          }
-        })();
-        const switchFlight: MonitoringPaymentSwitchFlight = {
-          authorizationDigest,
-          method: input.method,
-          expiresAt: switchStartedAt + PROJECT_TTL_MS,
-          promise,
-        };
-        monitoringPaymentSwitches.set(lockKey, switchFlight);
-        try {
-          checkout = await promise;
-        } finally {
-          if (monitoringPaymentSwitches.get(lockKey) === switchFlight) {
-            monitoringPaymentSwitches.delete(lockKey);
-          }
-        }
-      }
-      if (
-        !safeSecretEqual(checkout.authorization, input.authorization) ||
-        checkout.orderId !== currentOrder.orderId ||
-        checkout.amountFen !== currentOrder.amountFen ||
-        checkout.expiresAt !== currentOrder.checkoutExpiresAt ||
-        checkout.fields.type !== input.method ||
-        checkout.fields.param !== input.authorization ||
-        checkout.fields.out_trade_no !== currentOrder.orderId
-      ) {
-        throw new GeoHttpError(
-          "支付服务返回了不一致的切换结果，已阻止打开收银台",
-          502,
-          "PAYMENT_SWITCH_INVALID",
-        );
-      }
-
-      const now = Date.now();
-      pruneExpiringMap(monitoringOrderLocks, now, 20_000);
-      const lock = monitoringOrderLocks.get(lockKey);
-      if (
-        lock?.checkout &&
-        !safeSecretEqual(lock.checkout.authorization, input.authorization)
-      ) {
-        throw new GeoHttpError(
-          "当前收银台已被另一项操作更新，请刷新后重试",
-          409,
-          "PAYMENT_CHECKOUT_REPLACED",
-        );
-      }
-      monitoringOrderLocks.set(lockKey, {
-        ...lock,
-        method: input.method,
-        expiresAt: now + PROJECT_TTL_MS,
-        checkout,
-        checkoutCommitted: true,
-        checkoutPromise: undefined,
-      });
-      trackProjectOrder(value, { monitoring: {} });
-      res.status(200).json({
-        payment: {
-          ...checkout,
-          monitoringEdition: input.monitoringEdition,
-          unitPriceFen: input.monitoringEdition === "overseas" ? 500 : 200,
-          answersPerPlatform: 5,
-        },
-      });
     }),
   );
-
   router.post(
     "/projects/:projectToken/monitoring",
     requireConfiguration,
@@ -4395,6 +4260,590 @@ export function createGeoRouter(options: GeoRouterOptions = {}): Router {
     asyncHandler(async (req, res) => {
       const value = openOwnedProject(req, res);
       const input = StartMonitoringRequestSchema.parse(req.body);
+      if ("schemaVersion" in input && input.schemaVersion === 2) {
+        const requestedPlatforms = input.platformIds as GeoMonitorPlatformId[];
+        const sortedPlatforms = [...requestedPlatforms].sort();
+        const scopeHash = crypto
+          .createHash("sha256")
+          .update(
+            JSON.stringify({
+              projectId: value.projectId,
+              knowledgeBaseTaskId: value.knowledgeBaseTaskId,
+              questionId: input.questionId,
+              monitoringEdition: input.monitoringEdition,
+              platformIds: sortedPlatforms,
+            }),
+          )
+          .digest("hex");
+        const idempotencyKey = `geo-monitor-free:v2:${scopeHash}`;
+
+        if (value.monitorRunId) {
+          if (
+            value.monitorQuestionId !== input.questionId ||
+            normalizedGeoMonitoringEdition(value.monitoringEdition) !==
+              input.monitoringEdition ||
+            !sameStringSet(value.monitorPlatformIds || [], requestedPlatforms)
+          ) {
+            throw new GeoHttpError(
+              "该项目已有一项不同范围的监控任务",
+              409,
+              "MONITOR_SCOPE_CONFLICT",
+            );
+          }
+          const run = await getResolvedMonitorRun(
+            broker,
+            value.monitorRunId,
+            monitorRunExpectation(value, requestedPlatforms),
+          );
+          const [knowledgeBaseTask, questionTask] = await Promise.all([
+            getResolvedTask(broker, value.knowledgeBaseTaskId),
+            value.questionTaskId
+              ? getResolvedTask(broker, value.questionTaskId)
+              : Promise.resolve(undefined),
+          ]);
+          const project = await buildProjectView(
+            broker,
+            value,
+            req.params.projectToken,
+            knowledgeBaseTask,
+            questionTask,
+            run,
+            undefined,
+            undefined,
+          );
+          res.status(200).json({
+            state: "started",
+            replayed: true,
+            projectToken: req.params.projectToken,
+            project,
+          });
+          return;
+        }
+
+        const now = Date.now();
+        pruneExpiringMap(freeMonitoringStarts, now, 20_000);
+        let durableReservation: GeoMonitorFreeReservationRecord;
+        let reservationCreated = false;
+        try {
+          const reserved = await monitorFreeReservationStore.reserve({
+            projectId: value.projectId,
+            scopeHash,
+            clientRequestId: input.clientRequestId,
+            idempotencyKey,
+          });
+          durableReservation = reserved.record;
+          reservationCreated = reserved.created;
+          if (reservationCreated) {
+            try {
+              consumeSessionRate(res, "monitor-free-create", 6);
+              consumeIdentityRate(req, "monitor-free-create", 6);
+            } catch (error) {
+              await monitorFreeReservationStore.releasePristine({
+                projectId: value.projectId,
+                scopeHash,
+                idempotencyKey,
+              });
+              throw error;
+            }
+          } else {
+            consumeSessionRate(
+              res,
+              "monitor-free-recovery",
+              FREE_MONITOR_RECOVERY_RATE_LIMIT,
+              1,
+              FREE_MONITOR_RECOVERY_RATE_WINDOW_MS,
+            );
+            consumeIdentityRate(
+              req,
+              "monitor-free-recovery",
+              FREE_MONITOR_RECOVERY_RATE_LIMIT,
+              1,
+              FREE_MONITOR_RECOVERY_RATE_WINDOW_MS,
+            );
+          }
+        } catch (error) {
+          if (
+            error instanceof GeoMonitorFreeReservationStoreError &&
+            error.code === "SCOPE_CONFLICT"
+          ) {
+            throw new GeoHttpError(
+              error.message,
+              409,
+              "MONITOR_SCOPE_CONFLICT",
+            );
+          }
+          if (
+            error instanceof GeoMonitorFreeReservationStoreError &&
+            error.code === "CLIENT_REQUEST_CONFLICT"
+          ) {
+            throw new GeoHttpError(
+              error.message,
+              409,
+              "MONITOR_CLIENT_REQUEST_CONFLICT",
+            );
+          }
+          throw error;
+        }
+        let freeStart = freeMonitoringStarts.get(value.projectId);
+        if (freeStart && freeStart.scopeHash !== scopeHash) {
+          throw new GeoHttpError(
+            "该项目已有一项不同范围的监控任务",
+            409,
+            "MONITOR_SCOPE_CONFLICT",
+          );
+        }
+        if (
+          freeStart &&
+          freeStart.clientRequestId !== durableReservation.clientRequestId
+        ) {
+          throw new GeoHttpError(
+            "免费监控进程状态与持久 reservation 不一致",
+            503,
+            "MONITOR_RESERVATION_STATE_CONFLICT",
+          );
+        }
+        const recovering = !reservationCreated;
+        if (!freeStart) {
+          freeStart = {
+            clientRequestId: durableReservation.clientRequestId,
+            scopeHash: durableReservation.scopeHash,
+            idempotencyKey: durableReservation.idempotencyKey,
+            expiresAt: now + FREE_MONITOR_START_FLIGHT_TTL_MS,
+          };
+          freeMonitoringStarts.set(value.projectId, freeStart);
+        }
+
+        const clearLocalFreeStart = () => {
+          if (freeMonitoringStarts.get(value.projectId) === freeStart) {
+            freeMonitoringStarts.delete(value.projectId);
+          }
+        };
+
+        const releasePristineFreeStart = async () => {
+          clearLocalFreeStart();
+          return monitorFreeReservationStore.releasePristine({
+            projectId: value.projectId,
+            scopeHash,
+            idempotencyKey,
+          });
+        };
+
+        const createRecoveryProjectToken = () =>
+          codec.seal(
+            "project",
+            {
+              ...value,
+              monitorFreeReservation: {
+                schemaVersion: 2 as const,
+                clientRequestId: durableReservation.clientRequestId,
+                scopeHash: durableReservation.scopeHash,
+                createdAt: durableReservation.createdAt,
+              },
+            },
+            PROJECT_TTL_MS,
+          );
+
+        const sendProcessing = () => {
+          const projectToken = createRecoveryProjectToken();
+          res.setHeader("Retry-After", "3");
+          res.status(202).json({
+            state: "processing",
+            retryAfterMs: 3_000,
+            clientRequestId: durableReservation.clientRequestId,
+            projectToken,
+          });
+        };
+
+        const projectOrders = await readProjectOrders(value.projectId);
+        const monitoringOrders = projectOrders.orders.filter(
+          (order) => order.purchaseType === "monitoring",
+        );
+        const activeLegacyOrders = monitoringOrders.filter((order) =>
+          [
+            "pending",
+            "paid",
+            "fulfilling",
+            "fulfilled",
+            "review_required",
+            "terminal_failed",
+          ].includes(order.state),
+        );
+        if (activeLegacyOrders.length > 1) {
+          await releasePristineFreeStart();
+          throw new GeoHttpError(
+            "检测到多个旧版监控订单，请保留原记录并联系技术支持",
+            409,
+            "LEGACY_MONITOR_PAYMENT_RECOVERY_REQUIRED",
+          );
+        }
+        const activeLegacyOrder = activeLegacyOrders[0];
+        let legacyOrder: GeoProjectOrder | undefined;
+        if (input.legacyPaymentAuthorization) {
+          const authorizationDigest = sha256(input.legacyPaymentAuthorization);
+          legacyOrder = monitoringOrders.find((order) =>
+            safeSecretEqual(order.authorizationDigest, authorizationDigest),
+          );
+          if (!legacyOrder) {
+            await releasePristineFreeStart();
+            throw new GeoHttpError(
+              "无法核对旧版监控订单，请保留记录并联系技术支持",
+              409,
+              "LEGACY_MONITOR_PAYMENT_RECOVERY_REQUIRED",
+            );
+          }
+          if (
+            activeLegacyOrder &&
+            activeLegacyOrder.orderId !== legacyOrder.orderId
+          ) {
+            await releasePristineFreeStart();
+            throw new GeoHttpError(
+              "旧版监控订单与当前未决订单不一致，请保留记录并联系技术支持",
+              409,
+              "LEGACY_MONITOR_PAYMENT_RECOVERY_REQUIRED",
+            );
+          }
+          if (legacyOrder.state === "terminal_failed") {
+            await releasePristineFreeStart();
+            throw new GeoHttpError(
+              "旧版监控任务已确定失败，不能自动创建新的监控任务",
+              409,
+              "LEGACY_MONITOR_TERMINAL_FAILED",
+            );
+          }
+          const expectedAmountFen = geoMonitoringPriceFen(
+            input.monitoringEdition,
+            requestedPlatforms,
+          );
+          if (expectedAmountFen === undefined) {
+            await releasePristineFreeStart();
+            throw new GeoHttpError(
+              "监控版本与平台范围不匹配",
+              400,
+              "MONITOR_SCOPE_INVALID",
+            );
+          }
+          let paymentStatus: Awaited<
+            ReturnType<GeoPaymentGateway["getStatus"]>
+          >;
+          try {
+            paymentStatus = await paymentGateway.getStatus({
+              authorization: input.legacyPaymentAuthorization,
+              projectId: value.projectId,
+              ownerSessionId: String(res.locals.geoSessionId || ""),
+              questionId: input.questionId,
+              platformIds: requestedPlatforms,
+              monitoringEdition: input.monitoringEdition,
+              expectedAmountFen,
+            });
+          } catch (error) {
+            if (
+              error instanceof GeoPaymentVerificationError &&
+              error.status < 500
+            ) {
+              await releasePristineFreeStart();
+            }
+            throw error;
+          }
+          if (
+            paymentStatus.orderId !== legacyOrder.orderId ||
+            paymentStatus.amountFen !== legacyOrder.amountFen
+          ) {
+            await releasePristineFreeStart();
+            throw new GeoHttpError(
+              "旧版监控订单与当前范围不匹配",
+              409,
+              "PAYMENT_SCOPE_MISMATCH",
+            );
+          }
+          if (legacyOrder.state === "closed") {
+            if (paymentStatus.status !== "pending") {
+              await transitionProjectOrder(
+                value.projectId,
+                legacyOrder.orderId,
+                "review_required",
+                { paidAt: paymentStatus.paidAt },
+              );
+              await releasePristineFreeStart();
+              throw new GeoHttpError(
+                "旧版监控订单在免费切换后收到付款结果，需要人工退款复核",
+                409,
+                "LEGACY_MONITOR_LATE_PAYMENT_REVIEW_REQUIRED",
+              );
+            }
+            legacyOrder = undefined;
+          } else if (paymentStatus.status === "pending") {
+            if (legacyOrder.state === "pending") {
+              await transitionProjectOrder(
+                value.projectId,
+                legacyOrder.orderId,
+                "closed",
+              );
+              legacyOrder = undefined;
+            }
+          } else {
+            legacyOrder = await transitionProjectOrder(
+              value.projectId,
+              legacyOrder.orderId,
+              paymentStatus.status === "review_required"
+                ? "review_required"
+                : "paid",
+              { paidAt: paymentStatus.paidAt },
+            );
+          }
+        } else if (activeLegacyOrder) {
+          await releasePristineFreeStart();
+          throw new GeoHttpError(
+            "检测到旧版监控订单，请从原页面记录继续恢复",
+            409,
+            "LEGACY_MONITOR_PAYMENT_RECOVERY_REQUIRED",
+          );
+        }
+
+        let resolvedQuestion: Awaited<
+          ReturnType<typeof resolveMonitorQuestion>
+        >;
+        try {
+          resolvedQuestion = await resolveMonitorQuestion(
+            value,
+            input.questionId,
+          );
+        } catch (error) {
+          if (error instanceof GeoHttpError && error.status < 500) {
+            await releasePristineFreeStart();
+          }
+          throw error;
+        }
+        const { knowledgeBaseTask, questionTask, question } = resolvedQuestion;
+        await assertMonitorProviderReady();
+        let monitorQuestion: string;
+        try {
+          monitorQuestion = await resolveMonitorQuestionForEdition(
+            broker,
+            value,
+            question,
+            input.monitoringEdition,
+            {
+              waitMs: monitorQuestionTranslationWaitMs,
+              pollMs: monitorQuestionTranslationPollMs,
+            },
+          );
+        } catch (error) {
+          if (
+            error instanceof GeoHttpError &&
+            error.code === "QUESTION_TRANSLATION_PENDING"
+          ) {
+            sendProcessing();
+            return;
+          }
+          if (
+            error instanceof GeoHttpError &&
+            error.code === "QUESTION_TRANSLATION_FAILED"
+          ) {
+            await releasePristineFreeStart();
+          }
+          throw error;
+        }
+
+        const submissionKey = legacyOrder
+          ? `geo-monitor:${crypto
+              .createHash("sha256")
+              .update(
+                JSON.stringify({
+                  projectId: value.projectId,
+                  orderId: legacyOrder.orderId,
+                  questionId: question.id,
+                  monitoringEdition: input.monitoringEdition,
+                  question: monitorQuestion,
+                  platforms: sortedPlatforms,
+                }),
+              )
+              .digest("hex")}`
+          : idempotencyKey;
+        let run: BrokerMonitorRun;
+        if (durableReservation.runId) {
+          run = await getResolvedMonitorRun(broker, durableReservation.runId, {
+            question: monitorQuestion,
+            platforms: requestedPlatforms,
+          });
+        } else {
+          durableReservation = await monitorFreeReservationStore.markSubmitting(
+            {
+              projectId: value.projectId,
+              scopeHash,
+              idempotencyKey,
+              submissionKey,
+            },
+          );
+          const durableSubmissionKey = durableReservation.submissionKey;
+          if (!durableSubmissionKey) {
+            throw new GeoMonitorFreeReservationStoreError(
+              "STORE_CORRUPT",
+              "免费监控 reservation 缺少 provider submission identity",
+            );
+          }
+          if (freeStart.run) {
+            run = freeStart.run;
+          } else {
+            if (!freeStart.promise) {
+              freeStart.promise = broker
+                .createMonitorRun({
+                  projectId: value.projectId,
+                  question: monitorQuestion,
+                  platforms: requestedPlatforms,
+                  idempotencyKey: durableSubmissionKey,
+                })
+                .then((candidate) =>
+                  normalizeMonitorRun(candidate, {
+                    question: monitorQuestion,
+                    platforms: requestedPlatforms,
+                  }),
+                );
+            }
+            try {
+              run = await freeStart.promise;
+              freeStart.run = run;
+            } catch (error) {
+              freeStart.promise = undefined;
+              if (
+                error instanceof GeoBrokerError &&
+                error.code === "MONITOR_SUBMISSION_UNKNOWN"
+              ) {
+                sendProcessing();
+                return;
+              }
+              if (
+                error instanceof GeoBrokerError &&
+                error.code === "MONITOR_SUBMISSION_REJECTED"
+              ) {
+                clearLocalFreeStart();
+                await monitorFreeReservationStore.releaseConfirmedRejected({
+                  projectId: value.projectId,
+                  scopeHash,
+                  idempotencyKey,
+                  submissionKey: durableSubmissionKey,
+                });
+                if (legacyOrder) {
+                  await transitionProjectOrder(
+                    value.projectId,
+                    legacyOrder.orderId,
+                    "review_required",
+                    { paidAt: legacyOrder.paidAt },
+                  );
+                }
+                throw new GeoHttpError(
+                  "监控服务已明确拒绝本次任务，请联系技术支持",
+                  502,
+                  "MONITOR_SUBMISSION_REJECTED",
+                );
+              }
+              throw error;
+            }
+          }
+        }
+        const durableSubmissionKey =
+          durableReservation.submissionKey || submissionKey;
+        if (
+          run.status === "submission_in_progress" ||
+          run.status === "submission_unknown"
+        ) {
+          durableReservation = await monitorFreeReservationStore.markRun({
+            projectId: value.projectId,
+            scopeHash,
+            idempotencyKey,
+            submissionKey: durableSubmissionKey,
+            runId: run.runId,
+            runStatus: run.status,
+            state: "submitted",
+          });
+          freeStart.run = undefined;
+          freeStart.promise = undefined;
+          sendProcessing();
+          return;
+        }
+        if (run.status === "remote_failed" || run.status === "shape_mismatch") {
+          durableReservation = await monitorFreeReservationStore.markRun({
+            projectId: value.projectId,
+            scopeHash,
+            idempotencyKey,
+            submissionKey: durableSubmissionKey,
+            runId: run.runId,
+            runStatus: run.status,
+            state: "failed",
+          });
+          clearLocalFreeStart();
+          if (legacyOrder) {
+            await transitionProjectOrder(
+              value.projectId,
+              legacyOrder.orderId,
+              "review_required",
+              { paidAt: legacyOrder.paidAt },
+            );
+          }
+          throw new GeoHttpError(
+            "监控服务已明确拒绝或无法校验本次任务，请联系技术支持",
+            502,
+            "MONITOR_SUBMISSION_REJECTED",
+          );
+        }
+        durableReservation = await monitorFreeReservationStore.markRun({
+          projectId: value.projectId,
+          scopeHash,
+          idempotencyKey,
+          submissionKey: durableSubmissionKey,
+          runId: run.runId,
+          runStatus: run.status,
+          state: "started",
+        });
+
+        let fulfillingOrder: GeoProjectOrder | undefined;
+        if (legacyOrder) {
+          fulfillingOrder = await transitionProjectOrder(
+            value.projectId,
+            legacyOrder.orderId,
+            "fulfilling",
+            { paidAt: legacyOrder.paidAt, allowReviewRecovery: true },
+          );
+        }
+        trackProjectOrder(value, { monitoring: { runId: run.runId } });
+        const nextValue: ProjectTokenValue = {
+          ...value,
+          monitorFreeReservation: undefined,
+          monitorRunId: run.runId,
+          monitoringEdition: input.monitoringEdition,
+          monitorQuestionId: question.id,
+          monitorPlatformIds: requestedPlatforms,
+          ...(fulfillingOrder
+            ? {
+                monitorOrderId: fulfillingOrder.orderId,
+                monitorAmountFen: fulfillingOrder.amountFen,
+                monitorAuthorizationDigest: fulfillingOrder.authorizationDigest,
+                monitorCheckoutExpiresAt: fulfillingOrder.checkoutExpiresAt,
+                monitorPaidAt: fulfillingOrder.paidAt,
+              }
+            : {}),
+        };
+        const projectToken = codec.seal("project", nextValue, PROJECT_TTL_MS);
+        const project = await buildProjectView(
+          broker,
+          nextValue,
+          projectToken,
+          knowledgeBaseTask,
+          questionTask,
+          run,
+          undefined,
+          undefined,
+        );
+        res.status(recovering ? 200 : 201).json({
+          state: "started",
+          replayed: recovering,
+          projectToken,
+          project,
+        });
+        return;
+      }
+      if (!("paymentAuthorization" in input)) {
+        throw new GeoHttpError("请求参数不正确", 400, "INVALID_REQUEST");
+      }
       await consumeMonitoringStartRate(
         req,
         res,
@@ -7001,6 +7450,8 @@ export function createGeoRouter(options: GeoRouterOptions = {}): Router {
     requireSessionRate("project-delete", 150, 10 * 60 * 1000),
     asyncHandler(async (req, res) => {
       const value = openOwnedProject(req, res);
+      const monitorDeletion =
+        await monitorFreeReservationStore.fenceProjectDeletion(value.projectId);
       // Fence first so the self-contained project token cannot create fresh
       // work while its remote resources are being removed. DELETE itself stays
       // retryable after the fence, and every other project route returns 410.
@@ -7037,9 +7488,11 @@ export function createGeoRouter(options: GeoRouterOptions = {}): Router {
         ...(value.previousOptimizationForecastTaskIds || []),
         ...validationTargets.taskIds,
       ].filter((item): item is string => Boolean(item));
-      const monitorRunIds = [value.monitorRunId, protectedMonitorRunId].filter(
-        (item): item is string => Boolean(item),
-      );
+      const monitorRunIds = [
+        value.monitorRunId,
+        protectedMonitorRunId,
+        monitorDeletion.runId,
+      ].filter((item): item is string => Boolean(item));
       const fileIds = [
         ...(value.uploadFileIds || []),
         ...(value.archiveFileIds || []),
@@ -7117,6 +7570,7 @@ export function createGeoRouter(options: GeoRouterOptions = {}): Router {
       }
 
       await customQuestionValidationStore.purgeProjectRecords(value.projectId);
+      await monitorFreeReservationStore.purgeProject(value.projectId);
 
       for (const map of [
         serviceOrderLocks,
@@ -10741,6 +11195,33 @@ function knowledgeBaseValidationReason(error: unknown) {
 }
 
 function normalizeError(error: unknown) {
+  if (error instanceof GeoMonitorFreeReservationStoreError) {
+    if (error.code === "SCOPE_CONFLICT") {
+      return new GeoHttpError(error.message, 409, "MONITOR_SCOPE_CONFLICT");
+    }
+    if (error.code === "CLIENT_REQUEST_CONFLICT") {
+      return new GeoHttpError(
+        error.message,
+        409,
+        "MONITOR_CLIENT_REQUEST_CONFLICT",
+      );
+    }
+    if (error.code === "PROJECT_DELETION_BLOCKED") {
+      return new GeoHttpError(
+        error.message,
+        409,
+        "MONITOR_PROJECT_DELETE_BLOCKED",
+      );
+    }
+    if (error.code === "PROJECT_DELETION_FENCED") {
+      return new GeoHttpError(error.message, 410, "PROJECT_DELETED");
+    }
+    return new GeoHttpError(
+      "免费监控恢复状态暂时无法安全保存，请使用原请求重试",
+      503,
+      "MONITOR_RESERVATION_STORE_UNAVAILABLE",
+    );
+  }
   if (error instanceof GeoCustomQuestionValidationStoreError) {
     if (error.code === "IDEMPOTENCY_CONFLICT") {
       return new GeoHttpError(

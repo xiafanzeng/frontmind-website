@@ -607,6 +607,14 @@ export type GeoProject = {
   /** Missing on historical projects and therefore resolved as `domestic`. */
   monitoringEdition?: GeoMonitoringEdition;
   selectedPlatformIds: GeoPlatformId[];
+  /** Local-only durable handoff for a server-issued free-monitor reservation. */
+  monitoringRecovery?: {
+    schemaVersion: 2;
+    clientRequestId: string;
+    questionId: string;
+    monitoringEdition: GeoMonitoringEdition;
+    platformIds: GeoPlatformId[];
+  };
   monitoring?: GeoMonitoringResult;
   assessment?: GeoAssessmentResult;
   optimizationForecast?: GeoOptimizationForecastResult;

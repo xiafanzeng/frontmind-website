@@ -4256,7 +4256,7 @@ describe("monitoring and assessment API", () => {
     expect(JSON.parse(String(fetchMock.mock.calls[1][1]?.body))).toEqual({});
   });
 
-  it("sends only the selected question, platforms, and payment authorization", async () => {
+  it("sends the strict payment-free v2 monitoring scope", async () => {
     const fetchMock = vi.fn<typeof fetch>().mockResolvedValue(
       new Response(
         JSON.stringify({
@@ -4276,22 +4276,130 @@ describe("monitoring and assessment API", () => {
     vi.stubGlobal("fetch", fetchMock);
 
     const updated = await startGeoMonitoring(project, {
+      clientRequestId: "22222222-2222-4222-8222-222222222222",
       questionId: "reputation-01",
       platformIds: ["doubao", "kimi"],
       monitoringEdition: "domestic",
-      paymentAuthorization: "paid-order-token",
     });
 
     expect(fetchMock.mock.calls[0][0]).toBe(
       "/api/geo/projects/signed-project-token/monitoring",
     );
     expect(JSON.parse(String(fetchMock.mock.calls[0][1]?.body))).toEqual({
+      schemaVersion: 2,
+      clientRequestId: "22222222-2222-4222-8222-222222222222",
       questionId: "reputation-01",
       platformIds: ["doubao", "kimi"],
       monitoringEdition: "domestic",
-      paymentAuthorization: "paid-order-token",
     });
     expect(updated.monitoring?.runId).toBe("run-1");
+  });
+
+  it("reuses the server-issued recovery project token without calling payments", async () => {
+    vi.useFakeTimers();
+    const fetchMock = vi
+      .fn<typeof fetch>()
+      .mockResolvedValueOnce(
+        new Response(
+          JSON.stringify({
+            state: "processing",
+            retryAfterMs: 500,
+            projectToken: "monitor-recovery-token",
+          }),
+          { status: 202, headers: { "content-type": "application/json" } },
+        ),
+      )
+      .mockResolvedValueOnce(
+        new Response(
+          JSON.stringify({
+            state: "started",
+            projectToken: "monitor-complete-token",
+            project: {
+              id: "project-1",
+              monitoring: {
+                runId: "run-1",
+                status: "submitted",
+                platforms: ["chatgpt"],
+              },
+            },
+          }),
+          { status: 200, headers: { "content-type": "application/json" } },
+        ),
+      );
+    vi.stubGlobal("fetch", fetchMock);
+    const onProcessing = vi.fn();
+
+    const started = startGeoMonitoring(project, {
+      clientRequestId: "23232323-2323-4232-8232-232323232323",
+      questionId: "reputation-01",
+      platformIds: ["chatgpt"],
+      monitoringEdition: "overseas",
+      onProcessing,
+    });
+    await vi.advanceTimersByTimeAsync(500);
+    const updated = await started;
+
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(fetchMock.mock.calls.map(([path]) => String(path))).toEqual([
+      "/api/geo/projects/signed-project-token/monitoring",
+      "/api/geo/projects/monitor-recovery-token/monitoring",
+    ]);
+    expect(
+      fetchMock.mock.calls.some(([path]) => String(path).includes("/payments")),
+    ).toBe(false);
+    expect(fetchMock.mock.calls[0][1]?.body).toBe(
+      fetchMock.mock.calls[1][1]?.body,
+    );
+    expect(onProcessing).toHaveBeenCalledWith(
+      expect.objectContaining({
+        remoteToken: "monitor-recovery-token",
+        monitoringRecovery: expect.objectContaining({
+          clientRequestId: "23232323-2323-4232-8232-232323232323",
+        }),
+      }),
+    );
+    expect(updated.remoteToken).toBe("monitor-complete-token");
+    expect(updated.monitoringRecovery).toBeUndefined();
+  });
+
+  it("publishes the durable recovery token before the five-minute deadline", async () => {
+    vi.useFakeTimers();
+    const fetchMock = vi.fn<typeof fetch>().mockImplementation(
+      async () =>
+        new Response(
+          JSON.stringify({
+            state: "processing",
+            retryAfterMs: 10_000,
+            projectToken: "durable-monitor-recovery-token",
+          }),
+          { status: 202, headers: { "content-type": "application/json" } },
+        ),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+    const onProcessing = vi.fn();
+
+    const result = startGeoMonitoring(project, {
+      clientRequestId: "24242424-2424-4242-8242-242424242424",
+      questionId: "reputation-01",
+      platformIds: ["chatgpt"],
+      monitoringEdition: "overseas",
+      onProcessing,
+    }).catch((reason: unknown) => reason);
+    await vi.advanceTimersByTimeAsync(5 * 60_000);
+
+    await expect(result).resolves.toMatchObject({
+      status: 202,
+      code: "QUESTION_TRANSLATION_PENDING",
+    });
+    expect(onProcessing).toHaveBeenCalledTimes(1);
+    expect(onProcessing).toHaveBeenCalledWith(
+      expect.objectContaining({
+        remoteToken: "durable-monitor-recovery-token",
+      }),
+    );
+    expect(String(fetchMock.mock.calls.at(-1)?.[0])).toContain(
+      "/projects/durable-monitor-recovery-token/monitoring",
+    );
   });
 
   it("keeps monitor activation alive beyond the default JSON timeout", async () => {
@@ -4309,10 +4417,10 @@ describe("monitoring and assessment API", () => {
     vi.stubGlobal("fetch", fetchMock);
 
     const result = startGeoMonitoring(project, {
+      clientRequestId: "33333333-3333-4333-8333-333333333333",
       questionId: "reputation-01",
       platformIds: ["chatgpt"],
       monitoringEdition: "overseas",
-      paymentAuthorization: "paid-order-token",
     }).catch((reason: unknown) => reason);
     const signal = fetchMock.mock.calls[0]?.[1]?.signal as AbortSignal;
 

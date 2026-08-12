@@ -281,6 +281,42 @@ describe("custom GEO question policy", () => {
 });
 
 describe("StartMonitoringRequestSchema", () => {
+  it("accepts the strict payment-free v2 contract and rejects mixed payment fields", () => {
+    const request = {
+      schemaVersion: 2 as const,
+      clientRequestId: "22222222-2222-4222-8222-222222222222",
+      questionId: "product-scenario-01",
+      monitoringEdition: "domestic" as const,
+      platformIds: ["doubao"],
+    };
+    expect(StartMonitoringRequestSchema.parse(request)).toEqual(request);
+    expect(() =>
+      StartMonitoringRequestSchema.parse({
+        ...request,
+        paymentAuthorization: "new-clients-must-not-send-payment",
+      }),
+    ).toThrow();
+    expect(
+      StartMonitoringRequestSchema.parse({
+        ...request,
+        legacyPaymentAuthorization: "legacy-order-capability",
+      }),
+    ).toMatchObject({ legacyPaymentAuthorization: "legacy-order-capability" });
+    expect(() =>
+      StartMonitoringRequestSchema.parse({
+        ...request,
+        monitoringEdition: undefined,
+      }),
+    ).toThrow();
+    expect(
+      StartMonitoringRequestSchema.parse({
+        questionId: "product-scenario-01",
+        platformIds: ["doubao"],
+        paymentAuthorization: "signed-zpay-authorization",
+      }),
+    ).toMatchObject({ monitoringEdition: "domestic" });
+  });
+
   it("keeps the six domestic platforms and accepts only ChatGPT overseas", () => {
     expect(
       StartMonitoringRequestSchema.parse({
