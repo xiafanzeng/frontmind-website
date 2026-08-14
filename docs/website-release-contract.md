@@ -6,18 +6,14 @@ Dashboard 仓库的 `docs/operations/RELEASE.md` 是唯一权威发布手册。�
 
 ## CI 行为
 
-- Pull Request 仅运行 `check`、Server tests、Client tests 和 release-flow，不推送镜像、不签名、不部署。
-- `main` 在构建、签名、SSH、controller 和 deployment marker 之前必须通过仓库内 exact-PR
-  prebuild gate：实际 source 必须是同仓 PR 的双亲 merge，merge tree 与 PR head 完全一致，且
-  对应本 workflow 的 PR run 已完成并成功。Actions API 的 `run.head_sha` 是 PR head；全部必要
-  测试之后生成的 attempt 专属 canonical artifact 才绑定实际 checkout 的 test-merge SHA/双亲/tree。
-  gate 下载唯一 artifact 并复核 GitHub 元数据、ZIP 长度、SHA-256 digest 和严格 JSON；不依赖
-  PR 关闭后可能为空的 `run.pull_requests`。同一 head 有多个 run 时只选择 run ID 最新的精确
-  configured-workflow run，并在最终检查重新列举；旧 run 的过期/重复 artifact 不阻断新 run，
-  但最新 run 的 pending/failed、移动的 head/base、tree 差异、artifact 过期/重复/冲突和
-  promotion trailer 缺失或重复均在镜像构建前失败。
-- `main` 的 push 在全部验证通过后构建 `ghcr.io/xiafanzeng/frontmind-website`，只部署
-  `image@sha256:digest`，禁止使用 tag 作为发布身份。
+- 应用 workflow 只响应 `main` push；不再为同一变更额外触发 Pull Request CI。
+- `main` 的一次 push 直接使用本次 `github.sha`；`check`、Server tests、Client tests 全部
+  通过后，生产环境从该精确
+  SHA 构建 `ghcr.io/xiafanzeng/frontmind-website`。构建前再次核对 checkout HEAD、
+  `GITHUB_SHA`、clean tree，以及 GitHub 当前 `main` 仍等于该 SHA；部署前再检查一次当前
+  `main`，防止手工重跑旧 workflow 回滚较新的生产版本。
+- 部署只消费本次 build job 输出的 source SHA 与不可变 `image@sha256:digest`，禁止使用 tag
+  作为发布身份，也不读取历史 run、PR artifact 或外部发布凭据。
 - 镜像由 `.github/workflows/ci-release.yml` 通过 GitHub OIDC 和 Cosign 无密钥签名。
 - Website 公钥在 `authorized_keys` 中固定到 Website controller，原始 SSH 命令只接受两个 token：
 
@@ -37,27 +33,22 @@ host key 都是公开的发布策略，不是秘密；它们固定在 workflow �
 `.github/deploy/production_known_hosts` 中，随代码评审。workflow 禁止运行时 `ssh-keyscan`
 或关闭 host-key 校验，也不再依赖容易漂移的 Repository variables。
 
-任何通过下述同仓 PR merge 进入 `main` 的提交，在 prebuild gate 与 CI 全绿后自动构建、签名
-并调用服务器 controller；普通发布不再有
+任何进入 `main` 的 coherent commit，在本次 workflow 的一次验证通过后自动构建、签名并调用
+服务器 controller；普通发布不再有
 `WEBSITE_AUTO_DEPLOY_ENABLED` 开关或额外人工审批。若 `state.json` 尚不存在，controller
 只允许从一个 source SHA/digest 与本机/公网 readiness 自洽的健康运行态完成一次首次签名
 镜像接管。当前 SHA 可以不同于候选，但候选必须是本次 `main` workflow 签名且 OCI revision
 精确匹配；错误签名或 readiness 不一致都失败关闭。
 
-当前私有仓不依赖 GitHub Branch Protection、Rulesets 或 commit status；普通发布和 Dev 晋级
-都必须先让待合并 head 包含当前 `main`，再使用
-`gh pr merge --merge --match-head-commit <reviewed-head-sha>`；普通单亲 direct push、squash
-或 rebase merge，以及双亲或 tree 与 PR 不匹配的 merge 无法满足 gate。Dev 晋级还必须先通过
-本地 exact-PR verifier。gate 的受信任边界仍包含仓库管理员：管理员可修改 gate/workflow，也可能
-构造在 GitHub PR 元数据、双亲和完整 tree 上与正常 PR merge 等价的提交；现有 gate 无法把这种
-管理员行为与正常 merge 做密码学区分。merge-proof artifact 只保留有限
-时间，不进入数据库、不提交 Git，也不是永久账本。gate 能防止误操作，但仓库管理员仍可修改
-gate/workflow 本身，因此相关 diff 仍必须评审。
+普通发布优先把一个 coherent commit 直接推入 `main`；若仓库策略拒绝 direct push，则可以使用
+一个普通 PR 只负责把该 commit 合并一次，发布验证仍只在最终 `main` push 执行。发布前只做一次
+确定性产品边界检查和相关 diff 评审，不要求 promotion
+trailer、Receipt、exact-PR、prebuild/merge proof artifact 或第二套批准格式。
 
-Website 应用 workflow 只有 `pull_request` 与 `push`；没有非 push 的应用 build/deploy 路径，
-也不配置历史 activation 恢复。每个 `push` 必须通过最新精确 PR run 的完整 artifact，不能借用
-历史部署结果。需要重新发布时创建新的 PR/source；手工 registry retention 等独立 workflow
-不构成应用 activation。这里不新增 recovery ledger、状态桥或第二控制器。
+Website 应用 workflow 只有 `main` push；没有非 push 的应用 build/deploy 路径，也不配置历史
+activation 恢复。每个 `main` push 只能构建本次且仍为当前 main 的 SHA，不能借用历史部署结果；
+手工 registry retention 等独立 workflow 不构成应用 activation。这里不新增 recovery ledger、
+状态桥或第二控制器。
 
 GHCR 发布使用 GitHub 自动提供的 `GITHUB_TOKEN`，workflow 权限限制为 `packages: write` 和
 签名所需的 `id-token: write`，不配置长期 GHCR 写入或读取令牌。部署 step 通过 SSH stdin
@@ -124,8 +115,8 @@ current/previous。
 完成修改后，可直接让 Codex 执行：
 
 ```text
-使用 $frontmind-release 把当前 FrontMind 修改验证、提交并上线；expand 自动，删表/contract 先让我审核。
+使用 $frontmind-promote-dev-to-production 将当前精确在线的 Dev 产品版本晋级生产。
 ```
 
-Skill 会等待 Website 精确 SHA 的 CI 和签名 digest 自动部署，并以 Website 与 Dashboard
-两个工作区都干净且同步、Website 本机/公网 readiness 精确匹配作为完成条件。
+Skill 会从隔离候选执行确定性产品投影；生产环境从最终 `main` SHA 自行构建并签名，只做一次
+Website `/healthz`、`/readyz` 与 changed-surface smoke。固定工作区的未知修改始终保留。

@@ -55,20 +55,6 @@ if (
   throw new Error("PRODUCTION_RELEASE_PROFILE_ENDPOINTS_INVALID");
 }
 
-execFileSync(
-  process.execPath,
-  ["--test", path.join(projectRoot, "scripts/promotion-prebuild-gate.node-test.mjs")],
-  { cwd: projectRoot, stdio: "inherit" },
-);
-execFileSync(
-  process.execPath,
-  [
-    "--test",
-    path.join(projectRoot, "scripts/promotion-prebuild-gate-runtime.node-test.mjs"),
-  ],
-  { cwd: projectRoot, stdio: "inherit" },
-);
-
 function git(repositoryRoot, args) {
   return execFileSync("git", args, {
     cwd: repositoryRoot,
@@ -211,15 +197,23 @@ try {
     }
   }
   for (const required of [
-    "pull_request:",
     "branches: [main]",
+    "needs: verify",
+    "needs: [verify, build]",
+    "ref: ${{ github.sha }}",
+    "ref: ${{ needs.build.outputs.source_sha }}",
+    "Verify source is still current production main",
+    "Verify source remains current production main",
+    "https://api.github.com/repos/${GITHUB_REPOSITORY}/git/ref/heads/main",
     "cosign sign --yes",
     "needs.build.outputs.digest",
     "StrictHostKeyChecking=yes",
     "GHCR_USERNAME: ${{ github.actor }}",
     "GHCR_TOKEN: ${{ secrets.GITHUB_TOKEN }}",
     `printf '%s\\n%s\\n' "$GHCR_USERNAME" "$GHCR_TOKEN" |`,
-    "${IMAGE_NAME}@${IMAGE_DIGEST} ${{ needs.promotion-gate.outputs.source_sha }}",
+    "FRONTMIND_RELEASE_SOURCE_SHA: ${{ github.sha }}",
+    "source_sha: ${{ github.sha }}",
+    "${IMAGE_NAME}@${IMAGE_DIGEST} ${{ needs.build.outputs.source_sha }}",
   ]) {
     if (!workflow.includes(required)) {
       throw new Error(`WEBSITE_WORKFLOW_CONTRACT_MISSING:${required}`);
@@ -227,6 +221,16 @@ try {
   }
   if (/\b(?:mysql|migration|pdf)\b/iu.test(workflow)) {
     throw new Error("WEBSITE_WORKFLOW_MUST_NOT_COUPLE_DB_OR_PDF");
+  }
+  if (workflow.includes("pull_request:")) {
+    throw new Error("WEBSITE_WORKFLOW_MUST_NOT_DUPLICATE_PULL_REQUEST_CI");
+  }
+  if (
+    /promotion-gate|promotion-merge-proof|verify-promotion-main-push|write-promotion-merge-proof|prebuild|merge-proof/iu.test(
+      workflow,
+    )
+  ) {
+    throw new Error("WEBSITE_WORKFLOW_MUST_USE_ORDINARY_RELEASE_CONTRACT");
   }
 
   console.log(
