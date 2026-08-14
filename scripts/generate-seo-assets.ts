@@ -610,7 +610,6 @@ Allow: /sitemap.xml
 Disallow: /admin/
 Disallow: /private/
 Disallow: /drafts/
-Disallow: /__manus__/
 
 # International search engines
 ${INTERNATIONAL_SEARCH_BOTS.map((bot) => `User-agent: ${bot}\nAllow: /`).join("\n\n")}

@@ -5,18 +5,17 @@ import express from "express";
 import fs from "node:fs";
 import path from "node:path";
 import { defineConfig, loadEnv, type Plugin, type ViteDevServer } from "vite";
-import { vitePluginManusRuntime } from "vite-plugin-manus-runtime";
 import { releaseProfile } from "./config/release-profile.mjs";
 import { handleVisitorStatsRequest } from "./server/visitorStats";
 import { createGeoRouter } from "./server/geo/router";
 
 // =============================================================================
-// Manus Debug Collector - Vite Plugin
+// FrontMind Debug Collector - Vite Plugin
 // Writes browser logs directly to files, trimmed when exceeding size limit
 // =============================================================================
 
 const PROJECT_ROOT = import.meta.dirname;
-const LOG_DIR = path.join(PROJECT_ROOT, ".manus-logs");
+const LOG_DIR = path.join(PROJECT_ROOT, ".frontmind-logs");
 const MAX_LOG_SIZE_BYTES = 1 * 1024 * 1024; // 1MB per log file
 const TRIM_TARGET_BYTES = Math.floor(MAX_LOG_SIZE_BYTES * 0.6); // Trim to 60% to avoid constant re-trimming
 
@@ -91,13 +90,13 @@ function writeToLogFile(source: LogSource, entries: unknown[]) {
 
 /**
  * Vite plugin to collect browser debug logs
- * - POST /__manus__/logs: Browser sends logs, written directly to files
+ * - POST /__frontmind_debug__/logs: Browser sends logs, written directly to files
  * - Files: browserConsole.log, networkRequests.log, sessionReplay.log
  * - Auto-trimmed when exceeding 1MB (keeps newest entries)
  */
-function vitePluginManusDebugCollector(): Plugin {
+function vitePluginFrontMindDebugCollector(): Plugin {
   return {
-    name: "manus-debug-collector",
+    name: "frontmind-debug-collector",
 
     transformIndexHtml(html) {
       if (process.env.NODE_ENV === "production") {
@@ -109,7 +108,7 @@ function vitePluginManusDebugCollector(): Plugin {
           {
             tag: "script",
             attrs: {
-              src: "/__manus__/debug-collector.js",
+              src: "/__frontmind_debug__/debug-collector.js",
               defer: true,
             },
             injectTo: "head",
@@ -119,8 +118,8 @@ function vitePluginManusDebugCollector(): Plugin {
     },
 
     configureServer(server: ViteDevServer) {
-      // POST /__manus__/logs: Browser sends logs (written directly to files)
-      server.middlewares.use("/__manus__/logs", (req, res, next) => {
+      // POST /__frontmind_debug__/logs: Browser sends logs (written directly to files)
+      server.middlewares.use("/__frontmind_debug__/logs", (req, res, next) => {
         if (req.method !== "POST") {
           return next();
         }
@@ -173,9 +172,9 @@ function vitePluginManusDebugCollector(): Plugin {
 
 function vitePluginStorageProxy(): Plugin {
   return {
-    name: "manus-storage-proxy",
+    name: "frontmind-storage-proxy",
     configureServer(server: ViteDevServer) {
-      server.middlewares.use("/manus-storage", async (req, res) => {
+      server.middlewares.use("/frontmind-storage", async (req, res) => {
         const key = req.url?.replace(/^\//, "");
         if (!key) {
           res.writeHead(400, { "Content-Type": "text/plain" });
@@ -272,8 +271,7 @@ export default defineConfig(({ command, mode }) => {
       ? []
       : [
           jsxLocPlugin(),
-          vitePluginManusRuntime(),
-          vitePluginManusDebugCollector(),
+          vitePluginFrontMindDebugCollector(),
           vitePluginStorageProxy(),
           vitePluginVisitorStatsApi(),
           vitePluginGeoApi(geoServerEnv),
@@ -326,11 +324,7 @@ export default defineConfig(({ command, mode }) => {
       strictPort: false, // Will find next available port if 3000 is busy
       host: true,
       allowedHosts: [
-        ".manuspre.computer",
-        ".manus.computer",
-        ".manus-asia.computer",
-        ".manuscomputer.ai",
-        ".manusvm.computer",
+        ".frontmind.net",
         "localhost",
         "127.0.0.1",
       ],
