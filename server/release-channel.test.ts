@@ -13,7 +13,7 @@ import {
 const expectedRuntimeEnvironment = {
   FRONTMIND_PUBLIC_BASE_URL: "https://site.example.invalid",
   FRONTMIND_PRESALES_AGENT_URL:
-    "http://agent.internal.invalid/api/internal/presales",
+    "http://agent.internal.invalid/api/internal/presales/v2",
   FRONTMIND_AGENT_PROVISIONING_URL:
     "http://agent.internal.invalid/api/internal/provisioning",
   FRONTMIND_AGENT_INTERNAL_HTTP_HOSTS: "agent.internal.invalid",

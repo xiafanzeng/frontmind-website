@@ -5,7 +5,11 @@ import path from "node:path";
 import { describe, expect, it } from "vitest";
 
 import { siblingDashboardRepositoryRoot } from "./cross-repo-test-path";
-import { knowledgeArchiveDescriptorHash } from "./knowledge-base-artifact";
+import {
+  expectedContractHashes,
+  PRESALES_CAPABILITIES,
+  PRESALES_CONTRACT_VERSION,
+} from "./broker";
 import {
   GeoKnowledgeImportRequestSchema,
   GeoPurchaseProvisionRequestV2Schema,
@@ -19,16 +23,27 @@ const agentFixturePath = path.resolve(
   siblingDashboardRepositoryRoot(),
   "shared/contracts/provisioning-v2.fixture.json",
 );
-const localV4FixturePath = path.resolve(
+const localV5FixturePath = path.resolve(
   process.cwd(),
-  "server/geo/contracts/provisioning-v4.fixture.json",
+  "server/geo/contracts/provisioning-v5.fixture.json",
 );
-const agentV4FixturePath = path.resolve(
+const agentV5FixturePath = path.resolve(
   siblingDashboardRepositoryRoot(),
-  "shared/contracts/provisioning-v4.fixture.json",
+  "shared/contracts/provisioning-v5.fixture.json",
 );
-const dashboardCopiesAvailable =
-  existsSync(agentFixturePath) && existsSync(agentV4FixturePath);
+const dashboardPurchaseCopyAvailable = existsSync(agentFixturePath);
+const dashboardV5CopyAvailable = existsSync(agentV5FixturePath);
+const localPresalesHashesPath = path.resolve(
+  process.cwd(),
+  "server/geo/contracts/presales-v2-contract-hashes.fixture.json",
+);
+const dashboardPresalesHashesPath = path.resolve(
+  siblingDashboardRepositoryRoot(),
+  "shared/contracts/presales-v2-contract-hashes.fixture.json",
+);
+const dashboardPresalesHashesAvailable = existsSync(
+  dashboardPresalesHashesPath,
+);
 
 async function fixture(filePath: string) {
   return JSON.parse(await readFile(filePath, "utf8")) as Record<
@@ -38,7 +53,27 @@ async function fixture(filePath: string) {
 }
 
 describe("Website ↔ Agent provisioning and archive shared contract", () => {
-  it("parses the shared purchase, categories, and knowledge artifact contract", async () => {
+  it("pins Website readiness to the canonical descriptor hashes", async () => {
+    const value = await fixture(localPresalesHashesPath);
+    expect(value).toEqual({
+      presalesContractVersion: PRESALES_CONTRACT_VERSION,
+      capabilities: PRESALES_CAPABILITIES,
+      contractHashes: expectedContractHashes(),
+    });
+  });
+
+  it.skipIf(!dashboardPresalesHashesAvailable)(
+    "matches the Dashboard canonical descriptor hash fixture",
+    async () => {
+      const [website, dashboard] = await Promise.all([
+        fixture(localPresalesHashesPath),
+        fixture(dashboardPresalesHashesPath),
+      ]);
+      expect(website).toEqual(dashboard);
+    },
+  );
+
+  it("parses the shared purchase and categories contract", async () => {
     const value = await fixture(localFixturePath);
     const request = value.purchaseRequest as Record<string, any>;
     for (const category of value.questionCategories as string[]) {
@@ -55,40 +90,41 @@ describe("Website ↔ Agent provisioning and archive shared contract", () => {
         }).service.purchasedQuestion.category,
       ).toBe(category);
     }
-    const knowledgeImport = GeoKnowledgeImportRequestSchema.parse(
-      value.knowledgeImport,
-    );
-    expect(
-      knowledgeArchiveDescriptorHash(value.artifactDescriptor as any),
-    ).toBe(knowledgeImport.descriptorHash);
   });
 
-  it.skipIf(!dashboardCopiesAvailable)(
-    "matches the Agent-owned copy when both repositories are checked out",
+  it.skipIf(!dashboardPurchaseCopyAvailable)(
+    "matches the Agent-owned purchase copy when both repositories are checked out",
     async () => {
-      const [website, agent, websiteV4, agentV4] = await Promise.all([
+      const [website, agent] = await Promise.all([
         fixture(localFixturePath),
         fixture(agentFixturePath),
-        fixture(localV4FixturePath),
-        fixture(agentV4FixturePath),
       ]);
       expect(agent).toEqual(website);
-      expect(agentV4).toEqual(websiteV4);
     },
   );
 
-  it("parses v4 and binds its candidate descriptor independently of the final file", async () => {
-    const value = await fixture(localV4FixturePath);
+  it("parses the v5 local-artifact knowledge import contract", async () => {
+    const value = await fixture(localV5FixturePath);
     const knowledgeImport = GeoKnowledgeImportRequestSchema.parse(
       value.knowledgeImport,
     );
-    expect(knowledgeImport.schemaVersion).toBe(4);
-    if (knowledgeImport.schemaVersion !== 4) throw new Error("expected v4");
-    expect(
-      knowledgeArchiveDescriptorHash(value.candidateDescriptor as any),
-    ).toBe(knowledgeImport.candidate.descriptorHash);
-    expect(knowledgeImport.finalArtifact.fileId).not.toBe(
-      knowledgeImport.candidate.fileId,
+    expect(knowledgeImport.schemaVersion).toBe(5);
+    expect(knowledgeImport.candidateArtifactId).not.toBe(
+      knowledgeImport.finalArtifactId,
+    );
+    expect(JSON.stringify(knowledgeImport)).not.toMatch(
+      /taskId|fileId|outputItemId|signedUrl/,
     );
   });
+
+  it.skipIf(!dashboardV5CopyAvailable)(
+    "matches the Agent-owned v5 local-artifact copy",
+    async () => {
+      const [website, agent] = await Promise.all([
+        fixture(localV5FixturePath),
+        fixture(agentV5FixturePath),
+      ]);
+      expect(agent).toEqual(website);
+    },
+  );
 });

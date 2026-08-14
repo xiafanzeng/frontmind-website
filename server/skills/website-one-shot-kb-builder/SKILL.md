@@ -8,7 +8,7 @@ description: "Build a source-grounded Simplified Chinese enterprise knowledge-ba
 Produce one evidence-grounded candidate ZIP. The service, not this skill,
 creates the final schema-v4 archive and all frontend manifests.
 
-Run this Skill only with the `frontmind-base` model profile. The Website creates
+Run this Skill only under the server-enforced `website.knowledge-base-candidate` contract. That contract is permanently mapped to Base. The Website creates
 exactly one enterprise knowledge-base generation task. Do not request,
 recommend, or perform automatic recovery, regeneration, or a second attempt.
 

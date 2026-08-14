@@ -1,698 +1,99 @@
-import fs from "node:fs";
-import path from "node:path";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
+
 import {
+  canonicalTrustedTaskJson,
   parseTrustedTaskJsonCandidate,
   resolveTrustedTaskJsonOutput,
   trustedTaskJsonObjectCandidates,
-  TRUSTED_TASK_JSON_MAX_NESTING_DEPTH,
-  TRUSTED_TASK_JSON_MAX_QUOTE_REPAIRS,
   TRUSTED_TASK_JSON_MAX_TOTAL_BYTES,
   TrustedTaskJsonOutputError,
-  type TrustedTaskJsonCandidateInspection,
 } from "./trusted-task-json-output";
-import { trustedAssistantOutputFiles } from "./trusted-task-output";
 
-type TestOutput = { valid: true; id?: number };
+const broker = { downloadArtifact: vi.fn() };
 
-function inspectTestOutput(
-  value: unknown,
-): TrustedTaskJsonCandidateInspection<TestOutput> {
-  if (
-    value &&
-    typeof value === "object" &&
-    !Array.isArray(value) &&
-    (value as Record<string, unknown>).valid === true
-  ) {
-    return { success: true, data: value as TestOutput };
-  }
-  return { success: false, code: "SCHEMA_MISMATCH" };
-}
+describe("v2 typed task result boundary", () => {
+  it("returns the already-typed structured result after business validation", async () => {
+    await expect(
+      resolveTrustedTaskJsonOutput(
+        broker,
+        {
+          result: {
+            structuredResult: { schemaVersion: 2, value: "ok" },
+            artifacts: [],
+          },
+        },
+        {
+          inspectParsed: (value) => ({ success: true, data: value }),
+        },
+      ),
+    ).resolves.toEqual({ schemaVersion: 2, value: "ok" });
+    expect(broker.downloadArtifact).not.toHaveBeenCalled();
+  });
 
-describe("trusted task JSON output files", () => {
-  it("extracts wrapped objects and repairs only a bounded number of in-string quotes", () => {
-    const wrapped =
-      '评估完成。```json\n{"valid":true,"summary":"说明"结论":结果为"可执行",但需复测。"}\n```';
-    const candidates = trustedTaskJsonObjectCandidates(wrapped);
-    expect(candidates.length).toBeLessThanOrEqual(3);
-    expect(candidates.map(parseTrustedTaskJsonCandidate)).toContainEqual({
-      valid: true,
-      summary: '说明"结论":结果为"可执行",但需复测。',
+  it("does not parse safe events, raw text, files, or Provider-shaped output", async () => {
+    await expect(
+      resolveTrustedTaskJsonOutput(
+        broker,
+        {
+          safeEvents: [{ message: '{"value":"unsafe"}' }],
+          output: { output_text: '{"value":"unsafe"}' },
+          result: { artifacts: [{ artifactId: "json-artifact" }] },
+        },
+        { inspectParsed: () => ({ success: true, data: "unexpected" }) },
+      ),
+    ).rejects.toMatchObject({
+      name: "TrustedTaskJsonOutputError",
+      code: "INVALID_JSON",
+      diagnostics: {
+        channel: "structured_result",
+        fileCandidateCount: 0,
+      },
     });
-
-    const excessive = `{"valid":true,"summary":"${'"引用"'.repeat(
-      TRUSTED_TASK_JSON_MAX_QUOTE_REPAIRS / 2 + 1,
-    )}"}`;
-    expect(parseTrustedTaskJsonCandidate(excessive)).toBeUndefined();
+    expect(broker.downloadArtifact).not.toHaveBeenCalled();
   });
 
-  it("normalizes only bounded JSON transport and syntax faults", () => {
-    expect(
-      parseTrustedTaskJsonCandidate(
-        '\ufeff```json\n{"valid":true,"items":[1,2,],}\n```',
-      ),
-    ).toEqual({ valid: true, items: [1, 2] });
-    expect(
-      parseTrustedTaskJsonCandidate(
-        JSON.stringify('{"valid":true,"summary":"双重编码"}'),
-      ),
-    ).toEqual({ valid: true, summary: "双重编码" });
-    expect(
-      parseTrustedTaskJsonCandidate(
-        '{"valid":true,"summary":"第一行\n第二行"}',
-      ),
-    ).toEqual({ valid: true, summary: "第一行\n第二行" });
-    expect(
-      parseTrustedTaskJsonCandidate('{"valid":true,"summary":"缺少结束分隔符"'),
-    ).toBeUndefined();
-  });
-
-  it("rejects duplicate keys before strict, repaired, or double-encoded JSON can overwrite security fields", () => {
-    for (const ambiguous of [
-      '{"decision":"accept","decision":"reject"}',
-      '{"valid":true,"evidence":{"path":"first","path":"second"}}',
-      '{"valid":true,"nested":{"a":1,"\\u0061":2}}',
-      '{"valid":true,"nested":{"sourceQuestionSha256":"a","sourceQuestionSha256":"b",},}',
-      '{"valid":true,"summary":"结果为"可用"。","valid":false}',
-      JSON.stringify(
-        '{"valid":true,"evidenceRefs":[],"evidenceRefs":["forged"]}',
-      ),
-    ]) {
-      expect(parseTrustedTaskJsonCandidate(ambiguous)).toBeUndefined();
-    }
-  });
-
-  it("rejects JSON beyond the bounded nesting depth", () => {
-    const overNested = `${"[".repeat(
-      TRUSTED_TASK_JSON_MAX_NESTING_DEPTH + 2,
-    )}true${"]".repeat(TRUSTED_TASK_JSON_MAX_NESTING_DEPTH + 2)}`;
-    expect(parseTrustedTaskJsonCandidate(overNested)).toBeUndefined();
-  });
-
-  it("governs every trusted object-candidate consumer through the shared parser and conflict handling", () => {
-    const expectedConsumers = [
-      "server/geo/assessment.ts",
-      "server/geo/custom-question-classifier.ts",
-      "server/geo/forecast.ts",
-      "server/geo/monitor-question-translation.ts",
-    ];
-    const actualConsumers = fs
-      .readdirSync(path.resolve(process.cwd(), "server/geo"))
-      .filter(
-        (filename) =>
-          filename.endsWith(".ts") && !filename.endsWith(".test.ts"),
-      )
-      .map((filename) => `server/geo/${filename}`)
-      .filter((relativePath) =>
-        fs
-          .readFileSync(path.resolve(process.cwd(), relativePath), "utf8")
-          .includes("trustedTaskJsonObjectCandidates("),
-      )
-      .filter(
-        (relativePath) =>
-          relativePath !== "server/geo/trusted-task-json-output.ts",
-      )
-      .sort();
-    expect(actualConsumers).toEqual(expectedConsumers);
-
-    for (const relativePath of actualConsumers) {
-      const source = fs.readFileSync(
-        path.resolve(process.cwd(), relativePath),
-        "utf8",
-      );
-      expect(source).not.toMatch(/JSON\.parse\s*\(\s*candidate\s*\)/);
-      expect(source).not.toMatch(/JSON\.parse\s*\(\s*jsonText\s*\)/);
-      expect(source).toMatch(
-        /parseTrustedTaskJsonCandidate|inspectTrustedTaskJsonCandidate/,
-      );
-    }
-    for (const relativePath of [
-      "server/geo/assessment.ts",
-      "server/geo/custom-question-classifier.ts",
-      "server/geo/forecast.ts",
-      "server/geo/monitor-question-translation.ts",
-    ]) {
-      const source = fs.readFileSync(
-        path.resolve(process.cwd(), relativePath),
-        "utf8",
-      );
-      expect(source).toContain("Conflicting valid JSON candidates");
-      expect(source).toContain("resolveTrustedTaskJsonOutput(");
-    }
-  });
-
-  it("collects only located typed files at the trusted assistant boundary", () => {
-    const files = trustedAssistantOutputFiles({
-      metadata: {
-        type: "output_file",
-        file_id: "metadata-file",
-        filename: "metadata.json",
-      },
-      output: [
-        {
-          role: "user",
-          type: "message",
-          content: [
-            {
-              type: "output_file",
-              file_id: "user-file",
-              filename: "user.json",
-            },
-          ],
-        },
-        {
-          role: "tool",
-          type: "output_file",
-          file_id: "tool-file",
-          filename: "tool.json",
-        },
-        {
-          role: "assistant",
-          type: "reasoning",
-          content: [
-            {
-              type: "output_file",
-              file_id: "reasoning-file",
-              filename: "reasoning.json",
-            },
-          ],
-        },
-        {
-          type: "file",
-          file_id: "untyped-file",
-          filename: "untyped.json",
-        },
-        {
-          type: "output_file",
-          file_id: "top-level",
-          filename: "top-level.json",
-        },
-        {
-          type: "output_file",
-          file_id: "merged-location",
-          filename: "merged.json",
-        },
-        {
-          type: "output_file",
-          file_id: "merged-location",
-          file_url: "https://agent.example.test/merged",
-          filename: "merged.json",
-        },
-        {
-          type: "output_file",
-          file_id: "x".repeat(256),
-          filename: "overlong-id.json",
-        },
-        {
-          type: "output_file",
-          file_url: "x".repeat(4_097),
-          filename: "overlong-url.json",
-        },
-        {
-          role: "assistant",
-          type: "message",
-          content: [
-            {
-              type: "output_file",
-              file_url: "https://agent.example.test/nested",
-              filename: "nested.json",
-            },
-            {
-              type: "output_file",
-              filename: "missing-location.json",
-            },
-          ],
-        },
-      ],
-    });
-
-    expect(files).toEqual([
-      {
-        fileId: "top-level",
-        url: undefined,
-        filename: "top-level.json",
-        mimeType: "application/json",
-      },
-      {
-        fileId: "merged-location",
-        url: "https://agent.example.test/merged",
-        filename: "merged.json",
-        mimeType: "application/json",
-      },
-      {
-        fileId: undefined,
-        url: "https://agent.example.test/nested",
-        filename: "nested.json",
-        mimeType: "application/json",
-      },
-    ]);
-  });
-
-  it("inspects no more than three file candidates", async () => {
-    const downloads: string[] = [];
-    const task = {
-      output: [1, 2, 3, 4].map((id) => ({
-        type: "output_file",
-        file_id: `file-${id}`,
-        filename: `candidate-${id}.json`,
-      })),
-    };
-
+  it("preserves schema and scope failures without exposing raw payloads", async () => {
+    const validation = [{ path: ["schemaVersion"], message: "invalid" }];
     const promise = resolveTrustedTaskJsonOutput(
+      broker,
+      { result: { structuredResult: { schemaVersion: 1 }, artifacts: [] } },
       {
-        async downloadFile(fileId) {
-          downloads.push(fileId);
-          return new Response("{}");
-        },
-        async downloadTaskOutput() {
-          throw new Error("URL fallback should not be used");
-        },
-      },
-      task,
-      {
-        inspectInline: () => undefined,
-        inspectParsed: inspectTestOutput,
-      },
-    );
-
-    await expect(promise).rejects.toMatchObject({ code: "SCHEMA_MISMATCH" });
-    expect(downloads).toEqual(["file-1", "file-2", "file-3"]);
-  });
-
-  it("accepts one leading UTF-8 BOM and returns the first complete passing file", async () => {
-    const downloads: string[] = [];
-    const result = await resolveTrustedTaskJsonOutput(
-      {
-        async downloadFile(fileId) {
-          downloads.push(fileId);
-          if (fileId === "invalid-utf8") {
-            return new Response(Buffer.from([0xff, 0xfe, 0xfd]));
-          }
-          return new Response(
-            Buffer.concat([
-              Buffer.from([0xef, 0xbb, 0xbf]),
-              Buffer.from('{"valid":true,"id":2}', "utf8"),
-            ]),
-          );
-        },
-        async downloadTaskOutput() {
-          throw new Error("URL fallback should not be used");
-        },
-      },
-      {
-        output: [
-          {
-            type: "output_file",
-            file_id: "invalid-utf8",
-            filename: "first.json",
-          },
-          {
-            type: "output_file",
-            file_id: "valid-bom",
-            filename: "second.json",
-          },
-        ],
-      },
-      {
-        inspectInline: () => undefined,
-        inspectParsed: inspectTestOutput,
-      },
-    );
-
-    expect(downloads).toEqual(["invalid-utf8", "valid-bom"]);
-    expect(result).toEqual({ valid: true, id: 2 });
-  });
-
-  it("recovers bounded unescaped quotes from a complete trusted JSON file", async () => {
-    const result = await resolveTrustedTaskJsonOutput(
-      {
-        async downloadFile() {
-          return new Response(
-            '{"valid":true,"summary":"结果为"可执行但需复测"。"}',
-          );
-        },
-        async downloadTaskOutput() {
-          throw new Error("URL fallback should not be used");
-        },
-      },
-      {
-        output: [
-          {
-            type: "output_file",
-            file_id: "recoverable",
-            filename: "result.json",
-          },
-        ],
-      },
-      {
-        inspectInline: () => undefined,
-        inspectParsed: (value) =>
-          value &&
-          typeof value === "object" &&
-          (value as Record<string, unknown>).valid === true
-            ? { success: true, data: value as TestOutput }
-            : { success: false, code: "SCHEMA_MISMATCH" },
-      },
-    );
-
-    expect(result).toMatchObject({ valid: true });
-  });
-
-  it("checks equivalent inline output after a preferred valid file", async () => {
-    let inspectedInline = false;
-    const result = await resolveTrustedTaskJsonOutput(
-      {
-        async downloadFile() {
-          return new Response('{"valid":true,"id":7}');
-        },
-        async downloadTaskOutput() {
-          throw new Error("URL fallback should not be used");
-        },
-      },
-      {
-        output: [
-          { type: "output_text", text: "x".repeat(1024 * 1024) },
-          {
-            type: "output_file",
-            file_id: "preferred",
-            filename: "preferred.json",
-          },
-        ],
-      },
-      {
-        preferredChannel: "output_file",
-        inspectInline: () => {
-          inspectedInline = true;
-          return { success: true, data: { valid: true, id: 7 } };
-        },
-        inspectParsed: inspectTestOutput,
-      },
-    );
-
-    expect(result).toEqual({ valid: true, id: 7 });
-    expect(inspectedInline).toBe(true);
-  });
-
-  it("fails closed when preferred file and inline channels contain conflicting valid JSON", async () => {
-    const promise = resolveTrustedTaskJsonOutput(
-      {
-        async downloadFile() {
-          return new Response('{"valid":true,"id":7}');
-        },
-        async downloadTaskOutput() {
-          throw new Error("URL fallback should not be used");
-        },
-      },
-      {
-        output: [
-          { type: "output_text", text: '{"valid":true,"id":8}' },
-          {
-            type: "output_file",
-            file_id: "preferred",
-            filename: "preferred.json",
-          },
-        ],
-      },
-      {
-        preferredChannel: "output_file",
-        inspectInline: () => ({
-          success: true,
-          data: { valid: true, id: 8 },
-        }),
-        inspectParsed: inspectTestOutput,
-      },
-    );
-
-    await expect(promise).rejects.toMatchObject({
-      code: "SCHEMA_MISMATCH",
-      validation: [
-        { path: ["root"], message: "Conflicting valid JSON candidates" },
-      ],
-    });
-  });
-
-  it("shares the three-candidate budget across inline and file output", async () => {
-    const downloads: string[] = [];
-    const promise = resolveTrustedTaskJsonOutput(
-      {
-        async downloadFile(fileId) {
-          downloads.push(fileId);
-          return new Response("{}");
-        },
-        async downloadTaskOutput() {
-          throw new Error("URL fallback should not be used");
-        },
-      },
-      {
-        output: [1, 2, 3].map((id) => ({
-          type: "output_file",
-          file_id: `file-${id}`,
-          filename: `candidate-${id}.json`,
-        })),
-      },
-      {
-        inspectInline: (_task, context) => {
-          expect(context.takeCandidate('{"valid":false,"id":1}')).toBe(true);
-          expect(context.takeCandidate('{"valid":false,"id":2}')).toBe(true);
-          return { success: false, code: "SCHEMA_MISMATCH" };
-        },
-        inspectParsed: inspectTestOutput,
-      },
-    );
-
-    await expect(promise).rejects.toMatchObject({ code: "SCHEMA_MISMATCH" });
-    expect(downloads).toEqual(["file-1"]);
-  });
-
-  it("falls back from file_id to the provider URL for the same descriptor", async () => {
-    const urlDownloads: string[] = [];
-    const result = await resolveTrustedTaskJsonOutput(
-      {
-        async downloadFile() {
-          let delivered = false;
-          return new Response(
-            new ReadableStream<Uint8Array>({
-              pull(controller) {
-                if (!delivered) {
-                  delivered = true;
-                  controller.enqueue(new TextEncoder().encode('{"valid":'));
-                  return;
-                }
-                controller.error(new Error("connection reset"));
-              },
-            }),
-          );
-        },
-        async downloadTaskOutput(taskId, url, filename) {
-          urlDownloads.push(`${taskId}|${url}|${filename}`);
-          return new Response('{"valid":true}');
-        },
-      },
-      {
-        id: "task-from-envelope",
-        output: [
-          {
-            type: "output_file",
-            file_id: "result-file",
-            filename: "result.json",
-          },
-          {
-            type: "output_file",
-            file_id: "result-file",
-            file_url: "https://agent.example.test/result",
-            filename: "result.json",
-          },
-        ],
-      },
-      {
-        inspectInline: () => undefined,
-        inspectParsed: inspectTestOutput,
-      },
-    );
-
-    expect(result.valid).toBe(true);
-    expect(urlDownloads).toEqual([
-      "task-from-envelope|https://agent.example.test/result|result.json",
-    ]);
-  });
-
-  it("reports an unreadable file instead of attributing the failure to inline schema", async () => {
-    const promise = resolveTrustedTaskJsonOutput(
-      {
-        async downloadFile() {
-          throw new Error("file endpoint unavailable");
-        },
-        async downloadTaskOutput() {
-          throw new Error("URL fallback unavailable");
-        },
-      },
-      {
-        output: [
-          { type: "output_text", text: '{"valid":false}' },
-          {
-            type: "output_file",
-            file_id: "unavailable",
-            filename: "result.json",
-          },
-        ],
-      },
-      {
-        inspectInline: () => ({
+        inspectParsed: () => ({
           success: false,
           code: "SCHEMA_MISMATCH",
+          validation,
         }),
-        inspectParsed: inspectTestOutput,
       },
     );
-
+    await expect(promise).rejects.toBeInstanceOf(TrustedTaskJsonOutputError);
     await expect(promise).rejects.toMatchObject({
-      code: "OUTPUT_FILE_UNAVAILABLE",
-      diagnostics: {
-        channel: "output_file",
-        byteCount: 0,
-        fileCandidateCount: 1,
-      },
+      code: "SCHEMA_MISMATCH",
+      validation,
     });
   });
 
-  it("classifies an unreadable output file above the budget as unavailable", async () => {
-    const downloads: string[] = [];
-    const promise = resolveTrustedTaskJsonOutput(
-      {
-        async downloadFile(fileId) {
-          downloads.push(fileId);
-          return new Response("{}", {
-            headers: {
-              "content-length": String(TRUSTED_TASK_JSON_MAX_TOTAL_BYTES + 1),
-            },
-          });
-        },
-        async downloadTaskOutput() {
-          throw new Error("URL fallback should not be used");
-        },
-      },
-      {
-        output: [
-          { type: "output_text", text: "结果已生成，请查看附件。" },
-          {
-            type: "output_file",
-            file_id: "oversized",
-            filename: "oversized.json",
+  it("enforces the bounded structured-result size", async () => {
+    await expect(
+      resolveTrustedTaskJsonOutput(
+        broker,
+        {
+          result: {
+            structuredResult: { value: "x".repeat(TRUSTED_TASK_JSON_MAX_TOTAL_BYTES) },
+            artifacts: [],
           },
-          {
-            type: "output_file",
-            file_id: "must-not-download",
-            filename: "later.json",
-          },
-        ],
-      },
-      {
-        inspectInline: () => ({ success: false, code: "INVALID_JSON" }),
-        inspectParsed: inspectTestOutput,
-      },
-    );
-
-    await expect(promise).rejects.toEqual(
-      expect.objectContaining<Partial<TrustedTaskJsonOutputError>>({
-        name: "TrustedTaskJsonOutputError",
-        code: "OUTPUT_FILE_UNAVAILABLE",
-        diagnostics: {
-          channel: "output_file",
-          byteCount: TRUSTED_TASK_JSON_MAX_TOTAL_BYTES,
-          fileCandidateCount: 2,
         },
-      }),
-    );
-    expect(downloads).toEqual(["oversized"]);
+        { inspectParsed: (value) => ({ success: true, data: value }) },
+      ),
+    ).rejects.toMatchObject({ code: "INVALID_JSON" });
   });
 
-  it("enforces the four-MiB budget cumulatively across candidates", async () => {
-    const downloads: string[] = [];
-    const firstBytes = Buffer.alloc(3 * 1024 * 1024, 0x20);
-    const promise = resolveTrustedTaskJsonOutput(
-      {
-        async downloadFile(fileId) {
-          downloads.push(fileId);
-          if (fileId === "first") return new Response(firstBytes);
-          return new Response('{"valid":true}', {
-            headers: { "content-length": String(2 * 1024 * 1024) },
-          });
-        },
-        async downloadTaskOutput() {
-          throw new Error("URL fallback should not be used");
-        },
-      },
-      {
-        output: [
-          {
-            type: "output_file",
-            file_id: "first",
-            filename: "first.json",
-          },
-          {
-            type: "output_file",
-            file_id: "second",
-            filename: "second.json",
-          },
-          {
-            type: "output_file",
-            file_id: "third",
-            filename: "third.json",
-          },
-        ],
-      },
-      {
-        inspectInline: () => undefined,
-        inspectParsed: inspectTestOutput,
-      },
-    );
-
-    await expect(promise).rejects.toMatchObject({ code: "INVALID_JSON" });
-    expect(downloads).toEqual(["first", "second"]);
-  });
-
-  it("charges bytes delivered before a non-limit stream failure to the shared budget", async () => {
-    const downloads: string[] = [];
-    const interruptedBody = () => {
-      let delivered = false;
-      return new ReadableStream<Uint8Array>({
-        pull(controller) {
-          if (!delivered) {
-            delivered = true;
-            controller.enqueue(new Uint8Array(3 * 1024 * 1024));
-            return;
-          }
-          controller.error(new Error("connection reset"));
-        },
-      });
-    };
-    const promise = resolveTrustedTaskJsonOutput(
-      {
-        async downloadFile(fileId) {
-          downloads.push(fileId);
-          if (fileId === "third") return new Response('{"valid":true}');
-          return new Response(interruptedBody());
-        },
-        async downloadTaskOutput() {
-          throw new Error("URL fallback should not be used");
-        },
-      },
-      {
-        output: ["first", "second", "third"].map((id) => ({
-          type: "output_file",
-          file_id: id,
-          filename: `${id}.json`,
-        })),
-      },
-      {
-        inspectInline: () => undefined,
-        inspectParsed: inspectTestOutput,
-      },
-    );
-
-    await expect(promise).rejects.toMatchObject({
-      code: "OUTPUT_FILE_UNAVAILABLE",
+  it("keeps the local marker parser strict and deterministic", () => {
+    expect(parseTrustedTaskJsonCandidate('{"b":1,"a":2}')).toEqual({
+      b: 1,
+      a: 2,
     });
-    expect(downloads).toEqual(["first", "second"]);
+    expect(canonicalTrustedTaskJson({ b: 1, a: 2 })).toBe('{"a":2,"b":1}');
+    expect(trustedTaskJsonObjectCandidates('```json\n{"a":1}\n```')).toEqual([]);
+    expect(parseTrustedTaskJsonCandidate('{"a":"unterminated}')).toBeUndefined();
   });
 });

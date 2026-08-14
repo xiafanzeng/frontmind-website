@@ -458,7 +458,7 @@ describe("geo-current-state-evaluator model output contract", () => {
     expect(production.errors).toContain("exactly once");
   });
 
-  it("packages the same parseable Draft 2020-12 schema and inline output contract", async () => {
+  it("packages the same parseable Draft 2020-12 schema and Structured Output contract", async () => {
     const archive = await buildGeoCurrentStateEvaluatorSkillArchive();
     const zip = await JSZip.loadAsync(archive);
     const skillText = await zip.file("SKILL.md")?.async("string");
@@ -467,7 +467,7 @@ describe("geo-current-state-evaluator model output contract", () => {
       ?.async("string");
 
     expect(skillText).toBeDefined();
-    expect(skillText).toContain("final assistant `output_text`");
+    expect(skillText).toContain("Structured Output business object");
     expect(skillText).toContain("first non-whitespace character `{`");
     expect(skillText).toContain(
       "Do not create, upload, attach, or link a result file",

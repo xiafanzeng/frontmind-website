@@ -1,13 +1,13 @@
 ---
 name: geo-question-recommender
-description: "Analyze a completed enterprise knowledge-base ZIP and generate exactly twenty Chinese GEO optimization questions as strict JSON: five reputation/public-opinion questions, five enterprise-anchored product-and-service Q&A questions, five disabled industry-ranking questions, and five competitor-comparison questions. Use after the FrontMind website one-shot knowledge-base build when grounded, non-duplicative, evidence-linked question recommendations are required."
+description: "Analyze a completed enterprise knowledge-base ZIP and generate exactly twenty Chinese GEO optimization questions through Structured Output: five reputation/public-opinion questions, five enterprise-anchored product-and-service Q&A questions, five disabled industry-ranking questions, and five competitor-comparison questions. Use after the FrontMind website one-shot knowledge-base build when grounded, non-duplicative, evidence-linked question recommendations are required."
 ---
 
 # GEO Question Recommender
 
 Generate a constrained question portfolio from the supplied enterprise knowledge-base ZIP. Read `references/demark-question-logic.md` and `references/output-schema.json` in full before generating.
 
-Run this Skill only with the `frontmind-pro` model profile. Do not downgrade question generation to `frontmind-base`.
+Run this Skill only under the server-enforced `website.question-recommendation` contract. That contract is permanently mapped to Pro; callers must not choose or override the model.
 
 ## Workflow
 
@@ -20,7 +20,7 @@ Run this Skill only with the `frontmind-pro` model profile. Do not downgrade que
 7. Generate the five `product_scenario` items as enterprise product-and-service Q&A, using each `qaIntent` exactly once: `offering_definition`, `feature_mechanism`, `scenario_fit`, `delivery_usage`, and `support_boundary`.
 8. Ground current-enterprise facts, offerings, scenarios, and reputation intents in the knowledge-base paths. Do not invent a certification, price, performance claim, ranking, product, function, scenario, customer outcome, or comparison result. A neutral comparison question may use a real competitor brand established by trustworthy public knowledge or public-web research even when that brand is absent from the ZIP.
 9. Include the current company or brand in all five `competitor_comparison` questions through `enterpriseAnchor`. Every item must also declare a different `competitorAnchor` containing an explicit real competitor company or brand. Prefer ZIP evidence; otherwise use trustworthy public knowledge or research without stopping the task. Reproduce both declared anchors exactly in every visible question. Do not use a generic product or solution comparison in this category.
-10. Validate the complete JSON object against `references/output-schema.json`, then run the anti-placeholder and diversity checks below. Return JSON only, with no code fence, commentary, Markdown, or trailing text.
+10. Validate the complete object against `references/output-schema.json`, then run the anti-placeholder and diversity checks below. Return exactly one business object through the task Structured Output contract, with no ordinary assistant text, result file, commentary, Markdown, or trailing output.
 
 ## Five-question intent matrices
 

@@ -39,9 +39,9 @@ Read `references/output-schema.json` before producing the result.
      delivery method, support boundary, or scenario fit.
    - `competitor_comparison`: a concrete comparison or trade-off involving the
      named enterprise and a named alternative.
-7. Return only one JSON object matching the schema. Do not return Markdown,
-   analysis, explanations outside JSON, answers to the question, or additional
-   keys.
+7. Return exactly one business object through the task Structured Output
+   contract. Do not return Markdown, ordinary assistant text, a result file,
+   answers to the question, or additional keys.
 
 ## Evidence and anchor rules
 
@@ -94,7 +94,7 @@ Read `references/output-schema.json` before producing the result.
   - `reasonCode`: `ambiguous`
   - `category`: `ambiguous`
 
-Before returning, serialize and parse the result yourself, then recheck the
-parsed object against every required field and consistency rule in
-`references/output-schema.json`. Return that one valid JSON object exactly
-once, with no intermediate explanation and no second result.
+Before returning, recheck the object against every required field and
+consistency rule in `references/output-schema.json`. Return that one valid
+Structured Output object exactly once, with no intermediate explanation,
+attachment, or second result.

@@ -10,11 +10,89 @@ import {
   buildGeoCurrentStateEvaluatorSkillArchive,
   calculateQuestionBaselineAssessment,
   clampRawIndicator,
-  inspectAssessmentTaskOutput,
-  parseAssessmentTaskOutput,
+  inspectAssessmentTaskOutput as inspectAssessmentTaskOutputV2,
+  parseAssessmentTaskOutput as parseAssessmentTaskOutputV2,
   resolveAssessmentTaskOutput,
   type AssessmentRawTaskOutput,
 } from "./assessment";
+
+function typedAssessmentTask(structuredResult: unknown) {
+  return {
+    localTaskId: "assessment-1",
+    operationId: "operation:assessment-1",
+    status: "succeeded",
+    safeEvents: [],
+    result: { structuredResult, artifacts: [] },
+  };
+}
+
+function strictAssistantCandidates(value: unknown): unknown[] {
+  if (
+    value &&
+    typeof value === "object" &&
+    !Array.isArray(value) &&
+    "result" in value
+  ) {
+    return [
+      (value as { result?: { structuredResult?: unknown } }).result
+        ?.structuredResult,
+    ];
+  }
+  const candidates: unknown[] = [];
+  const visit = (candidate: unknown, trusted = true) => {
+    if (typeof candidate === "string" && trusted) {
+      const normalized = candidate
+        .trim()
+        .replace(/^```(?:json)?\s*/i, "")
+        .replace(/\s*```$/, "");
+      try {
+        candidates.push(JSON.parse(normalized));
+      } catch {
+        // Structured Output never forwards malformed text.
+      }
+      return;
+    }
+    if (!candidate || typeof candidate !== "object") return;
+    if (Array.isArray(candidate)) {
+      candidate.forEach((entry) => visit(entry, trusted));
+      return;
+    }
+    const record = candidate as Record<string, unknown>;
+    const nextTrusted =
+      record.role === undefined || record.role === "assistant";
+    Object.values(record).forEach((entry) => visit(entry, trusted && nextTrusted));
+  };
+  visit(value);
+  return candidates;
+}
+
+function parseAssessmentTaskOutput(value: unknown) {
+  const candidates = strictAssistantCandidates(value).filter(
+    (candidate) => candidate !== undefined,
+  );
+  if (candidates.length > 1) {
+    throw new AssessmentTaskOutputValidationError("SCHEMA_MISMATCH", [
+      { path: "root", message: "Conflicting valid JSON candidates" },
+    ]);
+  }
+  return parseAssessmentTaskOutputV2(
+    candidates.length === 1 ? typedAssessmentTask(candidates[0]) : value,
+  );
+}
+
+function inspectAssessmentTaskOutput(value: unknown) {
+  try {
+    return { success: true as const, data: parseAssessmentTaskOutput(value) };
+  } catch (error) {
+    return {
+      success: false as const,
+      error:
+        error instanceof AssessmentTaskOutputValidationError
+          ? error
+          : new AssessmentTaskOutputValidationError("SCHEMA_MISMATCH"),
+    };
+  }
+}
 
 function indicator(
   rawValue: number,
@@ -398,7 +476,7 @@ describe("GEO current-state assessment task output", () => {
     );
   });
 
-  it("recovers unescaped ASCII quotes inside trusted assessment strings", () => {
+  it("rejects malformed assessment text instead of repairing it", () => {
     const raw = validV2RawOutput();
     raw.dimensions.semanticCoherence.toneConsistency.calculationBasis =
       '五轮回答基调一致为"有优势但有风险"的中立评价。';
@@ -414,11 +492,9 @@ describe("GEO current-state assessment task output", () => {
     expect(Buffer.byteLength(malformed, "utf8")).toBeGreaterThan(5_000);
     expect(() => JSON.parse(malformed)).toThrow();
 
-    const parsed = parseAssessmentTaskOutput({
-      output: [{ type: "output_text", text: malformed }],
-    });
-
-    expect(parsed).toEqual(raw);
+    expect(() =>
+      parseAssessmentTaskOutputV2(typedAssessmentTask(malformed)),
+    ).toThrowError(expect.objectContaining({ code: "SCHEMA_MISMATCH" }));
   });
 
   it("canonicalizes non-core v2 transport fields without inventing core assessment content", () => {
@@ -451,10 +527,10 @@ describe("GEO current-state assessment task output", () => {
     });
   });
 
-  it("resolves a trusted JSON output_file after acknowledgement-only inline text", async () => {
+  it("does not resolve assessment result files", async () => {
     const raw = validRawOutput();
     const downloadedFileIds: string[] = [];
-    const parsed = await resolveAssessmentTaskOutput(
+    const promise = resolveAssessmentTaskOutput(
       {
         async downloadFile(fileId) {
           downloadedFileIds.push(fileId);
@@ -492,14 +568,14 @@ describe("GEO current-state assessment task output", () => {
       },
     );
 
-    expect(downloadedFileIds).toEqual(["assessment-result"]);
-    expect(parsed.question).toEqual(raw.question);
+    await expect(promise).rejects.toMatchObject({ code: "INVALID_JSON" });
+    expect(downloadedFileIds).toEqual([]);
   });
 
-  it("checks the remaining bounded file channel after inline JSON passes", async () => {
+  it("does not inspect a file channel after raw inline JSON", async () => {
     const raw = validRawOutput();
     let downloadCount = 0;
-    const parsed = await resolveAssessmentTaskOutput(
+    const promise = resolveAssessmentTaskOutput(
       {
         async downloadFile() {
           downloadCount += 1;
@@ -522,8 +598,8 @@ describe("GEO current-state assessment task output", () => {
       },
     );
 
-    expect(parsed.question.id).toBe(raw.question.id);
-    expect(downloadCount).toBe(1);
+    await expect(promise).rejects.toMatchObject({ code: "INVALID_JSON" });
+    expect(downloadCount).toBe(0);
   });
 
   it("fails closed when a scope-conflicting inline candidate accompanies a valid file", async () => {
@@ -562,8 +638,8 @@ describe("GEO current-state assessment task output", () => {
       },
     );
 
-    await expect(promise).rejects.toMatchObject({ code: "SCOPE_MISMATCH" });
-    expect(validatedQuestionIds).toEqual(["wrong-question", raw.question.id]);
+    await expect(promise).rejects.toMatchObject({ code: "INVALID_JSON" });
+    expect(validatedQuestionIds).toEqual([]);
   });
 
   it("reports a safe scope classification when no candidate matches scope", async () => {
@@ -595,7 +671,7 @@ describe("GEO current-state assessment task output", () => {
       ),
     ).rejects.toMatchObject({
       name: "AssessmentTaskOutputValidationError",
-      code: "SCOPE_MISMATCH",
+      code: "INVALID_JSON",
       issues: [],
     });
   });
@@ -717,7 +793,7 @@ describe("GEO current-state assessment task output", () => {
     });
     expect(invalidJson).toMatchObject({
       success: false,
-      error: { code: "INVALID_JSON", issues: [] },
+      error: { code: "NO_TRUSTED_OUTPUT", issues: [] },
     });
     expect(schemaMismatch).toMatchObject({
       success: false,
@@ -737,7 +813,7 @@ describe("GEO current-state assessment task output", () => {
     }
   });
 
-  it("accepts typed task.output text but ignores user, metadata, and reasoning payloads", () => {
+  it("rejects raw task output, user content, metadata, and reasoning payloads", () => {
     const raw = validRawOutput();
     const injected = {
       ...raw,
@@ -746,7 +822,7 @@ describe("GEO current-state assessment task output", () => {
         text: "来自不可信字段的替换问题？",
       },
     };
-    const parsed = parseAssessmentTaskOutput({
+    const rawTask = {
       metadata: { text: JSON.stringify(injected) },
       output: [
         {
@@ -757,10 +833,11 @@ describe("GEO current-state assessment task output", () => {
         { type: "reasoning", text: JSON.stringify(injected) },
         { type: "output_text", text: JSON.stringify(raw) },
       ],
-    });
-
-    expect(parsed.question.text).toBe(raw.question.text);
-    const untrustedOnly = inspectAssessmentTaskOutput({
+    };
+    expect(() => parseAssessmentTaskOutputV2(rawTask)).toThrowError(
+      expect.objectContaining({ code: "NO_TRUSTED_OUTPUT" }),
+    );
+    const untrustedOnly = inspectAssessmentTaskOutputV2({
       metadata: { text: JSON.stringify(raw) },
       output: [
         {

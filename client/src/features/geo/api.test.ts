@@ -792,6 +792,13 @@ describe("normalizeGeoProject", () => {
                 },
               ],
             },
+            {
+              task_id: "provider-task-id-must-not-be-a-public-log-id",
+              stage: "monitoring",
+              title: "上游任务标识不应成为日志条目 ID",
+              status: "running",
+              events: [],
+            },
           ],
         },
       },
@@ -1399,7 +1406,7 @@ describe("uploadGeoFile", () => {
     expect(fetchMock.mock.calls[1][1]?.signal?.aborted).toBe(true);
   });
 
-  it("does not fall back to the upload proxy after a direct upload timeout", async () => {
+  it("surfaces a Website proxy upload timeout", async () => {
     vi.useFakeTimers();
     const fetchMock = vi
       .fn<typeof fetch>()
@@ -1409,7 +1416,6 @@ describe("uploadGeoFile", () => {
             fileId: "file-1",
             filename: "企业资料.pdf",
             uploadToken: "signed-upload-token",
-            directUploadUrl: "https://storage.example/upload",
           }),
           { status: 201, headers: { "content-type": "application/json" } },
         ),
@@ -1439,9 +1445,7 @@ describe("uploadGeoFile", () => {
     expect(fetchMock).toHaveBeenCalledTimes(2);
   });
 
-  it("accepts an empty successful response from direct storage", async () => {
-    const signedUrl =
-      "https://storage.example/upload?X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Credential=AKIAEXAMPLE%2F20260730%2Fcn-north-1%2Fs3%2Faws4_request&X-Amz-Signature=abcdef0123456789";
+  it("uploads only through the authenticated Website proxy", async () => {
     const fetchMock = vi
       .fn<typeof fetch>()
       .mockResolvedValueOnce(
@@ -1450,12 +1454,16 @@ describe("uploadGeoFile", () => {
             fileId: "file-1",
             filename: "企业资料.pdf",
             uploadToken: "signed-upload-token",
-            directUploadUrl: signedUrl,
           }),
           { status: 201, headers: { "content-type": "application/json" } },
         ),
       )
-      .mockResolvedValueOnce(new Response(null, { status: 204 }));
+      .mockResolvedValueOnce(
+        new Response(JSON.stringify({ ok: true, status: "uploaded" }), {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        }),
+      );
     vi.stubGlobal("fetch", fetchMock);
 
     const file = new File(["brochure"], "企业资料.pdf", {
@@ -1467,10 +1475,10 @@ describe("uploadGeoFile", () => {
       uploadToken: "signed-upload-token",
     });
     expect(fetchMock).toHaveBeenCalledTimes(2);
-    expect(fetchMock.mock.calls[1][0]).toBe(signedUrl);
+    expect(fetchMock.mock.calls[1][0]).toBe("/api/geo/uploads/proxy");
   });
 
-  it("falls back to the authenticated website proxy when direct storage upload fails", async () => {
+  it("ignores any direct storage URL returned by an outdated server", async () => {
     const fetchMock = vi
       .fn<typeof fetch>()
       .mockResolvedValueOnce(
@@ -1483,9 +1491,6 @@ describe("uploadGeoFile", () => {
           }),
           { status: 201, headers: { "content-type": "application/json" } },
         ),
-      )
-      .mockResolvedValueOnce(
-        new Response("storage unavailable", { status: 503 }),
       )
       .mockResolvedValueOnce(
         new Response(JSON.stringify({ ok: true, status: "uploaded" }), {
@@ -1505,10 +1510,10 @@ describe("uploadGeoFile", () => {
       name: "企业资料.pdf",
       uploadToken: "signed-upload-token",
     });
-    expect(fetchMock).toHaveBeenCalledTimes(3);
-    expect(fetchMock.mock.calls[2][0]).toBe("/api/geo/uploads/proxy");
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(fetchMock.mock.calls[1][0]).toBe("/api/geo/uploads/proxy");
     expect(
-      new Headers(fetchMock.mock.calls[2][1]?.headers).get(
+      new Headers(fetchMock.mock.calls[1][1]?.headers).get(
         "x-geo-upload-token",
       ),
     ).toBe("signed-upload-token");

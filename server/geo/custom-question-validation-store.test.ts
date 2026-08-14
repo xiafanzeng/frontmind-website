@@ -47,7 +47,7 @@ function reservation(
     knowledgeBaseTaskId: "knowledge-task-1",
     knowledgeBaseValidationProfile: "website-lead-v1" as const,
     knowledgeBaseArtifact: {
-      fileId: "knowledge-file-1",
+      artifactId: "knowledge-artifact-1",
       filename: "Acme.zip",
       sha256: "1".repeat(64),
       packageManifestSha256: "2".repeat(64),
@@ -317,7 +317,7 @@ describe("custom-question validation persistence", () => {
           ...reserved.record,
           state: "completed",
           result: recommendedQuestion(),
-          taskId: "completed-task",
+          localTaskId: "completed-task",
         },
         lease!,
       );
@@ -329,7 +329,7 @@ describe("custom-question validation persistence", () => {
         now: new Date(start + 2_000),
         cleanup: async (target) => {
           expect(target).not.toHaveProperty("taskId");
-          cleaned.push(...target.temporaryFileIds);
+          cleaned.push(...target.temporaryLocalAssetIds);
         },
       });
       expect(retained.retained).toBeGreaterThan(0);
@@ -849,16 +849,16 @@ describe("custom-question validation persistence", () => {
         ...sideEffect.record,
         state: "submitted",
         archiveAttachment: {
-          fileId: "archive-file-side-effect",
+          localAssetId: "archive-file-side-effect",
           filename: "Acme.zip",
           temporary: false,
         },
         skillAttachment: {
-          fileId: "skill-file-side-effect",
+          localAssetId: "skill-file-side-effect",
           filename: "geo-custom-question-classifier.skill.zip",
           temporary: true,
         },
-        taskId: "upstream-task-side-effect",
+        localTaskId: "upstream-task-side-effect",
       },
       sideEffectLease!,
     );
@@ -877,9 +877,9 @@ describe("custom-question validation persistence", () => {
       store.get(reservation().projectId, sideEffectId),
     ).resolves.toMatchObject({
       state: "submitted",
-      taskId: "upstream-task-side-effect",
-      archiveAttachment: { fileId: "archive-file-side-effect" },
-      skillAttachment: { fileId: "skill-file-side-effect" },
+      localTaskId: "upstream-task-side-effect",
+      archiveAttachment: { localAssetId: "archive-file-side-effect" },
+      skillAttachment: { localAssetId: "skill-file-side-effect" },
     });
     const preserved = await store.get(reservation().projectId, sideEffectId);
     expect(preserved?.supersededByClientRequestId).toBeUndefined();
@@ -1136,16 +1136,16 @@ describe("custom-question validation persistence", () => {
         ...created.record,
         state: "submitted",
         archiveAttachment: {
-          fileId: "archive-file-1",
+          localAssetId: "archive-file-1",
           filename: "Acme.zip",
           temporary: false,
         },
         skillAttachment: {
-          fileId: "skill-file-1",
+          localAssetId: "skill-file-1",
           filename: "geo-custom-question-classifier.skill.zip",
           temporary: true,
         },
-        taskId: "upstream-task-1",
+        localTaskId: "upstream-task-1",
       },
       lease!,
     );
@@ -1158,9 +1158,9 @@ describe("custom-question validation persistence", () => {
       ),
     ).resolves.toMatchObject({
       state: "submitted",
-      taskId: "upstream-task-1",
-      archiveAttachment: { fileId: "archive-file-1" },
-      skillAttachment: { fileId: "skill-file-1" },
+      localTaskId: "upstream-task-1",
+      archiveAttachment: { localAssetId: "archive-file-1" },
+      skillAttachment: { localAssetId: "skill-file-1" },
     });
   });
 
@@ -1176,7 +1176,7 @@ describe("custom-question validation persistence", () => {
       {
         ...created.record,
         state: "completed",
-        taskId: "upstream-task-1",
+        localTaskId: "upstream-task-1",
         cleanupCompleted: true,
         result: {
           id: "custom-1234567890abcdef1234",
@@ -1200,7 +1200,7 @@ describe("custom-question validation persistence", () => {
     expect(replayed.record).toMatchObject({
       key: completed.key,
       state: "completed",
-      taskId: "upstream-task-1",
+      localTaskId: "upstream-task-1",
       cleanupCompleted: true,
       result: { question: QUESTION },
     });
@@ -1221,6 +1221,45 @@ describe("custom-question validation persistence", () => {
     ).rejects.toMatchObject({
       code: "IDEMPOTENCY_CONFLICT",
     });
+  });
+
+  it("fails closed on legacy provider-shaped record fields and unsafe local IDs", async () => {
+    const directory = await makeStoreDirectory();
+    const store = new FileGeoCustomQuestionValidationStore(directory);
+    const created = await store.reserve(reservation());
+    const lease = await store.tryAcquireLease(
+      created.record.projectId,
+      created.record.clientRequestId,
+    );
+    await expect(
+      store.update(
+        {
+          ...created.record,
+          state: "submitted",
+          localTaskId: "https://provider.example/v2/tasks/task-1",
+        },
+        lease!,
+      ),
+    ).rejects.toThrow();
+    await store.releaseLease(lease!);
+
+    const recordName = (await fs.readdir(directory))
+      .filter((name) => name.includes(".record.v"))
+      .sort()
+      .at(-1);
+    expect(recordName).toBeDefined();
+    const recordPath = path.join(directory, recordName!);
+    const legacyRecord = JSON.parse(await fs.readFile(recordPath, "utf8"));
+    legacyRecord.taskId = "provider-task-id";
+    legacyRecord.orphanedTemporaryFileIds = ["provider-file-id"];
+    await fs.writeFile(recordPath, JSON.stringify(legacyRecord), {
+      mode: 0o600,
+    });
+
+    const restarted = new FileGeoCustomQuestionValidationStore(directory);
+    await expect(
+      restarted.get(created.record.projectId, created.record.clientRequestId),
+    ).rejects.toMatchObject({ code: "STORE_CORRUPT" });
   });
 
   it("fails closed without an explicit absolute production directory", () => {
@@ -1380,13 +1419,14 @@ describe("custom-question validation persistence", () => {
     expect(markerText).not.toContain(QUESTION);
     await expect(
       store.get(created.record.projectId, created.record.clientRequestId),
-    ).resolves.toMatchObject({ orphanedTemporaryFileIds: [] });
+    ).resolves.toMatchObject({ temporaryLocalAssetIds: [] });
 
     const cleaned: string[] = [];
     now += 4 * 60 * 1000;
     await store.collectGarbage({
       now: new Date(now),
-      cleanup: async (target) => cleaned.push(...target.temporaryFileIds),
+      cleanup: async (target) =>
+        cleaned.push(...target.temporaryLocalAssetIds),
     });
     expect(cleaned).toEqual([]);
     await expect(
@@ -1407,7 +1447,8 @@ describe("custom-question validation persistence", () => {
 
     await store.collectGarbage({
       now: new Date(now),
-      cleanup: async (target) => cleaned.push(...target.temporaryFileIds),
+      cleanup: async (target) =>
+        cleaned.push(...target.temporaryLocalAssetIds),
     });
     expect(cleaned).toEqual([justCreatedFileId]);
     await expect(
@@ -1450,7 +1491,8 @@ describe("custom-question validation persistence", () => {
     const cleaned: string[] = [];
     await expect(
       store.collectGarbage({
-        cleanup: async (target) => cleaned.push(...target.temporaryFileIds),
+        cleanup: async (target) =>
+          cleaned.push(...target.temporaryLocalAssetIds),
       }),
     ).rejects.toMatchObject({
       code: "STORE_CORRUPT",
@@ -1533,7 +1575,11 @@ describe("custom-question validation persistence", () => {
       created.record.clientRequestId,
     );
     const updated = await newProcess.update(
-      { ...authority!, state: "submitted", taskId: "authoritative-task" },
+      {
+        ...authority!,
+        state: "submitted",
+        localTaskId: "authoritative-task",
+      },
       newLease!,
     );
     await oldProcess.releaseLease(oldLease!);
@@ -1547,7 +1593,7 @@ describe("custom-question validation persistence", () => {
       newProcess.get(created.record.projectId, created.record.clientRequestId),
     ).resolves.toMatchObject({
       state: "submitted",
-      taskId: "authoritative-task",
+      localTaskId: "authoritative-task",
       fencingToken: updated.fencingToken,
       activeLease: { token: newLease!.token },
     });
@@ -1611,9 +1657,9 @@ describe("custom-question validation persistence", () => {
       {
         ...created.record,
         state: "submitted",
-        taskId: "task-to-retain",
+        localTaskId: "task-to-retain",
         skillAttachment: {
-          fileId: "temporary-skill",
+          localAssetId: "temporary-skill",
           filename: "skill.zip",
           temporary: true,
         },
@@ -1649,7 +1695,7 @@ describe("custom-question validation persistence", () => {
       tombstoneTtlMs: 1_000,
       cleanup: async (target) => {
         expect(target).not.toHaveProperty("taskId");
-        cleanedIds.push(...target.temporaryFileIds);
+        cleanedIds.push(...target.temporaryLocalAssetIds);
       },
     });
     expect(succeeded).toMatchObject({ deleted: 0, retained: 0 });
@@ -1707,9 +1753,9 @@ describe("custom-question validation persistence", () => {
       {
         ...created.record,
         state: "submitted",
-        taskId: "retry-retained-task",
+        localTaskId: "retry-retained-task",
         skillAttachment: {
-          fileId: "retry-cleanup-file",
+          localAssetId: "retry-cleanup-file",
           filename: "skill.zip",
           temporary: true,
         },
@@ -1738,8 +1784,8 @@ describe("custom-question validation persistence", () => {
     await expect(
       store.getProjectDeletionTargets(created.record.projectId),
     ).resolves.toEqual({
-      taskIds: [],
-      temporaryFileIds: ["retry-cleanup-file"],
+      localTaskIds: [],
+      temporaryLocalAssetIds: ["retry-cleanup-file"],
     });
 
     const persistedAfterOutage = await Promise.all(
@@ -1759,7 +1805,7 @@ describe("custom-question validation persistence", () => {
       tombstoneTtlMs: 1_000,
       cleanup: async (target) => {
         expect(target).not.toHaveProperty("taskId");
-        cleaned.push(...target.temporaryFileIds);
+        cleaned.push(...target.temporaryLocalAssetIds);
       },
     });
     expect(cleaned).toEqual(["retry-cleanup-file"]);
@@ -1874,9 +1920,9 @@ describe("custom-question validation persistence", () => {
         {
           ...created.record,
           state: "prepared",
-          taskId: "retained-audit-task",
+          localTaskId: "retained-audit-task",
           archiveAttachment: {
-            fileId: "temporary-archive-file",
+            localAssetId: "temporary-archive-file",
             filename: "Acme.zip",
             temporary: true,
           },
@@ -1912,7 +1958,7 @@ describe("custom-question validation persistence", () => {
         },
       });
       expect(cleanupTargets).toEqual([
-        { temporaryFileIds: ["temporary-archive-file"] },
+        { temporaryLocalAssetIds: ["temporary-archive-file"] },
       ]);
       expect(cleanupTargets[0]).not.toHaveProperty("taskId");
     }
@@ -2007,9 +2053,9 @@ describe("custom-question validation persistence", () => {
         {
           ...created.record,
           state: "failed",
-          taskId: "project-delete-task",
+          localTaskId: "project-delete-task",
           promptInputAttachment: {
-            fileId: "project-delete-input",
+            localAssetId: "project-delete-input",
             filename: "task-input.json",
             temporary: true,
           },
@@ -2037,15 +2083,15 @@ describe("custom-question validation persistence", () => {
       await expect(
         store.getProjectDeletionTargets(created.record.projectId),
       ).resolves.toEqual({
-        taskIds: ["project-delete-task"],
-        temporaryFileIds: ["project-delete-input"],
+        localTaskIds: ["project-delete-task"],
+        temporaryLocalAssetIds: ["project-delete-input"],
       });
       await expect(
         store.purgeProjectRecords(created.record.projectId),
       ).resolves.toBe(1);
       await expect(
         store.getProjectDeletionTargets(created.record.projectId),
-      ).resolves.toEqual({ taskIds: [], temporaryFileIds: [] });
+      ).resolves.toEqual({ localTaskIds: [], temporaryLocalAssetIds: [] });
       await expect(
         store.get(created.record.projectId, created.record.clientRequestId),
       ).rejects.toMatchObject({ code: "PROJECT_DELETION_FENCED" });
@@ -2061,7 +2107,7 @@ describe("custom-question validation persistence", () => {
     ).resolves.toBe(true);
     await expect(
       restarted.getProjectDeletionTargets(reservation().projectId),
-    ).resolves.toEqual({ taskIds: [], temporaryFileIds: [] });
+    ).resolves.toEqual({ localTaskIds: [], temporaryLocalAssetIds: [] });
     await expect(restarted.listActive()).resolves.toEqual([]);
     await expect(restarted.reserve(reservation())).rejects.toMatchObject({
       code: "PROJECT_DELETION_FENCED",
@@ -2115,7 +2161,7 @@ describe("custom-question validation persistence", () => {
     ).resolves.toBe(true);
     await expect(
       restarted.getProjectDeletionTargets(created.record.projectId),
-    ).resolves.toEqual({ taskIds: [], temporaryFileIds: [] });
+    ).resolves.toEqual({ localTaskIds: [], temporaryLocalAssetIds: [] });
     await expect(
       restarted.get(created.record.projectId, created.record.clientRequestId),
     ).rejects.toMatchObject({ code: "PROJECT_DELETION_FENCED" });

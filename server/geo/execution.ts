@@ -234,35 +234,22 @@ function taskEntry(input: TaskEntryInput): GeoExecutionLogEntry {
       ? safeValidationFailureCode(input.validationFailureCode)
       : undefined;
   const status = validationFailureCode ? "failed" : upstreamStatus;
-  const startedAt = timestampValue(
-    input.task.started_at,
-    input.task.startedAt,
-    input.task.created_at,
-    input.task.createdAt,
-    asRecord(input.task.metadata).started_at,
-    asRecord(input.task.metadata).created_at,
-    input.fallbackStartedAt,
-  );
+  const safeEventTimes = input.task.safeEvents
+    .map((event) => timestampValue(event.createdAt, event.timestamp))
+    .filter((value): value is string => Boolean(value));
+  const startedAt =
+    safeEventTimes.length > 0 ? safeEventTimes[0] : input.fallbackStartedAt;
   const crawlProgress = input.includeCrawlProgress
     ? parseTrustedGeoCrawlProgress(input.task)
     : undefined;
   const updatedAt = latestTimestamp([
-    timestampValue(
-      input.task.updated_at,
-      input.task.updatedAt,
-      asRecord(input.task.metadata).updated_at,
-      asRecord(input.task.metadata).updatedAt,
-    ),
+    safeEventTimes.at(-1),
     crawlProgress?.reportedAt,
   ]);
-  const completedAt = timestampValue(
-    input.task.completed_at,
-    input.task.completedAt,
-    input.task.finished_at,
-    input.task.finishedAt,
-    asRecord(input.task.metadata).completed_at,
-    asRecord(input.task.metadata).completedAt,
-  );
+  const completedAt =
+    upstreamStatus === "completed" || upstreamStatus === "failed"
+      ? updatedAt
+      : undefined;
   const terminalAt =
     status === "completed" || status === "failed"
       ? (completedAt ?? updatedAt)
@@ -425,62 +412,15 @@ function safeAssistantOutputTexts(task: BrokerTask): Array<{
   text: string;
   createdAt?: string;
 }> {
-  const results: Array<{ text: string; createdAt?: string }> = [];
   const seen = new Set<string>();
-
-  const addOutputText = (value: unknown, inheritedAt?: string) => {
-    const record = asRecord(value);
-    if (stringValue(record.type)?.toLowerCase() !== "output_text") return;
-    const text = safeModelText(record.text);
-    if (!text || seen.has(text)) return;
-    const createdAt =
-      timestampValue(record.created_at, record.createdAt, record.timestamp) ??
-      inheritedAt;
+  return task.safeEvents.flatMap((event) => {
+    if (seen.size >= MAX_MODEL_EVENTS) return [];
+    const text = safeModelText(event.message);
+    if (!text || seen.has(text)) return [];
     seen.add(text);
-    results.push({ text, ...(createdAt ? { createdAt } : {}) });
-  };
-
-  const visit = (value: unknown, depth: number) => {
-    if (depth > 12 || results.length >= MAX_MODEL_EVENTS) return;
-    if (Array.isArray(value)) {
-      for (const item of value) {
-        visit(item, depth + 1);
-        if (results.length >= MAX_MODEL_EVENTS) break;
-      }
-      return;
-    }
-    const record = asRecord(value);
-    if (Object.keys(record).length === 0) return;
-
-    const role = stringValue(record.role)?.toLowerCase();
-    const createdAt = timestampValue(
-      record.created_at,
-      record.createdAt,
-      record.timestamp,
-    );
-    const type = stringValue(record.type)?.toLowerCase();
-    if (role === "assistant") {
-      if (type === "output_text") addOutputText(record, createdAt);
-      const content = record.content;
-      if (Array.isArray(content)) {
-        for (const item of content) {
-          addOutputText(item, createdAt);
-          if (results.length >= MAX_MODEL_EVENTS) break;
-        }
-      }
-      return;
-    }
-
-    // Only these vendor envelope keys may contain assistant messages. Do not
-    // recursively inspect metadata, prompts, tool payloads, or reasoning.
-    for (const key of ["output", "messages", "items", "data", "result"]) {
-      visit(record[key], depth + 1);
-      if (results.length >= MAX_MODEL_EVENTS) break;
-    }
-  };
-
-  visit(task.output, 0);
-  return results;
+    const createdAt = timestampValue(event.createdAt, event.timestamp);
+    return [{ text, ...(createdAt ? { createdAt } : {}) }];
+  });
 }
 
 function safeModelText(value: unknown): string | undefined {

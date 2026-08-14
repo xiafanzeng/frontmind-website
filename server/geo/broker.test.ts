@@ -1,25 +1,52 @@
 import { describe, expect, it, vi } from "vitest";
 import {
   createGeoPresalesBrokerFromEnv,
-  FRONTMIND_BASE_PROFILE,
-  FRONTMIND_PRO_PROFILE,
+  expectedContractHashes,
   HttpGeoPresalesBroker,
+  PRESALES_CAPABILITIES,
+  PRESALES_CONTRACTS,
+  PRESALES_CONTRACT_VERSION,
 } from "./broker";
+
+function taskFixture(id: string) {
+  return {
+    localTaskId: id,
+    operationId: `operation:${id}`,
+    status: "running",
+    safeEvents: [],
+  };
+}
+
+function statusFixture(overrides: Record<string, unknown> = {}) {
+  return {
+    ok: true,
+    credentialConfigured: true,
+    monitorCredentialConfigured: true,
+    monitorCredentialAuthenticated: true,
+    publicUrlConfigured: true,
+    presalesContractVersion: PRESALES_CONTRACT_VERSION,
+    capabilities: PRESALES_CAPABILITIES,
+    contractHashes: expectedContractHashes(),
+    ...overrides,
+  };
+}
 
 describe("HttpGeoPresalesBroker", () => {
   it("rejects an over-budget task prompt before any outbound request", async () => {
     const fetchMock = vi.fn();
     const broker = new HttpGeoPresalesBroker({
-      baseUrl: "https://agent.example/api/internal/presales",
+      baseUrl: "https://agent.example/api/internal/presales/v2",
       serviceToken: "private-token",
       fetchImpl: fetchMock as typeof fetch,
     });
 
     await expect(
       broker.createTask({
+        projectId: "project-over-budget",
         prompt: "😀".repeat(3_001),
-        attachments: [],
+        localAssets: [],
         idempotencyKey: "geo:over-budget",
+        contract: PRESALES_CONTRACTS.knowledgeBaseCandidate,
       }),
     ).rejects.toMatchObject({
       code: "TASK_PROMPT_TOO_LONG",
@@ -34,7 +61,7 @@ describe("HttpGeoPresalesBroker", () => {
       async () =>
         new Response(
           JSON.stringify({
-            id: "file-1",
+            localAssetId: "asset-1",
             filename: "archive.zip",
             status: "pending",
           }),
@@ -45,12 +72,12 @@ describe("HttpGeoPresalesBroker", () => {
         ),
     );
     const broker = new HttpGeoPresalesBroker({
-      baseUrl: "https://agent.example/api/internal/presales",
+      baseUrl: "https://agent.example/api/internal/presales/v2",
       serviceToken: "private-token",
       fetchImpl: fetchMock as typeof fetch,
     });
 
-    await broker.createFile({
+    await broker.createAsset({
       projectId: "project-file-1",
       filename: "archive.zip",
       mimeType: "application/zip",
@@ -60,7 +87,7 @@ describe("HttpGeoPresalesBroker", () => {
 
     const [url, init] = fetchMock.mock.calls[0];
     expect(String(url)).toBe(
-      "https://agent.example/api/internal/presales/files",
+      "https://agent.example/api/internal/presales/v2/assets",
     );
     expect(JSON.parse(String(init?.body))).toEqual({
       projectId: "project-file-1",
@@ -71,11 +98,11 @@ describe("HttpGeoPresalesBroker", () => {
     });
   });
 
-  it("defaults to Base, sends the private service token, and rejects redirects", async () => {
+  it("sends only the server-owned contract and local asset identities", async () => {
     const fetchMock = vi.fn(
       async (_url: string | URL | Request, init?: RequestInit) => {
         return new Response(
-          JSON.stringify({ id: "task-1", status: "running" }),
+          JSON.stringify(taskFixture("task-1")),
           {
             status: 201,
             headers: { "content-type": "application/json" },
@@ -84,7 +111,7 @@ describe("HttpGeoPresalesBroker", () => {
       },
     );
     const broker = new HttpGeoPresalesBroker({
-      baseUrl: "https://agent.example/api/internal/presales",
+      baseUrl: "https://agent.example/api/internal/presales/v2",
       serviceToken: "private-token",
       fetchImpl: fetchMock as typeof fetch,
     });
@@ -92,35 +119,80 @@ describe("HttpGeoPresalesBroker", () => {
     await broker.createTask({
       projectId: "project-1",
       prompt: "build",
-      attachments: [],
+      localAssets: [{ localAssetId: "asset-1", filename: "source.pdf" }],
       idempotencyKey: "geo:project:test",
+      contract: PRESALES_CONTRACTS.knowledgeBaseCandidate,
     });
     const [url, init] = fetchMock.mock.calls[0];
     expect(String(url)).toBe(
-      "https://agent.example/api/internal/presales/tasks",
+      "https://agent.example/api/internal/presales/v2/tasks",
     );
     expect(new Headers(init?.headers).get("x-frontmind-service-token")).toBe(
       "private-token",
     );
     expect(init?.redirect).toBe("error");
-    expect(JSON.parse(String(init?.body))).toMatchObject({
-      agentProfile: FRONTMIND_BASE_PROFILE,
-      taskMode: "agent",
+    expect(JSON.parse(String(init?.body))).toEqual({
       idempotencyKey: "geo:project:test",
       projectId: "project-1",
+      prompt: "build",
+      localAssetIds: [{ localAssetId: "asset-1", filename: "source.pdf" }],
+      contract: PRESALES_CONTRACTS.knowledgeBaseCandidate,
     });
   });
 
-  it("allows only an explicit task to use Pro", async () => {
+  it.each([
+    {
+      localTaskId: "task-null-result",
+      operationId: "operation-null-result",
+      status: "running",
+      safeEvents: [],
+      result: null,
+    },
+    {
+      localTaskId: "task-premature-result",
+      operationId: "operation-premature-result",
+      status: "running",
+      safeEvents: [],
+      result: { structuredResult: {}, artifacts: [] },
+    },
+    {
+      localTaskId: "task-incomplete-error",
+      operationId: "operation-incomplete-error",
+      status: "failed",
+      safeEvents: [],
+      error: { code: "TASK_FAILED" },
+    },
+  ])("rejects non-exact v2 task DTOs", async (responseBody) => {
+    const broker = new HttpGeoPresalesBroker({
+      baseUrl: "https://agent.example/api/internal/presales/v2",
+      serviceToken: "private-token",
+      fetchImpl: vi.fn(
+        async () =>
+          new Response(JSON.stringify(responseBody), {
+            status: 200,
+            headers: { "content-type": "application/json" },
+          }),
+      ) as typeof fetch,
+    });
+
+    await expect(broker.getTask(responseBody.localTaskId)).rejects.toMatchObject(
+      {
+        code: "AGENT_INVALID_RESPONSE",
+        status: 502,
+      },
+    );
+  });
+
+  it("keeps recommendation Pro in the immutable server contract", async () => {
     const fetchMock = vi.fn(
       async () =>
-        new Response(JSON.stringify({ id: "task-pro", status: "running" }), {
+        new Response(JSON.stringify(taskFixture("task-pro")), {
           status: 201,
           headers: { "content-type": "application/json" },
         }),
     );
     const broker = new HttpGeoPresalesBroker({
-      baseUrl: "https://agent.example/api/internal/presales",
+      baseUrl: "https://agent.example/api/internal/presales/v2",
       serviceToken: "private-token",
       fetchImpl: fetchMock as typeof fetch,
     });
@@ -128,16 +200,50 @@ describe("HttpGeoPresalesBroker", () => {
     await broker.createTask({
       projectId: "project-1",
       prompt: "recommend questions",
-      attachments: [],
+      localAssets: [],
       idempotencyKey: "geo:project:questions",
-      agentProfile: FRONTMIND_PRO_PROFILE,
+      contract: PRESALES_CONTRACTS.questionRecommendation,
     });
 
     const [, init] = fetchMock.mock.calls[0];
-    expect(JSON.parse(String(init?.body))).toMatchObject({
-      agentProfile: FRONTMIND_PRO_PROFILE,
-      taskMode: "agent",
+    const body = JSON.parse(String(init?.body));
+    expect(body.contract).toEqual(PRESALES_CONTRACTS.questionRecommendation);
+    expect(body).not.toHaveProperty("agentProfile");
+    expect(body).not.toHaveProperty("model");
+    expect(body).not.toHaveProperty("taskMode");
+  });
+
+  it("submits one same-task repair with only the stable local operation key", async () => {
+    const fetchMock = vi.fn(
+      async () =>
+        new Response(JSON.stringify(taskFixture("task-repair")), {
+          status: 202,
+          headers: { "content-type": "application/json" },
+        }),
+    );
+    const broker = new HttpGeoPresalesBroker({
+      baseUrl: "https://agent.example/api/internal/presales/v2",
+      serviceToken: "private-token",
+      fetchImpl: fetchMock as typeof fetch,
     });
+
+    await broker.repairTask("task-repair", {
+      idempotencyKey:
+        "geo:structured-repair:website.question-recommendation:task-repair:1",
+    });
+
+    const [url, init] = fetchMock.mock.calls[0];
+    expect(String(url)).toBe(
+      "https://agent.example/api/internal/presales/v2/tasks/task-repair/repair",
+    );
+    expect(init?.method).toBe("POST");
+    expect(JSON.parse(String(init?.body))).toEqual({
+      idempotencyKey:
+        "geo:structured-repair:website.question-recommendation:task-repair:1",
+    });
+    expect(JSON.parse(String(init?.body))).not.toHaveProperty("agentProfile");
+    expect(JSON.parse(String(init?.body))).not.toHaveProperty("model");
+    expect(JSON.parse(String(init?.body))).not.toHaveProperty("taskMode");
   });
 
   it("uses Agent's raw upload fallback contract", async () => {
@@ -149,11 +255,11 @@ describe("HttpGeoPresalesBroker", () => {
         }),
     );
     const broker = new HttpGeoPresalesBroker({
-      baseUrl: "https://agent.example/api/internal/presales",
+      baseUrl: "https://agent.example/api/internal/presales/v2",
       serviceToken: "private-token",
       fetchImpl: fetchMock as typeof fetch,
     });
-    await broker.uploadFile(
+    await broker.uploadAsset(
       "file-1",
       Buffer.from("pdf"),
       "application/pdf",
@@ -189,7 +295,7 @@ describe("HttpGeoPresalesBroker", () => {
         ),
     );
     const broker = new HttpGeoPresalesBroker({
-      baseUrl: "https://agent.example/api/internal/presales",
+      baseUrl: "https://agent.example/api/internal/presales/v2",
       serviceToken: "private-token",
       fetchImpl: fetchMock as typeof fetch,
     });
@@ -202,7 +308,7 @@ describe("HttpGeoPresalesBroker", () => {
 
     const [url, init] = fetchMock.mock.calls[0];
     expect(String(url)).toBe(
-      "https://agent.example/api/internal/presales/monitor-runs",
+      "https://agent.example/api/internal/presales/v2/monitor-runs",
     );
     expect(JSON.parse(String(init?.body))).toEqual({
       projectId: "project-monitor-1",
@@ -215,7 +321,7 @@ describe("HttpGeoPresalesBroker", () => {
   it("physically deletes the project-scoped local monitor record", async () => {
     const fetchMock = vi.fn(async () => new Response(null, { status: 204 }));
     const broker = new HttpGeoPresalesBroker({
-      baseUrl: "https://agent.example/api/internal/presales",
+      baseUrl: "https://agent.example/api/internal/presales/v2",
       serviceToken: "private-token",
       fetchImpl: fetchMock as typeof fetch,
     });
@@ -226,7 +332,7 @@ describe("HttpGeoPresalesBroker", () => {
 
     const [url, init] = fetchMock.mock.calls[0];
     expect(String(url)).toBe(
-      "https://agent.example/api/internal/presales/projects/project-monitor-1/monitor-runs/monitor-run-1",
+      "https://agent.example/api/internal/presales/v2/projects/project-monitor-1/monitor-runs/monitor-run-1",
     );
     expect(init?.method).toBe("DELETE");
   });
@@ -248,7 +354,7 @@ describe("HttpGeoPresalesBroker", () => {
         ),
     );
     const broker = new HttpGeoPresalesBroker({
-      baseUrl: "https://agent.example/api/internal/presales",
+      baseUrl: "https://agent.example/api/internal/presales/v2",
       serviceToken: "private-token",
       fetchImpl: fetchMock as typeof fetch,
     });
@@ -274,7 +380,7 @@ describe("HttpGeoPresalesBroker", () => {
         ),
     );
     const broker = new HttpGeoPresalesBroker({
-      baseUrl: "https://agent.example/api/internal/presales",
+      baseUrl: "https://agent.example/api/internal/presales/v2",
       serviceToken: "private-token",
       fetchImpl: fetchMock as typeof fetch,
     });
@@ -295,7 +401,7 @@ describe("HttpGeoPresalesBroker", () => {
     "preserves the allowlisted Dashboard monitor error code %s",
     async (code) => {
       const broker = new HttpGeoPresalesBroker({
-        baseUrl: "https://agent.example/api/internal/presales",
+        baseUrl: "https://agent.example/api/internal/presales/v2",
         serviceToken: "private-token",
         fetchImpl: vi.fn(
           async () =>
@@ -324,7 +430,7 @@ describe("HttpGeoPresalesBroker", () => {
 
   it("does not forward an unrecognized Dashboard error code", async () => {
     const broker = new HttpGeoPresalesBroker({
-      baseUrl: "https://agent.example/api/internal/presales",
+      baseUrl: "https://agent.example/api/internal/presales/v2",
       serviceToken: "private-token",
       fetchImpl: vi.fn(
         async () =>
@@ -383,7 +489,7 @@ describe("HttpGeoPresalesBroker", () => {
         ),
     );
     const broker = new HttpGeoPresalesBroker({
-      baseUrl: "https://agent.example/api/internal/presales",
+      baseUrl: "https://agent.example/api/internal/presales/v2",
       serviceToken: "private-token",
       fetchImpl: fetchMock as typeof fetch,
     });
@@ -393,7 +499,7 @@ describe("HttpGeoPresalesBroker", () => {
     expect(result.records).toHaveLength(1);
     const [url, init] = fetchMock.mock.calls[0];
     expect(String(url)).toBe(
-      "https://agent.example/api/internal/presales/monitor-runs/monitor-run-1/result",
+      "https://agent.example/api/internal/presales/v2/monitor-runs/monitor-run-1/result",
     );
     expect(init?.method).toBeUndefined();
     expect(new Headers(init?.headers).get("x-frontmind-service-token")).toBe(
@@ -403,7 +509,7 @@ describe("HttpGeoPresalesBroker", () => {
 
   it("reports HTTP 202 monitor results as safely retryable pending reads", async () => {
     const broker = new HttpGeoPresalesBroker({
-      baseUrl: "https://agent.example/api/internal/presales",
+      baseUrl: "https://agent.example/api/internal/presales/v2",
       serviceToken: "private-token",
       fetchImpl: vi.fn(
         async () => new Response(null, { status: 202 }),
@@ -422,7 +528,7 @@ describe("HttpGeoPresalesBroker", () => {
   it("rejects a public placeholder service token", async () => {
     const broker = createGeoPresalesBrokerFromEnv({
       FRONTMIND_PRESALES_AGENT_URL:
-        "https://agent.example/api/internal/presales",
+        "https://agent.example/api/internal/presales/v2",
       FRONTMIND_PRESALES_SERVICE_TOKEN: "replace-with-the-same-random-token",
     });
     await expect(broker.getStatus()).rejects.toMatchObject({
@@ -432,10 +538,10 @@ describe("HttpGeoPresalesBroker", () => {
   });
 
   it.each([
-    "http://agent.example/api/internal/presales",
-    "https://user:password@agent.example/api/internal/presales",
+    "http://agent.example/api/internal/presales/v2",
+    "https://user:password@agent.example/api/internal/presales/v2",
     "https://agent.example/api/internal/provisioning",
-    "https://agent.example/api/internal/presales/tasks",
+    "https://agent.example/api/internal/presales/v2/tasks",
     "https://agent.example/api/internal/presales?target=elsewhere",
     "https://agent.example/api/internal/presales#fragment",
   ])(
@@ -462,21 +568,15 @@ describe("HttpGeoPresalesBroker", () => {
   it("allows an exact Docker DNS hostname only when explicitly allowlisted", async () => {
     const fetchMock = vi.fn(async (url: string | URL | Request) => {
       expect(String(url)).toBe(
-        "http://frontmind-dashboard:3001/api/internal/presales/status",
+        "http://frontmind-dashboard:3001/api/internal/presales/v2/status",
       );
       return new Response(
-        JSON.stringify({
-          ok: true,
-          credentialConfigured: true,
-          monitorCredentialConfigured: true,
-          monitorCredentialAuthenticated: true,
-          publicUrlConfigured: true,
-        }),
+        JSON.stringify(statusFixture()),
         { status: 200, headers: { "content-type": "application/json" } },
       );
     });
     const broker = new HttpGeoPresalesBroker({
-      baseUrl: "http://frontmind-dashboard:3001/api/internal/presales",
+      baseUrl: "http://frontmind-dashboard:3001/api/internal/presales/v2",
       internalHttpHosts: ["frontmind-dashboard"],
       serviceToken: "presales-service-token-at-least-32-characters",
       fetchImpl: fetchMock as typeof fetch,
@@ -489,21 +589,20 @@ describe("HttpGeoPresalesBroker", () => {
   it("requests an uncached monitor credential probe for payment preflight", async () => {
     const fetchMock = vi.fn(async (url: string | URL | Request) => {
       expect(String(url)).toBe(
-        "http://frontmind-dashboard:3001/api/internal/presales/status?monitorCredentialProbe=fresh",
+        "http://frontmind-dashboard:3001/api/internal/presales/v2/status?monitorCredentialProbe=fresh",
       );
       return new Response(
-        JSON.stringify({
-          ok: false,
-          credentialConfigured: true,
-          monitorCredentialConfigured: true,
-          monitorCredentialAuthenticated: false,
-          publicUrlConfigured: true,
-        }),
+        JSON.stringify(
+          statusFixture({
+            ok: false,
+            monitorCredentialAuthenticated: false,
+          }),
+        ),
         { status: 200, headers: { "content-type": "application/json" } },
       );
     });
     const broker = new HttpGeoPresalesBroker({
-      baseUrl: "http://frontmind-dashboard:3001/api/internal/presales",
+      baseUrl: "http://frontmind-dashboard:3001/api/internal/presales/v2",
       internalHttpHosts: ["frontmind-dashboard"],
       serviceToken: "presales-service-token-at-least-32-characters",
       fetchImpl: fetchMock as typeof fetch,
@@ -519,6 +618,35 @@ describe("HttpGeoPresalesBroker", () => {
     expect(fetchMock).toHaveBeenCalledTimes(1);
   });
 
+  it.each([
+    statusFixture({
+      capabilities: [...PRESALES_CAPABILITIES, "provider-identities"],
+    }),
+    statusFixture({
+      contractHashes: {
+        ...expectedContractHashes(),
+        "website.unknown-contract": "a".repeat(64),
+      },
+    }),
+  ])("fails readiness when the v2 capability/hash surface is not exact", async (status) => {
+    const broker = new HttpGeoPresalesBroker({
+      baseUrl: "https://agent.example/api/internal/presales/v2",
+      serviceToken: "private-token",
+      fetchImpl: vi.fn(
+        async () =>
+          new Response(JSON.stringify(status), {
+            status: 200,
+            headers: { "content-type": "application/json" },
+          }),
+      ) as typeof fetch,
+    });
+
+    await expect(broker.getStatus()).rejects.toMatchObject({
+      code: "AGENT_STATUS_INVALID",
+      status: 502,
+    });
+  });
+
   it("rejects malformed or near-match internal host allowlists", () => {
     for (const internalHosts of [
       "http://frontmind-dashboard:3001",
@@ -529,7 +657,7 @@ describe("HttpGeoPresalesBroker", () => {
       expect(() =>
         createGeoPresalesBrokerFromEnv({
           FRONTMIND_PRESALES_AGENT_URL:
-            "http://frontmind-dashboard:3001/api/internal/presales",
+            "http://frontmind-dashboard:3001/api/internal/presales/v2",
           FRONTMIND_AGENT_INTERNAL_HTTP_HOSTS: internalHosts,
           FRONTMIND_PRESALES_SERVICE_TOKEN:
             "presales-service-token-at-least-32-characters",

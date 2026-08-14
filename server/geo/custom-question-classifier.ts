@@ -1,15 +1,12 @@
 import { z } from "zod";
 import type { KnowledgeBaseManifest } from "./archive";
 import type { GeoPresalesBroker } from "./broker";
-import { trustedAssistantOutputTexts } from "./trusted-task-output";
 import {
-  inspectTrustedTaskJsonCandidate,
   resolveTrustedTaskJsonOutput,
-  trustedTaskJsonObjectCandidates,
   TrustedTaskJsonOutputError,
   type TrustedTaskJsonCandidateInspection,
-  type TrustedTaskJsonInlineInspectionContext,
 } from "./trusted-task-json-output";
+import { normalizePresalesStructuredResult } from "./structured-result-normalization";
 
 const AcceptedCustomQuestionClassificationSchema = z
   .object({
@@ -126,61 +123,26 @@ const GENERIC_ANCHORS = new Set(
 export function parseCustomQuestionClassificationTaskOutput(
   task: unknown,
 ): CustomQuestionClassification | null {
-  const inspection = inspectInlineCustomQuestionClassification(task);
-  return inspection?.success ? inspection.data : null;
-}
-
-function inspectInlineCustomQuestionClassification(
-  task: unknown,
-  context?: TrustedTaskJsonInlineInspectionContext,
-):
-  | TrustedTaskJsonCandidateInspection<CustomQuestionClassification>
-  | undefined {
-  const texts = trustedAssistantOutputTexts(task);
-  if (texts.length === 0) return undefined;
-  const valid = new Map<string, CustomQuestionClassification>();
-  let sawParsedJson = false;
-  let validation: unknown;
-  for (const text of trustedAssistantOutputTexts(task)) {
-    if (context && !context.canInspectText(text)) break;
-    for (const candidate of trustedTaskJsonObjectCandidates(text)) {
-      if (context && !context.takeCandidate(candidate)) break;
-      const normalized = inspectTrustedTaskJsonCandidate(candidate);
-      if (!normalized) continue;
-      sawParsedJson = true;
-      const inspection = inspectParsedCustomQuestionClassification(
-        normalized.value,
-      );
-      if (inspection.success) {
-        valid.set(classificationSecurityKey(inspection.data), inspection.data);
-      } else {
-        validation = inspection.validation;
-      }
-    }
-  }
-  if (valid.size === 1) {
-    return { success: true, data: valid.values().next().value! };
-  }
-  if (valid.size > 1) {
-    return {
-      success: false,
-      code: "SCHEMA_MISMATCH",
-      validation: [
-        { path: ["root"], message: "Conflicting valid JSON candidates" },
-      ],
-    };
-  }
-  return {
-    success: false,
-    code: sawParsedJson ? "SCHEMA_MISMATCH" : "INVALID_JSON",
-    validation,
-  };
+  const result =
+    task && typeof task === "object" && !Array.isArray(task)
+      ? (task as { result?: { structuredResult?: unknown } }).result
+      : undefined;
+  if (!result || !("structuredResult" in result)) return null;
+  const inspection = inspectParsedCustomQuestionClassification(
+    result.structuredResult,
+  );
+  return inspection.success ? inspection.data : null;
 }
 
 function inspectParsedCustomQuestionClassification(
   candidate: unknown,
 ): TrustedTaskJsonCandidateInspection<CustomQuestionClassification> {
-  const parsed = CustomQuestionClassificationSchema.safeParse(candidate);
+  const parsed = CustomQuestionClassificationSchema.safeParse(
+    normalizePresalesStructuredResult(
+      "website.custom-question-classifier",
+      candidate,
+    ),
+  );
   return parsed.success
     ? { success: true, data: parsed.data }
     : {
@@ -194,14 +156,13 @@ function inspectParsedCustomQuestionClassification(
 }
 
 export async function resolveCustomQuestionClassificationTaskOutput(
-  broker: Pick<GeoPresalesBroker, "downloadFile" | "downloadTaskOutput">,
+  broker: Pick<GeoPresalesBroker, "downloadArtifact">,
   task: unknown,
   options: Readonly<{ taskId?: string }> = {},
 ): Promise<CustomQuestionClassification | null> {
   try {
     return await resolveTrustedTaskJsonOutput(broker, task, {
       taskId: options.taskId,
-      inspectInline: inspectInlineCustomQuestionClassification,
       inspectParsed: inspectParsedCustomQuestionClassification,
       canonicalize: classificationSecurityKey,
     });

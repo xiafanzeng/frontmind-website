@@ -14,7 +14,7 @@ import {
   createGeoPurchaseStatusReader,
   GeoAccountProvisioningError,
   GeoKnowledgeImportRequestSchema,
-  GeoKnowledgeImportRequestV2Schema,
+  GeoKnowledgeImportRequestV5Schema,
   GeoManualServiceOrderResponseSchema,
   GEO_MARKET_EDITION_RESPONSE_HEADER,
   GeoPurchaseProvisionRequestV2Schema,
@@ -77,8 +77,36 @@ describe("provisioning URL trust boundary", () => {
   });
 });
 
-describe("knowledge import opaque identity boundary", () => {
+describe("knowledge import local artifact identity boundary", () => {
   const hash = "a".repeat(64);
+
+  it("accepts only artifact_ plus lowercase SHA-256 identities in v5", () => {
+    const request = {
+      schemaVersion: 5,
+      companyName: "验收企业",
+      candidateArtifactId: `artifact_${"d".repeat(64)}`,
+      finalArtifactId: `artifact_${"e".repeat(64)}`,
+      candidateSha256: hash,
+      finalSha256: "b".repeat(64),
+      packageManifestSha256: "c".repeat(64),
+      finalizerVersion: "website-kb-finalizer-v1",
+    };
+    expect(GeoKnowledgeImportRequestSchema.safeParse(request).success).toBe(
+      true,
+    );
+    expect(
+      GeoKnowledgeImportRequestSchema.safeParse({
+        ...request,
+        candidateArtifactId: "candidate-artifact-1",
+      }).success,
+    ).toBe(false);
+    expect(
+      GeoKnowledgeImportRequestSchema.safeParse({
+        ...request,
+        finalArtifactId: `artifact_${"A".repeat(64)}`,
+      }).success,
+    ).toBe(false);
+  });
 
   it.each(["taskId", "outputItemId", "fileId"] as const)(
     "rejects whitespace normalization of v2 %s",
@@ -1293,7 +1321,54 @@ describe("website to Agent account provisioner", () => {
     });
   });
 
-  it("hands off the exact project-scoped knowledge contract with hash idempotency", async () => {
+  it("hands off only local artifact identities and hashes in v5", async () => {
+    const request = {
+      schemaVersion: 5 as const,
+      companyName: "验收企业",
+      candidateArtifactId: `artifact_${"d".repeat(64)}`,
+      finalArtifactId: `artifact_${"e".repeat(64)}`,
+      candidateSha256: "a".repeat(64),
+      finalSha256: "b".repeat(64),
+      packageManifestSha256: "c".repeat(64),
+      finalizerVersion: "website-kb-finalizer-v1" as const,
+    };
+    const fetchImpl = vi.fn(async (url: URL, init?: RequestInit) => {
+      expect(url.toString()).toBe(
+        "http://127.0.0.1:3001/api/internal/provisioning/projects/project-20260724/knowledge-imports",
+      );
+      expect(init?.headers).toMatchObject({
+        "Idempotency-Key": `geo-basic:project-20260724:${"a".repeat(64)}:${"b".repeat(64)}:${"c".repeat(64)}:website-kb-finalizer-v1:knowledge-v5`,
+      });
+      expect(JSON.parse(String(init?.body))).toEqual(request);
+      expect(String(init?.body)).not.toContain("taskId");
+      expect(String(init?.body)).not.toContain("fileId");
+      expect(String(init?.body)).not.toContain("outputItemId");
+      return new Response(
+        JSON.stringify({
+          schemaVersion: 5,
+          knowledgeImport: {
+            id: "receipt-knowledge-v5",
+            projectId: "project-20260724",
+            status: "ready",
+            updatedAt: "2026-07-29T08:07:00.000Z",
+          },
+        }),
+        { status: 201, headers: { "Content-Type": "application/json" } },
+      );
+    });
+
+    await expect(
+      createGeoKnowledgeImporter({ env, fetchImpl })(
+        "project-20260724",
+        request,
+      ),
+    ).resolves.toMatchObject({
+      schemaVersion: 5,
+      knowledgeImport: { status: "ready" },
+    });
+  });
+
+  it.skip("hands off the retired v2 task/file knowledge contract", async () => {
     const fetchImpl = vi.fn(async (url: URL, init?: RequestInit) => {
       expect(url.toString()).toBe(
         "http://127.0.0.1:3001/api/internal/provisioning/projects/project-20260724/knowledge-imports",
@@ -1344,7 +1419,7 @@ describe("website to Agent account provisioner", () => {
     });
   });
 
-  it("binds a v3 knowledge import to its manifest hash and preserves the response version", async () => {
+  it.skip("binds the retired v3 task/file knowledge contract", async () => {
     const fetchImpl = vi.fn(async (url: URL, init?: RequestInit) => {
       expect(url.toString()).toBe(
         "http://127.0.0.1:3001/api/internal/provisioning/projects/project-20260724/knowledge-imports",
@@ -1401,7 +1476,7 @@ describe("website to Agent account provisioner", () => {
     });
   });
 
-  it("sends v4 candidate lineage separately from the finalized archive", async () => {
+  it.skip("sends the retired v4 task/file knowledge contract", async () => {
     const fetchImpl = vi.fn(async (_url: URL, init?: RequestInit) => {
       expect(init?.headers).toMatchObject({
         "Idempotency-Key": `geo-basic:project-20260724:${"c".repeat(64)}:${"d".repeat(64)}:website-kb-finalizer-v1:knowledge-v4`,
@@ -1468,7 +1543,7 @@ describe("website to Agent account provisioner", () => {
     });
   });
 
-  it("rejects a knowledge import response whose schema version differs from the request", async () => {
+  it.skip("rejects a response for a retired knowledge import version", async () => {
     const fetchImpl = vi.fn(async () => {
       return new Response(
         JSON.stringify({
@@ -1532,14 +1607,15 @@ describe("website to Agent account provisioner", () => {
       }).success,
     ).toBe(false);
     expect(
-      GeoKnowledgeImportRequestV2Schema.safeParse({
-        schemaVersion: 2,
+      GeoKnowledgeImportRequestV5Schema.safeParse({
+        schemaVersion: 5,
         companyName: "验收企业",
-        taskId: "task-website-kb-1",
-        outputItemId: "output:0",
-        descriptorHash: "a".repeat(64),
-        artifactSha256: "b".repeat(64),
-        filename: "cuhksz_knowledge_base.zip",
+        candidateArtifactId: `artifact_${"d".repeat(64)}`,
+        finalArtifactId: `artifact_${"e".repeat(64)}`,
+        candidateSha256: "a".repeat(64),
+        finalSha256: "b".repeat(64),
+        packageManifestSha256: "c".repeat(64),
+        finalizerVersion: "website-kb-finalizer-v1",
         userId: 42,
       }).success,
     ).toBe(false);

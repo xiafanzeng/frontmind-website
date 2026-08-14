@@ -2539,7 +2539,7 @@ function normalizeExecutionLog(value: unknown): GeoExecutionLog | undefined {
 
   const entries = rawEntries.flatMap((item, entryIndex) => {
     const entry = asRecord(item);
-    const id = textValue(entry.id, entry.taskId, entry.task_id);
+    const id = textValue(entry.id);
     const title = textValue(entry.title, entry.label);
     const rawStage = textValue(entry.stage);
     if (!id || !title || !rawStage || !validStages.has(rawStage as GeoStage)) {
@@ -3303,15 +3303,8 @@ export async function uploadGeoFile(
       }),
     }),
   );
-  const uploadToken = textValue(
-    initPayload.uploadToken,
-    initPayload.upload_token,
-  );
-  const directUploadUrl = textValue(
-    initPayload.directUploadUrl,
-    initPayload.direct_upload_url,
-  );
-  const fileId = textValue(initPayload.fileId, initPayload.file_id);
+  const uploadToken = textValue(initPayload.uploadToken);
+  const fileId = textValue(initPayload.fileId);
   if (!uploadToken || !fileId)
     throw new GeoApiError(
       "附件上传凭证无效，请重新选择文件。",
@@ -3333,46 +3326,7 @@ export async function uploadGeoFile(
     });
   };
 
-  if (directUploadUrl) {
-    try {
-      await withRequestControl(
-        {
-          signal: options.signal,
-          timeoutMs: UPLOAD_REQUEST_TIMEOUT_MS,
-        },
-        async (signal) => {
-          const directResponse = await fetch(directUploadUrl, {
-            method: "PUT",
-            body: file,
-            credentials: "omit",
-            signal,
-            headers: {
-              "content-type": file.type || "application/octet-stream",
-            },
-          });
-          if (!directResponse.ok) {
-            await parseResponse(directResponse, {
-              requireJsonOnSuccess: false,
-            });
-          }
-        },
-      );
-    } catch (error) {
-      if (
-        options.signal?.aborted ||
-        (error instanceof GeoApiError && error.code === "REQUEST_TIMEOUT")
-      ) {
-        throw options.signal?.aborted
-          ? requestAbortReason(options.signal)
-          : error;
-      }
-      // Presigned uploads can fail because of storage CORS or transient network errors.
-      // Reusing the same ticket through our authenticated proxy is safe because PUT is idempotent.
-      await uploadThroughWebsite();
-    }
-  } else {
-    await uploadThroughWebsite();
-  }
+  await uploadThroughWebsite();
 
   return {
     id: fileId,

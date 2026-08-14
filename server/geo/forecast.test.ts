@@ -526,21 +526,10 @@ describe("GEO optimization forecast schema and parser", () => {
     ).toBe(false);
   });
 
-  it("strictly parses a fenced nested Base response", () => {
+  it("strictly parses a typed Base result", () => {
     const raw = rawForecast();
     const parsed = parseOptimizationOutcomeForecastTaskOutput({
-      output: [
-        {
-          role: "assistant",
-          type: "message",
-          content: [
-            {
-              type: "text",
-              text: `preface with {ignored: true}\n\`\`\`json\n${JSON.stringify(raw)}\n\`\`\`\nafter`,
-            },
-          ],
-        },
-      ],
+      result: { structuredResult: raw, artifacts: [] },
     });
     expect(parsed.forecastType).toBe("conditional_4_week");
     expect(parsed.roadmap.map((phase) => phase.phase)).toEqual([1, 2, 3, 4]);
@@ -569,33 +558,27 @@ describe("GEO optimization forecast schema and parser", () => {
     ).toThrow("strict geo-optimization-outcome-forecaster JSON");
   });
 
-  it("uses the shared bounded recovery for inline forecast string quotes", () => {
+  it("rejects malformed forecast text instead of repairing it", () => {
     const raw = rawForecast();
     raw.summary = '规划结果为"可执行但仍需复测"，不得视为结果保证。';
     const malformed = JSON.stringify(raw).replaceAll('\\"', '"');
     expect(() => JSON.parse(malformed)).toThrow();
 
-    const parsed = parseOptimizationOutcomeForecastTaskOutput({
-      output: [
-        {
-          role: "assistant",
-          type: "message",
-          content: [{ type: "output_text", text: malformed }],
-        },
-      ],
-    });
-
-    expect(parsed.summary).toBe(raw.summary);
+    expect(() =>
+      parseOptimizationOutcomeForecastTaskOutput({
+        result: { structuredResult: malformed, artifacts: [] },
+      }),
+    ).toThrow(/strict geo-optimization-outcome-forecaster JSON/);
   });
 
-  it("resolves a URL-backed trusted JSON output_file", async () => {
+  it("does not resolve forecast result files or URLs", async () => {
     const raw = rawForecast();
     const downloads: Array<{
       taskId: string;
       url: string;
       filename?: string;
     }> = [];
-    const parsed = await resolveOptimizationOutcomeForecastTaskOutput(
+    const promise = resolveOptimizationOutcomeForecastTaskOutput(
       {
         async downloadFile() {
           throw new Error("file endpoint should not be used");
@@ -618,14 +601,8 @@ describe("GEO optimization forecast schema and parser", () => {
       { taskId: "forecast-task" },
     );
 
-    expect(parsed.forecastType).toBe("conditional_4_week");
-    expect(downloads).toEqual([
-      {
-        taskId: "forecast-task",
-        url: "https://agent.example.test/result/forecast",
-        filename: "forecast.json",
-      },
-    ]);
+    await expect(promise).rejects.toMatchObject({ code: "INVALID_JSON" });
+    expect(downloads).toEqual([]);
   });
 
   it("fails on conflicting valid channels and safely falls back when the file is unavailable", async () => {
@@ -656,11 +633,9 @@ describe("GEO optimization forecast schema and parser", () => {
         ],
       },
     );
-    await expect(conflicting).rejects.toMatchObject({
-      code: "SCHEMA_MISMATCH",
-    });
+    await expect(conflicting).rejects.toMatchObject({ code: "INVALID_JSON" });
 
-    const fallback = await resolveOptimizationOutcomeForecastTaskOutput(
+    const fallback = resolveOptimizationOutcomeForecastTaskOutput(
       {
         async downloadFile() {
           throw new Error("provider file expired");
@@ -680,7 +655,7 @@ describe("GEO optimization forecast schema and parser", () => {
         ],
       },
     );
-    expect(fallback.summary).toBe(inline.summary);
+    await expect(fallback).rejects.toMatchObject({ code: "INVALID_JSON" });
   });
 
   it("returns a safe forecast error code for invalid downloaded JSON", async () => {
@@ -710,14 +685,14 @@ describe("GEO optimization forecast schema and parser", () => {
     await expect(promise).rejects.toMatchObject({ code: "INVALID_JSON" });
   });
 
-  it("accepts typed task.output text but ignores user, metadata, and reasoning payloads", () => {
+  it("accepts only typed results and ignores raw output, metadata, and reasoning", () => {
     const raw = rawForecast();
     const injected = {
       ...raw,
       summary:
         "来自不可信字段的预测摘要，不应覆盖受信任 assistant 输出中的真实结果。",
     };
-    const parsed = parseOptimizationOutcomeForecastTaskOutput({
+    const rawTask = {
       metadata: { content: JSON.stringify(injected) },
       output: [
         {
@@ -728,9 +703,15 @@ describe("GEO optimization forecast schema and parser", () => {
         { type: "reasoning", text: JSON.stringify(injected) },
         { type: "output_text", text: JSON.stringify(raw) },
       ],
-    });
-
-    expect(parsed.summary).toBe(raw.summary);
+    };
+    expect(() => parseOptimizationOutcomeForecastTaskOutput(rawTask)).toThrow(
+      /strict geo-optimization-outcome-forecaster JSON/,
+    );
+    expect(
+      parseOptimizationOutcomeForecastTaskOutput({
+        result: { structuredResult: raw, artifacts: [] },
+      }).summary,
+    ).toBe(raw.summary);
     expect(() =>
       parseOptimizationOutcomeForecastTaskOutput({
         metadata: { content: JSON.stringify(raw) },
@@ -754,13 +735,7 @@ describe("GEO optimization forecast schema and parser", () => {
     );
 
     const parsed = parseOptimizationOutcomeForecastTaskOutput({
-      output: [
-        {
-          role: "assistant",
-          type: "message",
-          content: [{ type: "output_text", text: JSON.stringify(legacy) }],
-        },
-      ],
+      result: { structuredResult: legacy, artifacts: [] },
     });
 
     expect(parsed.limitations).toHaveLength(7);
@@ -1140,9 +1115,9 @@ describe("forecast Base prompt and audited skill loader", () => {
     });
     expect(prompt).toContain(FORECAST_SKILL_ARCHIVE_FILENAME);
     expect(prompt).toContain(FORECAST_OUTPUT_TEMPLATE_FILENAME);
-    expect(prompt).toContain(FORECAST_OUTPUT_RESULT_FILENAME);
-    expect(prompt).toContain("typed output_file");
-    expect(prompt).toContain("才把同一个完整 JSON 对象直接写入");
+    expect(prompt).not.toContain(FORECAST_OUTPUT_RESULT_FILENAME);
+    expect(prompt).toContain("Structured Output 合同");
+    expect(prompt).not.toContain("typed output_file");
     expect(prompt).not.toContain("# FILE:");
     expect(Array.from(prompt).length).toBeLessThanOrEqual(3_000);
 
@@ -1157,8 +1132,8 @@ describe("forecast Base prompt and audited skill loader", () => {
       "references/source-manifest.json",
     ]);
     const skillText = await zip.file("SKILL.md")!.async("string");
-    expect(skillText).toContain("typed assistant `output_file`");
-    expect(skillText).toContain(FORECAST_OUTPUT_RESULT_FILENAME);
+    expect(skillText).toContain("Structured Output contract");
+    expect(skillText).toContain("Do not create or attach a result file");
     const archivedTemplate = JSON.parse(
       await zip.file("assets/output-template.json")!.async("string"),
     );

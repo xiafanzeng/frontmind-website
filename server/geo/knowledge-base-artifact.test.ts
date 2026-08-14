@@ -2,294 +2,81 @@ import { describe, expect, it } from "vitest";
 
 import {
   collectKnowledgeArchiveDescriptors,
+  isExplicitKnowledgeCandidateDescriptor,
   knowledgeArchiveDescriptorHash,
-  knowledgeArchiveFileIdFromUrl,
   rankedKnowledgeArchiveDescriptors,
+  WEBSITE_KNOWLEDGE_CANDIDATE_FILENAME,
 } from "./knowledge-base-artifact";
 
-describe("website/Agent knowledge artifact contract fixture", () => {
-  it("uses the Agent output item identity and canonical descriptor hash", () => {
-    const descriptors = collectKnowledgeArchiveDescriptors([
-      {
-        id: "message-1",
-        type: "message",
-        role: "assistant",
-        content: [
-          { type: "output_text", text: "知识库已生成" },
-          {
-            type: "output_file",
-            file_id: "file-kb-1",
-            filename: "cuhksz_knowledge_base.zip",
-            mime_type: "application/zip",
-          },
-        ],
-      },
-    ]);
+const SHA_A = "a".repeat(64);
+const SHA_B = "b".repeat(64);
 
-    expect(descriptors).toEqual([
+function artifact(
+  artifactId: string,
+  filename = WEBSITE_KNOWLEDGE_CANDIDATE_FILENAME,
+  sha256 = SHA_A,
+) {
+  return {
+    artifactId,
+    filename,
+    mimeType: "application/zip",
+    bytes: 1024,
+    sha256,
+  };
+}
+
+describe("Website v2 local knowledge artifact contract", () => {
+  it("accepts only complete local ZIP artifact metadata", () => {
+    expect(collectKnowledgeArchiveDescriptors([artifact("artifact-1")])).toEqual([
       {
-        outputItemId: "message-1:content:1",
-        fileId: "file-kb-1",
-        url: undefined,
-        filename: "cuhksz_knowledge_base.zip",
+        outputItemId: "artifact:0:artifact-1",
+        artifactId: "artifact-1",
+        filename: WEBSITE_KNOWLEDGE_CANDIDATE_FILENAME,
         mimeType: "application/zip",
+        bytes: 1024,
+        sha256: SHA_A,
       },
     ]);
-    expect(knowledgeArchiveDescriptorHash(descriptors[0]!)).toBe(
-      "d56e642c0374e5a9abcb96ff4b97b79626ea52abc8bd790d385dd034938451e2",
-    );
-  });
-
-  it("uses output:index and a URL hash when a typed file has no id", () => {
-    const descriptors = collectKnowledgeArchiveDescriptors([
-      {
-        type: "output_file",
-        filename: "kb.zip",
-        mimeType: "application/zip",
-        url: "https://files.example/kb.zip?sig=one-time",
-      },
-    ]);
-
-    expect(descriptors[0]).toMatchObject({
-      outputItemId: "output:0",
-      filename: "kb.zip",
-    });
-    expect(knowledgeArchiveDescriptorHash(descriptors[0]!)).toBe(
-      "22d59039bb6352ebff2dee5860101b9bcc0d5729b3e03a90339bc56455089d05",
-    );
-  });
-
-  it("does not trust file-shaped metadata or user messages", () => {
-    expect(
-      collectKnowledgeArchiveDescriptors([
-        {
-          type: "message",
-          role: "user",
-          content: [
-            {
-              type: "output_file",
-              file_id: "untrusted-file",
-              filename: "untrusted.zip",
-            },
-          ],
-        },
-        {
-          type: "reasoning",
-          metadata: {
-            type: "output_file",
-            file_id: "nested-file",
-            filename: "nested.zip",
-          },
-        },
-      ]),
-    ).toEqual([]);
-  });
-
-  it.each(["user", "tool", "system", "developer"])(
-    "does not collect a top-level %s resource",
-    (role) => {
-      expect(
-        collectKnowledgeArchiveDescriptors([
-          {
-            id: `${role}-file`,
-            type: "output_file",
-            role,
-            file_id: `file-${role}`,
-            filename: "website-lead-candidate-v1.zip",
-            mime_type: "application/zip",
-          },
-        ]),
-      ).toEqual([]);
-    },
-  );
-
-  it("uses a bounded deterministic child identity without changing the parent identity", () => {
-    const parentId = "m".repeat(255);
-    const output = [
-      {
-        id: parentId,
-        type: "message",
-        role: "assistant",
-        content: [
-          {
-            type: "output_file",
-            file_id: "file-long-parent",
-            filename: "kb.zip",
-            mime_type: "application/zip",
-          },
-        ],
-      },
-    ];
-
-    const first = collectKnowledgeArchiveDescriptors(output);
-    const second = collectKnowledgeArchiveDescriptors(output);
-
-    expect(first).toHaveLength(1);
-    expect(first).toEqual(second);
-    expect(first[0]?.outputItemId).toMatch(/^content:[a-f0-9]{64}$/u);
-    expect(first[0]?.outputItemId.length).toBeLessThanOrEqual(255);
-    expect(parentId).toHaveLength(255);
   });
 
   it.each([
-    {
-      id: " message-1",
-      type: "output_file",
-      file_id: "file-1",
-      filename: "kb.zip",
-    },
-    {
-      id: "m".repeat(256),
-      type: "output_file",
-      file_id: "file-1",
-      filename: "kb.zip",
-    },
-    {
-      type: "output_file",
-      file_id: " file-1",
-      filename: "kb.zip",
-    },
-    {
-      type: "output_file",
-      file_id: "f".repeat(256),
-      filename: "kb.zip",
-    },
-    {
-      type: "output_file",
-      file_url: " https://files.example/kb.zip",
-      filename: "kb.zip",
-    },
-    {
-      type: "output_file",
-      file_url: `https://files.example/${"x".repeat(8_193)}`,
-      filename: "kb.zip",
-    },
-  ])("rejects lossy output/file/url identity normalization", (item) => {
-    expect(collectKnowledgeArchiveDescriptors([item])).toEqual([]);
+    { ...artifact("artifact-1"), artifactId: " artifact-1" },
+    { ...artifact("artifact-1"), filename: "candidate.txt", mimeType: "text/plain" },
+    { ...artifact("artifact-1"), bytes: 0 },
+    { ...artifact("artifact-1"), sha256: "not-a-hash" },
+    { fileId: "provider-file", filename: "candidate.zip" },
+    { url: "https://provider.example/signed", filename: "candidate.zip" },
+  ])("rejects incomplete or Provider-shaped descriptor %#", (value) => {
+    expect(collectKnowledgeArchiveDescriptors([value])).toEqual([]);
   });
 
-  it("rejects conflicting aliases and an explicit file ID that conflicts with its URL", () => {
-    expect(
-      collectKnowledgeArchiveDescriptors([
-        {
-          type: "output_file",
-          file_id: "file-one",
-          fileId: "file-two",
-          filename: "kb.zip",
-        },
-        {
-          type: "output_file",
-          file_id: "file-one",
-          url: "https://api.example/v1/files/file-two/content",
-          filename: "kb.zip",
-        },
-        {
-          type: "output_file",
-          file_url: "https://files.example/one.zip",
-          fileUrl: "https://files.example/two.zip",
-          filename: "kb.zip",
-        },
-      ]),
-    ).toEqual([]);
-  });
-
-  it("preserves matching aliases and a valid typed file identity exactly", () => {
-    expect(
-      collectKnowledgeArchiveDescriptors([
-        {
-          id: "output-file-1",
-          type: "output_file",
-          file_id: "file-one",
-          fileId: "file-one",
-          url: "https://api.example/v1/files/file-one/content?download=1",
-          filename: "kb.zip",
-        },
-      ]),
-    ).toEqual([
-      {
-        outputItemId: "output-file-1",
-        fileId: "file-one",
-        url: "https://api.example/v1/files/file-one/content?download=1",
-        filename: "kb.zip",
-        mimeType: "application/zip",
-      },
+  it("ranks the fixed candidate name before generic ZIPs and bounds inspection", () => {
+    const ranked = rankedKnowledgeArchiveDescriptors([
+      artifact("generic-1", "generic-1.zip"),
+      artifact("named", WEBSITE_KNOWLEDGE_CANDIDATE_FILENAME),
+      artifact("generic-2", "generic-2.zip"),
+      artifact("generic-3", "generic-3.zip"),
     ]);
-  });
-
-  it("keeps empty optional aliases as missing instead of normalizing an identity", () => {
-    expect(
-      collectKnowledgeArchiveDescriptors([
-        {
-          id: "",
-          type: "output_file",
-          file_id: "",
-          fileId: "file-one",
-          url: "",
-          filename: "kb.zip",
-        },
-      ]),
-    ).toEqual([
-      {
-        outputItemId: "output:0",
-        fileId: "file-one",
-        url: undefined,
-        filename: "kb.zip",
-        mimeType: "application/zip",
-      },
-    ]);
-  });
-
-  it("rejects malformed or lossy file IDs embedded in file URLs", () => {
-    expect(
-      knowledgeArchiveFileIdFromUrl(
-        "https://api.example/v1/files/%20file-one/content",
-      ),
-    ).toBeUndefined();
-    expect(
-      knowledgeArchiveFileIdFromUrl(
-        `https://api.example/v1/files/${"f".repeat(256)}/content`,
-      ),
-    ).toBeUndefined();
-    expect(
-      knowledgeArchiveFileIdFromUrl(
-        "https://api.example/v1/files/%E0%A4%A/content",
-      ),
-    ).toBeUndefined();
-    expect(
-      knowledgeArchiveFileIdFromUrl(
-        "https://api.example/v1/files/file-one/content",
-      ),
-    ).toBe("file-one");
-  });
-
-  it("ranks the fixed candidate name ahead of other assistant ZIP files", () => {
-    const descriptors = rankedKnowledgeArchiveDescriptors([
-      {
-        type: "output_file",
-        file_id: "generic",
-        filename: "research.zip",
-      },
-      {
-        type: "output_file",
-        file_id: "named",
-        filename: "knowledge-base-candidate-recovered.zip",
-      },
-      {
-        type: "output_file",
-        file_id: "exact",
-        filename: "website-lead-candidate-v1.zip",
-      },
-      {
-        type: "output_file",
-        file_id: "fourth",
-        filename: "other.zip",
-      },
-    ]);
-
-    expect(descriptors.map((descriptor) => descriptor.fileId)).toEqual([
-      "exact",
+    expect(ranked.map((entry) => entry.artifactId)).toEqual([
       "named",
-      "generic",
+      "generic-1",
+      "generic-2",
     ]);
+    expect(isExplicitKnowledgeCandidateDescriptor(ranked[0]!)).toBe(true);
+    expect(isExplicitKnowledgeCandidateDescriptor(ranked[1]!)).toBe(false);
+  });
+
+  it("binds the canonical descriptor hash to local identity and content", () => {
+    const first = collectKnowledgeArchiveDescriptors([artifact("artifact-1")])[0]!;
+    const replay = collectKnowledgeArchiveDescriptors([artifact("artifact-1")])[0]!;
+    const changed = collectKnowledgeArchiveDescriptors([
+      artifact("artifact-1", WEBSITE_KNOWLEDGE_CANDIDATE_FILENAME, SHA_B),
+    ])[0]!;
+    expect(knowledgeArchiveDescriptorHash(first)).toBe(
+      knowledgeArchiveDescriptorHash(replay),
+    );
+    expect(knowledgeArchiveDescriptorHash(changed)).not.toBe(
+      knowledgeArchiveDescriptorHash(first),
+    );
   });
 });

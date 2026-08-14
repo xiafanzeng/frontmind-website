@@ -9,16 +9,19 @@ import express from "express";
 import JSZip from "jszip";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
-  FRONTMIND_BASE_PROFILE,
-  FRONTMIND_PRO_PROFILE,
   GeoBrokerError,
-  type BrokerFile,
+  PRESALES_CAPABILITIES,
+  PRESALES_CONTRACTS,
+  PRESALES_CONTRACT_VERSION,
+  expectedContractHashes,
+  type BrokerArtifact,
+  type BrokerLocalAsset,
   type BrokerMonitorRun,
   type BrokerTask,
   type GeoMonitoringEdition,
   type GeoMonitorPlatformId,
   type GeoPresalesBroker,
-  type FrontMindAgentProfile,
+  type PresalesContract,
 } from "./broker";
 import {
   GeoAdminNotificationConfigurationError,
@@ -210,9 +213,9 @@ function fixtureEvidenceCharacterCount(markdown: string) {
 }
 
 class MockBroker implements GeoPresalesBroker {
-  tasks = new Map<string, BrokerTask>();
+  tasks = new Map<string, any>();
   prompts: string[] = [];
-  taskAgentProfiles: Array<FrontMindAgentProfile | undefined> = [];
+  taskContracts: PresalesContract[] = [];
   uploads = new Map<string, Buffer>();
   skillUploads = new Map<string, Buffer>();
   taskInputUploads = new Map<string, Buffer>();
@@ -233,7 +236,7 @@ class MockBroker implements GeoPresalesBroker {
   invalidFirstQuestionTask = false;
   questionTaskOutput?: unknown;
   idempotentTasks = new Map<string, BrokerTask>();
-  idempotentFiles = new Map<string, BrokerFile>();
+  idempotentFiles = new Map<string, BrokerLocalAsset>();
   fileCredentialVersions = new Map<string, number>();
   fileProjectIds = new Map<string, string>();
   fileCreateOperationKeys: string[] = [];
@@ -260,6 +263,12 @@ class MockBroker implements GeoPresalesBroker {
   taskErrors = new Map<string, Error>();
   createTaskErrors: Error[] = [];
   taskResults = new Map<string, BrokerTask>();
+  repairCalls: Array<{ taskId: string; idempotencyKey: string }> = [];
+  repairResults = new Map<string, BrokerTask[]>();
+  repairResultFactory?: (
+    taskId: string,
+    idempotencyKey: string,
+  ) => BrokerTask | undefined;
   deletedTasks: string[] = [];
   taskProjectIds = new Map<string, string>();
   monitorCredentialConfigured = true;
@@ -269,6 +278,7 @@ class MockBroker implements GeoPresalesBroker {
   omitNextKnowledgeTaskStatus = false;
   downloadErrors = new Map<string, Error>();
   downloadOverrides = new Map<string, Buffer>();
+  artifactSources = new Map<string, string>();
   downloadedFileIds: string[] = [];
   customQuestionClassifierOutput: Record<string, unknown> = {
     decision: "accept",
@@ -363,44 +373,52 @@ class MockBroker implements GeoPresalesBroker {
       monitorCredentialConfigured: this.monitorCredentialConfigured,
       monitorCredentialAuthenticated: this.monitorCredentialAuthenticated,
       publicUrlConfigured: this.publicUrlConfigured,
+      presalesContractVersion: PRESALES_CONTRACT_VERSION,
+      capabilities: PRESALES_CAPABILITIES,
+      contractHashes: expectedContractHashes(),
     };
   }
 
-  async createFile(input: {
+  async createAsset(input: {
     projectId?: string;
     filename: string;
     mimeType?: string;
+    sizeBytes: number;
     idempotencyKey?: string;
-  }): Promise<BrokerFile> {
+  }): Promise<BrokerLocalAsset> {
     if (input.idempotencyKey) {
       this.fileCreateOperationKeys.push(input.idempotencyKey);
       const replay = this.idempotentFiles.get(input.idempotencyKey);
       if (replay) return replay;
     }
-    let file: BrokerFile;
+    let file: BrokerLocalAsset;
     if (input.filename.endsWith(".skill.zip")) {
       file = {
-        id: `skill-file-${this.nextSkillFile++}`,
+        localAssetId: `skill-file-${this.nextSkillFile++}`,
         filename: input.filename,
         status: "pending",
       };
     } else if (input.filename.endsWith("-task-input.json")) {
       file = {
-        id: `task-input-file-${this.nextTaskInputFile++}`,
+        localAssetId: `task-input-file-${this.nextTaskInputFile++}`,
         filename: input.filename,
         status: "pending",
       };
     } else {
       file = {
-        id: `file-${this.nextRegularFile++}`,
+        localAssetId: `file-${this.nextRegularFile++}`,
         filename: input.filename,
         status: "pending",
       };
     }
-    this.createdFileIds.push(file.id);
-    if (input.projectId) this.fileProjectIds.set(file.id, input.projectId);
-    this.createdFileMimeTypes.set(file.id, input.mimeType);
-    this.fileCredentialVersions.set(file.id, this.currentCredentialVersion);
+    this.createdFileIds.push(file.localAssetId);
+    if (input.projectId)
+      this.fileProjectIds.set(file.localAssetId, input.projectId);
+    this.createdFileMimeTypes.set(file.localAssetId, input.mimeType);
+    this.fileCredentialVersions.set(
+      file.localAssetId,
+      this.currentCredentialVersion,
+    );
     if (input.idempotencyKey) {
       this.idempotentFiles.set(input.idempotencyKey, file);
       if (this.loseNextIdempotentFileCreateResponse) {
@@ -418,7 +436,7 @@ class MockBroker implements GeoPresalesBroker {
     return file;
   }
 
-  async uploadFile(fileId: string, body: Buffer) {
+  async uploadAsset(fileId: string, body: Buffer) {
     this.uploadAttempts.push(fileId);
     if (fileId.startsWith("skill-file-") && this.skillUploadError) {
       throw this.skillUploadError;
@@ -436,18 +454,167 @@ class MockBroker implements GeoPresalesBroker {
     return { status: "uploaded" };
   }
 
+  private asV2Task(value: unknown, fallbackId?: string): BrokerTask {
+    const record =
+      value && typeof value === "object" && !Array.isArray(value)
+        ? (value as Record<string, any>)
+        : {};
+    if (
+      typeof record.localTaskId === "string" &&
+      typeof record.operationId === "string" &&
+      Array.isArray(record.safeEvents)
+    ) {
+      return record as BrokerTask;
+    }
+    const id = String(record.id || record.task_id || fallbackId || "task");
+    const rawStatus = String(record.status || "running").toLowerCase();
+    const status: BrokerTask["status"] =
+      rawStatus === "completed" || rawStatus === "succeeded"
+        ? "succeeded"
+        : rawStatus === "failed"
+          ? "failed"
+          : rawStatus === "cancelled" || rawStatus === "canceled"
+            ? "cancelled"
+            : rawStatus === "pending" || rawStatus === "queued"
+              ? "queued"
+              : rawStatus === "result_pending"
+                ? "result_pending"
+                : "running";
+    const structuredResult = this.legacyStructuredResult(record.output);
+    const artifacts = this.legacyArtifacts(record.output);
+    return {
+      localTaskId: id,
+      operationId: `operation:${id}`,
+      status,
+      safeEvents: [],
+      ...(status === "succeeded" || structuredResult !== undefined || artifacts.length
+        ? {
+            result: {
+              ...(structuredResult !== undefined ? { structuredResult } : {}),
+              artifacts,
+            },
+          }
+        : {}),
+      ...(record.error
+        ? { error: { code: "TASK_FAILED", retryable: false } }
+        : {}),
+    };
+  }
+
+  private legacyStructuredResult(value: unknown): unknown {
+    const seen = new Set<unknown>();
+    const visit = (candidate: unknown, depth: number): unknown => {
+      if (depth > 10 || candidate === null || candidate === undefined) return;
+      if (typeof candidate === "string") {
+        const trimmed = candidate.trim().replace(/^```(?:json)?\s*/i, "").replace(/\s*```$/, "");
+        try {
+          return visit(JSON.parse(trimmed), depth + 1);
+        } catch {
+          return undefined;
+        }
+      }
+      if (typeof candidate !== "object" || seen.has(candidate)) return;
+      seen.add(candidate);
+      if (Array.isArray(candidate)) {
+        for (const entry of candidate) {
+          const result = visit(entry, depth + 1);
+          if (result !== undefined) return result;
+        }
+        return;
+      }
+      const item = candidate as Record<string, unknown>;
+      if (
+        [
+          "questions",
+          "decision",
+          "assessmentType",
+          "scenario",
+          "sourceQuestionSha256",
+        ].some((key) => key in item)
+      ) {
+        return item;
+      }
+      const fileId =
+        typeof item.file_id === "string"
+          ? item.file_id
+          : typeof item.fileId === "string"
+            ? item.fileId
+            : undefined;
+      if (fileId) {
+        const bytes = this.downloadOverrides.get(fileId);
+        if (bytes) {
+          const result = visit(bytes.toString("utf8"), depth + 1);
+          if (result !== undefined) return result;
+        }
+      }
+      for (const child of Object.values(item)) {
+        const result = visit(child, depth + 1);
+        if (result !== undefined) return result;
+      }
+      return;
+    };
+    return visit(value, 0);
+  }
+
+  private legacyArtifacts(value: unknown): BrokerArtifact[] {
+    const artifacts: BrokerArtifact[] = [];
+    const seenObjects = new Set<unknown>();
+    const seenIds = new Set<string>();
+    const visit = (candidate: unknown, depth: number) => {
+      if (depth > 10 || !candidate || typeof candidate !== "object") return;
+      if (seenObjects.has(candidate)) return;
+      seenObjects.add(candidate);
+      if (Array.isArray(candidate)) {
+        candidate.forEach((entry) => visit(entry, depth + 1));
+        return;
+      }
+      const item = candidate as Record<string, unknown>;
+      const artifactId =
+        typeof item.artifactId === "string"
+          ? item.artifactId
+          : typeof item.file_id === "string"
+            ? item.file_id
+            : typeof item.fileId === "string"
+              ? item.fileId
+              : undefined;
+      const filename =
+        typeof item.filename === "string" ? item.filename : undefined;
+      if (artifactId && filename && filename.toLowerCase().endsWith(".zip") && !seenIds.has(artifactId)) {
+        const bytes =
+          this.downloadOverrides.get(artifactId) ||
+          this.uploads.get(artifactId) ||
+          this.archive;
+        seenIds.add(artifactId);
+        artifacts.push({
+          artifactId,
+          filename,
+          mimeType: "application/zip",
+          bytes: Math.max(1, bytes.length),
+          sha256: createHash("sha256").update(bytes).digest("hex"),
+        });
+      }
+      Object.values(item).forEach((child) => visit(child, depth + 1));
+    };
+    visit(value, 0);
+    return artifacts;
+  }
+
   async createTask(input: {
-    projectId?: string;
+    projectId: string;
     prompt: string;
-    attachments: Array<{ file_id: string; filename: string }>;
+    localAssets: Array<{ localAssetId: string; filename: string }>;
     idempotencyKey: string;
-    agentProfile?: FrontMindAgentProfile;
+    contract: PresalesContract;
   }) {
+    const attachments = input.localAssets.map((asset) => ({
+      file_id: asset.localAssetId,
+      filename: asset.filename,
+    }));
     const configuredError = this.createTaskErrors.shift();
     if (configuredError) throw configuredError;
     if (
       this.enforceCurrentCredentialAttachments &&
-      input.attachments.some(
+      attachments.some(
         (attachment) =>
           this.fileCredentialVersions.get(attachment.file_id) !==
           this.currentCredentialVersion,
@@ -462,8 +629,8 @@ class MockBroker implements GeoPresalesBroker {
     const existing = this.idempotentTasks.get(input.idempotencyKey);
     if (existing) return existing;
     this.prompts.push(input.prompt);
-    this.taskAgentProfiles.push(input.agentProfile);
-    this.taskAttachments.push(input.attachments);
+    this.taskContracts.push(input.contract);
+    this.taskAttachments.push(attachments);
     const isQuestionTask = input.prompt.includes(
       "geo-question-recommender.skill.zip",
     );
@@ -490,7 +657,7 @@ class MockBroker implements GeoPresalesBroker {
             : isForecastTask
               ? `forecast-${++this.forecastTaskCount}`
               : `kb-${this.nextTask++}`;
-    const task: BrokerTask = isMonitorQuestionTranslationTask
+    const legacyTask: any = isMonitorQuestionTranslationTask
       ? {
           id,
           status: this.monitorQuestionTranslationStatus,
@@ -565,12 +732,11 @@ class MockBroker implements GeoPresalesBroker {
                   this.omitNextKnowledgeTaskStatus
                 ? { id, progress: 0.25, output: [] }
                 : { id, status: "running", progress: 0.25, output: [] };
+    const task = this.asV2Task(legacyTask, id);
     this.tasks.set(id, task);
-    if (input.projectId) {
-      this.taskProjectIds.set(id, input.projectId);
-      for (const attachment of input.attachments) {
-        this.fileProjectIds.set(attachment.file_id, input.projectId);
-      }
+    this.taskProjectIds.set(id, input.projectId);
+    for (const attachment of attachments) {
+      this.fileProjectIds.set(attachment.file_id, input.projectId);
     }
     this.idempotentTasks.set(input.idempotencyKey, task);
     return task;
@@ -583,26 +749,45 @@ class MockBroker implements GeoPresalesBroker {
     if (!task) throw new Error("missing task");
     if (
       taskId.startsWith("custom-question-classifier-") &&
-      task.status === "running"
+      this.asV2Task(task, taskId).status === "running"
     ) {
       this.customQuestionClassifierPolls += 1;
       this.customQuestionClassifierPendingPolls -= 1;
       if (this.customQuestionClassifierPendingPolls <= 0) {
-        task = {
+        task = this.asV2Task({
           id: taskId,
           status: "completed",
           output: this.customQuestionClassifierTaskOutput(taskId),
-        };
+        });
         this.tasks.set(taskId, task);
       }
     }
-    return task;
+    return this.asV2Task(task, taskId);
   }
 
   async getTaskResult(taskId: string) {
     const error = this.taskResultErrors.get(taskId);
     if (error) throw error;
-    return this.taskResults.get(taskId) ?? this.getTask(taskId);
+    const result = this.taskResults.get(taskId);
+    return result ? this.asV2Task(result, taskId) : this.getTask(taskId);
+  }
+
+  async repairTask(taskId: string, input: { idempotencyKey: string }) {
+    this.repairCalls.push({ taskId, idempotencyKey: input.idempotencyKey });
+    const queue = this.repairResults.get(taskId);
+    const repaired =
+      queue?.shift() ??
+      this.repairResultFactory?.(taskId, input.idempotencyKey);
+    if (repaired) {
+      this.tasks.set(taskId, repaired);
+      this.taskResults.set(taskId, repaired);
+      return repaired;
+    }
+    throw new GeoBrokerError(
+      "No configured repair result",
+      409,
+      "TASK_REPAIR_EXHAUSTED",
+    );
   }
 
   async deleteTask(taskId: string) {
@@ -611,7 +796,7 @@ class MockBroker implements GeoPresalesBroker {
     this.taskResults.delete(taskId);
     this.taskProjectIds.delete(taskId);
     for (const [key, task] of Array.from(this.idempotentTasks.entries())) {
-      if (task.id === taskId) this.idempotentTasks.delete(key);
+      if (task.localTaskId === taskId) this.idempotentTasks.delete(key);
     }
   }
 
@@ -625,7 +810,7 @@ class MockBroker implements GeoPresalesBroker {
       .map(([fileId]) => fileId);
     for (const fileId of fileIds) {
       try {
-        await this.deleteFile(fileId);
+        await this.deleteAsset(fileId);
       } catch (error) {
         if (!(error instanceof GeoBrokerError) || error.status !== 404) {
           throw error;
@@ -642,7 +827,7 @@ class MockBroker implements GeoPresalesBroker {
     };
   }
 
-  async deleteFile(fileId: string) {
+  async deleteAsset(fileId: string) {
     if (this.failDeleteFile) throw new Error("delete failed");
     this.deletedFiles.push(fileId);
     this.uploads.delete(fileId);
@@ -651,7 +836,7 @@ class MockBroker implements GeoPresalesBroker {
     this.fileProjectIds.delete(fileId);
   }
 
-  async downloadFile(fileId?: string) {
+  async downloadAsset(fileId?: string) {
     if (fileId) {
       this.downloadedFileIds.push(fileId);
       const error = this.downloadErrors.get(fileId);
@@ -670,8 +855,51 @@ class MockBroker implements GeoPresalesBroker {
     });
   }
 
-  async downloadTaskOutput() {
-    return this.downloadFile();
+  async promoteArtifact(input: {
+    projectId: string;
+    idempotencyKey: string;
+    sourceLocalAssetId: string;
+    filename: string;
+    mimeType: "application/zip";
+    bytes: number;
+    sha256: string;
+    kind: "website-final-knowledge-base";
+  }) {
+    const artifactId = `artifact-${input.sha256}`;
+    this.artifactSources.set(artifactId, input.sourceLocalAssetId);
+    return {
+      artifactId,
+      filename: input.filename,
+      mimeType: input.mimeType,
+      bytes: input.bytes,
+      sha256: input.sha256,
+    };
+  }
+
+  async downloadArtifact(artifactId: string) {
+    this.downloadedFileIds.push(artifactId);
+    const sourceLocalAssetId = this.artifactSources.get(artifactId);
+    const error =
+      this.downloadErrors.get(artifactId) ||
+      (sourceLocalAssetId
+        ? this.downloadErrors.get(sourceLocalAssetId)
+        : undefined);
+    if (error) throw error;
+    const bytes =
+      (sourceLocalAssetId
+        ? this.downloadOverrides.get(sourceLocalAssetId)
+        : undefined) ||
+      this.downloadOverrides.get(artifactId) ||
+      (sourceLocalAssetId ? this.uploads.get(sourceLocalAssetId) : undefined) ||
+      this.uploads.get(artifactId) ||
+      this.archive;
+    return new Response(bytes, {
+      status: 200,
+      headers: {
+        "content-type": "application/zip",
+        "content-length": String(bytes.length),
+      },
+    });
   }
 
   async createMonitorRun(input: {
@@ -1631,7 +1859,7 @@ describe("GEO API", () => {
     expect(sealedValue.knowledgeBaseSkillSha256).toMatch(/^[a-f0-9]{64}$/);
     expect(payload.projectToken).not.toContain("kb-1");
     expect(payload.project.kbTask.id).toBe("knowledge-base");
-    expect(payload.project.kbTask.progress).toBe(25);
+    expect(payload.project.kbTask.progress).toBeNull();
     expect(payload.project.kbTask.output).toEqual([]);
     expect(payload.project.executionLog).toMatchObject({
       currentEntryId: "enterprise-analysis",
@@ -1640,7 +1868,6 @@ describe("GEO API", () => {
           id: "enterprise-analysis",
           stage: "enterprise_analysis",
           status: "running",
-          progress: 25,
         },
       ],
     });
@@ -1652,7 +1879,9 @@ describe("GEO API", () => {
       ).data.uploadedFiles,
     ).toEqual(["catalog.pdf"]);
     expect(broker.prompts[0]).not.toContain("# FILE: SKILL.md");
-    expect(broker.taskAgentProfiles).toEqual([FRONTMIND_BASE_PROFILE]);
+    expect(broker.taskContracts).toEqual([
+      PRESALES_CONTRACTS.knowledgeBaseCandidate,
+    ]);
     expect(broker.taskAttachments[0]).toEqual([
       {
         file_id: "skill-file-1",
@@ -1951,8 +2180,8 @@ describe("GEO API", () => {
     let loseFirstResponse = true;
     broker.createTask = async (input) => {
       submittedAttachments.push(
-        input.attachments.map(({ file_id, filename }) => ({
-          file_id,
+        input.localAssets.map(({ localAssetId, filename }) => ({
+          file_id: localAssetId,
           filename,
         })),
       );
@@ -2259,7 +2488,7 @@ describe("GEO API", () => {
           finalizerVersion: "website-kb-finalizer-v4",
           candidate: {
             taskId: "kb-1",
-            fileId: "candidate-v2",
+            artifactId: "candidate-v2",
             sha256: expect.stringMatching(/^[a-f0-9]{64}$/),
           },
           final: {
@@ -2270,9 +2499,13 @@ describe("GEO API", () => {
           },
         },
       });
-      const finalBytes = v2Broker.uploads.get(
-        value.knowledgeBaseArtifact.final.fileId,
-      )!;
+      const finalBytes = Buffer.from(
+        await (
+          await v2Broker.downloadArtifact(
+            value.knowledgeBaseArtifact.final.artifactId,
+          )
+        ).arrayBuffer(),
+      );
       expect(finalBytes).toBeDefined();
       await expect(
         parseKnowledgeBaseArchive(finalBytes, {
@@ -2464,7 +2697,7 @@ describe("GEO API", () => {
       completedPayload.projectToken,
       "project",
     ).value;
-    const finalFileId = completedValue.knowledgeBaseArtifact.final.fileId;
+    const finalFileId = completedValue.knowledgeBaseArtifact.final.artifactId;
 
     const noRebuildBroker = new MockBroker();
     noRebuildBroker.archive = broker.archive;
@@ -2757,7 +2990,7 @@ describe("GEO API", () => {
     const tokenValue = new GeoTokenCodec(
       "test-session-secret-at-least-16-characters",
     ).open<any>((completed.body as any).projectToken, "project").value;
-    expect(tokenValue.knowledgeBaseArtifact.candidate.fileId).toBe(
+    expect(tokenValue.knowledgeBaseArtifact.candidate.artifactId).toBe(
       "fixed-candidate",
     );
   });
@@ -2860,7 +3093,7 @@ describe("GEO API", () => {
     const tokenValue = new GeoTokenCodec(
       "test-session-secret-at-least-16-characters",
     ).open<any>((completed.body as any).projectToken, "project").value;
-    expect(tokenValue.knowledgeBaseArtifact.candidate.fileId).toBe(
+    expect(tokenValue.knowledgeBaseArtifact.candidate.artifactId).toBe(
       "generic-valid",
     );
   });
@@ -2983,7 +3216,9 @@ describe("GEO API", () => {
       "knowledgeBaseRetryAvailable",
     );
     expect(broker.prompts).toHaveLength(1);
-    expect(broker.taskAgentProfiles).toEqual([FRONTMIND_BASE_PROFILE]);
+    expect(broker.taskContracts).toEqual([
+      PRESALES_CONTRACTS.knowledgeBaseCandidate,
+    ]);
 
     const stable = await jsonRequest(
       `/projects/${encodeURIComponent((first.body as any).projectToken)}`,
@@ -3200,7 +3435,7 @@ describe("GEO API", () => {
 
   it("treats resources hidden by a rotated API Key as already deleted", async () => {
     const ready = await createReadyProject();
-    broker.deleteFile = async () => {
+    broker.deleteAsset = async () => {
       throw new GeoBrokerError(
         "resource is not visible to the current credential",
         404,
@@ -3659,7 +3894,7 @@ describe("GEO API", () => {
     expect(paymentCheckoutCalls).toHaveLength(0);
   });
 
-  it("resolves a trusted translation output_file before starting free overseas monitoring", async () => {
+  it("consumes a Dashboard-localized translation without downloading a Provider output file", async () => {
     broker.monitorQuestionTranslationUseOutputFile = true;
     const ready = await createReadyProject();
     const started = await jsonRequest(
@@ -3678,7 +3913,7 @@ describe("GEO API", () => {
     );
 
     expect(started.response.status).toBe(201);
-    expect(broker.downloadedFileIds).toContain(
+    expect(broker.downloadedFileIds).not.toContain(
       "monitor-question-translation-1-result-json",
     );
     expect(broker.monitorRuns.get("monitor-1")).toMatchObject({
@@ -3689,7 +3924,7 @@ describe("GEO API", () => {
     expect(paymentCalls).toHaveLength(0);
   });
 
-  it("starts free overseas monitoring from strict typed text.value output before task status convergence", async () => {
+  it("waits for succeeded status before consuming a typed translation", async () => {
     broker.monitorQuestionTranslationStatus = "running";
     const ready = await createReadyProject();
     const createTask = broker.createTask.bind(broker);
@@ -3722,13 +3957,8 @@ describe("GEO API", () => {
       },
     );
 
-    expect(started.response.status).toBe(201);
-    expect(broker.monitorCreates).toBe(1);
-    expect(broker.monitorRuns.get("monitor-1")).toMatchObject({
-      question:
-        "Which business problems does Acme Service Module 1 primarily solve?",
-      platforms: ["chatgpt"],
-    });
+    expect(started.response.status).toBe(202);
+    expect(broker.monitorCreates).toBe(0);
   });
 
   it("fails closed before free overseas monitoring when translation is not source-bound", async () => {
@@ -3761,6 +3991,59 @@ describe("GEO API", () => {
     expect(broker.monitorCreates).toBe(0);
     expect(paymentCalls).toHaveLength(0);
     expect(projectOrders.size).toBe(0);
+  });
+
+  it("repairs one source-mismatched translation on the same task", async () => {
+    const sourceQuestion = "Acme 的服务模块 1 主要解决哪些业务问题？";
+    broker.monitorQuestionTranslationRawOutput = {
+      schemaVersion: 1,
+      sourceQuestionSha256: "0".repeat(64),
+      questionEnglish: "Is this unrelated platform stable?",
+    };
+    broker.repairResultFactory = (taskId) =>
+      taskId.startsWith("monitor-question-translation-")
+        ? {
+            localTaskId: taskId,
+            operationId: `operation:${taskId}`,
+            status: "succeeded",
+            safeEvents: [],
+            result: {
+              structuredResult: {
+                schemaVersion: 1,
+                sourceQuestionSha256: createHash("sha256")
+                  .update(sourceQuestion, "utf8")
+                  .digest("hex"),
+                questionEnglish:
+                  "Which business problems does Acme Service Module 1 primarily solve?",
+              },
+              artifacts: [],
+            },
+          }
+        : undefined;
+    const ready = await createReadyProject();
+
+    const started = await jsonRequest(
+      `/projects/${encodeURIComponent(ready.projectToken)}/monitoring`,
+      ready.cookie,
+      {
+        method: "POST",
+        body: {
+          schemaVersion: 2,
+          clientRequestId: "85858585-8585-4585-8585-858585858585",
+          questionId: "product-scenario-01",
+          monitoringEdition: "overseas",
+          platformIds: ["chatgpt"],
+        },
+      },
+    );
+
+    expect(started.response.status).toBe(201);
+    expect(broker.monitorQuestionTranslationTaskCount).toBe(1);
+    expect(broker.monitorCreates).toBe(1);
+    expect(broker.repairCalls).toHaveLength(1);
+    expect(broker.repairCalls[0]!.taskId).toBe(
+      "monitor-question-translation-1",
+    );
   });
 
   it("persists an existing recommended question as a no-active terminal receipt that old clients may ACK", async () => {
@@ -4533,7 +4816,7 @@ describe("GEO API", () => {
     ).rejects.toMatchObject({ code: "PROJECT_DELETION_FENCED" });
     await expect(
       crashedStore.getProjectDeletionTargets(project.projectId),
-    ).resolves.toEqual({ taskIds: [], temporaryFileIds: [] });
+    ).resolves.toEqual({ localTaskIds: [], temporaryLocalAssetIds: [] });
     await expect(
       crashedStore.isProjectDeletionFenced(project.projectId),
     ).resolves.toBe(true);
@@ -4691,7 +4974,7 @@ describe("GEO API", () => {
       knowledgeBaseTaskId: "knowledge-task-before-upgrade",
       knowledgeBaseValidationProfile: "website-lead-v1",
       knowledgeBaseArtifact: {
-        fileId: "knowledge-file-before-upgrade",
+        artifactId: "knowledge-file-before-upgrade",
         filename: "Acme.zip",
         sha256: "1".repeat(64),
         packageManifestSha256: "2".repeat(64),
@@ -4706,16 +4989,16 @@ describe("GEO API", () => {
         ...reservation.record,
         state: "submitted",
         archiveAttachment: {
-          fileId: "archive-before-upgrade",
+          localAssetId: "archive-before-upgrade",
           filename: "Acme.zip",
           temporary: false,
         },
         skillAttachment: {
-          fileId: "skill-before-upgrade",
+          localAssetId: "skill-before-upgrade",
           filename: "geo-custom-question-classifier.skill.zip",
           temporary: false,
         },
-        taskId,
+        localTaskId: taskId,
       },
       lease!,
     );
@@ -4752,7 +5035,7 @@ describe("GEO API", () => {
 
     await expect(store.get(projectId, clientRequestId)).resolves.toMatchObject({
       state: "rejected",
-      taskId,
+      localTaskId: taskId,
       cleanupCompleted: true,
     });
     expect(broker.taskInputUploads.size).toBe(0);
@@ -4786,7 +5069,7 @@ describe("GEO API", () => {
         knowledgeBaseTaskId: `knowledge-task-${index}`,
         knowledgeBaseValidationProfile: "website-lead-v1",
         knowledgeBaseArtifact: {
-          fileId: `knowledge-file-${index}`,
+          artifactId: `knowledge-file-${index}`,
           filename: "Acme.zip",
           sha256: "1".repeat(64),
           packageManifestSha256: "2".repeat(64),
@@ -4800,12 +5083,12 @@ describe("GEO API", () => {
           ...reservation.record,
           state: "prepared",
           archiveAttachment: {
-            fileId: `prepared-archive-${index}`,
+            localAssetId: `prepared-archive-${index}`,
             filename: "Acme.zip",
             temporary: false,
           },
           skillAttachment: {
-            fileId: `prepared-skill-${index}`,
+            localAssetId: `prepared-skill-${index}`,
             filename: "geo-custom-question-classifier.skill.zip",
             temporary: false,
           },
@@ -4874,7 +5157,7 @@ describe("GEO API", () => {
         index,
         state: record?.state,
         cleanupCompleted: record?.cleanupCompleted,
-        taskId: record?.taskId,
+        localTaskId: record?.localTaskId,
         error: record?.error?.code,
       })),
     ).toEqual(
@@ -4882,7 +5165,7 @@ describe("GEO API", () => {
         index,
         state: "rejected",
         cleanupCompleted: true,
-        taskId: expect.stringMatching(/^custom-question-classifier-/),
+        localTaskId: expect.stringMatching(/^custom-question-classifier-/),
         error: "CUSTOM_QUESTION_ENTERPRISE_UNRELATED",
       })),
     );
@@ -5026,14 +5309,14 @@ describe("GEO API", () => {
     );
     expect(staged).toMatchObject({
       skillStagingAttachment: {
-        fileId: expect.stringMatching(/^skill-file-/),
+        localAssetId: expect.stringMatching(/^skill-file-/),
         temporary: true,
       },
       transientErrorCount: 1,
     });
     expect(staged?.skillAttachment).toBeUndefined();
-    const stagedFileId = staged!.skillStagingAttachment!.fileId;
-    expect(staged!.orphanedTemporaryFileIds).toContain(stagedFileId);
+    const stagedFileId = staged!.skillStagingAttachment!.localAssetId;
+    expect(staged!.temporaryLocalAssetIds).toContain(stagedFileId);
     expect(
       broker.createdFileIds.filter(
         (id) => !createdBefore.has(id) && id.startsWith("skill-file-"),
@@ -5298,18 +5581,18 @@ describe("GEO API", () => {
     expect(staged).toMatchObject({
       attachmentRebuildCount: 1,
       archiveStagingAttachment: {
-        fileId: expect.stringMatching(/^file-/),
+        localAssetId: expect.stringMatching(/^file-/),
         temporary: true,
       },
       transientErrorCount: 1,
     });
     expect(staged?.archiveAttachment).toBeUndefined();
-    const archiveStagingId = staged!.archiveStagingAttachment!.fileId;
-    const originalSkillId = staged!.orphanedTemporaryFileIds.find((id) =>
+    const archiveStagingId = staged!.archiveStagingAttachment!.localAssetId;
+    const originalSkillId = staged!.temporaryLocalAssetIds.find((id) =>
       id.startsWith("skill-file-"),
     );
     expect(originalSkillId).toBeDefined();
-    expect(staged!.orphanedTemporaryFileIds).toEqual(
+    expect(staged!.temporaryLocalAssetIds).toEqual(
       expect.arrayContaining([archiveStagingId, originalSkillId]),
     );
     expect(
@@ -5490,7 +5773,7 @@ describe("GEO API", () => {
     expect(broker.tasks.has("custom-question-classifier-1")).toBe(true);
   });
 
-  it("accepts finished as a terminal classifier status", async () => {
+  it("accepts succeeded as the terminal v2 classifier status", async () => {
     const ready = await createReadyProject();
     broker.customQuestionClassifierPendingPolls = 99;
     const pathname = `/projects/${encodeURIComponent(
@@ -5506,16 +5789,14 @@ describe("GEO API", () => {
     expect(started.response.status).toBe(202);
 
     broker.tasks.set("custom-question-classifier-1", {
-      id: "custom-question-classifier-1",
-      status: "finished",
-      output: [
-        {
-          role: "assistant",
-          content: [
-            { text: JSON.stringify(broker.customQuestionClassifierOutput) },
-          ],
-        },
-      ],
+      localTaskId: "custom-question-classifier-1",
+      operationId: "operation:custom-question-classifier-1",
+      status: "succeeded",
+      safeEvents: [],
+      result: {
+        structuredResult: broker.customQuestionClassifierOutput,
+        artifacts: [],
+      },
     });
     const completed = await jsonRequest(
       `${pathname}/${CUSTOM_QUESTION_CLIENT_REQUEST_ID}`,
@@ -5531,7 +5812,7 @@ describe("GEO API", () => {
     expect(broker.customQuestionClassifierTaskCount).toBe(1);
   });
 
-  it("fails an unknown classifier status after three stable observations", async () => {
+  it("keeps a Dashboard-normalized nonterminal classifier status pending", async () => {
     const ready = await createReadyProject();
     broker.customQuestionClassifierPendingPolls = 99;
     const pathname = `/projects/${encodeURIComponent(
@@ -5559,19 +5840,10 @@ describe("GEO API", () => {
         validation: { state: "submitted" },
       });
     }
-    const failed = await jsonRequest(statusPath, ready.cookie);
-    expect(failed.response.status).toBe(502);
-    expect(failed.body).toMatchObject({
-      error: {
-        code: "CUSTOM_QUESTION_CLASSIFIER_UNKNOWN_STATUS",
-        message: "问题验证任务返回了无法识别的状态，可重新验证当前问题",
-      },
-      validation: { state: "failed", error: { retryable: true } },
-    });
-    const replayed = await jsonRequest(statusPath, ready.cookie);
-    expect(replayed.response.status).toBe(502);
-    expect(replayed.body).toMatchObject({
-      error: { code: "CUSTOM_QUESTION_CLASSIFIER_UNKNOWN_STATUS" },
+    const pending = await jsonRequest(statusPath, ready.cookie);
+    expect(pending.response.status).toBe(202);
+    expect(pending.body).toMatchObject({
+      validation: { state: "submitted" },
     });
     expect(broker.customQuestionClassifierTaskCount).toBe(1);
   });
@@ -5652,7 +5924,7 @@ describe("GEO API", () => {
     expect(deleted.body).toMatchObject({ ok: true });
   });
 
-  it("maps a quoted malformed enterprise rejection to the actionable user message", async () => {
+  it("does not salvage a quoted malformed classifier result", async () => {
     const ready = await createReadyProject();
     broker.customQuestionClassifierRawText = `{"decision":"reject","category":"unrelated","enterpriseRelated":false,"reasonCode":"enterprise_unrelated","reason":"问题询问"FrontMind"是什么企业，该名称在硅基流动企业知识库中无任何记录，既非硅基流动的产品、服务、别名，也未与硅基流动存在任何可验证的关联路径，无法将其绑定至被评估企业。","enterpriseAnchor":null,"offeringAnchor":null,"evidenceRefs":[]}`;
 
@@ -5668,22 +5940,63 @@ describe("GEO API", () => {
       },
     );
 
-    expect(rejected.response.status).toBe(422);
+    expect(rejected.response.status).toBe(502);
     expect(rejected.body).toMatchObject({
-      error: {
-        code: "CUSTOM_QUESTION_ENTERPRISE_UNRELATED",
-        message:
-          "该问题与「Acme」没有明确关系，请重新输入与当前企业相关的非行业排名类问题。",
-      },
-      validation: {
-        state: "rejected",
-        error: { retryable: false },
-      },
+      error: { code: "CUSTOM_QUESTION_CLASSIFIER_INVALID_RESPONSE" },
+      validation: { state: "failed", error: { retryable: true } },
     });
     expect(broker.customQuestionClassifierTaskCount).toBe(1);
   });
 
-  it("resolves a trusted classifier output_file through the custom-question route", async () => {
+  it("repairs one malformed classifier result on the same task", async () => {
+    const ready = await createReadyProject();
+    broker.customQuestionClassifierRawText = "not-json";
+    broker.repairResultFactory = (taskId) =>
+      taskId.startsWith("custom-question-classifier-")
+        ? {
+            localTaskId: taskId,
+            operationId: `operation:${taskId}`,
+            status: "succeeded",
+            safeEvents: [],
+            result: {
+              structuredResult: broker.customQuestionClassifierOutput,
+              artifacts: [],
+            },
+          }
+        : undefined;
+    const pathname = `/projects/${encodeURIComponent(
+      ready.projectToken,
+    )}/questions/custom`;
+
+    const started = await jsonRequest(pathname, ready.cookie, {
+      method: "POST",
+      body: {
+        question: "Acme 在高校科研场景中能解决什么问题？",
+        clientRequestId: CUSTOM_QUESTION_CLIENT_REQUEST_ID,
+      },
+    });
+    expect(started.response.status).toBe(202);
+    expect(started.body).toMatchObject({
+      validation: { state: "submitted" },
+    });
+
+    const completed = await jsonRequest(
+      `${pathname}/${CUSTOM_QUESTION_CLIENT_REQUEST_ID}`,
+      ready.cookie,
+    );
+    expect(completed.response.status).toBe(200);
+    expect(completed.body).toMatchObject({
+      validation: { state: "completed" },
+      question: { category: "product_scenario" },
+    });
+    expect(broker.customQuestionClassifierTaskCount).toBe(1);
+    expect(broker.repairCalls).toHaveLength(1);
+    expect(broker.repairCalls[0]!.taskId).toBe(
+      "custom-question-classifier-1",
+    );
+  });
+
+  it("consumes a Dashboard-localized classifier result without downloading a Provider output file", async () => {
     const ready = await createReadyProject();
     broker.customQuestionClassifierUseOutputFile = true;
     broker.customQuestionClassifierOutput = {
@@ -5714,13 +6027,13 @@ describe("GEO API", () => {
       validation: { state: "completed" },
       question: { category: "reputation" },
     });
-    expect(broker.downloadedFileIds).toContain(
+    expect(broker.downloadedFileIds).not.toContain(
       "custom-question-classifier-1-result-json",
     );
     expect(broker.customQuestionClassifierTaskCount).toBe(1);
   });
 
-  it("automatically revalidates conflicting classifier reasons for the same question", async () => {
+  it("fails closed on conflicting classifier objects", async () => {
     const ready = await createReadyProject();
     const accepted = {
       decision: "accept",
@@ -5754,23 +6067,15 @@ describe("GEO API", () => {
         },
       },
     );
-    expect(started.response.status).toBe(202);
-
-    const completed = await jsonRequest(
-      `/projects/${encodeURIComponent(ready.projectToken)}/questions/custom/${CUSTOM_QUESTION_CLIENT_REQUEST_ID}`,
-      ready.cookie,
-    );
-    expect(completed.response.status).toBe(200);
-    expect(completed.body).toMatchObject({
-      validation: { state: "completed", question: "Acme 靠谱吗？" },
-      question: {
-        rationale: "重验结果唯一且明确绑定 Acme 的服务可靠性。",
-      },
+    expect(started.response.status).toBe(502);
+    expect(started.body).toMatchObject({
+      error: { code: "CUSTOM_QUESTION_CLASSIFIER_INVALID_RESPONSE" },
+      validation: { state: "failed", error: { retryable: true } },
     });
-    expect(broker.customQuestionClassifierTaskCount).toBe(2);
+    expect(broker.customQuestionClassifierTaskCount).toBe(1);
   });
 
-  it("automatically revalidates one irreparable format result without changing the question", async () => {
+  it("fails closed on one irreparable classifier result", async () => {
     const ready = await createReadyProject();
     broker.customQuestionClassifierRawTexts = [
       "not-json",
@@ -5797,28 +6102,19 @@ describe("GEO API", () => {
         },
       },
     );
-    expect(started.response.status).toBe(202);
+    expect(started.response.status).toBe(502);
     expect(started.body).toMatchObject({
       validation: {
-        state: "reserved",
+        state: "failed",
         question: "Acme 靠谱吗？",
+        error: { retryable: true },
       },
     });
-
-    const completed = await jsonRequest(
-      `/projects/${encodeURIComponent(ready.projectToken)}/questions/custom/${CUSTOM_QUESTION_CLIENT_REQUEST_ID}`,
-      ready.cookie,
-    );
-    expect(completed.response.status).toBe(200);
-    expect(completed.body).toMatchObject({
-      validation: { state: "completed", question: "Acme 靠谱吗？" },
-      question: { category: "reputation", question: "Acme 靠谱吗？" },
-    });
-    expect(broker.customQuestionClassifierTaskCount).toBe(2);
+    expect(broker.customQuestionClassifierTaskCount).toBe(1);
     expect(paymentCheckoutCalls).toHaveLength(0);
   });
 
-  it("returns a retryable system error only after the bounded format revalidation also fails", async () => {
+  it("returns a retryable system error for an invalid typed result", async () => {
     const ready = await createReadyProject();
     broker.customQuestionClassifierRawTexts = ["not-json", "still-not-json"];
 
@@ -5833,14 +6129,8 @@ describe("GEO API", () => {
         },
       },
     );
-    expect(started.response.status).toBe(202);
-
-    const failed = await jsonRequest(
-      `/projects/${encodeURIComponent(ready.projectToken)}/questions/custom/${CUSTOM_QUESTION_CLIENT_REQUEST_ID}`,
-      ready.cookie,
-    );
-    expect(failed.response.status).toBe(502);
-    expect(failed.body).toMatchObject({
+    expect(started.response.status).toBe(502);
+    expect(started.body).toMatchObject({
       error: {
         code: "CUSTOM_QUESTION_CLASSIFIER_INVALID_RESPONSE",
         message: "验证结果格式异常，可重新验证当前问题",
@@ -5850,10 +6140,10 @@ describe("GEO API", () => {
         error: { retryable: true },
       },
     });
-    expect(broker.customQuestionClassifierTaskCount).toBe(2);
+    expect(broker.customQuestionClassifierTaskCount).toBe(1);
   });
 
-  it("replays a retained historical invalid task through the repaired parser before creating another task", async () => {
+  it("does not salvage a retained malformed result for a new operation", async () => {
     customQuestionValidationNowMs = Date.now();
     const ready = await createReadyProject();
     broker.customQuestionClassifierRawTexts = ["not-json", "still-not-json"];
@@ -5868,28 +6158,21 @@ describe("GEO API", () => {
       method: "POST",
       body: { question, clientRequestId: firstClientRequestId },
     });
-    expect(started.response.status).toBe(202);
-    const failed = await jsonRequest(
-      `${pathname}/${firstClientRequestId}`,
-      ready.cookie,
-    );
-    expect(failed.response.status).toBe(502);
-    expect(broker.customQuestionClassifierTaskCount).toBe(2);
+    expect(started.response.status).toBe(502);
+    expect(broker.customQuestionClassifierTaskCount).toBe(1);
 
-    broker.tasks.set("custom-question-classifier-2", {
-      id: "custom-question-classifier-2",
-      status: "completed",
-      output: [
-        {
-          role: "assistant",
-          content: [
-            {
-              text: `{"decision":"accept","category":"reputation","enterpriseRelated":true,"reasonCode":"accepted","reason":"问题明确以"Acme"为主语询问其可靠性。","enterpriseAnchor":"Acme","offeringAnchor":null,"evidenceRefs":["evidence/S001.md"]}`,
-            },
-          ],
-        },
-      ],
-    });
+    broker.customQuestionClassifierRawTexts = [];
+    broker.customQuestionClassifierRawText = undefined;
+    broker.customQuestionClassifierOutput = {
+      decision: "accept",
+      category: "reputation",
+      enterpriseRelated: true,
+      reasonCode: "accepted",
+      reason: "问题明确以 Acme 为主语询问其可靠性。",
+      enterpriseAnchor: "Acme",
+      offeringAnchor: null,
+      evidenceRefs: ["evidence/S001.md"],
+    };
 
     const replayed = await jsonRequest(pathname, ready.cookie, {
       method: "POST",
@@ -5939,7 +6222,7 @@ describe("GEO API", () => {
     expect(paymentCheckoutCalls).toHaveLength(0);
   });
 
-  it("automatically revalidates an evidence path outside the enterprise knowledge base", async () => {
+  it("fails closed on an evidence path outside the enterprise knowledge base", async () => {
     const ready = await createReadyProject();
     const invalidEvidence = {
       decision: "accept",
@@ -5971,25 +6254,16 @@ describe("GEO API", () => {
         },
       },
     );
-    expect(started.response.status).toBe(202);
-
-    const completed = await jsonRequest(
-      `/projects/${encodeURIComponent(ready.projectToken)}/questions/custom/${CUSTOM_QUESTION_CLIENT_REQUEST_ID}`,
-      ready.cookie,
-    );
-    expect(completed.response.status).toBe(200);
-    expect(completed.body).toMatchObject({
-      validation: { state: "completed" },
-      question: {
-        category: "reputation",
-        evidenceRefs: ["evidence/S001.md"],
-      },
+    expect(started.response.status).toBe(502);
+    expect(started.body).toMatchObject({
+      error: { code: "CUSTOM_QUESTION_CLASSIFIER_INVALID_RESPONSE" },
+      validation: { state: "failed", error: { retryable: true } },
     });
-    expect(broker.customQuestionClassifierTaskCount).toBe(2);
+    expect(broker.customQuestionClassifierTaskCount).toBe(1);
     expect(paymentCheckoutCalls).toHaveLength(0);
   });
 
-  it("returns one retryable system error after both evidence outputs remain outside the knowledge base", async () => {
+  it("returns one retryable system error for evidence outside the knowledge base", async () => {
     const ready = await createReadyProject();
     const invalidEvidence = JSON.stringify({
       decision: "accept",
@@ -6015,21 +6289,15 @@ describe("GEO API", () => {
         clientRequestId: CUSTOM_QUESTION_CLIENT_REQUEST_ID,
       },
     });
-    expect(started.response.status).toBe(202);
-
-    const failed = await jsonRequest(
-      `${pathname}/${CUSTOM_QUESTION_CLIENT_REQUEST_ID}`,
-      ready.cookie,
-    );
-    expect(failed.response.status).toBe(502);
-    expect(failed.body).toMatchObject({
+    expect(started.response.status).toBe(502);
+    expect(started.body).toMatchObject({
       error: {
         code: "CUSTOM_QUESTION_CLASSIFIER_INVALID_RESPONSE",
         message: "验证结果格式异常，可重新验证当前问题",
       },
       validation: { state: "failed", error: { retryable: true } },
     });
-    expect(broker.customQuestionClassifierTaskCount).toBe(2);
+    expect(broker.customQuestionClassifierTaskCount).toBe(1);
   });
 
   it("uses the classifier category instead of the previous regex fallback", async () => {
@@ -6705,7 +6973,7 @@ describe("GEO API", () => {
       "此任务使用 Base 模型，只输出 schema 要求的事实四分类、confidence 与 0-1 原始指标",
     );
     expect(broker.prompts.at(-1)).toContain(
-      "最终答案必须直接写入 assistant output_text",
+      "最终答案必须通过任务的 Structured Output 合同返回一个业务对象",
     );
     expect(broker.prompts.at(-1)).toContain(
       "禁止创建、上传或附加结果 JSON 文件",
@@ -6757,8 +7025,8 @@ describe("GEO API", () => {
         return createTask(input);
       }
       submittedAttachments.push(
-        input.attachments.map(({ file_id, filename }) => ({
-          file_id,
+        input.localAssets.map(({ localAssetId, filename }) => ({
+          file_id: localAssetId,
           filename,
         })),
       );
@@ -6814,7 +7082,7 @@ describe("GEO API", () => {
     ).toHaveLength(2);
   });
 
-  it("keeps invalid completed assessment terminal on GET and only reruns it after an explicit POST", async () => {
+  it("repairs one invalid assessment on the same local task without creating a replacement", async () => {
     const ready = await createReadyProject();
     const monitored = await startOnePlatformMonitor(ready);
     const run = broker.monitorRuns.get("monitor-1")!;
@@ -6851,62 +7119,50 @@ describe("GEO API", () => {
         },
       ],
     });
+    broker.repairResults.set("assessment-1", [
+      {
+        localTaskId: "assessment-1",
+        operationId: "operation:assessment-1",
+        status: "running",
+        safeEvents: [],
+      },
+    ]);
 
     const viewed = await jsonRequest(
       `/projects/${encodeURIComponent((first.body as any).projectToken)}`,
       ready.cookie,
     );
     expect(viewed.response.status).toBe(200);
-    expect((viewed.body as any).project).toMatchObject({
-      assessment: {
-        status: "failed",
-        failureCode: "SCHEMA_MISMATCH",
-        error: "现状评估结果字段未通过校验，请重新评估",
-      },
-      assessmentRetryAvailable: true,
+    expect((viewed.body as any).project.assessment).toMatchObject({
+      status: "running",
     });
     expect(broker.assessmentTaskCount).toBe(1);
-    expect((viewed.body as any).project.executionLog.currentEntryId).toBe(
-      "current-assessment",
+    expect(broker.repairCalls).toHaveLength(1);
+    expect(broker.repairCalls[0]).toMatchObject({ taskId: "assessment-1" });
+    expect(broker.repairCalls[0]!.idempotencyKey).toContain(
+      "website.current-state-assessment:assessment-1:1",
     );
-    expect(
-      (viewed.body as any).project.executionLog.entries.find(
-        (entry: any) => entry.id === "current-assessment",
-      ),
-    ).toMatchObject({
-      status: "failed",
-      events: expect.arrayContaining([
-        expect.objectContaining({
-          kind: "error",
-          message: "服务端结果校验未通过（支持码：SCHEMA_MISMATCH）。",
-        }),
-      ]),
-    });
     const repeated = await jsonRequest(
       `/projects/${encodeURIComponent((viewed.body as any).projectToken)}`,
       ready.cookie,
     );
     expect(repeated.response.status).toBe(200);
     expect(broker.assessmentTaskCount).toBe(1);
+    expect(broker.repairCalls).toHaveLength(1);
 
     const manuallyRetried = await jsonRequest(
       `/projects/${encodeURIComponent((viewed.body as any).projectToken)}/assessment`,
       ready.cookie,
       { method: "POST", body: {} },
     );
-    expect(manuallyRetried.response.status).toBe(201);
+    expect(manuallyRetried.response.status).toBe(200);
     expect((manuallyRetried.body as any).project.assessment).toMatchObject({
       status: "running",
     });
-    expect(broker.assessmentTaskCount).toBe(2);
-    expect(broker.prompts.at(-1)).toContain("在单次任务中完成");
-    expect(broker.prompts.at(-1)).not.toContain("结构校验重试");
-    expect(broker.prompts.at(-1)).not.toContain(
-      "geo-knowledge-answer-verifier",
-    );
+    expect(broker.assessmentTaskCount).toBe(1);
   });
 
-  it("recovers acknowledgement text plus a trusted JSON output_file without rerunning the assessment", async () => {
+  it("uses the Dashboard-localized assessment result without downloading a Provider output file", async () => {
     const ready = await createReadyProject();
     const monitored = await startOnePlatformMonitor(ready);
     const run = broker.monitorRuns.get("monitor-1")!;
@@ -6971,7 +7227,7 @@ describe("GEO API", () => {
     ).toBeGreaterThan(0);
     expect(
       broker.downloadedFileIds.filter((fileId) => fileId === outputFileId),
-    ).toHaveLength(1);
+    ).toHaveLength(0);
     expect(broker.assessmentTaskCount).toBe(1);
     expect(broker.forecastTaskCount).toBe(1);
   });
@@ -7021,8 +7277,8 @@ describe("GEO API", () => {
     expect((viewed.body as any).project).toMatchObject({
       assessment: {
         status: "failed",
-        failureCode: "OUTPUT_FILE_UNAVAILABLE",
-        error: "现状评估结果文件暂时无法读取，请稍后刷新或重新评估",
+        failureCode: "INVALID_JSON",
+        error: "现状评估结果不是可识别的 JSON，请重新评估",
       },
       assessmentRetryAvailable: true,
     });
@@ -7583,8 +7839,8 @@ describe("GEO API", () => {
         return createTask(input);
       }
       submittedAttachments.push(
-        input.attachments.map(({ file_id, filename }) => ({
-          file_id,
+        input.localAssets.map(({ localAssetId, filename }) => ({
+          file_id: localAssetId,
           filename,
         })),
       );
@@ -7641,7 +7897,7 @@ describe("GEO API", () => {
     ).toBe(4);
   });
 
-  it("retries one invalid optimization forecast output", async () => {
+  it("repairs one invalid optimization forecast on the same local task", async () => {
     const ready = await createReadyProject();
     const monitored = await startOnePlatformMonitor(ready);
     const run = broker.monitorRuns.get("monitor-1")!;
@@ -7671,57 +7927,33 @@ describe("GEO API", () => {
       status: "completed",
       output: [{ content: [{ text: '{"assessmentType":"not-a-forecast"}' }] }],
     });
+    broker.repairResults.set("forecast-1", [
+      {
+        localTaskId: "forecast-1",
+        operationId: "operation:forecast-1",
+        status: "succeeded",
+        safeEvents: [],
+        result: { structuredResult: validForecastOutput(), artifacts: [] },
+      },
+    ]);
 
     const retried = await jsonRequest(
       `/projects/${encodeURIComponent((firstForecast.body as any).projectToken)}`,
       ready.cookie,
     );
     expect((retried.body as any).project.optimizationForecast).toMatchObject({
-      status: "running",
+      status: "ready",
     });
     expect(retried.response.status).toBe(200);
-    expect(broker.forecastTaskCount).toBe(2);
+    expect(broker.forecastTaskCount).toBe(1);
+    expect(broker.repairCalls).toHaveLength(1);
+    expect(broker.repairCalls[0]).toMatchObject({ taskId: "forecast-1" });
+    expect(broker.repairCalls[0]!.idempotencyKey).toContain(
+      "website.optimization-forecast:forecast-1:1",
+    );
     expect((retried.body as any).project.executionLog.currentEntryId).toBe(
       "optimization-forecast",
     );
-    expect(broker.prompts.at(-1)).toContain("data.retryReason");
-    const retryInputAttachment = broker.taskAttachments
-      .at(-1)!
-      .find((attachment) => attachment.filename.endsWith("-task-input.json"))!;
-    expect(
-      JSON.parse(
-        broker.taskInputUploads
-          .get(retryInputAttachment.file_id)!
-          .toString("utf8"),
-      ).data.retryReason,
-    ).toBeTruthy();
-
-    const unavailableFileId = "forecast-output-unavailable";
-    broker.downloadErrors.set(
-      unavailableFileId,
-      new Error("provider file expired"),
-    );
-    broker.tasks.set("forecast-2", {
-      id: "forecast-2",
-      status: "completed",
-      output: [
-        {
-          type: "output_file",
-          file_id: unavailableFileId,
-          filename: "forecast.json",
-          mime_type: "application/json",
-        },
-      ],
-    });
-    const exhausted = await jsonRequest(
-      `/projects/${encodeURIComponent((retried.body as any).projectToken)}`,
-      ready.cookie,
-    );
-    expect((exhausted.body as any).project.optimizationForecast).toMatchObject({
-      status: "failed",
-      failureCode: "OUTPUT_FILE_UNAVAILABLE",
-      error: "优化效果评估结果文件暂时无法读取，请稍后刷新或重新评估",
-    });
   });
 
   it("keeps one automatic retry and allows a later explicit manual forecast retry", async () => {
@@ -7896,7 +8128,7 @@ describe("GEO API", () => {
     expect(servicePaymentCheckoutCalls).toHaveLength(0);
   });
 
-  it("reuses assessment and forecast output files across service validation and project rendering", async () => {
+  it("reuses Dashboard-localized typed results across service validation and project rendering", async () => {
     const ready = await createServiceReadyProject();
     const assessmentFileId = "service-assessment-output-json";
     const forecastFileId = "service-forecast-output-json";
@@ -7954,10 +8186,10 @@ describe("GEO API", () => {
     expect(created.response.status).toBe(201);
     expect(
       broker.downloadedFileIds.filter((fileId) => fileId === assessmentFileId),
-    ).toHaveLength(1);
+    ).toHaveLength(0);
     expect(
       broker.downloadedFileIds.filter((fileId) => fileId === forecastFileId),
-    ).toHaveLength(1);
+    ).toHaveLength(0);
   });
 
   it("rejects a forged payable status that has no contract evidence", async () => {
@@ -9418,19 +9650,14 @@ describe("GEO API", () => {
     expect(knowledgeImportCalls).toHaveLength(1);
     expect(knowledgeImportCalls[0]).toMatchObject({
       request: {
-        schemaVersion: 4,
+        schemaVersion: 5,
         companyName: "Acme",
-        candidate: {
-          taskId: "kb-1",
-          sha256: expect.stringMatching(/^[a-f0-9]{64}$/),
-        },
-        finalArtifact: {
-          filename: "Acme_website_lead_knowledge_base.zip",
-          archiveContractVersion: 4,
-          validationProfile: "website-lead-v1",
-          packageManifestSha256: expect.stringMatching(/^[a-f0-9]{64}$/),
-          finalizerVersion: "website-kb-finalizer-v1",
-        },
+        candidateArtifactId: expect.any(String),
+        finalArtifactId: expect.any(String),
+        candidateSha256: expect.stringMatching(/^[a-f0-9]{64}$/),
+        finalSha256: expect.stringMatching(/^[a-f0-9]{64}$/),
+        packageManifestSha256: expect.stringMatching(/^[a-f0-9]{64}$/),
+        finalizerVersion: "website-kb-finalizer-v1",
       },
     });
     const accountPoll = await jsonRequest(
@@ -9602,7 +9829,9 @@ describe("GEO API", () => {
     });
     expect(broker.questionTaskCount).toBe(1);
     expect(broker.prompts).toHaveLength(2);
-    expect(broker.taskAgentProfiles.at(-1)).toBe(FRONTMIND_PRO_PROFILE);
+    expect(broker.taskContracts.at(-1)).toBe(
+      PRESALES_CONTRACTS.questionRecommendation,
+    );
 
     broker.taskResultErrors.delete("question-1");
     broker.taskResults.set("question-1", {
@@ -9633,7 +9862,7 @@ describe("GEO API", () => {
     expect(broker.prompts).toHaveLength(2);
   });
 
-  it("publishes renderable recommendations when only quality checks fail", async () => {
+  it("fails closed when recommendation quality checks fail", async () => {
     const ready = await createReadyProject();
     const relaxed = validQuestionSet() as Record<string, any>;
     relaxed.questions[5].question =
@@ -9663,22 +9892,14 @@ describe("GEO API", () => {
 
     expect(refreshed.response.status).toBe(200);
     expect(project).toMatchObject({
-      status: "completed",
+      status: "failed",
       stage: "question_recommendation",
     });
-    expect(project.questions).toHaveLength(20);
-    expect(project.questionValidationError).toBeUndefined();
-    expect(new Set(project.questions.map((item: any) => item.id)).size).toBe(
-      20,
-    );
-    expect(project.questions[5]).toMatchObject({
-      category: "industry_ranking",
-      selectable: false,
-    });
+    expect(project.questionValidationError).toEqual(expect.any(String));
     expect(broker.questionTaskCount).toBe(1);
   });
 
-  it("completes the first recommendation request with a partial question set", async () => {
+  it("rejects the first recommendation request with a partial question set", async () => {
     broker.questionTaskOutput = {
       questions: [
         {
@@ -9736,39 +9957,11 @@ describe("GEO API", () => {
 
     expect(recommended.response.status).toBe(201);
     expect(project).toMatchObject({
-      status: "completed",
+      status: "failed",
       stage: "question_recommendation",
     });
-    expect(project.questions).toHaveLength(3);
-    expect(project.questionValidationError).toBeUndefined();
-    expect(
-      project.questions.every((question: any) => question.selectable),
-    ).toBe(true);
+    expect(project.questionValidationError).toEqual(expect.any(String));
     expect(broker.questionTaskCount).toBe(1);
-
-    const projectToken = (recommended.body as Record<string, any>)
-      .projectToken as string;
-    const monitoring = await jsonRequest(
-      `/projects/${encodeURIComponent(projectToken)}/monitoring`,
-      cookie,
-      {
-        method: "POST",
-        body: {
-          schemaVersion: 2,
-          clientRequestId: "90909090-9090-4090-8090-909090909090",
-          questionId: "product-scenario-01",
-          monitoringEdition: "domestic",
-          platformIds: ["doubao"],
-        },
-      },
-    );
-    expect(monitoring.response.status).toBe(201);
-    expect(monitoring.body).toMatchObject({
-      project: {
-        selectedQuestionId: "product-scenario-01",
-        monitoring: { status: "submitted", expectedRecords: 5 },
-      },
-    });
   });
 
   it("never creates a second task for an invalid question result", async () => {
@@ -9821,9 +10014,9 @@ describe("GEO API", () => {
       },
     });
     expect(broker.questionTaskCount).toBe(1);
-    expect(broker.taskAgentProfiles).toEqual([
-      FRONTMIND_BASE_PROFILE,
-      FRONTMIND_PRO_PROFILE,
+    expect(broker.taskContracts).toEqual([
+      PRESALES_CONTRACTS.knowledgeBaseCandidate,
+      PRESALES_CONTRACTS.questionRecommendation,
     ]);
   });
 
@@ -9868,7 +10061,7 @@ describe("GEO API", () => {
         entries: [
           expect.objectContaining({
             id: "enterprise-analysis",
-            status: "waiting",
+            status: "running",
             startedAt: expect.any(String),
           }),
         ],
@@ -9912,7 +10105,7 @@ describe("GEO API", () => {
         entries: [
           expect.objectContaining({
             id: "enterprise-analysis",
-            status: "waiting",
+            status: "running",
           }),
         ],
       },
@@ -9954,7 +10147,46 @@ describe("GEO API", () => {
     expect(broker.questionTaskCount).toBe(1);
   });
 
-  it("offers support after 15 minutes of unknown state while remaining non-terminal", async () => {
+  it("repairs an invalid recommendation result once without changing its local task id", async () => {
+    const ready = await createReadyProject();
+    const stored = new GeoTokenCodec(
+      "test-session-secret-at-least-16-characters",
+    ).open<{ questionTaskId: string }>(ready.projectToken, "project").value;
+    broker.tasks.set(stored.questionTaskId, {
+      localTaskId: stored.questionTaskId,
+      operationId: `operation:${stored.questionTaskId}`,
+      status: "succeeded",
+      safeEvents: [],
+      result: { structuredResult: { questions: [] }, artifacts: [] },
+    });
+    broker.repairResults.set(stored.questionTaskId, [
+      {
+        localTaskId: stored.questionTaskId,
+        operationId: `operation:${stored.questionTaskId}`,
+        status: "succeeded",
+        safeEvents: [],
+        result: {
+          structuredResult: validQuestionSet(),
+          artifacts: [],
+        },
+      },
+    ]);
+
+    const repaired = await jsonRequest(
+      `/projects/${encodeURIComponent(ready.projectToken)}`,
+      ready.cookie,
+    );
+
+    expect(repaired.response.status).toBe(200);
+    expect((repaired.body as any).project.questions).toHaveLength(20);
+    expect(broker.questionTaskCount).toBe(1);
+    expect(broker.repairCalls).toHaveLength(1);
+    expect(broker.repairCalls[0]).toMatchObject({
+      taskId: stored.questionTaskId,
+    });
+  });
+
+  it("keeps Dashboard-normalized running state nonterminal regardless of local token age", async () => {
     const { cookie } = await verifyInvite();
     const created = await jsonRequest("/projects", cookie, {
       method: "POST",
@@ -9988,7 +10220,7 @@ describe("GEO API", () => {
     );
     expect((delayed.body as any).project).toMatchObject({
       status: "running",
-      knowledgeBaseSupportRequired: true,
+      knowledgeBaseSupportRequired: false,
       kbTask: { status: "running" },
     });
     expect(broker.prompts).toHaveLength(1);
@@ -10202,11 +10434,18 @@ describe("GEO API", () => {
     expect(broker.monitorCreates).toBe(0);
 
     const translationTask = broker.tasks.get("monitor-question-translation-1")!;
-    translationTask.status = "completed";
-    translationTask.output = monitorTranslationTaskOutput(
-      "Acme 的服务模块 1 主要解决哪些业务问题？",
-      "Which business problems does Acme Service Module 1 primarily solve?",
-    );
+    translationTask.status = "succeeded";
+    translationTask.result = {
+      structuredResult: {
+        schemaVersion: 1,
+        sourceQuestionSha256: createHash("sha256")
+          .update("Acme 的服务模块 1 主要解决哪些业务问题？", "utf8")
+          .digest("hex"),
+        questionEnglish:
+          "Which business problems does Acme Service Module 1 primarily solve?",
+      },
+      artifacts: [],
+    };
     await restartWithCustomQuestionValidationStore(
       customQuestionValidationStore,
     );

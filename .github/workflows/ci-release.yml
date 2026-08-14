@@ -3,6 +3,15 @@ name: Website CI and release
 on:
   push:
     branches: [main]
+  workflow_dispatch:
+    inputs:
+      release_mode:
+        description: Build and sign the exact Website production artifact
+        required: true
+        default: build-only
+        type: choice
+        options:
+          - build-only
 
 concurrency:
   group: website-${{ github.workflow }}-${{ github.ref }}
@@ -18,6 +27,7 @@ env:
 jobs:
   verify:
     name: Verify (${{ matrix.command }})
+    if: github.event_name != 'workflow_dispatch'
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
@@ -41,7 +51,9 @@ jobs:
   build:
     name: Build, push and sign image
     if: >-
-      github.event_name == 'push' &&
+      always() &&
+      ((github.event_name == 'push' && needs.verify.result == 'success') ||
+       (github.event_name == 'workflow_dispatch' && inputs.release_mode == 'build-only')) &&
       github.ref == 'refs/heads/main'
     needs: verify
     env:
@@ -106,79 +118,11 @@ jobs:
         env:
           IMAGE_DIGEST: ${{ steps.image.outputs.digest }}
         run: cosign sign --yes "${IMAGE_NAME}@${IMAGE_DIGEST}"
-
-  deploy:
-    name: Deploy signed website digest
-    if: >-
-      github.event_name == 'push' &&
-      github.ref == 'refs/heads/main'
-    needs: [verify, build]
-    runs-on: ubuntu-latest
-    permissions:
-      contents: read
-      packages: write
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
-          persist-credentials: false
-          ref: ${{ needs.build.outputs.source_sha }}
-      - uses: docker/setup-buildx-action@v3
-      - uses: docker/login-action@v3
-        with:
-          registry: ghcr.io
-          username: ${{ github.actor }}
-          password: ${{ secrets.GITHUB_TOKEN }}
-      - name: Configure restricted deploy key
-        env:
-          DEPLOY_KEY: ${{ secrets.WEBSITE_DEPLOY_SSH_PRIVATE_KEY }}
-        run: |
-          set -euo pipefail
-          : "${DEPLOY_KEY:?WEBSITE_DEPLOY_SSH_PRIVATE_KEY is required}"
-          install -d -m 0700 "$HOME/.ssh"
-          printf '%s\n' "$DEPLOY_KEY" > "$HOME/.ssh/website_deploy"
-          chmod 0600 "$HOME/.ssh/website_deploy"
-          install -m 0644 .github/deploy/production_known_hosts "$HOME/.ssh/known_hosts"
-          ssh-keygen -y -f "$HOME/.ssh/website_deploy" >/dev/null
-      - name: Verify source remains current production main
+      - name: Record exact reusable production digest
         shell: bash
         env:
-          EXPECTED_SOURCE_SHA: ${{ needs.build.outputs.source_sha }}
-          GITHUB_TOKEN: ${{ github.token }}
+          IMAGE_DIGEST: ${{ steps.image.outputs.digest }}
         run: |
           set -euo pipefail
-          current_main_sha="$(
-            curl --fail --silent --show-error --location \
-              --proto '=https' --tlsv1.2 \
-              -H 'Accept: application/vnd.github+json' \
-              -H "Authorization: Bearer ${GITHUB_TOKEN}" \
-              -H 'X-GitHub-Api-Version: 2022-11-28' \
-              "https://api.github.com/repos/${GITHUB_REPOSITORY}/git/ref/heads/main" |
-              jq -er 'select(.ref == "refs/heads/main" and .object.type == "commit") | .object.sha | select(test("^[a-f0-9]{40}$"))'
-          )"
-          test "$current_main_sha" = "$EXPECTED_SOURCE_SHA"
-      - name: Invoke the server forced-command controller
-        env:
-          DEPLOY_HOST: 149.88.85.148
-          DEPLOY_PORT: "22"
-          DEPLOY_USER: frontmind-deploy
-          IMAGE_DIGEST: ${{ needs.build.outputs.digest }}
-          GHCR_USERNAME: ${{ github.actor }}
-          GHCR_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: |
-          set -euo pipefail
-          printf '%s\n%s\n' "$GHCR_USERNAME" "$GHCR_TOKEN" |
-            ssh -T \
-              -i "$HOME/.ssh/website_deploy" \
-              -p "$DEPLOY_PORT" \
-              -o BatchMode=yes \
-              -o IdentitiesOnly=yes \
-              -o StrictHostKeyChecking=yes \
-              "$DEPLOY_USER@$DEPLOY_HOST" \
-              "${IMAGE_NAME}@${IMAGE_DIGEST} ${{ needs.build.outputs.source_sha }}"
-      - name: Record immutable successful-deployment marker
-        env:
-          IMAGE_DIGEST: ${{ needs.build.outputs.digest }}
-        run: |
-          export IMAGE="${IMAGE_NAME,,}"
-          node scripts/mark-ghcr-promoted.mjs --marker-prefix deployed
+          printf '### Website production artifact\n\n- Source: `%s`\n- Digest: `%s`\n' \
+            "$GITHUB_SHA" "$IMAGE_DIGEST" >>"$GITHUB_STEP_SUMMARY"

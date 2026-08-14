@@ -5,11 +5,19 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import express from "express";
 import type {
-  BrokerFile,
+  BrokerArtifact,
+  BrokerLocalAsset,
   BrokerMonitorRun,
   BrokerTask,
   GeoMonitorPlatformId,
   GeoPresalesBroker,
+} from "../server/geo/broker";
+import {
+  expectedContractHashes,
+  GeoBrokerError,
+  PRESALES_CAPABILITIES,
+  PRESALES_CONTRACT_VERSION,
+  type PresalesContract,
 } from "../server/geo/broker";
 import type {
   GeoProjectOrder,
@@ -97,7 +105,14 @@ function loadRealMonitorRun(): BrokerMonitorRun {
 
 function loadRealAssessmentTask(): BrokerTask {
   const task = readSnapshot(realAssessmentResultPath, "真实评估结果");
-  if (String(task.status || "").toLowerCase() !== "completed") {
+  if (
+    task.status !== "succeeded" ||
+    typeof task.localTaskId !== "string" ||
+    typeof task.operationId !== "string" ||
+    !Array.isArray(task.safeEvents) ||
+    !task.result ||
+    typeof task.result !== "object"
+  ) {
     throw new Error("真实评估任务尚未完成");
   }
   return task as BrokerTask;
@@ -105,7 +120,14 @@ function loadRealAssessmentTask(): BrokerTask {
 
 function loadRealForecastTask(): BrokerTask {
   const task = readSnapshot(realForecastResultPath, "真实优化预测结果");
-  if (String(task.status || "").toLowerCase() !== "completed") {
+  if (
+    task.status !== "succeeded" ||
+    typeof task.localTaskId !== "string" ||
+    typeof task.operationId !== "string" ||
+    !Array.isArray(task.safeEvents) ||
+    !task.result ||
+    typeof task.result !== "object"
+  ) {
     throw new Error("真实优化预测任务尚未完成");
   }
   return task as BrokerTask;
@@ -114,31 +136,31 @@ function loadRealForecastTask(): BrokerTask {
 function buildLocalQuestionSet() {
   const reputationQuestions = [
     {
-      question: `${companyName}的企业背景和团队能力有哪些公开依据？`,
+      question: `${companyName}值得信赖吗？`,
       rationale:
         "帮助客户核验企业来源、研究背景与团队经验，补足建立初始信任所需的权威事实。",
       evidenceRefs: ["01_company_overview/overview.md", "02_team/overview.md"],
     },
     {
-      question: `${companyName}的技术与项目交付能力是否可靠，能够用哪些事实验证？`,
+      question: `${companyName}的技术与项目交付可靠吗？`,
       rationale:
         "对应客户在采购前对技术实力和落地可靠性的判断，可用能力说明与交付路径形成证据回答。",
       evidenceRefs: ["04_technology/overview.md", "07_service/overview.md"],
     },
     {
-      question: `${companyName}如何说明企业项目中的数据安全、合规要求与服务边界？`,
+      question: `${companyName}保护客户数据安全吗？`,
       rationale:
         "聚焦企业客户对数据、权限和合规风险的核验，便于把公开边界与待确认事项清楚区分。",
       evidenceRefs: ["04_technology/overview.md", "07_service/overview.md"],
     },
     {
-      question: `${companyName}有哪些公开荣誉、行业认可或客户信任依据可以参考？`,
+      question: `${companyName}的项目服务稳定吗？`,
       rationale:
         "覆盖客户验证外部认可和可信背书的需求，适合沉淀可追溯的荣誉与公开证明。",
       evidenceRefs: ["08_competitive_advantages/overview.md"],
     },
     {
-      question: `${companyName}的持续服务和项目支持口碑应该从哪些方面判断？`,
+      question: `客户对${companyName}的口碑怎么样？`,
       rationale:
         "回应客户对长期合作、响应机制和持续支持的顾虑，引导以服务范围和交付约定进行判断。",
       evidenceRefs: ["07_service/overview.md"],
@@ -149,8 +171,8 @@ function buildLocalQuestionSet() {
     {
       offeringAnchor: realApiEvidenceEnabled ? companyName : "MindPromise 智诺",
       question: realApiEvidenceEnabled
-        ? `${companyName}是一家什么公司，主要提供哪些产品和服务？`
-        : `${companyName}的 MindPromise 智诺是什么，主要解决哪些品牌认知问题？`,
+        ? `${companyName}主要提供哪些产品和服务？`
+        : `${companyName}的 MindPromise 智诺主要解决哪些品牌认知问题？`,
       rationale: realApiEvidenceEnabled
         ? "使用已完成的真实 API 回答，验证企业知识库对照、事实核验与评分链路。"
         : "帮助客户理解品牌认知治理产品的定位、输入和交付价值，适合承接产品定义类搜索。",
@@ -193,12 +215,12 @@ function buildLocalQuestionSet() {
         "聚焦品牌认知治理这一细分品类，承接客户寻找专业知识基建服务商的推荐意图。",
     },
     {
-      question: "需要智能获客与线索沉淀时，哪些企业 AI 服务商值得选择？",
+      question: "智能获客与线索沉淀领域有哪些企业 AI 服务商值得选择？",
       rationale:
         "从增长场景出发筛选服务商，帮助客户比较能否覆盖意向识别、触达和线索运营。",
     },
     {
-      question: "企业级 AI 工作流部署方案怎么选，头部服务商有哪些？",
+      question: "企业级 AI 工作流部署有哪些头部服务商？",
       rationale:
         "覆盖工作流部署领域的选型和头部厂商发现需求，适合形成有明确维度的候选清单。",
     },
@@ -211,27 +233,32 @@ function buildLocalQuestionSet() {
 
   const comparisonQuestions = [
     {
-      question: `${companyName}与传统单点工具在核心能力和交付物上有什么区别？`,
+      competitorAnchor: "云杉科技",
+      question: `${companyName}与云杉科技在核心能力上有什么区别？`,
       rationale:
         "帮助客户比较完整服务与单点工具的能力边界，明确事实治理、执行与交付物差异。",
     },
     {
-      question: `${companyName}与纯内容代运营相比，分别适合哪些企业需求？`,
+      competitorAnchor: "星河智能",
+      question: `${companyName}与星河智能在客户场景上有什么区别？`,
       rationale:
         "从客户需求和适用场景比较两类方案，避免把知识治理与单纯内容生产混为一谈。",
     },
     {
-      question: `${companyName}与通用 AI 平台相比，在系统部署和流程嵌入上有什么差异？`,
+      competitorAnchor: "青峰云",
+      question: `${companyName}与青峰云在系统部署上有什么差异？`,
       rationale:
         "聚焦部署方式和组织流程连接，帮助客户判断平台采购与项目型服务的取舍。",
     },
     {
-      question: `企业自建 AI 团队与选择${companyName}的 FDE 入驻服务应如何取舍？`,
+      competitorAnchor: "海岳数据",
+      question: `${companyName}与海岳数据在工程交付上有什么差异？`,
       rationale:
         "围绕资源投入、协作模式和落地效率形成自建与外部部署服务之间的决策比较。",
     },
     {
-      question: `${companyName}与同类企业 AI 咨询服务相比，持续支持边界有什么不同？`,
+      competitorAnchor: "云岚科技",
+      question: `${companyName}与云岚科技在持续支持上有什么差异？`,
       rationale:
         "比较长期支持、项目边界和持续运营方式，回应客户对合作深度与后续服务的顾虑。",
     },
@@ -242,6 +269,7 @@ function buildLocalQuestionSet() {
       id: `reputation-${String(index + 1).padStart(2, "0")}`,
       category: "reputation" as const,
       ...item,
+      enterpriseAnchor: companyName,
       selectable: true,
     })),
     ...productDefinitions.map((item, index) => ({
@@ -270,6 +298,7 @@ function buildLocalQuestionSet() {
       id: `competitor-comparison-${String(index + 1).padStart(2, "0")}`,
       category: "competitor_comparison" as const,
       ...item,
+      enterpriseAnchor: companyName,
       evidenceRefs: [
         index < 2
           ? "08_competitive_advantages/overview.md"
@@ -287,6 +316,7 @@ class LocalAcceptanceBroker implements GeoPresalesBroker {
   private nextMonitorRun = 1;
   private readonly uploads = new Map<string, Buffer>();
   private readonly filenames = new Map<string, string>();
+  private readonly artifacts = new Map<string, { bytes: Buffer; filename: string }>();
   private readonly tasks = new Map<string, BrokerTask>();
   private readonly idempotentTasks = new Map<string, BrokerTask>();
   private readonly taskReads = new Map<string, number>();
@@ -315,41 +345,47 @@ class LocalAcceptanceBroker implements GeoPresalesBroker {
       ok: true,
       credentialConfigured: true,
       monitorCredentialConfigured: true,
+      monitorCredentialAuthenticated: true,
       publicUrlConfigured: true,
+      presalesContractVersion: PRESALES_CONTRACT_VERSION,
+      capabilities: PRESALES_CAPABILITIES,
+      contractHashes: expectedContractHashes(),
     };
   }
 
-  async createFile(input: {
+  async createAsset(input: {
+    projectId?: string;
     filename: string;
     mimeType?: string;
     sizeBytes: number;
-  }): Promise<BrokerFile> {
+    idempotencyKey?: string;
+  }): Promise<BrokerLocalAsset> {
     const id = `local-file-${this.nextFile++}`;
     this.filenames.set(id, input.filename);
     return {
-      id,
+      localAssetId: id,
       filename: input.filename,
       status: "pending",
-      proxy_upload_ticket: `local-ticket-${id}`,
+      uploadTicket: `local-ticket-${id}`,
     };
   }
 
-  async uploadFile(fileId: string, body: Buffer) {
+  async uploadAsset(
+    fileId: string,
+    body: Buffer,
+    _contentType: string,
+    _uploadTicket?: string,
+  ) {
     this.uploads.set(fileId, Buffer.from(body));
-    if (
-      this.filenames.get(fileId)?.endsWith("_website_lead_knowledge_base.zip")
-    ) {
-      this.latestFinalFileId = fileId;
-      this.metrics.finalUploadCount += 1;
-    }
     return { status: "uploaded" };
   }
 
   async createTask(input: {
-    projectId?: string;
+    projectId: string;
     prompt: string;
-    attachments: Array<{ file_id: string; filename: string }>;
+    localAssets: Array<{ localAssetId: string; filename: string }>;
     idempotencyKey: string;
+    contract: PresalesContract;
   }): Promise<BrokerTask> {
     const existing = this.idempotentTasks.get(input.idempotencyKey);
     if (existing) return existing;
@@ -359,8 +395,8 @@ class LocalAcceptanceBroker implements GeoPresalesBroker {
     );
     if (isCustomQuestionClassifierTask) {
       this.metrics.customQuestionClassifierTaskCount += 1;
-      const taskInput = input.attachments
-        .map((attachment) => this.uploads.get(attachment.file_id))
+      const taskInput = input.localAssets
+        .map((attachment) => this.uploads.get(attachment.localAssetId))
         .filter((body): body is Buffer => Boolean(body))
         .map((body) =>
           parseGeoTaskInputAttachment<{ question?: unknown }>(
@@ -408,18 +444,13 @@ class LocalAcceptanceBroker implements GeoPresalesBroker {
             evidenceRefs: [],
           };
       const task: BrokerTask = {
-        id: `custom-question-classifier-local-acceptance-${this.metrics.customQuestionClassifierTaskCount}`,
-        status: "completed",
-        progress: 1,
-        completed_at: new Date().toISOString(),
-        output: [
-          {
-            role: "assistant",
-            content: [{ text: JSON.stringify(output) }],
-          },
-        ],
+        localTaskId: `custom-question-classifier-local-acceptance-${this.metrics.customQuestionClassifierTaskCount}`,
+        operationId: `custom-question-classifier-operation-${this.metrics.customQuestionClassifierTaskCount}`,
+        status: "succeeded",
+        safeEvents: [],
+        result: { structuredResult: output, artifacts: [] },
       };
-      this.tasks.set(String(task.id), task);
+      this.tasks.set(task.localTaskId, task);
       this.idempotentTasks.set(input.idempotencyKey, task);
       return task;
     }
@@ -430,18 +461,13 @@ class LocalAcceptanceBroker implements GeoPresalesBroker {
       this.metrics.questionTaskCreateCount += 1;
       const questions = buildLocalQuestionSet().questions;
       const task: BrokerTask = {
-        id: `question-local-acceptance-${this.metrics.questionTaskCreateCount}`,
-        status: "completed",
-        progress: 1,
-        completed_at: "2026-07-31T04:00:01.000Z",
-        output: [
-          {
-            role: "assistant",
-            content: [{ text: JSON.stringify({ questions }) }],
-          },
-        ],
+        localTaskId: `question-local-acceptance-${this.metrics.questionTaskCreateCount}`,
+        operationId: `question-operation-${this.metrics.questionTaskCreateCount}`,
+        status: "succeeded",
+        safeEvents: [],
+        result: { structuredResult: { questions }, artifacts: [] },
       };
-      this.tasks.set(String(task.id), task);
+      this.tasks.set(task.localTaskId, task);
       this.idempotentTasks.set(input.idempotencyKey, task);
       return task;
     }
@@ -451,7 +477,7 @@ class LocalAcceptanceBroker implements GeoPresalesBroker {
     if (isAssessmentTask && realApiEvidenceEnabled) {
       this.metrics.assessmentTaskCreateCount += 1;
       const task = loadRealAssessmentTask();
-      const taskId = String(task.id || task.task_id || "");
+      const taskId = task.localTaskId;
       if (!taskId) throw new Error("真实评估结果缺少任务 ID");
       this.tasks.set(taskId, task);
       this.idempotentTasks.set(input.idempotencyKey, task);
@@ -463,7 +489,7 @@ class LocalAcceptanceBroker implements GeoPresalesBroker {
     if (isForecastTask && realForecastEvidenceEnabled) {
       this.metrics.forecastTaskCreateCount += 1;
       const task = loadRealForecastTask();
-      const taskId = String(task.id || task.task_id || "");
+      const taskId = task.localTaskId;
       if (!taskId) throw new Error("真实优化预测结果缺少任务 ID");
       this.tasks.set(taskId, task);
       this.idempotentTasks.set(input.idempotencyKey, task);
@@ -471,12 +497,12 @@ class LocalAcceptanceBroker implements GeoPresalesBroker {
     }
     this.metrics.knowledgeTaskCreateCount += 1;
     const task: BrokerTask = {
-      id: "kb-local-acceptance-1",
+      localTaskId: "kb-local-acceptance-1",
+      operationId: "kb-operation-local-acceptance-1",
       status: "running",
-      progress: 0.8,
-      output: [],
+      safeEvents: [],
     };
-    this.tasks.set(String(task.id), task);
+    this.tasks.set(task.localTaskId, task);
     this.idempotentTasks.set(input.idempotencyKey, task);
     return task;
   }
@@ -484,28 +510,25 @@ class LocalAcceptanceBroker implements GeoPresalesBroker {
   private completeTask(taskId: string) {
     const task = this.tasks.get(taskId);
     if (!task) throw new Error(`未知本地任务：${taskId}`);
-    if (taskId !== "kb-local-acceptance-1" || task.status === "completed") {
+    if (taskId !== "kb-local-acceptance-1" || task.status === "succeeded") {
       return task;
     }
     const reads = (this.taskReads.get(taskId) || 0) + 1;
     this.taskReads.set(taskId, reads);
     if (reads >= 1) {
       Object.assign(task, {
-        status: "completed",
-        progress: 1,
-        completed_at: "2026-07-31T04:00:00.000Z",
-        output: [
-          {
-            role: "assistant",
-            content: [
-              {
-                type: "output_file",
-                file_id: "candidate-local-acceptance",
-                filename: "website-lead-candidate-v1.zip",
-              },
-            ],
-          },
-        ],
+        status: "succeeded",
+        result: {
+          artifacts: [
+            {
+              artifactId: "candidate-local-acceptance",
+              filename: "website-lead-candidate-v1.zip",
+              mimeType: "application/zip",
+              bytes: candidateBytes.length,
+              sha256: candidateSha256,
+            },
+          ],
+        },
       });
     }
     return task;
@@ -519,13 +542,40 @@ class LocalAcceptanceBroker implements GeoPresalesBroker {
     return this.completeTask(taskId);
   }
 
-  async deleteFile(fileId: string) {
+  async repairTask(_taskId: string, _input: { idempotencyKey: string }) {
+    throw new GeoBrokerError(
+      "Local acceptance fixtures do not require structured repair",
+      409,
+      "TASK_REPAIR_EXHAUSTED",
+    );
+  }
+
+  async deleteTask(taskId: string) {
+    this.tasks.delete(taskId);
+  }
+
+  async deleteProjectTasks(_projectId: string) {
+    const deletedTasks = this.tasks.size;
+    const deletedFiles = this.uploads.size;
+    this.tasks.clear();
+    this.uploads.clear();
+    return {
+      schemaVersion: 1 as const,
+      projectId: _projectId,
+      status: "deleted" as const,
+      deletedTasks,
+      deletedFiles,
+      pendingReservations: 0 as const,
+    };
+  }
+
+  async deleteAsset(fileId: string) {
     this.metrics.deletedFileCount += 1;
     this.uploads.delete(fileId);
     this.filenames.delete(fileId);
   }
 
-  async downloadFile(fileId: string) {
+  async downloadAsset(fileId: string) {
     let bytes: Buffer;
     let filename: string;
     if (fileId === "candidate-local-acceptance") {
@@ -551,8 +601,58 @@ class LocalAcceptanceBroker implements GeoPresalesBroker {
     });
   }
 
-  async downloadTaskOutput(_taskId: string, _url: string, _filename?: string) {
-    return this.downloadFile("candidate-local-acceptance");
+  async promoteArtifact(input: {
+    projectId: string;
+    idempotencyKey: string;
+    sourceLocalAssetId: string;
+    filename: string;
+    mimeType: "application/zip";
+    bytes: number;
+    sha256: string;
+    kind: "website-final-knowledge-base";
+  }): Promise<BrokerArtifact> {
+    const bytes = this.uploads.get(input.sourceLocalAssetId);
+    if (!bytes) throw new Error("本地最终知识库资产不存在");
+    const artifactId = `local-artifact-${input.sha256}`;
+    this.artifacts.set(artifactId, {
+      bytes: Buffer.from(bytes),
+      filename: input.filename,
+    });
+    this.latestFinalFileId = artifactId;
+    this.metrics.finalUploadCount += 1;
+    return {
+      artifactId,
+      filename: input.filename,
+      mimeType: input.mimeType,
+      bytes: input.bytes,
+      sha256: input.sha256,
+    };
+  }
+
+  async downloadArtifact(artifactId: string) {
+    if (artifactId === "candidate-local-acceptance") {
+      this.metrics.candidateDownloadCount += 1;
+      return new Response(candidateBytes, {
+        status: 200,
+        headers: {
+          "content-type": "application/zip",
+          "content-length": String(candidateBytes.length),
+        },
+      });
+    }
+    const artifact = this.artifacts.get(artifactId);
+    if (!artifact) throw new Error(`本地 Artifact 不存在：${artifactId}`);
+    if (artifactId === this.latestFinalFileId) {
+      this.metrics.finalReadbackCount += 1;
+    }
+    return new Response(artifact.bytes, {
+      status: 200,
+      headers: {
+        "content-type": "application/zip",
+        "content-length": String(artifact.bytes.length),
+        "content-disposition": `attachment; filename*=UTF-8''${encodeURIComponent(artifact.filename)}`,
+      },
+    });
   }
 
   async createMonitorRun(input: {
@@ -601,8 +701,9 @@ class LocalAcceptanceBroker implements GeoPresalesBroker {
     return this.completedMonitorRun(runId);
   }
 
-  async deleteMonitorRun(runId: string) {
+  async deleteMonitorRun(_projectId: string, runId: string) {
     this.monitorRuns.delete(runId);
+    return "deleted" as const;
   }
 
   private completedMonitorRun(runId: string): BrokerMonitorRun {
@@ -637,6 +738,16 @@ class LocalAcceptanceBroker implements GeoPresalesBroker {
             url: "https://frontmind.net/about/",
           },
         ],
+        sources: [
+          {
+            title: "超前智能企业知识库",
+            url: "https://frontmind.net/",
+          },
+          {
+            title: "本地知识库验收来源",
+            url: "https://frontmind.net/about/",
+          },
+        ],
         completedAt: new Date().toISOString(),
       })),
     );
@@ -653,7 +764,7 @@ class LocalAcceptanceBroker implements GeoPresalesBroker {
 
   status() {
     const finalBytes = this.latestFinalFileId
-      ? this.uploads.get(this.latestFinalFileId)
+      ? this.artifacts.get(this.latestFinalFileId)?.bytes
       : undefined;
     return {
       case: companyName,
@@ -717,6 +828,14 @@ class LocalPaymentGateway implements GeoPaymentGateway {
 
   async switchCheckoutMethod(): Promise<GeoPaymentCheckout> {
     throw new Error("本地验收付款会即时完成，不能再更换支付方式");
+  }
+
+  async switchServiceCheckoutMethod(): Promise<GeoPaymentCheckout> {
+    throw new Error("本地验收付款会即时完成，不能再更换支付方式");
+  }
+
+  async confirmServiceBankTransfer(): Promise<GeoPaymentReceipt> {
+    throw new Error("本地验收不模拟银行转账确认");
   }
 
   async getStatus(
@@ -843,6 +962,18 @@ class LocalProjectOrderRegistry implements GeoProjectOrderRegistry {
           !["fulfilled", "terminal_failed", "closed"].includes(order.state),
       ),
       orders,
+    };
+  }
+
+  async deleteProject(projectId: string) {
+    const orderIds = [...this.orders.values()]
+      .filter((order) => order.projectId === projectId)
+      .map((order) => order.orderId);
+    for (const orderId of orderIds) this.orders.delete(orderId);
+    return {
+      schemaVersion: 1 as const,
+      projectId,
+      deletedOrders: orderIds.length,
     };
   }
 }

@@ -24,14 +24,10 @@ function marker(overrides: Record<string, unknown> = {}) {
 }
 
 describe("trusted GEO crawl progress", () => {
-  it("accepts a cumulative checkpoint only from assistant output", () => {
+  it("accepts a cumulative checkpoint only from safe events", () => {
     const progress = parseTrustedGeoCrawlProgress({
-      output: [
-        {
-          type: "message",
-          role: "assistant",
-          content: [{ type: "output_text", text: marker() }],
-        },
+      safeEvents: [
+        { id: "event-1", type: "progress", message: marker() },
       ],
       metadata: { progress: marker({ visitedLinks: 999 }) },
     });
@@ -46,7 +42,7 @@ describe("trusted GEO crawl progress", () => {
     );
   });
 
-  it("rejects user messages, metadata, malformed, negative, oversized and inconsistent data", () => {
+  it("rejects metadata, malformed, negative, oversized and inconsistent data", () => {
     const invalid = [
       marker({ visitedLinks: -1 }),
       marker({ textCharacters: 1_000_000_001 }),
@@ -56,18 +52,11 @@ describe("trusted GEO crawl progress", () => {
     ];
     expect(
       parseTrustedGeoCrawlProgress({
-        output: [
-          {
-            type: "message",
-            role: "user",
-            content: [{ type: "output_text", text: marker() }],
-          },
-          ...invalid.map((text) => ({
-            type: "message",
-            role: "assistant",
-            content: [{ type: "output_text", text }],
-          })),
-        ],
+        safeEvents: invalid.map((message, index) => ({
+          id: `event-${index}`,
+          type: "progress",
+          message,
+        })),
         metadata: { crawlProgress: marker() },
       }),
     ).toBeUndefined();
@@ -75,15 +64,12 @@ describe("trusted GEO crawl progress", () => {
 
   it("keeps the latest monotonic checkpoint and ignores regressing counters", () => {
     const progress = parseTrustedGeoCrawlProgress({
-      output: [
+      safeEvents: [
+        { id: "event-1", type: "progress", message: marker() },
         {
-          type: "message",
-          role: "assistant",
-          content: [
-            { type: "output_text", text: marker() },
-            {
-              type: "output_text",
-              text: marker({
+          id: "event-2",
+          type: "progress",
+          message: marker({
                 reportedAt: "2026-07-28T08:10:00.000Z",
                 visitedLinks: 20,
                 successfulPages: 17,
@@ -94,15 +80,14 @@ describe("trusted GEO crawl progress", () => {
                 documentsParsed: 4,
                 webQueriesExecuted: 3,
               }),
-            },
-            {
-              type: "output_text",
-              text: marker({
+        },
+        {
+          id: "event-3",
+          type: "progress",
+          message: marker({
                 reportedAt: "2026-07-28T08:15:00.000Z",
                 visitedLinks: 19,
               }),
-            },
-          ],
         },
       ],
     });

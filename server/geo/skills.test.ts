@@ -258,7 +258,7 @@ describe("website one-shot knowledge-base skill", () => {
       "contentFloorExceptions",
       "cross-file evidence-reference subset",
       "scripts/build_candidate.py",
-      "`frontmind-base` model profile",
+      "`website.knowledge-base-candidate` contract",
       "exactly one enterprise knowledge-base generation task",
       "automatic recovery, regeneration, or a second attempt",
     ]) {
@@ -924,7 +924,7 @@ describe("GEO question-recommender skill", () => {
     );
     expect(skill).toContain("这些题不属于美誉与舆情");
     expect(skill).toContain("Never use the Chinese comma `，`");
-    expect(skill).toContain("`frontmind-pro` model profile");
+    expect(skill).toContain("`website.question-recommendation` contract");
     expect(skill).toContain(
       "Every item must also declare a different `competitorAnchor`",
     );

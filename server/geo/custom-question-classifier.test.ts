@@ -68,13 +68,11 @@ const v4Manifest: KnowledgeBaseManifest = {
 
 function assistantTask(value: unknown) {
   return {
-    status: "completed",
-    output: [
-      {
-        role: "assistant",
-        content: [{ type: "output_text", text: JSON.stringify(value) }],
-      },
-    ],
+    localTaskId: "classifier-1",
+    operationId: "operation:classifier-1",
+    status: "succeeded",
+    safeEvents: [],
+    result: { structuredResult: value, artifacts: [] },
   };
 }
 
@@ -99,6 +97,7 @@ describe("custom GEO question classifier contract", () => {
         enterpriseRelated: true,
         reasonCode: "accepted",
         reason: "问题明确询问超前智能的企业知识库产品能力。",
+        questionEnglish: null,
         enterpriseAnchor: "超前智能",
         offeringAnchor: "企业知识库",
         evidenceRefs: ["03_products/knowledge-base.md"],
@@ -130,22 +129,14 @@ describe("custom GEO question classifier contract", () => {
     ).toBeNull();
   });
 
-  it("repairs an otherwise strict rejection when a quoted name is not escaped", () => {
+  it("rejects malformed assistant text instead of repairing it", () => {
     const classification = parseCustomQuestionClassificationTaskOutput(
       assistantTextTask(
         `{"decision":"reject","category":"unrelated","enterpriseRelated":false,"reasonCode":"enterprise_unrelated","reason":"问题询问"FrontMind"是什么企业，该名称在硅基流动企业知识库中无任何记录，既非硅基流动的产品、服务、别名，也未与硅基流动存在任何可验证的关联路径，无法将其绑定至被评估企业。","enterpriseAnchor":null,"offeringAnchor":null,"evidenceRefs":[]}`,
       ),
     );
 
-    expect(classification).toMatchObject({
-      decision: "reject",
-      category: "unrelated",
-      enterpriseRelated: false,
-      reasonCode: "enterprise_unrelated",
-      enterpriseAnchor: null,
-      offeringAnchor: null,
-      evidenceRefs: [],
-    });
+    expect(classification).toBeNull();
   });
 
   it("does not invent a rejection from prose or an incomplete shape", () => {
@@ -158,38 +149,23 @@ describe("custom GEO question classifier contract", () => {
     ).toBeNull();
   });
 
-  it("repairs a malformed accepted classification before strict validation", () => {
+  it("rejects a malformed accepted classification", () => {
     const classification = parseCustomQuestionClassificationTaskOutput(
       assistantTextTask(
         `{"decision":"accept","category":"product_scenario","enterpriseRelated":true,"reasonCode":"accepted","reason":"问题询问"企业知识库"的具体能力。","enterpriseAnchor":"超前智能","offeringAnchor":"企业知识库","evidenceRefs":["03_products/knowledge-base.md"]}`,
       ),
     );
 
-    expect(classification).toMatchObject({
-      decision: "accept",
-      category: "product_scenario",
-      reason: '问题询问"企业知识库"的具体能力。',
-      evidenceRefs: ["03_products/knowledge-base.md"],
-    });
+    expect(classification).toBeNull();
   });
 
   it.each([
     `{"decision":"accept","category":"reputation","enterpriseRelated":true,"reasonCode":"accepted","reason":"问题明确以"硅基流动"为主语，询问其可靠性/信誉，知识库中存在关于硅基流动多轮融资、安全认证、服务稳定性及客户规模的具体事实，可支撑对该企业信誉的判定。","enterpriseAnchor":"硅基流动","offeringAnchor":null,"evidenceRefs":["08_competitive_advantages/013-3d826344f0.md","01_company_overview/001-cba3ec0725.md","evidence/S001.md"]}`,
     `{"decision":"accept","category":"reputation","enterpriseRelated":true,"reasonCode":"accepted","reason":"问题明确以"硅基流动"为主语询问其可信度与可靠性，知识库中存在关于该企业安全认证、融资记录、服务稳定性及用户规模的具体证据，属于声誉类问题。","enterpriseAnchor":"硅基流动","offeringAnchor":null,"evidenceRefs":["08_competitive_advantages/013-3d826344f0.md","01_company_overview/001-cba3ec0725.md","evidence/S001.md"]}`,
-  ])("repairs a retained SiliconFlow production accept fixture", (raw) => {
+  ])("rejects a retained malformed text fixture", (raw) => {
     expect(
       parseCustomQuestionClassificationTaskOutput(assistantTextTask(raw)),
-    ).toMatchObject({
-      decision: "accept",
-      category: "reputation",
-      enterpriseRelated: true,
-      enterpriseAnchor: "硅基流动",
-      evidenceRefs: [
-        "08_competitive_advantages/013-3d826344f0.md",
-        "01_company_overview/001-cba3ec0725.md",
-        "evidence/S001.md",
-      ],
-    });
+    ).toBeNull();
   });
 
   it("fails closed when multiple valid assistant results conflict", () => {
@@ -256,7 +232,7 @@ describe("custom GEO question classifier contract", () => {
     ).toBeNull();
   });
 
-  it("resolves one trusted classifier output_file", async () => {
+  it("does not read classifier result files", async () => {
     const accepted = {
       decision: "accept",
       category: "reputation",
@@ -270,11 +246,8 @@ describe("custom GEO question classifier contract", () => {
     await expect(
       resolveCustomQuestionClassificationTaskOutput(
         {
-          async downloadFile() {
-            return new Response(JSON.stringify(accepted));
-          },
-          async downloadTaskOutput() {
-            throw new Error("URL fallback should not be used");
+          async downloadArtifact() {
+            throw new Error("typed results must not download artifacts");
           },
         },
         {
@@ -288,7 +261,7 @@ describe("custom GEO question classifier contract", () => {
           ],
         },
       ),
-    ).resolves.toEqual(accepted);
+    ).resolves.toBeNull();
   });
 
   it("fails closed when classifier inline and output_file channels conflict", async () => {
@@ -339,9 +312,7 @@ describe("custom GEO question classifier contract", () => {
           async downloadFile() {
             return new Response("{}", {
               headers: {
-                "content-length": String(
-                  TRUSTED_TASK_JSON_MAX_TOTAL_BYTES + 1,
-                ),
+                "content-length": String(TRUSTED_TASK_JSON_MAX_TOTAL_BYTES + 1),
               },
             });
           },
@@ -457,10 +428,7 @@ describe("custom GEO question classifier contract", () => {
         reason: "问题明确询问超前智能的企业知识库产品能力。",
         enterpriseAnchor: "超前智能",
         offeringAnchor: "企业知识库",
-        evidenceRefs: [
-          "03_products/knowledge-base.md",
-          "evidence/S001.md",
-        ],
+        evidenceRefs: ["03_products/knowledge-base.md", "evidence/S001.md"],
       }),
     );
     if (!classification || classification.decision !== "accept") {

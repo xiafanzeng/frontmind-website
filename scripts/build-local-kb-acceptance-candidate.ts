@@ -650,25 +650,43 @@ candidateZip.file(
   [
     "# 超前智能企业知识库客户稿",
     "",
-    ...branches.flatMap((branch) => [
-      `## ${branch.title}`,
-      "",
-      `${branch.overview} [来源](${officialUrl})`,
-      "",
-      ...branch.leaves.flatMap((leaf) => [
-        `### ${leaf.title}`,
+    ...branches.flatMap((branch, branchIndex) => {
+      const contentFloor = [500, 500, 2_500, 1_000, 600, 600, 600][
+        branchIndex
+      ]!;
+      const topicCount = [1, 1, 2, 2, 1, 1, 1][branchIndex]!;
+      // The validator intentionally excludes headings, links, whitespace, and
+      // punctuation. Keep a deterministic margin so the fixture exercises the
+      // normal (non-exception) content-floor path after that normalization.
+      const topicCharacters = Math.ceil(
+        (contentFloor * 1.4 + 300) / topicCount,
+      );
+      return [
+        `## ${branch.title}`,
         "",
-        `${leaf.body} [来源](${officialUrl})`,
-        "",
-      ]),
-    ]),
+        ...branch.leaves.slice(0, topicCount).flatMap((leaf, topicIndex) => {
+          const topicMarker = String.fromCodePoint(
+            0x4e00 + branchIndex * 8 + topicIndex,
+          );
+          const paddedNarrative = `${leaf.body}${topicMarker.repeat(
+            Math.max(0, topicCharacters - leaf.body.length),
+          )}`;
+          return [
+            `### ${leaf.title}`,
+            "",
+            `${paddedNarrative} [来源](${officialUrl})`,
+            "",
+          ];
+        }),
+      ];
+    }),
   ].join("\n"),
 );
 candidateZip.file(
   "02_run.json",
   JSON.stringify(
     {
-      schemaVersion: 1,
+      schemaVersion: 2,
       company: {
         name: "超前智能",
         officialWebsite: officialUrl,
@@ -683,6 +701,14 @@ candidateZip.file(
         },
       ],
       queries: ["超前智能 官网", "FrontMind 产品与服务"],
+      stopReason: "coverage_complete",
+      contentFloorExceptions: [],
+      logoAcquisition: {
+        status: "unavailable",
+        attemptedPageUrls: [officialUrl],
+        reason:
+          "第一方页面未提供可在本地验收中独立打包且来源清晰的官方 Logo 原始资源。",
+      },
       assets: [],
     },
     null,

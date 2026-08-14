@@ -4,16 +4,17 @@ import path from "node:path";
 import { z } from "zod";
 import { GeoQuestionSchema, type GeoQuestion } from "./schemas";
 
-const STORE_SCHEMA_VERSION = 1 as const;
+const STORE_SCHEMA_VERSION = 2 as const;
 const DEFAULT_LEASE_MS = 30_000;
 const DEFAULT_TOMBSTONE_TTL_MS = 7 * 24 * 60 * 60 * 1000;
 const STALE_TEMPORARY_FILE_AGE_MS = 60 * 60 * 1000;
 const ORPHAN_FILE_MARKER_GRACE_MS = 5 * 60 * 1000;
 const VERSION_WIDTH = 12;
+const LOCAL_RESOURCE_ID_RE = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,199}$/;
 
 const StoredAttachmentSchema = z
   .object({
-    fileId: z.string().min(1).max(200),
+    localAssetId: z.string().regex(LOCAL_RESOURCE_ID_RE),
     filename: z.string().min(1).max(512),
     temporary: z.boolean(),
   })
@@ -38,7 +39,7 @@ const ActiveLeaseSchema = z
 
 const KnowledgeBaseArtifactSchema = z
   .object({
-    fileId: z.string().min(1).max(200),
+    artifactId: z.string().min(1).max(200),
     filename: z.string().min(1).max(512),
     sha256: z
       .string()
@@ -53,14 +54,12 @@ const KnowledgeBaseArtifactSchema = z
 
 const CleanupTargetSchema = z
   .object({
-    // Accepted only for backward compatibility with cleanup tombstones written
-    // before upstream tasks became permanent evidence. The transform strips it
-    // so no cleanup callback can request task deletion.
-    taskId: z.string().min(1).max(200).optional(),
-    temporaryFileIds: z.array(z.string().min(1).max(200)).max(26).default([]),
+    temporaryLocalAssetIds: z
+      .array(z.string().regex(LOCAL_RESOURCE_ID_RE))
+      .max(26)
+      .default([]),
   })
-  .strict()
-  .transform(({ temporaryFileIds }) => ({ temporaryFileIds }));
+  .strict();
 
 const CustomQuestionValidationRecordSchema = z
   .object({
@@ -94,17 +93,13 @@ const CustomQuestionValidationRecordSchema = z
     archiveStagingAttachment: StoredAttachmentSchema.optional(),
     skillStagingAttachment: StoredAttachmentSchema.optional(),
     promptInputStagingAttachment: StoredAttachmentSchema.optional(),
-    orphanedTemporaryFileIds: z
-      .array(z.string().min(1).max(200))
+    temporaryLocalAssetIds: z
+      .array(z.string().regex(LOCAL_RESOURCE_ID_RE))
       .max(20)
       .default([]),
     attachmentRebuildCount: z.number().int().min(0).max(10).default(0),
     formatRetryCount: z.number().int().min(0).max(1).default(0),
-    taskId: z.string().min(1).max(200).optional(),
-    priorTaskIds: z
-      .array(z.string().min(1).max(200))
-      .max(1)
-      .default([]),
+    localTaskId: z.string().regex(LOCAL_RESOURCE_ID_RE).optional(),
     result: GeoQuestionSchema.optional(),
     completionMode: z.literal("existing_recommended_question").optional(),
     error: StoredErrorSchema.optional(),
@@ -182,7 +177,7 @@ const OrphanFileMarkerSchema = z
   .object({
     schemaVersion: z.literal(STORE_SCHEMA_VERSION),
     recordKey: z.string().regex(/^[a-f0-9]{64}$/),
-    fileId: z.string().min(1).max(200),
+    localAssetId: z.string().regex(LOCAL_RESOURCE_ID_RE),
     createdAt: z.string().datetime({ offset: true }),
   })
   .strict();
@@ -209,7 +204,7 @@ export type GeoCustomQuestionValidationReservation = {
   knowledgeBaseTaskId: string;
   knowledgeBaseValidationProfile?: "website-lead-v1";
   knowledgeBaseArtifact: {
-    fileId: string;
+    artifactId: string;
     filename: string;
     sha256?: string;
     packageManifestSha256?: string;
@@ -240,8 +235,8 @@ export type GeoProjectDeletionFenceOptions = {
 };
 
 export type GeoProjectDeletionTargets = {
-  taskIds: string[];
-  temporaryFileIds: string[];
+  localTaskIds: string[];
+  temporaryLocalAssetIds: string[];
 };
 
 export interface GeoCustomQuestionValidationStore {
@@ -287,7 +282,7 @@ export interface GeoCustomQuestionValidationStore {
   retainTemporaryFileForCleanup(
     projectId: string,
     clientRequestId: string,
-    fileId: string,
+    localAssetId: string,
   ): Promise<GeoCustomQuestionValidationRecord>;
   listActive(limit?: number): Promise<GeoCustomQuestionValidationRecord[]>;
   tryAcquireLease(
@@ -389,11 +384,10 @@ function isPristineReservationLoser(record: GeoCustomQuestionValidationRecord) {
     !record.archiveStagingAttachment &&
     !record.skillStagingAttachment &&
     !record.promptInputStagingAttachment &&
-    record.orphanedTemporaryFileIds.length === 0 &&
+    record.temporaryLocalAssetIds.length === 0 &&
     record.attachmentRebuildCount === 0 &&
     record.formatRetryCount === 0 &&
-    !record.taskId &&
-    record.priorTaskIds.length === 0 &&
+    !record.localTaskId &&
     !record.result &&
     !record.error &&
     record.unknownStatusCount === 0 &&
@@ -434,26 +428,26 @@ function cleanupTargetFromRecord(
   record: GeoCustomQuestionValidationRecord,
 ): GeoCustomQuestionValidationCleanupTarget {
   return CleanupTargetSchema.parse({
-    temporaryFileIds: Array.from(
+    temporaryLocalAssetIds: Array.from(
       new Set([
-        ...record.orphanedTemporaryFileIds,
+        ...record.temporaryLocalAssetIds,
         ...(record.skillAttachment?.temporary
-          ? [record.skillAttachment.fileId]
+          ? [record.skillAttachment.localAssetId]
           : []),
         ...(record.promptInputAttachment?.temporary
-          ? [record.promptInputAttachment.fileId]
+          ? [record.promptInputAttachment.localAssetId]
           : []),
         ...(record.archiveAttachment?.temporary
-          ? [record.archiveAttachment.fileId]
+          ? [record.archiveAttachment.localAssetId]
           : []),
         ...(record.skillStagingAttachment?.temporary
-          ? [record.skillStagingAttachment.fileId]
+          ? [record.skillStagingAttachment.localAssetId]
           : []),
         ...(record.promptInputStagingAttachment?.temporary
-          ? [record.promptInputStagingAttachment.fileId]
+          ? [record.promptInputStagingAttachment.localAssetId]
           : []),
         ...(record.archiveStagingAttachment?.temporary
-          ? [record.archiveStagingAttachment.fileId]
+          ? [record.archiveStagingAttachment.localAssetId]
           : []),
       ]),
     ),
@@ -464,18 +458,18 @@ function projectDeletionTargetsFromRecords(
   records: GeoCustomQuestionValidationRecord[],
 ): GeoProjectDeletionTargets {
   return {
-    taskIds: Array.from(
+    localTaskIds: Array.from(
       new Set(
-        records.flatMap((record) => [
-          ...record.priorTaskIds,
-          ...(record.taskId ? [record.taskId] : []),
-        ]),
+        records.flatMap((record) =>
+          record.localTaskId ? [record.localTaskId] : [],
+        ),
       ),
     ),
-    temporaryFileIds: Array.from(
+    temporaryLocalAssetIds: Array.from(
       new Set(
         records.flatMap(
-          (record) => cleanupTargetFromRecord(record).temporaryFileIds,
+          (record) =>
+            cleanupTargetFromRecord(record).temporaryLocalAssetIds,
         ),
       ),
     ),
@@ -495,10 +489,9 @@ function initialRecord(
     fencingToken: 0,
     ...input,
     state: "reserved",
-    orphanedTemporaryFileIds: [],
+    temporaryLocalAssetIds: [],
     attachmentRebuildCount: 0,
     formatRetryCount: 0,
-    priorTaskIds: [],
     unknownStatusCount: 0,
     transientErrorCount: 0,
     cleanupCompleted: false,
@@ -534,7 +527,8 @@ function assertReservationMatches(
     record.question !== input.question ||
     record.companyName !== input.companyName ||
     record.knowledgeBaseTaskId !== input.knowledgeBaseTaskId ||
-    record.knowledgeBaseArtifact.fileId !== input.knowledgeBaseArtifact.fileId
+    record.knowledgeBaseArtifact.artifactId !==
+      input.knowledgeBaseArtifact.artifactId
   ) {
     throw new GeoCustomQuestionValidationStoreError(
       "IDEMPOTENCY_CONFLICT",
@@ -744,18 +738,21 @@ export class MemoryGeoCustomQuestionValidationStore
         (record) => record.projectId === projectId,
       ),
     );
-    const tombstoneFileIds = Array.from(this.tombstones.values()).flatMap(
+    const tombstoneLocalAssetIds = Array.from(this.tombstones.values()).flatMap(
       (tombstone) =>
         tombstone.projectId === projectId &&
         !tombstone.cleanupCompleted &&
         tombstone.cleanupTarget
-          ? tombstone.cleanupTarget.temporaryFileIds
+          ? tombstone.cleanupTarget.temporaryLocalAssetIds
           : [],
     );
     return {
-      taskIds: recordTargets.taskIds,
-      temporaryFileIds: Array.from(
-        new Set([...recordTargets.temporaryFileIds, ...tombstoneFileIds]),
+      localTaskIds: recordTargets.localTaskIds,
+      temporaryLocalAssetIds: Array.from(
+        new Set([
+          ...recordTargets.temporaryLocalAssetIds,
+          ...tombstoneLocalAssetIds,
+        ]),
       ),
     };
   }
@@ -1072,7 +1069,7 @@ export class MemoryGeoCustomQuestionValidationStore
   async retainTemporaryFileForCleanup(
     projectId: string,
     clientRequestId: string,
-    fileId: string,
+    localAssetId: string,
   ) {
     const key = recordKey(projectId, clientRequestId);
     const current = this.records.get(key);
@@ -1082,14 +1079,17 @@ export class MemoryGeoCustomQuestionValidationStore
         "该自定义问题验证请求不存在或已过期",
       );
     }
-    if (current.orphanedTemporaryFileIds.includes(fileId)) {
+    if (current.temporaryLocalAssetIds.includes(localAssetId)) {
       return cloneRecord(current);
     }
     const next = parseRecord({
       ...current,
       storeVersion: current.storeVersion + 1,
       commitId: crypto.randomUUID(),
-      orphanedTemporaryFileIds: [...current.orphanedTemporaryFileIds, fileId],
+      temporaryLocalAssetIds: [
+        ...current.temporaryLocalAssetIds,
+        localAssetId,
+      ],
       updatedAt: new Date(this.now()).toISOString(),
     });
     await this.hooks.beforeRecordCommit?.({
@@ -1152,7 +1152,7 @@ export class MemoryGeoCustomQuestionValidationStore
           record.projectId === projectId &&
           record.ownerSessionHash === ownerSessionHash &&
           record.questionHash === questionHash &&
-          record.taskId &&
+          record.localTaskId &&
           record.error?.code ===
             "CUSTOM_QUESTION_CLASSIFIER_INVALID_RESPONSE" &&
           Date.parse(record.expiresAt) > now,
@@ -1543,28 +1543,30 @@ export class FileGeoCustomQuestionValidationStore
     const records = await this.readProjectRecords(projectId);
     const tombstones = await this.readProjectTombstones(projectId);
     const recordTargets = projectDeletionTargetsFromRecords(records);
-    const tombstoneFileIds: string[] = [];
+    const tombstoneLocalAssetIds: string[] = [];
     for (const tombstone of tombstones) {
       if (
         tombstone.cleanupTarget &&
         !(await this.hasCleanupCompleteMarker(tombstone.key))
       ) {
-        tombstoneFileIds.push(...tombstone.cleanupTarget.temporaryFileIds);
+        tombstoneLocalAssetIds.push(
+          ...tombstone.cleanupTarget.temporaryLocalAssetIds,
+        );
       }
     }
-    const orphanFileIds = await this.readOrphanFileIds(
+    const orphanLocalAssetIds = await this.readOrphanLocalAssetIds(
       new Set([
         ...records.map((record) => record.key),
         ...tombstones.map((tombstone) => tombstone.key),
       ]),
     );
     return {
-      taskIds: recordTargets.taskIds,
-      temporaryFileIds: Array.from(
+      localTaskIds: recordTargets.localTaskIds,
+      temporaryLocalAssetIds: Array.from(
         new Set([
-          ...recordTargets.temporaryFileIds,
-          ...tombstoneFileIds,
-          ...orphanFileIds,
+          ...recordTargets.temporaryLocalAssetIds,
+          ...tombstoneLocalAssetIds,
+          ...orphanLocalAssetIds,
         ]),
       ),
     };
@@ -1897,14 +1899,14 @@ export class FileGeoCustomQuestionValidationStore
   async retainTemporaryFileForCleanup(
     projectId: string,
     clientRequestId: string,
-    fileId: string,
+    localAssetId: string,
   ) {
     await this.assertDirectory();
     const key = recordKey(projectId, clientRequestId);
     const marker = OrphanFileMarkerSchema.parse({
       schemaVersion: STORE_SCHEMA_VERSION,
       recordKey: key,
-      fileId,
+      localAssetId,
       createdAt: new Date(this.now()).toISOString(),
     });
     await this.createOrphanFileMarker(marker);
@@ -1916,7 +1918,7 @@ export class FileGeoCustomQuestionValidationStore
           "该自定义问题验证请求不存在或已过期",
         );
       }
-      if (current.orphanedTemporaryFileIds.includes(fileId)) {
+      if (current.temporaryLocalAssetIds.includes(localAssetId)) {
         await this.removeOrphanFileMarker(marker).catch(() => undefined);
         return current;
       }
@@ -1924,9 +1926,9 @@ export class FileGeoCustomQuestionValidationStore
         current,
         {
           ...current,
-          orphanedTemporaryFileIds: [
-            ...current.orphanedTemporaryFileIds,
-            fileId,
+          temporaryLocalAssetIds: [
+            ...current.temporaryLocalAssetIds,
+            localAssetId,
           ],
         },
         this.now(),
@@ -1981,7 +1983,7 @@ export class FileGeoCustomQuestionValidationStore
         (record) =>
           record.ownerSessionHash === ownerSessionHash &&
           record.questionHash === questionHash &&
-          record.taskId &&
+          record.localTaskId &&
           record.error?.code ===
             "CUSTOM_QUESTION_CLASSIFIER_INVALID_RESPONSE" &&
           Date.parse(record.expiresAt) > now,
@@ -2628,8 +2630,8 @@ export class FileGeoCustomQuestionValidationStore
     return tombstones;
   }
 
-  private async readOrphanFileIds(recordKeys: Set<string>) {
-    const fileIds: string[] = [];
+  private async readOrphanLocalAssetIds(recordKeys: Set<string>) {
+    const localAssetIds: string[] = [];
     const pattern = /^([a-f0-9]{64})\.([a-f0-9]{64})\.orphan-file\.json$/;
     for (const name of await fs.readdir(this.directory)) {
       const identity = pattern.exec(name);
@@ -2637,9 +2639,9 @@ export class FileGeoCustomQuestionValidationStore
       const marker = OrphanFileMarkerSchema.parse(
         JSON.parse(await fs.readFile(path.join(this.directory, name), "utf8")),
       );
-      fileIds.push(marker.fileId);
+      localAssetIds.push(marker.localAssetId);
     }
-    return fileIds;
+    return localAssetIds;
   }
 
   private async hasCleanupCompleteMarker(key: string) {
@@ -2676,7 +2678,10 @@ export class FileGeoCustomQuestionValidationStore
   private async createOrphanFileMarker(
     marker: z.infer<typeof OrphanFileMarkerSchema>,
   ) {
-    const target = this.orphanFileMarkerPath(marker.recordKey, marker.fileId);
+    const target = this.orphanFileMarkerPath(
+      marker.recordKey,
+      marker.localAssetId,
+    );
     const created = await this.linkImmutableJson(target, marker);
     if (created) return;
     const existing = OrphanFileMarkerSchema.parse(
@@ -2684,7 +2689,7 @@ export class FileGeoCustomQuestionValidationStore
     );
     if (
       existing.recordKey !== marker.recordKey ||
-      existing.fileId !== marker.fileId
+      existing.localAssetId !== marker.localAssetId
     ) {
       throw this.storeCorrupt("自定义问题验证孤儿文件标记冲突");
     }
@@ -2694,7 +2699,9 @@ export class FileGeoCustomQuestionValidationStore
     marker: z.infer<typeof OrphanFileMarkerSchema>,
   ) {
     await fs
-      .unlink(this.orphanFileMarkerPath(marker.recordKey, marker.fileId))
+      .unlink(
+        this.orphanFileMarkerPath(marker.recordKey, marker.localAssetId),
+      )
       .catch((error) => {
         if (!isFileNotFoundError(error)) throw error;
       });
@@ -2727,7 +2734,7 @@ export class FileGeoCustomQuestionValidationStore
       );
       const expectedFileHash = crypto
         .createHash("sha256")
-        .update(marker.fileId, "utf8")
+        .update(marker.localAssetId, "utf8")
         .digest("hex");
       if (
         marker.recordKey !== identity[1] ||
@@ -2739,14 +2746,14 @@ export class FileGeoCustomQuestionValidationStore
       const tracked = Boolean(
         current &&
           [
-            ...current.orphanedTemporaryFileIds,
-            current.archiveAttachment?.fileId,
-            current.skillAttachment?.fileId,
-            current.promptInputAttachment?.fileId,
-            current.archiveStagingAttachment?.fileId,
-            current.skillStagingAttachment?.fileId,
-            current.promptInputStagingAttachment?.fileId,
-          ].includes(marker.fileId),
+            ...current.temporaryLocalAssetIds,
+            current.archiveAttachment?.localAssetId,
+            current.skillAttachment?.localAssetId,
+            current.promptInputAttachment?.localAssetId,
+            current.archiveStagingAttachment?.localAssetId,
+            current.skillStagingAttachment?.localAssetId,
+            current.promptInputStagingAttachment?.localAssetId,
+          ].includes(marker.localAssetId),
       );
       if (tracked) {
         await this.removeOrphanFileMarker(marker);
@@ -2761,7 +2768,7 @@ export class FileGeoCustomQuestionValidationStore
         continue;
       }
       try {
-        await cleanup({ temporaryFileIds: [marker.fileId] });
+        await cleanup({ temporaryLocalAssetIds: [marker.localAssetId] });
         await this.removeOrphanFileMarker(marker);
       } catch {
         result.retained += 1;
@@ -2973,10 +2980,13 @@ export class FileGeoCustomQuestionValidationStore
     return path.join(this.directory, `${key}.cleanup-complete.json`);
   }
 
-  private orphanFileMarkerPath(recordKeyValue: string, fileId: string) {
+  private orphanFileMarkerPath(
+    recordKeyValue: string,
+    localAssetId: string,
+  ) {
     const fileHash = crypto
       .createHash("sha256")
-      .update(fileId, "utf8")
+      .update(localAssetId, "utf8")
       .digest("hex");
     return path.join(
       this.directory,

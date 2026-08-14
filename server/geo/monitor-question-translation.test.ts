@@ -12,14 +12,11 @@ const sourceQuestion = "硅基流动的 SiliconCloud 平台稳定吗？";
 
 function assistantTask(value: unknown) {
   return {
-    id: "translation-1",
-    status: "completed",
-    output: [
-      {
-        role: "assistant",
-        content: [{ text: JSON.stringify(value) }],
-      },
-    ],
+    localTaskId: "translation-1",
+    operationId: "operation:translation-1",
+    status: "succeeded",
+    safeEvents: [],
+    result: { structuredResult: value, artifacts: [] },
   };
 }
 
@@ -54,7 +51,7 @@ describe("overseas monitor question translation", () => {
     ).toBeUndefined();
   });
 
-  it("accepts the upstream typed text.value envelope before status convergence", () => {
+  it("rejects a raw text envelope before status convergence", () => {
     const output = {
       schemaVersion: 1,
       sourceQuestionSha256: geoMonitorQuestionSourceDigest(sourceQuestion),
@@ -79,13 +76,13 @@ describe("overseas monitor question translation", () => {
 
     expect(
       parseGeoMonitorQuestionTranslationTaskOutput(task, sourceQuestion),
-    ).toBe("Is SiliconFlow reliable?");
+    ).toBeUndefined();
     expect(
       parseGeoMonitorQuestionTranslationTaskOutput(
         { ...task, status: "failed" },
         sourceQuestion,
       ),
-    ).toBe("Is SiliconFlow reliable?");
+    ).toBeUndefined();
   });
 
   it("parses the exact SiliconFlow production payload and source digest", () => {
@@ -95,57 +92,27 @@ describe("overseas monitor question translation", () => {
     expect(geoMonitorQuestionSourceDigest(productionSourceQuestion)).toBe(
       productionDigest,
     );
-    const rawProductionPayload = JSON.stringify({
+    const productionPayload = {
       schemaVersion: 1,
       sourceQuestionSha256: productionDigest,
       questionEnglish: "Is SiliconFlow reliable?",
-    });
+    };
 
     expect(
       parseGeoMonitorQuestionTranslationTaskOutput(
-        {
-          id: "production-translation",
-          status: "running",
-          output: [
-            {
-              type: "output_message",
-              role: "assistant",
-              content: [
-                {
-                  type: "output_text",
-                  text: { value: rawProductionPayload },
-                },
-              ],
-            },
-          ],
-        },
+        assistantTask(productionPayload),
         productionSourceQuestion,
       ),
     ).toBe("Is SiliconFlow reliable?");
     expect(
       parseGeoMonitorQuestionTranslationTaskOutput(
-        {
-          id: "production-translation-completed",
-          status: "completed",
-          output: [
-            {
-              type: "output_message",
-              role: "assistant",
-              content: [
-                {
-                  type: "output_text",
-                  text: `\`\`\`json\n${rawProductionPayload}\n\`\`\``,
-                },
-              ],
-            },
-          ],
-        },
+        { output: [{ type: "output_text", text: JSON.stringify(productionPayload) }] },
         productionSourceQuestion,
       ),
-    ).toBe("Is SiliconFlow reliable?");
+    ).toBeUndefined();
   });
 
-  it("repairs unescaped quotes and rejects conflicting translations", () => {
+  it("rejects malformed or conflicting raw translations", () => {
     const digest = geoMonitorQuestionSourceDigest(sourceQuestion);
     const malformed = `{"schemaVersion":1,"sourceQuestionSha256":"${digest}","questionEnglish":"Is "SiliconFlow" reliable?"}`;
     expect(
@@ -160,7 +127,7 @@ describe("overseas monitor question translation", () => {
         },
         sourceQuestion,
       ),
-    ).toBe('Is "SiliconFlow" reliable?');
+    ).toBeUndefined();
 
     expect(
       parseGeoMonitorQuestionTranslationTaskOutput(
@@ -194,7 +161,7 @@ describe("overseas monitor question translation", () => {
     ).toBeUndefined();
   });
 
-  it("resolves one trusted translation output_file", async () => {
+  it("does not read translation result files", async () => {
     const output = {
       schemaVersion: 1,
       sourceQuestionSha256: geoMonitorQuestionSourceDigest(sourceQuestion),
@@ -203,11 +170,8 @@ describe("overseas monitor question translation", () => {
     await expect(
       resolveGeoMonitorQuestionTranslationTaskOutput(
         {
-          async downloadFile() {
-            return new Response(JSON.stringify(output));
-          },
-          async downloadTaskOutput() {
-            throw new Error("URL fallback should not be used");
+          async downloadArtifact() {
+            throw new Error("typed results must not download artifacts");
           },
         },
         {
@@ -222,7 +186,7 @@ describe("overseas monitor question translation", () => {
         },
         sourceQuestion,
       ),
-    ).resolves.toBe(output.questionEnglish);
+    ).resolves.toBeUndefined();
   });
 
   it("fails closed when translation inline and output_file channels conflict", async () => {

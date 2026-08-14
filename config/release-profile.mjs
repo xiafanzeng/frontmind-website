@@ -9,7 +9,7 @@ export const releaseProfile = Object.freeze({
   expectedRuntimeEnvironment: Object.freeze({
     FRONTMIND_PUBLIC_BASE_URL: "https://www.frontmind.net",
     FRONTMIND_PRESALES_AGENT_URL:
-      "http://frontmind-dashboard:3001/api/internal/presales",
+      "http://frontmind-dashboard:3001/api/internal/presales/v2",
     FRONTMIND_AGENT_PROVISIONING_URL:
       "http://frontmind-dashboard:3001/api/internal/provisioning",
     FRONTMIND_AGENT_INTERNAL_HTTP_HOSTS: "frontmind-dashboard",

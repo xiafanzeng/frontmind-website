@@ -43,7 +43,7 @@ if (
 const expectedRuntimeEnvironment = {
   FRONTMIND_PUBLIC_BASE_URL: "https://www.frontmind.net",
   FRONTMIND_PRESALES_AGENT_URL:
-    "http://frontmind-dashboard:3001/api/internal/presales",
+    "http://frontmind-dashboard:3001/api/internal/presales/v2",
   FRONTMIND_AGENT_PROVISIONING_URL:
     "http://frontmind-dashboard:3001/api/internal/provisioning",
   FRONTMIND_AGENT_INTERNAL_HTTP_HOSTS: "frontmind-dashboard",
@@ -93,6 +93,8 @@ async function copyActualSourceFiles() {
     .filter(
       (relativePath) =>
         relativePath &&
+        relativePath !== "node_modules" &&
+        !relativePath.startsWith("node_modules/") &&
         relativePath !== "dist" &&
         !relativePath.startsWith("dist/"),
     );
@@ -198,22 +200,17 @@ try {
   }
   for (const required of [
     "branches: [main]",
+    "workflow_dispatch:",
+    "release_mode:",
+    "- build-only",
     "needs: verify",
-    "needs: [verify, build]",
     "ref: ${{ github.sha }}",
-    "ref: ${{ needs.build.outputs.source_sha }}",
     "Verify source is still current production main",
-    "Verify source remains current production main",
     "https://api.github.com/repos/${GITHUB_REPOSITORY}/git/ref/heads/main",
     "cosign sign --yes",
-    "needs.build.outputs.digest",
-    "StrictHostKeyChecking=yes",
-    "GHCR_USERNAME: ${{ github.actor }}",
-    "GHCR_TOKEN: ${{ secrets.GITHUB_TOKEN }}",
-    `printf '%s\\n%s\\n' "$GHCR_USERNAME" "$GHCR_TOKEN" |`,
+    "Record exact reusable production digest",
     "FRONTMIND_RELEASE_SOURCE_SHA: ${{ github.sha }}",
     "source_sha: ${{ github.sha }}",
-    "${IMAGE_NAME}@${IMAGE_DIGEST} ${{ needs.build.outputs.source_sha }}",
   ]) {
     if (!workflow.includes(required)) {
       throw new Error(`WEBSITE_WORKFLOW_CONTRACT_MISSING:${required}`);
@@ -224,6 +221,12 @@ try {
   }
   if (workflow.includes("pull_request:")) {
     throw new Error("WEBSITE_WORKFLOW_MUST_NOT_DUPLICATE_PULL_REQUEST_CI");
+  }
+  if (
+    /^  deploy:/mu.test(workflow) ||
+    /DEPLOY_SSH|StrictHostKeyChecking|frontmind-deploy/iu.test(workflow)
+  ) {
+    throw new Error("WEBSITE_WORKFLOW_MUST_ONLY_BUILD_THE_REUSABLE_ARTIFACT");
   }
   if (
     /promotion-gate|promotion-merge-proof|verify-promotion-main-push|write-promotion-merge-proof|prebuild|merge-proof/iu.test(

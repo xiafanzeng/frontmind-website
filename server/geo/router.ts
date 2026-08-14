@@ -29,7 +29,7 @@ import {
   buildAssessmentTaskInput,
   calculateQuestionBaselineAssessment,
   determineBsasGrade,
-  resolveAssessmentTaskOutput,
+  resolveAssessmentTaskOutput as resolveAssessmentTaskOutputRaw,
 } from "./assessment";
 import {
   buildGeoOptimizationOutcomeForecastTemplate,
@@ -43,20 +43,20 @@ import {
   FORECAST_SKILL_ARCHIVE_FILENAME,
   FORECAST_TASK_INPUT_FILENAME,
   ForecastTaskOutputValidationError,
-  resolveOptimizationOutcomeForecastTaskOutput,
+  resolveOptimizationOutcomeForecastTaskOutput as resolveOptimizationOutcomeForecastTaskOutputRaw,
 } from "./forecast";
 import { buildGeoExecutionLog } from "./execution";
 import {
   createGeoPresalesBrokerFromEnv,
-  FRONTMIND_BASE_PROFILE,
-  FRONTMIND_PRO_PROFILE,
+  PRESALES_CONTRACTS,
+  type BrokerArtifact,
   type BrokerMonitorRun,
   geoMonitoringPriceFen,
   GEO_MONITOR_PLATFORM_IDS,
   GeoBrokerError,
   normalizedGeoMonitoringEdition,
   type BrokerTask,
-  type FrontMindAgentProfile,
+  type PresalesContract,
   type GeoPresalesBroker,
   type GeoMonitorPlatformId,
   type GeoMonitoringEdition,
@@ -130,10 +130,6 @@ import {
   geoMonitorQuestionTranslationOperationKey,
   resolveGeoMonitorQuestionTranslationTaskOutput,
 } from "./monitor-question-translation";
-import {
-  trustedAssistantOutputFiles,
-  trustedAssistantOutputTexts,
-} from "./trusted-task-output";
 import {
   buildGeoCustomQuestionClassifierTaskInput,
   buildGeoCustomQuestionClassifierPrompt,
@@ -311,6 +307,7 @@ type SessionTokenValue = {
 };
 
 type ProjectTokenValue = {
+  projectContractVersion: 2;
   projectId: string;
   ownerSessionId: string;
   companyName: string;
@@ -341,12 +338,12 @@ type ProjectTokenValue = {
     candidate: {
       taskId: string;
       outputItemId: string;
-      fileId?: string;
+      artifactId: string;
       descriptorHash: string;
       sha256: string;
     };
     final: {
-      fileId: string;
+      artifactId: string;
       filename: string;
       sha256: string;
       packageManifestSha256: string;
@@ -506,7 +503,7 @@ type ProjectOrderProtection = {
 async function verifyUploadedKnowledgeBaseArchive(
   broker: GeoPresalesBroker,
   input: {
-    fileId: string;
+    artifactId: string;
     companyName: string;
     generatedAt: string;
     expectedBytes: Buffer;
@@ -516,7 +513,7 @@ async function verifyUploadedKnowledgeBaseArchive(
 ) {
   let bytes: Buffer;
   try {
-    const response = await broker.downloadFile(input.fileId);
+    const response = await broker.downloadArtifact(input.artifactId);
     bytes = await readResponseBufferLimited(
       response,
       MAX_VALIDATED_ARCHIVE_BYTES,
@@ -801,7 +798,9 @@ export function createGeoRouter(options: GeoRouterOptions = {}): Router {
       };
     }
 
-    const candidateDescriptors = rankedKnowledgeArchiveDescriptors(task.output);
+    const candidateDescriptors = rankedKnowledgeArchiveDescriptors(
+      task.result?.artifacts,
+    );
     if (!candidateDescriptors.length) {
       return {
         value: {
@@ -848,13 +847,7 @@ export function createGeoRouter(options: GeoRouterOptions = {}): Router {
       });
       let bytes: Buffer;
       try {
-        const response = descriptor.fileId
-          ? await broker.downloadFile(descriptor.fileId)
-          : await broker.downloadTaskOutput(
-              value.knowledgeBaseTaskId,
-              descriptor.url || "",
-              descriptor.filename,
-            );
+        const response = await broker.downloadArtifact(descriptor.artifactId);
         const declaredLength = Number(
           response.headers.get("content-length") || 0,
         );
@@ -1088,11 +1081,12 @@ export function createGeoRouter(options: GeoRouterOptions = {}): Router {
         candidateParseMs,
       });
       const evaluatedAt =
-        typeof task.completed_at === "string"
-          ? task.completed_at
-          : typeof task.updated_at === "string"
-            ? task.updated_at
-            : value.knowledgeBaseSubmittedAt || new Date(0).toISOString();
+        normalizedIsoTimestamp(
+          task.safeEvents.at(-1)?.createdAt ??
+            task.safeEvents.at(-1)?.timestamp,
+        ) ||
+        value.knowledgeBaseSubmittedAt ||
+        new Date(0).toISOString();
       const candidateCompanyName = selectedCandidate.run?.company.name.trim();
       const finalCompanyName =
         candidateCompanyName &&
@@ -1136,7 +1130,7 @@ export function createGeoRouter(options: GeoRouterOptions = {}): Router {
         finalCompanyName,
         "company",
       )}_website_lead_knowledge_base.zip`;
-      const file = await broker.createFile({
+      const finalAsset = await broker.createAsset({
         projectId: value.projectId,
         idempotencyKey: `geo:${value.projectId}:knowledge-base-final:${candidateSha}:${selectedFinalizerVersion}`,
         filename,
@@ -1144,18 +1138,29 @@ export function createGeoRouter(options: GeoRouterOptions = {}): Router {
         sizeBytes: finalized.bytes.length,
       });
       let verifiedManifest: KnowledgeBaseManifest;
+      let promotedArtifact: BrokerArtifact;
       try {
         const uploadStartedAt = Date.now();
-        await broker.uploadFile(
-          file.id,
+        await broker.uploadAsset(
+          finalAsset.localAssetId,
           finalized.bytes,
           "application/zip",
-          file.proxy_upload_ticket,
+          finalAsset.uploadTicket,
         );
         const uploadMs = Date.now() - uploadStartedAt;
+        promotedArtifact = await broker.promoteArtifact({
+          projectId: value.projectId,
+          idempotencyKey: `geo:${value.projectId}:knowledge-base-final-artifact:${finalized.sha256}:${selectedFinalizerVersion}`,
+          sourceLocalAssetId: finalAsset.localAssetId,
+          filename,
+          mimeType: "application/zip",
+          bytes: finalized.bytes.length,
+          sha256: finalized.sha256,
+          kind: "website-final-knowledge-base",
+        });
         const readbackStartedAt = Date.now();
         verifiedManifest = await verifyUploadedKnowledgeBaseArchive(broker, {
-          fileId: file.id,
+          artifactId: promotedArtifact.artifactId,
           companyName: finalCompanyName,
           generatedAt: evaluatedAt,
           expectedBytes: finalized.bytes,
@@ -1244,13 +1249,13 @@ export function createGeoRouter(options: GeoRouterOptions = {}): Router {
           event: "final_archive_readback_failed",
           projectId: value.projectId,
           taskId: value.knowledgeBaseTaskId,
-          finalFileId: file.id,
+          finalFileId: finalAsset.localAssetId,
           diagnosticCode:
             error instanceof GeoHttpError
               ? error.code
               : "FINAL_ARCHIVE_UPLOAD_OR_READBACK_FAILED",
         });
-        await broker.deleteFile(file.id).catch(() => undefined);
+        await broker.deleteAsset(finalAsset.localAssetId).catch(() => undefined);
         throw error;
       }
       const nextValue: ProjectTokenValue = {
@@ -1271,10 +1276,7 @@ export function createGeoRouter(options: GeoRouterOptions = {}): Router {
         archiveFileIds: Array.from(
           new Set([
             ...(value.archiveFileIds || []),
-            ...(selectedCandidateDescriptor.fileId
-              ? [selectedCandidateDescriptor.fileId]
-              : []),
-            file.id,
+            finalAsset.localAssetId,
           ]),
         ),
         knowledgeBaseArtifact: {
@@ -1282,15 +1284,13 @@ export function createGeoRouter(options: GeoRouterOptions = {}): Router {
           candidate: {
             taskId: value.knowledgeBaseTaskId,
             outputItemId: selectedCandidateDescriptor.outputItemId,
-            ...(selectedCandidateDescriptor.fileId
-              ? { fileId: selectedCandidateDescriptor.fileId }
-              : {}),
+            artifactId: selectedCandidateDescriptor.artifactId,
             descriptorHash,
             sha256: candidateSha,
           },
           final: {
-            fileId: file.id,
-            filename: file.filename || filename,
+            artifactId: promotedArtifact.artifactId,
+            filename: promotedArtifact.filename || filename,
             sha256: finalized.sha256,
             packageManifestSha256: finalized.packageManifestSha256,
             archiveContractVersion:
@@ -1748,7 +1748,7 @@ export function createGeoRouter(options: GeoRouterOptions = {}): Router {
     }
     const [knowledgeBaseTask, questionTask] = await Promise.all([
       getResolvedTask(broker, value.knowledgeBaseTaskId),
-      getResolvedTask(broker, value.questionTaskId),
+      getResolvedQuestionTask(broker, value.questionTaskId),
     ]);
     const questionSet = parseQuestionSetFromTask(questionTask);
     const question = findOwnedQuestion(
@@ -2056,8 +2056,6 @@ export function createGeoRouter(options: GeoRouterOptions = {}): Router {
           "ARCHIVE_NOT_READY",
         );
       }
-      // The Agent import endpoint still uses the v1 wire-contract literal.
-      // The archive itself remains tagged with the internal v2 finalizer version.
       const importFinalizerVersion = "website-kb-finalizer-v1" as const;
       const idempotencyKey = [
         "geo-basic",
@@ -2065,21 +2063,17 @@ export function createGeoRouter(options: GeoRouterOptions = {}): Router {
         artifact.final.sha256,
         artifact.final.packageManifestSha256,
         importFinalizerVersion,
-        "knowledge-v4",
+        "knowledge-v5",
       ].join(":");
       const imported = await knowledgeImporter(value.projectId, {
-        schemaVersion: 4,
+        schemaVersion: 5,
         companyName: value.companyName,
-        candidate: artifact.candidate,
-        finalArtifact: {
-          fileId: artifact.final.fileId,
-          filename: artifact.final.filename,
-          sha256: artifact.final.sha256,
-          archiveContractVersion: artifact.final.archiveContractVersion,
-          validationProfile: "website-lead-v1",
-          packageManifestSha256: artifact.final.packageManifestSha256,
-          finalizerVersion: importFinalizerVersion,
-        },
+        candidateArtifactId: artifact.candidate.artifactId,
+        finalArtifactId: artifact.final.artifactId,
+        candidateSha256: artifact.candidate.sha256,
+        finalSha256: artifact.final.sha256,
+        packageManifestSha256: artifact.final.packageManifestSha256,
+        finalizerVersion: importFinalizerVersion,
       });
       return mergeKnowledgeImport(
         value,
@@ -2282,13 +2276,18 @@ export function createGeoRouter(options: GeoRouterOptions = {}): Router {
       "project",
     );
     if (
+      value.projectContractVersion !== 2 ||
       !value.ownerSessionId ||
       value.ownerSessionId !== String(res.locals.geoSessionId || "")
     ) {
       throw new GeoHttpError(
-        "项目不属于当前邀请会话",
-        403,
-        "PROJECT_SESSION_MISMATCH",
+        value.projectContractVersion !== 2
+          ? "项目使用旧版任务合同，请重新创建项目"
+          : "项目不属于当前邀请会话",
+        value.projectContractVersion !== 2 ? 409 : 403,
+        value.projectContractVersion !== 2
+          ? "PROJECT_CONTRACT_RESET_REQUIRED"
+          : "PROJECT_SESSION_MISMATCH",
       );
     }
     return value;
@@ -2402,7 +2401,7 @@ export function createGeoRouter(options: GeoRouterOptions = {}): Router {
           "UPLOAD_TYPE_MISMATCH",
         );
       }
-      const result = await broker.uploadFile(
+      const result = await broker.uploadAsset(
         payload.fileId,
         body,
         String(originalContentType),
@@ -2608,31 +2607,29 @@ export function createGeoRouter(options: GeoRouterOptions = {}): Router {
         input.sizeBytes,
       );
       const filename = safeCustomerUploadFilename(input.filename);
-      const file = await broker.createFile({
+      const asset = await broker.createAsset({
         filename,
         mimeType: input.contentType,
         sizeBytes: input.sizeBytes,
       });
-      if (!file.id)
+      if (!asset.localAssetId)
         throw new GeoHttpError("创建上传文件失败", 502, "UPLOAD_INIT_FAILED");
       const uploadToken = codec.seal<UploadTokenValue>(
         "upload",
         {
-          fileId: file.id,
-          filename: file.filename || filename,
+          fileId: asset.localAssetId,
+          filename: asset.filename || filename,
           sessionId: String(res.locals.geoSessionId || ""),
           sizeBytes: input.sizeBytes,
           contentType: input.contentType,
-          upstreamUploadTicket: file.proxy_upload_ticket,
+          upstreamUploadTicket: asset.uploadTicket,
         },
         UPLOAD_TTL_MS,
       );
       res.status(201).json({
-        fileId: file.id,
-        filename: file.filename || filename,
+        fileId: asset.localAssetId,
+        filename: asset.filename || filename,
         uploadToken,
-        directUploadUrl: file.upload_url || undefined,
-        uploadExpiresAt: file.upload_expires_at || undefined,
       });
     }),
   );
@@ -2658,7 +2655,7 @@ export function createGeoRouter(options: GeoRouterOptions = {}): Router {
         : crypto.randomUUID();
       const customerAttachments = input.attachments.map(
         (attachment, index) => ({
-          file_id: attachment.fileId,
+          localAssetId: attachment.fileId,
           filename: safeCustomerUploadFilename(
             uploads[index]?.filename || attachment.filename,
           ),
@@ -2686,7 +2683,7 @@ export function createGeoRouter(options: GeoRouterOptions = {}): Router {
         skillVersion: websiteKnowledgeBaseWriterVersion,
         prompt: await buildWebsiteKnowledgeBasePrompt(promptInput),
         taskInput: buildWebsiteKnowledgeBaseTaskInput(promptInput),
-        attachments: customerAttachments,
+        localAssets: customerAttachments,
         idempotencyKey: `geo:${projectId}:knowledge-base:1`,
       });
       const task = created.task;
@@ -2694,7 +2691,7 @@ export function createGeoRouter(options: GeoRouterOptions = {}): Router {
       if (!taskId) {
         await Promise.allSettled(
           created.generatedAttachments.map((attachment) =>
-            broker.deleteFile(attachment.file_id),
+            broker.deleteAsset(attachment.localAssetId),
           ),
         );
         throw new GeoHttpError(
@@ -2706,6 +2703,7 @@ export function createGeoRouter(options: GeoRouterOptions = {}): Router {
 
       const companyIdentity = deriveCompanyIdentity(input);
       const value: ProjectTokenValue = {
+        projectContractVersion: 2,
         projectId,
         ownerSessionId: String(res.locals.geoSessionId || ""),
         companyName: companyIdentity.name,
@@ -2720,7 +2718,7 @@ export function createGeoRouter(options: GeoRouterOptions = {}): Router {
           (attachment) => attachment.filename,
         ),
         temporaryFileIds: created.generatedAttachments.map(
-          (attachment) => attachment.file_id,
+          (attachment) => attachment.localAssetId,
         ),
       };
       const projectToken = codec.seal("project", value, PROJECT_TTL_MS);
@@ -2822,7 +2820,7 @@ export function createGeoRouter(options: GeoRouterOptions = {}): Router {
         mimeType: "application/json",
         body: monitoringBytes,
       });
-      temporaryFiles.push(monitoringFile.id);
+      temporaryFiles.push(monitoringFile.localAssetId);
       const archiveAttachment = await materializeArchiveAttachment(
         broker,
         value.knowledgeBaseTaskId,
@@ -2833,7 +2831,7 @@ export function createGeoRouter(options: GeoRouterOptions = {}): Router {
         },
       );
       if (archiveAttachment.temporary) {
-        temporaryFiles.push(archiveAttachment.file_id);
+        temporaryFiles.push(archiveAttachment.localAssetId);
       }
       const successfulResponses = monitoringDocument.successfulResponses;
       const assessmentPromptInput = {
@@ -2854,17 +2852,18 @@ export function createGeoRouter(options: GeoRouterOptions = {}): Router {
         {
           projectId: value.projectId,
           prompt: await buildAssessmentPrompt(assessmentPromptInput),
-          attachments: [
+          localAssets: [
             {
-              file_id: archiveAttachment.file_id,
+              localAssetId: archiveAttachment.localAssetId,
               filename: archiveAttachment.filename,
             },
             {
-              file_id: monitoringFile.id,
+              localAssetId: monitoringFile.localAssetId,
               filename: monitoringFile.filename || monitoringFilename,
             },
           ],
           idempotencyKey: assessmentTaskOperationKey,
+          contract: PRESALES_CONTRACTS.currentStateAssessment,
         },
         [
           {
@@ -2875,7 +2874,7 @@ export function createGeoRouter(options: GeoRouterOptions = {}): Router {
         ],
       );
       temporaryFiles.push(
-        ...created.skillAttachments.map((item) => item.file_id),
+        ...created.skillAttachments.map((item) => item.localAssetId),
       );
       const assessmentTaskId = taskIdFrom(created.task);
       if (!assessmentTaskId) {
@@ -2901,7 +2900,7 @@ export function createGeoRouter(options: GeoRouterOptions = {}): Router {
     } catch (error) {
       if (!shouldRetainGeneratedTaskFilesForReplay(error)) {
         await Promise.allSettled(
-          temporaryFiles.map((fileId) => broker.deleteFile(fileId)),
+          temporaryFiles.map((fileId) => broker.deleteAsset(fileId)),
         );
       }
       throw error;
@@ -2988,7 +2987,7 @@ export function createGeoRouter(options: GeoRouterOptions = {}): Router {
         mimeType: "application/json",
         body: assessmentBytes,
       });
-      temporaryFiles.push(assessmentFile.id);
+      temporaryFiles.push(assessmentFile.localAssetId);
       const scenarioFile = await createGeoTaskEvidenceFile(broker, {
         projectId: value.projectId,
         taskOperationKey: forecastTaskOperationKey,
@@ -2997,7 +2996,7 @@ export function createGeoRouter(options: GeoRouterOptions = {}): Router {
         mimeType: "application/json",
         body: scenarioBytes,
       });
-      temporaryFiles.push(scenarioFile.id);
+      temporaryFiles.push(scenarioFile.localAssetId);
       const archiveAttachment = await materializeArchiveAttachment(
         broker,
         value.knowledgeBaseTaskId,
@@ -3008,7 +3007,7 @@ export function createGeoRouter(options: GeoRouterOptions = {}): Router {
         },
       );
       if (archiveAttachment.temporary) {
-        temporaryFiles.push(archiveAttachment.file_id);
+        temporaryFiles.push(archiveAttachment.localAssetId);
       }
       const forecastPromptInput = {
         currentAssessmentFilename:
@@ -3024,21 +3023,22 @@ export function createGeoRouter(options: GeoRouterOptions = {}): Router {
           projectId: value.projectId,
           prompt:
             await buildOptimizationOutcomeForecastPrompt(forecastPromptInput),
-          attachments: [
+          localAssets: [
             {
-              file_id: archiveAttachment.file_id,
+              localAssetId: archiveAttachment.localAssetId,
               filename: archiveAttachment.filename,
             },
             {
-              file_id: assessmentFile.id,
+              localAssetId: assessmentFile.localAssetId,
               filename: assessmentFile.filename || assessmentFilename,
             },
             {
-              file_id: scenarioFile.id,
+              localAssetId: scenarioFile.localAssetId,
               filename: scenarioFile.filename || scenarioFilename,
             },
           ],
           idempotencyKey: forecastTaskOperationKey,
+          contract: PRESALES_CONTRACTS.optimizationForecast,
         },
         [
           {
@@ -3054,7 +3054,7 @@ export function createGeoRouter(options: GeoRouterOptions = {}): Router {
         ],
       );
       temporaryFiles.push(
-        ...created.skillAttachments.map((item) => item.file_id),
+        ...created.skillAttachments.map((item) => item.localAssetId),
       );
       const forecastTaskId = taskIdFrom(created.task);
       if (!forecastTaskId) {
@@ -3080,7 +3080,7 @@ export function createGeoRouter(options: GeoRouterOptions = {}): Router {
     } catch (error) {
       if (!shouldRetainGeneratedTaskFilesForReplay(error)) {
         await Promise.allSettled(
-          temporaryFiles.map((fileId) => broker.deleteFile(fileId)),
+          temporaryFiles.map((fileId) => broker.deleteAsset(fileId)),
         );
       }
       throw error;
@@ -3139,7 +3139,7 @@ export function createGeoRouter(options: GeoRouterOptions = {}): Router {
       ] = await Promise.all([
         getResolvedTask(broker, value.knowledgeBaseTaskId),
         value.questionTaskId
-          ? getResolvedTask(broker, value.questionTaskId)
+          ? getResolvedQuestionTask(broker, value.questionTaskId)
           : Promise.resolve(undefined),
         value.monitorRunId
           ? getResolvedMonitorRun(
@@ -3155,7 +3155,7 @@ export function createGeoRouter(options: GeoRouterOptions = {}): Router {
           ? getResolvedTask(broker, value.optimizationForecastTaskId)
           : Promise.resolve(undefined),
       ]);
-      const previousFinalFileId = value.knowledgeBaseArtifact?.final.fileId;
+      const previousFinalFileId = value.knowledgeBaseArtifact?.final.artifactId;
       const finalizedKnowledgeBase = await ensureFinalizedKnowledgeBase(
         trackArchiveFile(value, knowledgeBaseTask),
         knowledgeBaseTask,
@@ -3328,10 +3328,14 @@ export function createGeoRouter(options: GeoRouterOptions = {}): Router {
                   await currentForecastOutputPromise,
                 );
               } catch (error) {
-                forecastRetryReason =
-                  error instanceof Error
-                    ? error.message
-                    : "上一次优化效果评估输出未通过结构校验";
+                // Strict-output failures are repaired once on this same task.
+                // Keep the existing task after either a pending repair or a
+                // second invalid result; only transport-terminal task states
+                // below may create a fresh business attempt.
+                logAssessmentOutputValidation(
+                  error,
+                  currentOptimizationForecastTask,
+                );
               }
             }
             if (
@@ -3390,9 +3394,9 @@ export function createGeoRouter(options: GeoRouterOptions = {}): Router {
             : codec.seal("project", currentValue, PROJECT_TTL_MS);
       } catch (error) {
         const currentFinalFileId =
-          currentValue.knowledgeBaseArtifact?.final.fileId;
+          currentValue.knowledgeBaseArtifact?.final.artifactId;
         if (currentFinalFileId && currentFinalFileId !== previousFinalFileId) {
-          await broker.deleteFile(currentFinalFileId).catch(() => undefined);
+          await broker.deleteAsset(currentFinalFileId).catch(() => undefined);
         }
         throw error;
       }
@@ -3424,7 +3428,7 @@ export function createGeoRouter(options: GeoRouterOptions = {}): Router {
       if (value.questionTaskId) {
         const [knowledgeBaseTask, questionTask] = await Promise.all([
           getResolvedTask(broker, value.knowledgeBaseTaskId),
-          getResolvedTask(broker, value.questionTaskId),
+          getResolvedQuestionTask(broker, value.questionTaskId),
         ]);
         const currentValue = trackArchiveFile(value, knowledgeBaseTask);
         const currentToken =
@@ -3503,9 +3507,9 @@ export function createGeoRouter(options: GeoRouterOptions = {}): Router {
           {
             projectId: trackedValue.projectId,
             prompt: await buildGeoQuestionPrompt(questionPromptInput),
-            attachments: [archiveAttachment],
+            localAssets: [archiveAttachment],
             idempotencyKey: `geo:${trackedValue.projectId}:questions:1`,
-            agentProfile: FRONTMIND_PRO_PROFILE,
+            contract: PRESALES_CONTRACTS.questionRecommendation,
           },
           [
             {
@@ -3530,8 +3534,8 @@ export function createGeoRouter(options: GeoRouterOptions = {}): Router {
         temporaryFileIds: Array.from(
           new Set([
             ...(trackedValue.temporaryFileIds || []),
-            ...skillAttachments.map((item) => item.file_id),
-            ...(archiveAttachment.temporary ? [archiveAttachment.file_id] : []),
+            ...skillAttachments.map((item) => item.localAssetId),
+            ...(archiveAttachment.temporary ? [archiveAttachment.localAssetId] : []),
           ]),
         ),
       };
@@ -3644,7 +3648,7 @@ export function createGeoRouter(options: GeoRouterOptions = {}): Router {
     }
     const [knowledgeBaseTask, questionTask] = await Promise.all([
       getResolvedTask(broker, value.knowledgeBaseTaskId),
-      getResolvedTask(broker, value.questionTaskId),
+      getResolvedQuestionTask(broker, value.questionTaskId),
     ]);
     const trackedValue = await resolveCanonicalCompanyIdentity(
       broker,
@@ -3735,14 +3739,14 @@ export function createGeoRouter(options: GeoRouterOptions = {}): Router {
         trackedValue,
         knowledgeBaseTask,
       );
-      if (!archive?.fileId) {
+      if (!archive?.artifactId) {
         throw new GeoHttpError(
           "企业知识库准备完成后才能验证自定义问题",
           409,
           "ARCHIVE_NOT_READY",
         );
       }
-      const archiveFileId = archive.fileId;
+      const archiveArtifactId = archive.artifactId;
       const reservationInput = (expiresAt: string) => ({
         projectId: trackedValue.projectId,
         ownerSessionHash,
@@ -3759,7 +3763,7 @@ export function createGeoRouter(options: GeoRouterOptions = {}): Router {
         knowledgeBaseValidationProfile:
           trackedValue.knowledgeBaseValidationProfile,
         knowledgeBaseArtifact: {
-          fileId: archiveFileId,
+          artifactId: archiveArtifactId,
           filename: archive.filename,
           sha256: archive.sha256,
           packageManifestSha256: archive.packageManifestSha256,
@@ -3791,17 +3795,17 @@ export function createGeoRouter(options: GeoRouterOptions = {}): Router {
           ownerSessionHash,
           questionHash,
         );
-      if (retainedInvalid?.taskId) {
+      if (retainedInvalid?.localTaskId) {
         try {
           const retainedTask = await getResolvedTask(
             broker,
-            retainedInvalid.taskId,
+            retainedInvalid.localTaskId,
           );
           const retainedClassification =
             await resolveCustomQuestionClassificationTaskOutput(
               broker,
               retainedTask,
-              { taskId: retainedInvalid.taskId },
+              { taskId: retainedInvalid.localTaskId },
             );
           if (retainedClassification?.decision === "reject") {
             const rejected = rejectedCustomQuestionError(
@@ -3905,7 +3909,7 @@ export function createGeoRouter(options: GeoRouterOptions = {}): Router {
           console.warn("[GEO custom question]", {
             event: "retained_classifier_replay_deferred",
             projectId: trackedValue.projectId,
-            taskId: retainedInvalid.taskId,
+            taskId: retainedInvalid.localTaskId,
             diagnosticCode:
               error instanceof GeoBrokerError
                 ? error.code
@@ -4030,8 +4034,10 @@ export function createGeoRouter(options: GeoRouterOptions = {}): Router {
         // the same context used by the recovery worker and avoids two remote
         // task-result reads on every browser poll.
         knowledgeBaseTask: {
-          id: authoritative.knowledgeBaseTaskId,
-          status: "completed",
+          localTaskId: authoritative.knowledgeBaseTaskId,
+          operationId: `stored:${authoritative.knowledgeBaseTaskId}`,
+          status: "succeeded",
+          safeEvents: [],
         },
         now: customQuestionValidationNow,
       });
@@ -4151,8 +4157,10 @@ export function createGeoRouter(options: GeoRouterOptions = {}): Router {
         store: customQuestionValidationStore,
         record: stored,
         knowledgeBaseTask: {
-          id: stored.knowledgeBaseTaskId,
-          status: "completed",
+          localTaskId: stored.knowledgeBaseTaskId,
+          operationId: `stored:${stored.knowledgeBaseTaskId}`,
+          status: "succeeded",
+          safeEvents: [],
         },
         now: customQuestionValidationNow,
       });
@@ -4298,7 +4306,7 @@ export function createGeoRouter(options: GeoRouterOptions = {}): Router {
           const [knowledgeBaseTask, questionTask] = await Promise.all([
             getResolvedTask(broker, value.knowledgeBaseTaskId),
             value.questionTaskId
-              ? getResolvedTask(broker, value.questionTaskId)
+              ? getResolvedQuestionTask(broker, value.questionTaskId)
               : Promise.resolve(undefined),
           ]);
           const project = await buildProjectView(
@@ -4878,7 +4886,7 @@ export function createGeoRouter(options: GeoRouterOptions = {}): Router {
         ] = await Promise.all([
           getResolvedTask(broker, value.knowledgeBaseTaskId),
           value.questionTaskId
-            ? getResolvedTask(broker, value.questionTaskId)
+            ? getResolvedQuestionTask(broker, value.questionTaskId)
             : Promise.resolve(undefined),
           value.assessmentTaskId
             ? getResolvedTask(broker, value.assessmentTaskId)
@@ -5095,7 +5103,7 @@ export function createGeoRouter(options: GeoRouterOptions = {}): Router {
       const [knowledgeBaseTask, questionTask, monitorRun] = await Promise.all([
         getResolvedTask(broker, value.knowledgeBaseTaskId),
         value.questionTaskId
-          ? getResolvedTask(broker, value.questionTaskId)
+          ? getResolvedQuestionTask(broker, value.questionTaskId)
           : Promise.resolve(undefined),
         getResolvedMonitorRun(
           broker,
@@ -5175,7 +5183,9 @@ export function createGeoRouter(options: GeoRouterOptions = {}): Router {
             calculateQuestionBaselineAssessment(await assessmentOutputPromise);
           } catch (error) {
             logAssessmentOutputValidation(error, assessmentTask);
-            manualRestart = true;
+            // The strict resolver already reserved the sole same-task repair.
+            // Do not translate a pending or second-invalid format result into
+            // a fresh Provider task.
           }
         }
         if (manualRestart) {
@@ -5313,7 +5323,7 @@ export function createGeoRouter(options: GeoRouterOptions = {}): Router {
         );
       } catch (error) {
         if (!shouldRetainGeneratedTaskFilesForReplay(error)) {
-          await broker.deleteFile(monitoringFile.id).catch(() => undefined);
+          await broker.deleteAsset(monitoringFile.localAssetId).catch(() => undefined);
         }
         throw error;
       }
@@ -5334,24 +5344,25 @@ export function createGeoRouter(options: GeoRouterOptions = {}): Router {
       };
       const prompt = await buildAssessmentPrompt(assessmentPromptInput);
       let assessmentTask: BrokerTask;
-      let skillAttachments: Array<{ file_id: string; filename: string }>;
+      let skillAttachments: Array<{ localAssetId: string; filename: string }>;
       try {
         const created = await createGeoTaskWithSkillPackages(
           broker,
           {
             projectId: value.projectId,
             prompt,
-            attachments: [
+            localAssets: [
               {
-                file_id: archiveAttachment.file_id,
+                localAssetId: archiveAttachment.localAssetId,
                 filename: archiveAttachment.filename,
               },
               {
-                file_id: monitoringFile.id,
+                localAssetId: monitoringFile.localAssetId,
                 filename: monitoringFile.filename || monitoringFilename,
               },
             ],
             idempotencyKey: assessmentTaskOperationKey,
+            contract: PRESALES_CONTRACTS.currentStateAssessment,
           },
           [
             {
@@ -5366,9 +5377,9 @@ export function createGeoRouter(options: GeoRouterOptions = {}): Router {
       } catch (error) {
         if (!shouldRetainGeneratedTaskFilesForReplay(error)) {
           await Promise.allSettled([
-            broker.deleteFile(monitoringFile.id),
+            broker.deleteAsset(monitoringFile.localAssetId),
             ...(archiveAttachment.temporary
-              ? [broker.deleteFile(archiveAttachment.file_id)]
+              ? [broker.deleteAsset(archiveAttachment.localAssetId)]
               : []),
           ]);
         }
@@ -5391,9 +5402,9 @@ export function createGeoRouter(options: GeoRouterOptions = {}): Router {
         temporaryFileIds: Array.from(
           new Set([
             ...(value.temporaryFileIds || []),
-            monitoringFile.id,
-            ...skillAttachments.map((item) => item.file_id),
-            ...(archiveAttachment.temporary ? [archiveAttachment.file_id] : []),
+            monitoringFile.localAssetId,
+            ...skillAttachments.map((item) => item.localAssetId),
+            ...(archiveAttachment.temporary ? [archiveAttachment.localAssetId] : []),
           ]),
         ),
       };
@@ -5431,7 +5442,7 @@ export function createGeoRouter(options: GeoRouterOptions = {}): Router {
         await Promise.all([
           getResolvedTask(broker, value.knowledgeBaseTaskId),
           value.questionTaskId
-            ? getResolvedTask(broker, value.questionTaskId)
+            ? getResolvedQuestionTask(broker, value.questionTaskId)
             : Promise.resolve(undefined),
           value.monitorRunId
             ? getResolvedMonitorRun(
@@ -5540,10 +5551,7 @@ export function createGeoRouter(options: GeoRouterOptions = {}): Router {
               await existingForecastOutputPromise,
             );
           } catch (error) {
-            forecastRetryReason =
-              error instanceof Error
-                ? error.message
-                : "上一次优化效果评估输出未通过结构校验";
+            logAssessmentOutputValidation(error, optimizationForecastTask);
           }
         }
         if (forecastRetryReason) {
@@ -5671,7 +5679,7 @@ export function createGeoRouter(options: GeoRouterOptions = {}): Router {
             mimeType: "application/json",
             body: assessmentBytes,
           });
-          temporaryFiles.push(assessmentFile.id);
+          temporaryFiles.push(assessmentFile.localAssetId);
           const scenarioFile = await createGeoTaskEvidenceFile(broker, {
             projectId: value.projectId,
             taskOperationKey: forecastTaskOperationKey,
@@ -5680,7 +5688,7 @@ export function createGeoRouter(options: GeoRouterOptions = {}): Router {
             mimeType: "application/json",
             body: scenarioBytes,
           });
-          temporaryFiles.push(scenarioFile.id);
+          temporaryFiles.push(scenarioFile.localAssetId);
 
           const archiveAttachment = await materializeArchiveAttachment(
             broker,
@@ -5692,7 +5700,7 @@ export function createGeoRouter(options: GeoRouterOptions = {}): Router {
             },
           );
           if (archiveAttachment.temporary)
-            temporaryFiles.push(archiveAttachment.file_id);
+            temporaryFiles.push(archiveAttachment.localAssetId);
 
           const forecastPromptInput = {
             currentAssessmentFilename:
@@ -5711,21 +5719,22 @@ export function createGeoRouter(options: GeoRouterOptions = {}): Router {
                 await buildOptimizationOutcomeForecastPrompt(
                   forecastPromptInput,
                 ),
-              attachments: [
+              localAssets: [
                 {
-                  file_id: archiveAttachment.file_id,
+                  localAssetId: archiveAttachment.localAssetId,
                   filename: archiveAttachment.filename,
                 },
                 {
-                  file_id: assessmentFile.id,
+                  localAssetId: assessmentFile.localAssetId,
                   filename: assessmentFile.filename || assessmentFilename,
                 },
                 {
-                  file_id: scenarioFile.id,
+                  localAssetId: scenarioFile.localAssetId,
                   filename: scenarioFile.filename || scenarioFilename,
                 },
               ],
               idempotencyKey: forecastTaskOperationKey,
+              contract: PRESALES_CONTRACTS.optimizationForecast,
             },
             [
               {
@@ -5742,7 +5751,7 @@ export function createGeoRouter(options: GeoRouterOptions = {}): Router {
           );
           const task = created.task;
           temporaryFiles.push(
-            ...created.skillAttachments.map((item) => item.file_id),
+            ...created.skillAttachments.map((item) => item.localAssetId),
           );
           const taskId = taskIdFrom(task);
           if (!taskId) {
@@ -5756,7 +5765,7 @@ export function createGeoRouter(options: GeoRouterOptions = {}): Router {
         } catch (error) {
           if (!shouldRetainGeneratedTaskFilesForReplay(error)) {
             await Promise.allSettled(
-              temporaryFiles.map((fileId) => broker.deleteFile(fileId)),
+              temporaryFiles.map((fileId) => broker.deleteAsset(fileId)),
             );
           }
           throw error;
@@ -7332,13 +7341,7 @@ export function createGeoRouter(options: GeoRouterOptions = {}): Router {
         archive,
         value.knowledgeBaseValidationProfile,
       );
-      const upstream = archive.fileId
-        ? await broker.downloadFile(archive.fileId)
-        : await broker.downloadTaskOutput(
-            value.knowledgeBaseTaskId,
-            archive.url || "",
-            archive.filename,
-          );
+      const upstream = await broker.downloadArtifact(archive.artifactId);
       assertResponseLengthWithinLimit(upstream, MAX_VALIDATED_ARCHIVE_BYTES);
       res.status(upstream.status);
       res.setHeader(
@@ -7486,7 +7489,7 @@ export function createGeoRouter(options: GeoRouterOptions = {}): Router {
         ...(value.previousQuestionTaskIds || []),
         ...(value.previousAssessmentTaskIds || []),
         ...(value.previousOptimizationForecastTaskIds || []),
-        ...validationTargets.taskIds,
+        ...validationTargets.localTaskIds,
       ].filter((item): item is string => Boolean(item));
       const monitorRunIds = [
         value.monitorRunId,
@@ -7497,7 +7500,7 @@ export function createGeoRouter(options: GeoRouterOptions = {}): Router {
         ...(value.uploadFileIds || []),
         ...(value.archiveFileIds || []),
         ...(value.temporaryFileIds || []),
-        ...validationTargets.temporaryFileIds,
+        ...validationTargets.temporaryLocalAssetIds,
       ];
       const uniqueTaskIds = new Set(taskIds);
       const uniqueFileIds = new Set(fileIds);
@@ -7508,7 +7511,7 @@ export function createGeoRouter(options: GeoRouterOptions = {}): Router {
       ];
       const resourceResults = await Promise.allSettled([
         ...Array.from(uniqueTaskIds).map((taskId) => broker.deleteTask(taskId)),
-        ...Array.from(uniqueFileIds).map((fileId) => broker.deleteFile(fileId)),
+        ...Array.from(uniqueFileIds).map((fileId) => broker.deleteAsset(fileId)),
       ]);
       const monitorResults = await Promise.allSettled(
         Array.from(uniqueMonitorRunIds).map((runId) =>
@@ -7851,6 +7854,18 @@ async function buildProjectView(
     forecast?: ReturnType<typeof resolveOptimizationOutcomeForecastTaskOutput>;
   },
 ) {
+  if (
+    questionTask &&
+    normalizeTaskStatus(questionTask.status) === "completed" &&
+    !parseQuestionSetFromTask(questionTask)
+  ) {
+    questionTask =
+      (await requestStructuredTaskRepair(
+        broker,
+        questionTask,
+        PRESALES_CONTRACTS.questionRecommendation,
+      )) ?? questionTask;
+  }
   const knowledgeBase = normalizeTask(knowledgeBaseTask, "knowledge-base");
   const questionsTaskView = questionTask
     ? normalizeTask(questionTask, "questions")
@@ -7946,19 +7961,17 @@ async function buildProjectView(
           }
         : knowledgeBase;
   const executionKnowledgeBaseTask = knowledgeBaseFinalizationFailure
-    ? {
-        ...knowledgeBaseTask,
-        status: "failed",
-        output: [],
-        error: { message: KNOWLEDGE_BASE_FINALIZATION_PUBLIC_ERROR },
-      }
-    : knowledgeBaseValidationFailure
       ? {
           ...knowledgeBaseTask,
-          status: "failed",
-          output: [],
-          error: { message: knowledgeBaseValidationPublicError },
+          status: "failed" as const,
+          error: { code: "KB_FINALIZATION_FAILED", retryable: true },
         }
+    : knowledgeBaseValidationFailure
+        ? {
+            ...knowledgeBaseTask,
+            status: "failed" as const,
+            error: { code: "KB_VALIDATION_FAILED", retryable: false },
+          }
       : knowledgeBaseTask;
   const generatedQuestions =
     questionTask && questionsTaskView?.status === "completed"
@@ -8649,6 +8662,13 @@ async function toPublicAssessmentView(
       ],
     };
   } catch (error) {
+    if (error instanceof StructuredTaskRepairPendingError) {
+      return {
+        status: "running" as const,
+        dimensions: {},
+        comparisons: [],
+      };
+    }
     logAssessmentOutputValidation(error, task);
     return {
       status: "failed",
@@ -8807,6 +8827,14 @@ async function toPublicOptimizationForecastView(
       generatedAt: new Date().toISOString(),
     };
   } catch (error) {
+    if (error instanceof StructuredTaskRepairPendingError) {
+      return {
+        status: "running" as const,
+        dimensions: [],
+        assumptions: [],
+        roadmap: [],
+      };
+    }
     logAssessmentOutputValidation(
       error,
       error instanceof ForecastTaskOutputValidationError
@@ -8868,8 +8896,7 @@ async function loadKnowledgeBaseManifest(
   task: BrokerTask,
   companyName: string,
   archive: {
-    fileId?: string;
-    url?: string;
+    artifactId: string;
     filename: string;
     sha256?: string;
     packageManifestSha256?: string;
@@ -8881,7 +8908,7 @@ async function loadKnowledgeBaseManifest(
     cache = new Map();
     manifestCacheByBroker.set(broker, cache);
   }
-  const cacheKey = `${taskId}:${archive.fileId || archive.url || archive.filename}:${
+  const cacheKey = `${taskId}:${archive.artifactId}:${
     validationProfile || "historical-compatible"
   }:${archive.sha256 || "unverified"}:${
     archive.packageManifestSha256 || "unverified"
@@ -8892,13 +8919,7 @@ async function loadKnowledgeBaseManifest(
   const promise = (async () => {
     let bytes: Buffer;
     try {
-      const response = archive.fileId
-        ? await broker.downloadFile(archive.fileId)
-        : await broker.downloadTaskOutput(
-            taskId,
-            archive.url || "",
-            archive.filename,
-          );
+      const response = await broker.downloadArtifact(archive.artifactId);
       bytes = await readResponseBufferLimited(
         response,
         MAX_VALIDATED_ARCHIVE_BYTES,
@@ -8913,7 +8934,7 @@ async function loadKnowledgeBaseManifest(
       console.warn("[GEO KB]", {
         event: "archive_download_failed",
         taskId,
-        fileId: archive.fileId,
+        artifactId: archive.artifactId,
         filename: archive.filename,
         diagnosticCode:
           error instanceof GeoBrokerError ? error.code : "ARCHIVE_READ_FAILED",
@@ -8942,7 +8963,10 @@ async function loadKnowledgeBaseManifest(
       manifest = await parseKnowledgeBaseArchive(bytes, {
         companyName,
         validationProfile,
-        generatedAt: normalizedIsoTimestamp(task.completed_at, task.updated_at),
+        generatedAt: normalizedIsoTimestamp(
+          task.safeEvents.at(-1)?.createdAt ??
+            task.safeEvents.at(-1)?.timestamp,
+        ),
       });
     } catch (error) {
       console.warn(
@@ -8989,7 +9013,7 @@ async function loadKnowledgeBaseManifest(
 async function loadKnowledgeBaseAssetPreviews(
   broker: GeoPresalesBroker,
   taskId: string,
-  archive: { fileId?: string; url?: string; filename: string },
+  archive: { artifactId: string; filename: string },
   manifest: KnowledgeBaseManifest,
 ) {
   let cache = assetPreviewCacheByBroker.get(broker);
@@ -8997,18 +9021,12 @@ async function loadKnowledgeBaseAssetPreviews(
     cache = new Map();
     assetPreviewCacheByBroker.set(broker, cache);
   }
-  const cacheKey = `${taskId}:${archive.fileId || archive.url || archive.filename}`;
+  const cacheKey = `${taskId}:${archive.artifactId}`;
   const cached = cache.get(cacheKey);
   if (cached && cached.expiresAt > Date.now()) return cached.promise;
 
   const promise = (async () => {
-    const response = archive.fileId
-      ? await broker.downloadFile(archive.fileId)
-      : await broker.downloadTaskOutput(
-          taskId,
-          archive.url || "",
-          archive.filename,
-        );
+    const response = await broker.downloadArtifact(archive.artifactId);
     const bytes = await readResponseBufferLimited(
       response,
       MAX_VALIDATED_ARCHIVE_BYTES,
@@ -9053,11 +9071,152 @@ async function getResolvedTask(broker: GeoPresalesBroker, taskId: string) {
   }
 }
 
+const REPAIRABLE_STRUCTURED_CONTRACT_NAMES = new Set<string>([
+  PRESALES_CONTRACTS.questionRecommendation.name,
+  PRESALES_CONTRACTS.customQuestionClassifier.name,
+  PRESALES_CONTRACTS.currentStateAssessment.name,
+  PRESALES_CONTRACTS.optimizationForecast.name,
+  PRESALES_CONTRACTS.monitorQuestionTranslation.name,
+]);
+
+class StructuredTaskRepairPendingError extends Error {
+  readonly name = "StructuredTaskRepairPendingError";
+
+  constructor(
+    readonly task: BrokerTask,
+    readonly cause?: unknown,
+  ) {
+    super("Structured task repair is still pending");
+  }
+}
+
+function structuredTaskRepairKey(taskId: string, contract: PresalesContract) {
+  if (!REPAIRABLE_STRUCTURED_CONTRACT_NAMES.has(contract.name)) {
+    throw new Error("STRUCTURED_TASK_REPAIR_CONTRACT_NOT_ALLOWED");
+  }
+  return `geo:structured-repair:${contract.name}:${taskId}:1`;
+}
+
+async function requestStructuredTaskRepair(
+  broker: GeoPresalesBroker,
+  task: BrokerTask,
+  contract: PresalesContract,
+): Promise<BrokerTask | null> {
+  const taskId = taskIdFrom(task);
+  if (!taskId || normalizeTaskStatus(task.status) !== "completed") return null;
+  try {
+    return await broker.repairTask(taskId, {
+      idempotencyKey: structuredTaskRepairKey(taskId, contract),
+    });
+  } catch (error) {
+    if (
+      error instanceof GeoBrokerError &&
+      ["TASK_REPAIR_EXHAUSTED", "TASK_REPAIR_NOT_AVAILABLE"].includes(
+        error.code,
+      )
+    ) {
+      return null;
+    }
+    throw error;
+  }
+}
+
+async function repairStructuredTaskAfterValidation(
+  broker: GeoPresalesBroker,
+  task: BrokerTask,
+  contract: PresalesContract,
+  validationError: unknown,
+) {
+  let repaired: BrokerTask | null;
+  try {
+    repaired = await requestStructuredTaskRepair(broker, task, contract);
+  } catch (error) {
+    // A transport failure does not prove that the durable repair reservation
+    // was absent. Preserve the same task and stable repair key for the next
+    // observation instead of falling back to a fresh Provider task.
+    throw new StructuredTaskRepairPendingError(task, error);
+  }
+  if (!repaired) throw validationError;
+  if (normalizeTaskStatus(repaired.status) !== "completed") {
+    throw new StructuredTaskRepairPendingError(repaired);
+  }
+  return repaired;
+}
+
+async function getResolvedQuestionTask(
+  broker: GeoPresalesBroker,
+  taskId: string,
+) {
+  const task = await getResolvedTask(broker, taskId);
+  if (
+    normalizeTaskStatus(task.status) !== "completed" ||
+    parseQuestionSetFromTask(task)
+  ) {
+    return task;
+  }
+  return (
+    (await requestStructuredTaskRepair(
+      broker,
+      task,
+      PRESALES_CONTRACTS.questionRecommendation,
+    )) ?? task
+  );
+}
+
+async function resolveAssessmentTaskOutput(
+  broker: GeoPresalesBroker,
+  task: BrokerTask,
+  options: Parameters<typeof resolveAssessmentTaskOutputRaw>[2] = {},
+) {
+  try {
+    return await resolveAssessmentTaskOutputRaw(broker, task, options);
+  } catch (error) {
+    if (!(error instanceof AssessmentTaskOutputValidationError)) throw error;
+    const repaired = await repairStructuredTaskAfterValidation(
+      broker,
+      task,
+      PRESALES_CONTRACTS.currentStateAssessment,
+      error,
+    );
+    // Validate the repaired result exactly once with the same local business
+    // schema and scope callback. A second invalid result is terminal.
+    return await resolveAssessmentTaskOutputRaw(broker, repaired, options);
+  }
+}
+
+async function resolveOptimizationOutcomeForecastTaskOutput(
+  broker: GeoPresalesBroker,
+  task: BrokerTask,
+  options: Parameters<
+    typeof resolveOptimizationOutcomeForecastTaskOutputRaw
+  >[2] = {},
+) {
+  try {
+    return await resolveOptimizationOutcomeForecastTaskOutputRaw(
+      broker,
+      task,
+      options,
+    );
+  } catch (error) {
+    if (!(error instanceof ForecastTaskOutputValidationError)) throw error;
+    const repaired = await repairStructuredTaskAfterValidation(
+      broker,
+      task,
+      PRESALES_CONTRACTS.optimizationForecast,
+      error,
+    );
+    return await resolveOptimizationOutcomeForecastTaskOutputRaw(
+      broker,
+      repaired,
+      options,
+    );
+  }
+}
+
 function hasTrustedCompletedTaskOutput(task: BrokerTask): boolean {
   return (
-    Boolean(findArchiveDescriptor(task)) ||
-    trustedAssistantOutputTexts(task).length > 0 ||
-    trustedAssistantOutputFiles(task).length > 0
+    Boolean(task.result?.structuredResult) ||
+    Boolean(findArchiveDescriptor(task))
   );
 }
 
@@ -9170,7 +9329,7 @@ async function resolveMonitorQuestionForEdition(
   // An idempotent create replay can already contain the complete answer even
   // while the status endpoint is still eventually consistent. A strict schema
   // plus source digest makes that complete typed assistant output authoritative.
-  const createdTranslation =
+  let createdTranslation =
     await resolveGeoMonitorQuestionTranslationTaskOutput(
       broker,
       task,
@@ -9178,8 +9337,33 @@ async function resolveMonitorQuestionForEdition(
       { taskId: taskIdFrom(task) || undefined },
     );
   if (createdTranslation) return createdTranslation;
-  const createdStatus = normalizeTaskStatus(task.status);
+  let createdStatus = normalizeTaskStatus(task.status);
   if (["failed", "cancelled"].includes(createdStatus)) throw failed();
+  if (createdStatus === "completed") {
+    let repaired: BrokerTask | null;
+    try {
+      repaired = await requestStructuredTaskRepair(
+        broker,
+        task,
+        PRESALES_CONTRACTS.monitorQuestionTranslation,
+      );
+    } catch {
+      throw pending();
+    }
+    if (!repaired) throw failed();
+    task = repaired;
+    createdTranslation =
+      await resolveGeoMonitorQuestionTranslationTaskOutput(
+        broker,
+        task,
+        question.question,
+        { taskId: taskIdFrom(task) || undefined },
+      );
+    if (createdTranslation) return createdTranslation;
+    createdStatus = normalizeTaskStatus(task.status);
+    if (createdStatus === "completed") throw failed();
+    if (["failed", "cancelled"].includes(createdStatus)) throw failed();
+  }
 
   const taskId = taskIdFrom(task);
   if (!taskId) throw failed();
@@ -9206,9 +9390,33 @@ async function resolveMonitorQuestionForEdition(
     );
     if (translated) return translated;
 
-    const status = normalizeTaskStatus(resolved.status);
+    let status = normalizeTaskStatus(resolved.status);
     if (["failed", "cancelled"].includes(status)) throw failed();
-    if (status === "completed") throw failed();
+    if (status === "completed") {
+      let repaired: BrokerTask | null;
+      try {
+        repaired = await requestStructuredTaskRepair(
+          broker,
+          resolved,
+          PRESALES_CONTRACTS.monitorQuestionTranslation,
+        );
+      } catch {
+        throw pending();
+      }
+      if (!repaired) throw failed();
+      const repairedTranslation =
+        await resolveGeoMonitorQuestionTranslationTaskOutput(
+          broker,
+          repaired,
+          question.question,
+          { taskId },
+        );
+      if (repairedTranslation) return repairedTranslation;
+      status = normalizeTaskStatus(repaired.status);
+      if (["completed", "failed", "cancelled"].includes(status)) {
+        throw failed();
+      }
+    }
     if (!(await waitForNextObservation())) throw pending();
   }
 }
@@ -9221,13 +9429,13 @@ function createMonitorQuestionTranslationTask(
   return broker.createTask({
     projectId: value.projectId,
     prompt: buildGeoMonitorQuestionTranslationPrompt(question.question),
-    attachments: [],
+    localAssets: [],
     idempotencyKey: geoMonitorQuestionTranslationOperationKey({
       projectId: value.projectId,
       questionId: question.id,
       question: question.question,
     }),
-    agentProfile: FRONTMIND_BASE_PROFILE,
+    contract: PRESALES_CONTRACTS.monitorQuestionTranslation,
   });
 }
 
@@ -9277,8 +9485,8 @@ function isRecoverableMonitorResultError(error: unknown): boolean {
 
 async function materializeArchiveAttachment(
   broker: GeoPresalesBroker,
-  taskId: string,
-  archive: { fileId?: string; url?: string; filename: string },
+  _taskId: string,
+  archive: { artifactId: string; filename: string },
   options: {
     projectId: string;
     forceCopy?: boolean;
@@ -9295,18 +9503,7 @@ async function materializeArchiveAttachment(
     }) => Promise<void>;
   },
 ) {
-  if (archive.fileId && !options.forceCopy && !options.stagingAttachment)
-    return {
-      file_id: archive.fileId,
-      filename: archive.filename,
-      temporary: false,
-    };
-  if (!archive.fileId && !archive.url)
-    throw new GeoHttpError("知识库 ZIP 缺少下载地址", 409, "ARCHIVE_NOT_READY");
-
-  const response = archive.fileId
-    ? await broker.downloadFile(archive.fileId)
-    : await broker.downloadTaskOutput(taskId, archive.url!, archive.filename);
+  const response = await broker.downloadArtifact(archive.artifactId);
   const length = Number(response.headers.get("content-length") || 0);
   if (length > MAX_ARCHIVE_COPY_BYTES) {
     throw new GeoHttpError(
@@ -9331,13 +9528,13 @@ async function materializeArchiveAttachment(
   if (!body.length || body.length > MAX_ARCHIVE_COPY_BYTES) {
     throw new GeoHttpError("知识库 ZIP 无效或过大", 413, "ARCHIVE_TOO_LARGE");
   }
-  const file = options.stagingAttachment
+  const asset = options.stagingAttachment
     ? {
-        id: options.stagingAttachment.fileId,
+        localAssetId: options.stagingAttachment.fileId,
         filename: options.stagingAttachment.filename,
-        proxy_upload_ticket: undefined,
+        uploadTicket: undefined,
       }
-    : await broker.createFile({
+    : await broker.createAsset({
         projectId: options.projectId,
         idempotencyKey: options.idempotencyKey,
         filename: archive.filename,
@@ -9347,27 +9544,27 @@ async function materializeArchiveAttachment(
   if (!options.stagingAttachment) {
     try {
       await options.onTemporaryFileCreated?.({
-        fileId: file.id,
-        filename: file.filename || archive.filename,
+        fileId: asset.localAssetId,
+        filename: asset.filename || archive.filename,
         temporary: true,
       });
     } catch (error) {
       // The store writes an independent fsynced orphan marker before its
       // record CAS. Delete immediately when possible; if deletion also fails,
       // the marker survives the crash window and the recovery GC retries it.
-      await broker.deleteFile(file.id).catch(() => undefined);
+      await broker.deleteAsset(asset.localAssetId).catch(() => undefined);
       throw error;
     }
   }
-  await broker.uploadFile(
-    file.id,
+  await broker.uploadAsset(
+    asset.localAssetId,
     body,
     "application/zip",
-    file.proxy_upload_ticket,
+    asset.uploadTicket,
   );
   return {
-    file_id: file.id,
-    filename: file.filename || archive.filename,
+    localAssetId: asset.localAssetId,
+    filename: asset.filename || archive.filename,
     temporary: true,
   };
 }
@@ -9493,44 +9690,37 @@ async function advanceCustomQuestionValidation(input: {
       return exhausted ? cleanup(record) : record;
     };
     const scheduleFormatRetryOrFail = async () => {
-      if (record.formatRetryCount === 0 && record.taskId) {
-        const temporaryFileIds = [
-          ...record.orphanedTemporaryFileIds,
-          ...(record.skillAttachment?.temporary
-            ? [record.skillAttachment.fileId]
-            : []),
-          ...(record.promptInputAttachment?.temporary
-            ? [record.promptInputAttachment.fileId]
-            : []),
-          ...(record.archiveAttachment?.temporary
-            ? [record.archiveAttachment.fileId]
-            : []),
-        ];
-        return await persist({
-          ...record,
-          state: "reserved",
-          taskId: undefined,
-          priorTaskIds: [record.taskId],
-          formatRetryCount: 1,
-          archiveAttachment: undefined,
-          skillAttachment: undefined,
-          promptInputAttachment: undefined,
-          archiveStagingAttachment: undefined,
-          skillStagingAttachment: undefined,
-          promptInputStagingAttachment: undefined,
-          orphanedTemporaryFileIds: Array.from(new Set(temporaryFileIds)).slice(
-            -20,
-          ),
-          attachmentRebuildCount: Math.min(
-            10,
-            record.attachmentRebuildCount + 1,
-          ),
-          cleanupCompleted: false,
-          error: undefined,
-          transientErrorCount: 0,
-          firstTransientErrorAt: undefined,
-          lastTransientError: "验证结果格式异常，正在自动重新验证同一问题。",
-        });
+      if (record.formatRetryCount === 0 && record.localTaskId) {
+        let repaired: BrokerTask | null;
+        try {
+          repaired = await requestStructuredTaskRepair(
+            input.broker,
+            observedTask ??
+              (await getResolvedTask(input.broker, record.localTaskId)),
+            PRESALES_CONTRACTS.customQuestionClassifier,
+          );
+        } catch (error) {
+          return await persistTransientFailure(
+            error,
+            "CUSTOM_QUESTION_CLASSIFIER_REPAIR_UNAVAILABLE",
+            "问题验证结果修复暂时无法提交，请重试当前问题",
+          );
+        }
+        if (repaired) {
+          record = await persist({
+            ...record,
+            state: "submitted",
+            formatRetryCount: 1,
+            lastObservedStatus: String(repaired.status ?? "unknown").slice(
+              0,
+              100,
+            ),
+            transientErrorCount: 0,
+            firstTransientErrorAt: undefined,
+            lastTransientError: undefined,
+          });
+          return record;
+        }
       }
       record = await persist({
         ...record,
@@ -9547,22 +9737,6 @@ async function advanceCustomQuestionValidation(input: {
       });
       return await cleanup(record);
     };
-
-    if (
-      record.state === "failed" &&
-      record.error?.code === "CUSTOM_QUESTION_CLASSIFIER_INVALID_RESPONSE" &&
-      record.taskId &&
-      record.formatRetryCount === 0
-    ) {
-      // Old Website builds marked a completed-but-malformed provider result as
-      // terminal. Keep the retained task and replay its output through the new
-      // bounded parser before creating any replacement model task.
-      record = await persist({
-        ...record,
-        state: "submitted",
-        error: undefined,
-      });
-    }
     if (isTerminalCustomQuestionValidation(record)) {
       return await cleanup(record);
     }
@@ -9589,7 +9763,8 @@ async function advanceCustomQuestionValidation(input: {
             idempotencyKey: attachmentOperationKey("archive"),
             stagingAttachment: record.archiveStagingAttachment
               ? {
-                  ...record.archiveStagingAttachment,
+                  fileId: record.archiveStagingAttachment.localAssetId,
+                  filename: record.archiveStagingAttachment.filename,
                   temporary: true,
                 }
               : undefined,
@@ -9604,7 +9779,11 @@ async function advanceCustomQuestionValidation(input: {
               await persist({
                 ...record,
                 state: "prepared",
-                archiveStagingAttachment: stagingAttachment,
+                archiveStagingAttachment: {
+                  localAssetId: stagingAttachment.fileId,
+                  filename: stagingAttachment.filename,
+                  temporary: true,
+                },
               });
             },
           },
@@ -9613,7 +9792,7 @@ async function advanceCustomQuestionValidation(input: {
           ...record,
           state: "prepared",
           archiveAttachment: {
-            fileId: attachment.file_id,
+            localAssetId: attachment.localAssetId,
             filename: attachment.filename,
             temporary: attachment.temporary,
           },
@@ -9637,16 +9816,16 @@ async function advanceCustomQuestionValidation(input: {
         let stagingAttachment = record.skillStagingAttachment;
         let uploadTicket: string | undefined;
         if (!stagingAttachment) {
-          const file = await input.broker.createFile({
+          const file = await input.broker.createAsset({
             projectId: record.projectId,
             filename: CUSTOM_QUESTION_CLASSIFIER_SKILL_ARCHIVE_FILENAME,
             mimeType: "application/zip",
             sizeBytes: body.length,
             idempotencyKey: attachmentOperationKey("skill"),
           });
-          uploadTicket = file.proxy_upload_ticket;
+          uploadTicket = file.uploadTicket;
           stagingAttachment = {
-            fileId: file.id,
+            localAssetId: file.localAssetId,
             filename:
               file.filename ||
               CUSTOM_QUESTION_CLASSIFIER_SKILL_ARCHIVE_FILENAME,
@@ -9657,7 +9836,7 @@ async function advanceCustomQuestionValidation(input: {
               input.store.retainTemporaryFileForCleanup(
                 record.projectId,
                 record.clientRequestId,
-                stagingAttachment!.fileId,
+                stagingAttachment!.localAssetId,
               ),
             );
             await persist({
@@ -9666,12 +9845,12 @@ async function advanceCustomQuestionValidation(input: {
               skillStagingAttachment: stagingAttachment,
             });
           } catch (error) {
-            await input.broker.deleteFile(file.id).catch(() => undefined);
+            await input.broker.deleteAsset(file.localAssetId).catch(() => undefined);
             throw error;
           }
         }
-        await input.broker.uploadFile(
-          stagingAttachment.fileId,
+        await input.broker.uploadAsset(
+          stagingAttachment.localAssetId,
           body,
           "application/zip",
           uploadTicket,
@@ -9697,7 +9876,7 @@ async function advanceCustomQuestionValidation(input: {
     // Records submitted by an older Website build already carry their complete
     // inline prompt. They must remain pollable during a rolling deployment and
     // must not acquire a new, unused protocol attachment before observation.
-    if (!record.taskId && !record.promptInputAttachment) {
+    if (!record.localTaskId && !record.promptInputAttachment) {
       try {
         const taskInput = buildGeoCustomQuestionClassifierTaskInput({
           companyName: record.companyName,
@@ -9707,16 +9886,16 @@ async function advanceCustomQuestionValidation(input: {
         let stagingAttachment = record.promptInputStagingAttachment;
         let uploadTicket: string | undefined;
         if (!stagingAttachment) {
-          const file = await input.broker.createFile({
+          const file = await input.broker.createAsset({
             projectId: record.projectId,
             filename: taskInput.filename,
             mimeType: taskInput.mimeType,
             sizeBytes: taskInput.body.length,
             idempotencyKey: attachmentOperationKey("input"),
           });
-          uploadTicket = file.proxy_upload_ticket;
+          uploadTicket = file.uploadTicket;
           stagingAttachment = {
-            fileId: file.id,
+            localAssetId: file.localAssetId,
             filename: file.filename || taskInput.filename,
             temporary: true,
           };
@@ -9725,7 +9904,7 @@ async function advanceCustomQuestionValidation(input: {
               input.store.retainTemporaryFileForCleanup(
                 record.projectId,
                 record.clientRequestId,
-                stagingAttachment!.fileId,
+                stagingAttachment!.localAssetId,
               ),
             );
             await persist({
@@ -9734,12 +9913,12 @@ async function advanceCustomQuestionValidation(input: {
               promptInputStagingAttachment: stagingAttachment,
             });
           } catch (error) {
-            await input.broker.deleteFile(file.id).catch(() => undefined);
+            await input.broker.deleteAsset(file.localAssetId).catch(() => undefined);
             throw error;
           }
         }
-        await input.broker.uploadFile(
-          stagingAttachment.fileId,
+        await input.broker.uploadAsset(
+          stagingAttachment.localAssetId,
           taskInput.body,
           taskInput.mimeType,
           uploadTicket,
@@ -9763,7 +9942,7 @@ async function advanceCustomQuestionValidation(input: {
     }
 
     let observedTask: BrokerTask | undefined;
-    if (!record.taskId) {
+    if (!record.localTaskId) {
       try {
         observedTask = await input.broker.createTask({
           projectId: record.projectId,
@@ -9772,22 +9951,22 @@ async function advanceCustomQuestionValidation(input: {
             question: record.question,
             archiveFilename: record.archiveAttachment!.filename,
           }),
-          attachments: [
+          localAssets: [
             {
-              file_id: record.skillAttachment!.fileId,
+              localAssetId: record.skillAttachment!.localAssetId,
               filename: record.skillAttachment!.filename,
             },
             {
-              file_id: record.promptInputAttachment!.fileId,
+              localAssetId: record.promptInputAttachment!.localAssetId,
               filename: record.promptInputAttachment!.filename,
             },
             {
-              file_id: record.archiveAttachment!.fileId,
+              localAssetId: record.archiveAttachment!.localAssetId,
               filename: record.archiveAttachment!.filename,
             },
           ],
           idempotencyKey: geoCustomQuestionOperationKey(record),
-          agentProfile: FRONTMIND_BASE_PROFILE,
+          contract: PRESALES_CONTRACTS.customQuestionClassifier,
         });
       } catch (error) {
         if (isInvalidCustomQuestionAttachmentError(error)) {
@@ -9801,26 +9980,26 @@ async function advanceCustomQuestionValidation(input: {
               "问题验证附件持续失效，请重新提交问题",
             );
           }
-          const orphanedTemporaryFileIds = Array.from(
+          const temporaryLocalAssetIds = Array.from(
             new Set([
-              ...record.orphanedTemporaryFileIds,
+              ...record.temporaryLocalAssetIds,
               ...(record.skillAttachment?.temporary
-                ? [record.skillAttachment.fileId]
+                ? [record.skillAttachment.localAssetId]
                 : []),
               ...(record.promptInputAttachment?.temporary
-                ? [record.promptInputAttachment.fileId]
+                ? [record.promptInputAttachment.localAssetId]
                 : []),
               ...(record.archiveAttachment?.temporary
-                ? [record.archiveAttachment.fileId]
+                ? [record.archiveAttachment.localAssetId]
                 : []),
               ...(record.skillStagingAttachment?.temporary
-                ? [record.skillStagingAttachment.fileId]
+                ? [record.skillStagingAttachment.localAssetId]
                 : []),
               ...(record.promptInputStagingAttachment?.temporary
-                ? [record.promptInputStagingAttachment.fileId]
+                ? [record.promptInputStagingAttachment.localAssetId]
                 : []),
               ...(record.archiveStagingAttachment?.temporary
-                ? [record.archiveStagingAttachment.fileId]
+                ? [record.archiveStagingAttachment.localAssetId]
                 : []),
             ]),
           ).slice(-20);
@@ -9833,7 +10012,7 @@ async function advanceCustomQuestionValidation(input: {
             archiveStagingAttachment: undefined,
             skillStagingAttachment: undefined,
             promptInputStagingAttachment: undefined,
-            orphanedTemporaryFileIds,
+            temporaryLocalAssetIds,
             attachmentRebuildCount: record.attachmentRebuildCount + 1,
             transientErrorCount: 0,
             firstTransientErrorAt: undefined,
@@ -9873,7 +10052,7 @@ async function advanceCustomQuestionValidation(input: {
         await persist({
           ...record,
           state: "submitted",
-          taskId,
+          localTaskId: taskId,
           transientErrorCount: 0,
           firstTransientErrorAt: undefined,
           lastTransientError: undefined,
@@ -9889,7 +10068,7 @@ async function advanceCustomQuestionValidation(input: {
 
     if (!observedTask) {
       try {
-        observedTask = await input.broker.getTask(record.taskId!);
+        observedTask = await input.broker.getTask(record.localTaskId!);
       } catch (error) {
         return await persistTransientFailure(
           error,
@@ -9969,7 +10148,7 @@ async function advanceCustomQuestionValidation(input: {
 
     let resolvedTask: BrokerTask;
     try {
-      resolvedTask = await getResolvedTask(input.broker, record.taskId!);
+      resolvedTask = await getResolvedTask(input.broker, record.localTaskId!);
     } catch (error) {
       return await persistTransientFailure(
         error,
@@ -9988,13 +10167,13 @@ async function advanceCustomQuestionValidation(input: {
     const classification = await resolveCustomQuestionClassificationTaskOutput(
       input.broker,
       resolvedTask,
-      { taskId: record.taskId },
+      { taskId: record.localTaskId },
     );
     if (!classification) {
       console.warn("[GEO custom question]", {
         event: "classifier_output_rejected",
         projectId: record.projectId,
-        taskId: record.taskId,
+        taskId: record.localTaskId,
         diagnosticCode: "CUSTOM_QUESTION_CLASSIFIER_INVALID_RESPONSE",
       });
       return await scheduleFormatRetryOrFail();
@@ -10041,7 +10220,7 @@ async function advanceCustomQuestionValidation(input: {
       console.warn("[GEO custom question]", {
         event: "classifier_acceptance_blocked",
         projectId: record.projectId,
-        taskId: record.taskId,
+        taskId: record.localTaskId,
         diagnosticCode:
           grounding.kind === "invalid_evidence"
             ? "CUSTOM_QUESTION_CLASSIFIER_INVALID_EVIDENCE"
@@ -10115,31 +10294,33 @@ async function cleanupCustomQuestionValidation(
   ) => Promise<GeoCustomQuestionValidationRecord>,
 ) {
   if (record.cleanupCompleted) return record;
-  const temporaryFileIds = Array.from(
+  const temporaryLocalAssetIds = Array.from(
     new Set([
-      ...record.orphanedTemporaryFileIds,
+      ...record.temporaryLocalAssetIds,
       ...(record.skillAttachment?.temporary
-        ? [record.skillAttachment.fileId]
+        ? [record.skillAttachment.localAssetId]
         : []),
       ...(record.promptInputAttachment?.temporary
-        ? [record.promptInputAttachment.fileId]
+        ? [record.promptInputAttachment.localAssetId]
         : []),
       ...(record.archiveAttachment?.temporary
-        ? [record.archiveAttachment.fileId]
+        ? [record.archiveAttachment.localAssetId]
         : []),
       ...(record.skillStagingAttachment?.temporary
-        ? [record.skillStagingAttachment.fileId]
+        ? [record.skillStagingAttachment.localAssetId]
         : []),
       ...(record.promptInputStagingAttachment?.temporary
-        ? [record.promptInputStagingAttachment.fileId]
+        ? [record.promptInputStagingAttachment.localAssetId]
         : []),
       ...(record.archiveStagingAttachment?.temporary
-        ? [record.archiveStagingAttachment.fileId]
+        ? [record.archiveStagingAttachment.localAssetId]
         : []),
     ]),
   );
   const results = await Promise.allSettled([
-    ...temporaryFileIds.map((fileId) => broker.deleteFile(fileId)),
+    ...temporaryLocalAssetIds.map((localAssetId) =>
+      broker.deleteAsset(localAssetId),
+    ),
   ]);
   const failed = results.filter(
     (result) =>
@@ -10199,8 +10380,10 @@ export function createGeoCustomQuestionRecoveryWorker(input: {
               // loader only needs this task object for URL-only legacy archives;
               // v1 reservations always freeze a Dashboard fileId.
               knowledgeBaseTask: {
-                id: record.knowledgeBaseTaskId,
-                status: "completed",
+                localTaskId: record.knowledgeBaseTaskId,
+                operationId: `stored:${record.knowledgeBaseTaskId}`,
+                status: "succeeded",
+                safeEvents: [],
               },
               now: input.now,
             });
@@ -10234,8 +10417,8 @@ export function createGeoCustomQuestionRecoveryWorker(input: {
         now: new Date(input.now?.() ?? Date.now()),
         cleanup: async (target) => {
           const results = await Promise.allSettled([
-            ...target.temporaryFileIds.map((fileId) =>
-              input.broker.deleteFile(fileId),
+            ...target.temporaryLocalAssetIds.map((localAssetId) =>
+              input.broker.deleteAsset(localAssetId),
             ),
           ]);
           const failed = results.filter(
@@ -10444,7 +10627,7 @@ async function createGeoTaskEvidenceFile(
     mimeType: string;
   },
 ) {
-  const file = await broker.createFile({
+  const asset = await broker.createAsset({
     projectId: input.projectId,
     filename: input.filename,
     mimeType: input.mimeType,
@@ -10456,19 +10639,19 @@ async function createGeoTaskEvidenceFile(
     ),
   });
   try {
-    await broker.uploadFile(
-      file.id,
+    await broker.uploadAsset(
+      asset.localAssetId,
       input.body,
       input.mimeType,
-      file.proxy_upload_ticket,
+      asset.uploadTicket,
     );
   } catch (error) {
     if (!shouldRetainGeneratedTaskFilesForReplay(error)) {
-      await broker.deleteFile(file.id).catch(() => undefined);
+      await broker.deleteAsset(asset.localAssetId).catch(() => undefined);
     }
     throw error;
   }
-  return file;
+  return asset;
 }
 
 async function createGeoTaskWithSkillPackages(
@@ -10476,13 +10659,16 @@ async function createGeoTaskWithSkillPackages(
   input: {
     projectId: string;
     prompt: string;
-    attachments: Array<{ file_id: string; filename: string }>;
+    localAssets: Array<{ localAssetId: string; filename: string }>;
     idempotencyKey: string;
-    agentProfile?: FrontMindAgentProfile;
+    contract: PresalesContract;
   },
   skillPackages: GeoTaskSkillPackage[],
 ) {
-  const skillAttachments: Array<{ file_id: string; filename: string }> = [];
+  const skillAttachments: Array<{
+    localAssetId: string;
+    filename: string;
+  }> = [];
   let taskSubmissionStarted = false;
   try {
     for (
@@ -10492,7 +10678,7 @@ async function createGeoTaskWithSkillPackages(
     ) {
       const skillPackage = skillPackages[packageIndex]!;
       const mimeType = skillPackage.mimeType || "application/zip";
-      const file = await broker.createFile({
+      const asset = await broker.createAsset({
         projectId: input.projectId,
         filename: skillPackage.filename,
         mimeType,
@@ -10504,20 +10690,20 @@ async function createGeoTaskWithSkillPackages(
         ),
       });
       skillAttachments.push({
-        file_id: file.id,
-        filename: file.filename || skillPackage.filename,
+        localAssetId: asset.localAssetId,
+        filename: asset.filename || skillPackage.filename,
       });
-      await broker.uploadFile(
-        file.id,
+      await broker.uploadAsset(
+        asset.localAssetId,
         skillPackage.body,
         mimeType,
-        file.proxy_upload_ticket,
+        asset.uploadTicket,
       );
     }
     taskSubmissionStarted = true;
     const task = await broker.createTask({
       ...input,
-      attachments: [...skillAttachments, ...input.attachments],
+      localAssets: [...skillAttachments, ...input.localAssets],
     });
     if (!taskIdFrom(task)) {
       throw new GeoHttpError(
@@ -10539,7 +10725,7 @@ async function createGeoTaskWithSkillPackages(
     if (!retainForReplay) {
       await Promise.allSettled(
         skillAttachments.map((attachment) =>
-          broker.deleteFile(attachment.file_id),
+          broker.deleteAsset(attachment.localAssetId),
         ),
       );
     }
@@ -10554,7 +10740,7 @@ async function createWebsiteKnowledgeBaseTaskWithSkill(
     skillVersion: WebsiteKnowledgeBaseWriterVersion;
     prompt: string;
     taskInput: GeoTaskSkillPackage;
-    attachments: Array<{ file_id: string; filename: string }>;
+    localAssets: Array<{ localAssetId: string; filename: string }>;
     idempotencyKey: string;
   },
 ) {
@@ -10570,7 +10756,7 @@ async function createWebsiteKnowledgeBaseTaskWithSkill(
     broker,
     {
       ...taskInputWithoutGeneratedAttachment,
-      agentProfile: FRONTMIND_BASE_PROFILE,
+      contract: PRESALES_CONTRACTS.knowledgeBaseCandidate,
     },
     [
       {
@@ -10591,24 +10777,16 @@ async function createWebsiteKnowledgeBaseTaskWithSkill(
 
 function trackArchiveFile(
   value: ProjectTokenValue,
-  task: BrokerTask,
+  _task: BrokerTask,
 ): ProjectTokenValue {
-  const fileId = findArchiveDescriptor(task)?.fileId;
-  if (!fileId || value.archiveFileIds?.includes(fileId)) return value;
-  return {
-    ...value,
-    archiveFileIds: Array.from(
-      new Set([...(value.archiveFileIds || []), fileId]),
-    ),
-  };
+  return value;
 }
 
 function resolveKnowledgeBaseArtifact(
   value: ProjectTokenValue,
   _task: BrokerTask,
 ): {
-  fileId?: string;
-  url?: string;
+  artifactId: string;
   filename: string;
   sha256?: string;
   packageManifestSha256?: string;
@@ -10616,7 +10794,7 @@ function resolveKnowledgeBaseArtifact(
   const finalArtifact = value.knowledgeBaseArtifact?.final;
   if (!finalArtifact) return null;
   return {
-    fileId: finalArtifact.fileId,
+    artifactId: finalArtifact.artifactId,
     filename: finalArtifact.filename,
     sha256: finalArtifact.sha256,
     packageManifestSha256: finalArtifact.packageManifestSha256,
@@ -10741,7 +10919,7 @@ function deriveCompanyIdentity(input: CreateProjectRequest): {
 }
 
 function taskIdFrom(task: BrokerTask) {
-  const value = task.id || task.task_id;
+  const value = task.localTaskId;
   return typeof value === "string" && value.trim() ? value.trim() : "";
 }
 

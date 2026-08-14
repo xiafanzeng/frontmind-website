@@ -3,12 +3,94 @@ import {
   geoPromptCodePointLength,
 } from "./prompt-delivery";
 
-export const FRONTMIND_BASE_PROFILE = "frontmind-base" as const;
-export const FRONTMIND_PRO_PROFILE = "frontmind-pro" as const;
+export const PRESALES_CONTRACT_VERSION = 2 as const;
 
-export type FrontMindAgentProfile =
-  | typeof FRONTMIND_BASE_PROFILE
-  | typeof FRONTMIND_PRO_PROFILE;
+export const PRESALES_CAPABILITIES = [
+  "local-assets",
+  "typed-results",
+  "local-artifacts",
+  "safe-events",
+] as const;
+
+export const PRESALES_CONTRACTS = {
+  questionRecommendation: {
+    name: "website.question-recommendation",
+    revision: 2,
+    schemaHash:
+      "c2410c0b93f1c67e589e716e254bf9ce6e3f4ec9bb845b99e5f85706315dabb4",
+  },
+  knowledgeBaseCandidate: {
+    name: "website.knowledge-base-candidate",
+    revision: 2,
+    schemaHash:
+      "f7d08256052c49acd99fff60ca19f8075430851c265072674c3271604a7db4ca",
+  },
+  customQuestionClassifier: {
+    name: "website.custom-question-classifier",
+    revision: 2,
+    schemaHash:
+      "f810e57e094582892e1434641d20858bd5d7c324d0722411b21ce8e062320c7c",
+  },
+  currentStateAssessment: {
+    name: "website.current-state-assessment",
+    revision: 2,
+    schemaHash:
+      "cc5c61ed7841239a2290a7077d7a8ad04296a84a88f6c64858e234d25532bb7c",
+  },
+  optimizationForecast: {
+    name: "website.optimization-forecast",
+    revision: 2,
+    schemaHash:
+      "96bdf3df50dbabaca2618e198c7599c2fc53b3e41bff9076b21efcc2a79886b2",
+  },
+  monitorQuestionTranslation: {
+    name: "website.monitor-question-translation",
+    revision: 2,
+    schemaHash:
+      "7c0ceb342ac3bf7410cf6d10fb6d4167f3648c820d79d4fd6600f4965fb02024",
+  },
+} as const;
+
+export type PresalesContract =
+  (typeof PRESALES_CONTRACTS)[keyof typeof PRESALES_CONTRACTS];
+
+export type PresalesContractName = PresalesContract["name"];
+
+export function expectedContractHashes(): Record<string, string> {
+  return Object.fromEntries(
+    Object.values(PRESALES_CONTRACTS).map((contract) => [
+      contract.name,
+      contract.schemaHash,
+    ]),
+  );
+}
+
+function contractByName(name: string): PresalesContract | undefined {
+  return Object.values(PRESALES_CONTRACTS).find(
+    (contract) => contract.name === name,
+  );
+}
+
+function isMatchingContractHashes(value: unknown) {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return false;
+  const hashes = value as Record<string, unknown>;
+  const expected = expectedContractHashes();
+  return (
+    Object.keys(hashes).length === Object.keys(expected).length &&
+    Object.entries(expected).every(([name, hash]) => hashes[name] === hash)
+  );
+}
+
+function isMatchingCapabilities(value: unknown) {
+  if (!Array.isArray(value) || value.length !== PRESALES_CAPABILITIES.length) {
+    return false;
+  }
+  const capabilities = new Set(value);
+  return (
+    capabilities.size === PRESALES_CAPABILITIES.length &&
+    PRESALES_CAPABILITIES.every((capability) => capabilities.has(capability))
+  );
+}
 
 export class GeoBrokerError extends Error {
   constructor(
@@ -22,26 +104,105 @@ export class GeoBrokerError extends Error {
   }
 }
 
-const FORWARDED_MONITOR_ERROR_CODES = new Set([
+const FORWARDED_ERROR_CODES = new Set([
   "MONITOR_SUBMISSION_REJECTED",
   "MONITOR_SUBMISSION_UNKNOWN",
+  "TASK_RESULT_PENDING",
+  "TASK_SUBMISSION_UNKNOWN",
+  "TASK_REPAIR_EXHAUSTED",
+  "TASK_REPAIR_NOT_AVAILABLE",
+  "PRESALES_CONTRACT_MISMATCH",
+  "PRESALES_CREDENTIAL_REQUIRED",
+  "LOCAL_ASSET_NOT_FOUND",
+  "LOCAL_ARTIFACT_NOT_FOUND",
 ]);
 
-export type BrokerFile = {
-  id: string;
+export type BrokerLocalAsset = {
+  localAssetId: string;
   filename: string;
-  status: string;
-  upload_url?: string;
-  upload_expires_at?: string;
-  proxy_upload_ticket?: string;
+  status: "pending" | "uploaded";
+  uploadTicket?: string;
 };
 
-export type BrokerTask = Record<string, unknown> & {
-  id?: string;
-  task_id?: string;
-  status?: string;
-  output?: unknown;
+export type BrokerArtifact = {
+  artifactId: string;
+  filename: string;
+  mimeType: string;
+  bytes: number;
+  sha256: string;
 };
+
+export type BrokerTaskStatus =
+  | "queued"
+  | "running"
+  | "result_pending"
+  | "succeeded"
+  | "failed"
+  | "cancelled"
+  | "attention_required";
+
+export type BrokerSafeEvent = {
+  id: string;
+  type: string;
+  timestamp?: number;
+  createdAt?: string;
+  message?: string;
+};
+
+export type BrokerTaskResult = {
+  structuredResult?: unknown;
+  artifacts: BrokerArtifact[];
+};
+
+export type BrokerTask = {
+  localTaskId: string;
+  operationId: string;
+  status: BrokerTaskStatus;
+  safeEvents: BrokerSafeEvent[];
+  result?: BrokerTaskResult;
+  error?: {
+    code: string;
+    retryable: boolean;
+  };
+};
+
+function assertBrokerTask(value: BrokerTask): BrokerTask {
+  const statuses: readonly BrokerTaskStatus[] = [
+    "queued",
+    "running",
+    "result_pending",
+    "succeeded",
+    "failed",
+    "cancelled",
+    "attention_required",
+  ];
+  if (
+    !value ||
+    typeof value.localTaskId !== "string" ||
+    !value.localTaskId.trim() ||
+    typeof value.operationId !== "string" ||
+    !value.operationId.trim() ||
+    !statuses.includes(value.status) ||
+    !Array.isArray(value.safeEvents) ||
+    (value.status === "succeeded" && value.result === undefined) ||
+    (value.status !== "succeeded" && value.result !== undefined) ||
+    (value.result !== undefined &&
+      (typeof value.result !== "object" ||
+        !Array.isArray(value.result.artifacts))) ||
+    (value.error !== undefined &&
+      (!value.error ||
+        typeof value.error.code !== "string" ||
+        !value.error.code.trim() ||
+        typeof value.error.retryable !== "boolean"))
+  ) {
+    throw new GeoBrokerError(
+      "FrontMind 任务响应结构无效",
+      502,
+      "AGENT_INVALID_RESPONSE",
+    );
+  }
+  return value;
+}
 
 export const GEO_DOMESTIC_MONITOR_PLATFORM_IDS = [
   "doubao",
@@ -188,32 +349,45 @@ export interface GeoPresalesBroker {
     monitorCredentialConfigured: boolean;
     monitorCredentialAuthenticated: boolean;
     publicUrlConfigured?: boolean;
+    presalesContractVersion: 2;
+    capabilities: readonly string[];
+    contractHashes: Record<string, string>;
   }>;
-  createFile(input: BrokerCreateFileInput): Promise<BrokerFile>;
-  uploadFile(
-    fileId: string,
+  createAsset(input: BrokerCreateFileInput): Promise<BrokerLocalAsset>;
+  uploadAsset(
+    localAssetId: string,
     body: Buffer,
     contentType: string,
     uploadTicket?: string,
   ): Promise<unknown>;
   createTask(input: {
-    projectId?: string;
+    projectId: string;
     prompt: string;
-    attachments: Array<{ file_id: string; filename: string }>;
+    localAssets: Array<{ localAssetId: string; filename: string }>;
     idempotencyKey: string;
-    agentProfile?: FrontMindAgentProfile;
+    contract: PresalesContract;
   }): Promise<BrokerTask>;
   getTask(taskId: string): Promise<BrokerTask>;
   getTaskResult(taskId: string): Promise<BrokerTask>;
+  repairTask(
+    taskId: string,
+    input: { idempotencyKey: string },
+  ): Promise<BrokerTask>;
   deleteTask(taskId: string): Promise<void>;
   deleteProjectTasks(projectId: string): Promise<BrokerProjectTaskDeletion>;
-  deleteFile(fileId: string): Promise<void>;
-  downloadFile(fileId: string): Promise<Response>;
-  downloadTaskOutput(
-    taskId: string,
-    url: string,
-    filename?: string,
-  ): Promise<Response>;
+  deleteAsset(localAssetId: string): Promise<void>;
+  downloadAsset(localAssetId: string): Promise<Response>;
+  promoteArtifact(input: {
+    projectId: string;
+    idempotencyKey: string;
+    sourceLocalAssetId: string;
+    filename: string;
+    mimeType: "application/zip";
+    bytes: number;
+    sha256: string;
+    kind: "website-final-knowledge-base";
+  }): Promise<BrokerArtifact>;
+  downloadArtifact(artifactId: string): Promise<Response>;
   createMonitorRun(input: {
     projectId: string;
     question: string;
@@ -237,7 +411,7 @@ type BrokerConfig = {
 
 const INTERNAL_SERVICE_HOSTNAME_RE =
   /^(?=.{1,253}$)[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?(?:\.[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?)*$/;
-const PRESALES_PATH = "/api/internal/presales";
+const PRESALES_PATH = "/api/internal/presales/v2";
 
 function normalizedHostname(url: URL) {
   return url.hostname
@@ -338,6 +512,9 @@ export class HttpGeoPresalesBroker implements GeoPresalesBroker {
       typeof status.credentialConfigured !== "boolean" ||
       typeof status.monitorCredentialConfigured !== "boolean" ||
       typeof status.monitorCredentialAuthenticated !== "boolean" ||
+      status.presalesContractVersion !== PRESALES_CONTRACT_VERSION ||
+      !isMatchingCapabilities(status.capabilities) ||
+      !isMatchingContractHashes(status.contractHashes) ||
       (status.publicUrlConfigured !== undefined &&
         typeof status.publicUrlConfigured !== "boolean")
     ) {
@@ -352,27 +529,46 @@ export class HttpGeoPresalesBroker implements GeoPresalesBroker {
       credentialConfigured: status.credentialConfigured,
       monitorCredentialConfigured: status.monitorCredentialConfigured,
       monitorCredentialAuthenticated: status.monitorCredentialAuthenticated,
+      presalesContractVersion: PRESALES_CONTRACT_VERSION,
+      capabilities: PRESALES_CAPABILITIES,
+      contractHashes: expectedContractHashes(),
       ...(typeof status.publicUrlConfigured === "boolean"
         ? { publicUrlConfigured: status.publicUrlConfigured }
         : {}),
     };
   }
 
-  async createFile(input: BrokerCreateFileInput) {
-    return this.requestJson<BrokerFile>("/files", {
+  async createAsset(input: BrokerCreateFileInput) {
+    const asset = await this.requestJson<BrokerLocalAsset>("/assets", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(input),
     });
+    if (
+      !asset ||
+      typeof asset.localAssetId !== "string" ||
+      !asset.localAssetId.trim() ||
+      typeof asset.filename !== "string" ||
+      !["pending", "uploaded"].includes(asset.status)
+    ) {
+      throw new GeoBrokerError(
+        "FrontMind 本地资产响应结构无效",
+        502,
+        "LOCAL_ASSET_INVALID",
+      );
+    }
+    return asset;
   }
 
-  async uploadFile(
-    fileId: string,
+  async uploadAsset(
+    localAssetId: string,
     body: Buffer,
     contentType: string,
     uploadTicket?: string,
   ) {
-    return this.requestJson(`/files/${encodeURIComponent(fileId)}/content`, {
+    return this.requestJson(
+      `/assets/${encodeURIComponent(localAssetId)}/content`,
+      {
       method: "PUT",
       headers: {
         "Content-Type": "application/octet-stream",
@@ -380,15 +576,16 @@ export class HttpGeoPresalesBroker implements GeoPresalesBroker {
         ...(uploadTicket ? { "x-frontmind-upload-ticket": uploadTicket } : {}),
       },
       body,
-    });
+      },
+    );
   }
 
   async createTask(input: {
-    projectId?: string;
+    projectId: string;
     prompt: string;
-    attachments: Array<{ file_id: string; filename: string }>;
+    localAssets: Array<{ localAssetId: string; filename: string }>;
     idempotencyKey: string;
-    agentProfile?: FrontMindAgentProfile;
+    contract: PresalesContract;
   }) {
     const promptCodePoints = geoPromptCodePointLength(input.prompt);
     if (promptCodePoints > GEO_UPSTREAM_PROMPT_MAX_CODE_POINTS) {
@@ -402,27 +599,58 @@ export class HttpGeoPresalesBroker implements GeoPresalesBroker {
         },
       );
     }
-    return this.requestJson<BrokerTask>("/tasks", {
+    const expected = contractByName(input.contract.name);
+    if (
+      !expected ||
+      expected.revision !== input.contract.revision ||
+      expected.schemaHash !== input.contract.schemaHash
+    ) {
+      throw new GeoBrokerError(
+        "Website 任务合同无效",
+        500,
+        "PRESALES_CONTRACT_MISMATCH",
+      );
+    }
+    const task = await this.requestJson<BrokerTask>("/tasks", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
-        ...(input.projectId ? { projectId: input.projectId } : {}),
+        projectId: input.projectId,
         prompt: input.prompt,
-        attachments: input.attachments,
+        localAssetIds: input.localAssets,
         idempotencyKey: input.idempotencyKey,
-        agentProfile: input.agentProfile ?? FRONTMIND_BASE_PROFILE,
-        taskMode: "agent",
+        contract: input.contract,
       }),
     });
+    return assertBrokerTask(task);
   }
 
   async getTask(taskId: string) {
-    return this.requestJson<BrokerTask>(`/tasks/${encodeURIComponent(taskId)}`);
+    return assertBrokerTask(
+      await this.requestJson<BrokerTask>(
+        `/tasks/${encodeURIComponent(taskId)}`,
+      ),
+    );
   }
 
   async getTaskResult(taskId: string) {
-    return this.requestJson<BrokerTask>(
-      `/tasks/${encodeURIComponent(taskId)}/result`,
+    return assertBrokerTask(
+      await this.requestJson<BrokerTask>(
+        `/tasks/${encodeURIComponent(taskId)}/result`,
+      ),
+    );
+  }
+
+  async repairTask(taskId: string, input: { idempotencyKey: string }) {
+    return assertBrokerTask(
+      await this.requestJson<BrokerTask>(
+        `/tasks/${encodeURIComponent(taskId)}/repair`,
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ idempotencyKey: input.idempotencyKey }),
+        },
+      ),
     );
   }
 
@@ -474,26 +702,39 @@ export class HttpGeoPresalesBroker implements GeoPresalesBroker {
     return payload;
   }
 
-  async deleteFile(fileId: string) {
+  async deleteAsset(localAssetId: string) {
     const response = await this.request(
-      `/files/${encodeURIComponent(fileId)}`,
+      `/assets/${encodeURIComponent(localAssetId)}`,
       { method: "DELETE" },
     );
     if (response.body) await response.body.cancel().catch(() => undefined);
   }
 
-  async downloadFile(fileId: string) {
+  async downloadAsset(localAssetId: string) {
     return this.request(
-      `/files/${encodeURIComponent(fileId)}/content?download=1`,
+      `/assets/${encodeURIComponent(localAssetId)}/content`,
     );
   }
 
-  async downloadTaskOutput(taskId: string, url: string, filename?: string) {
-    const search = new URLSearchParams({ url });
-    if (filename) search.set("filename", filename);
-    return this.request(
-      `/tasks/${encodeURIComponent(taskId)}/output?${search.toString()}`,
-    );
+  async promoteArtifact(input: {
+    projectId: string;
+    idempotencyKey: string;
+    sourceLocalAssetId: string;
+    filename: string;
+    mimeType: "application/zip";
+    bytes: number;
+    sha256: string;
+    kind: "website-final-knowledge-base";
+  }) {
+    return this.requestJson<BrokerArtifact>("/artifacts", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(input),
+    });
+  }
+
+  async downloadArtifact(artifactId: string) {
+    return this.request(`/artifacts/${encodeURIComponent(artifactId)}/content`);
   }
 
   async createMonitorRun(input: {
@@ -608,7 +849,7 @@ export class HttpGeoPresalesBroker implements GeoPresalesBroker {
         response.status === 401 || response.status === 403
           ? 502
           : response.status;
-      const code = FORWARDED_MONITOR_ERROR_CODES.has(payload.code)
+      const code = FORWARDED_ERROR_CODES.has(payload.code)
         ? payload.code
         : response.status === 428
           ? "PRESALES_CREDENTIAL_REQUIRED"
@@ -663,7 +904,7 @@ export function createGeoPresalesBrokerFromEnv(
 ) {
   const baseUrl =
     env.FRONTMIND_PRESALES_AGENT_URL?.trim() ||
-    "http://127.0.0.1:3001/api/internal/presales";
+    "http://127.0.0.1:3001/api/internal/presales/v2";
   const configuredToken = env.FRONTMIND_PRESALES_SERVICE_TOKEN?.trim() || "";
   const serviceToken =
     /^(?:replace[-_ ]?with|change[-_ ]?me|example|placeholder|your[-_ ])/i.test(

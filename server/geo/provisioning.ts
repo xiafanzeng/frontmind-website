@@ -376,77 +376,23 @@ export const GeoPurchaseProvisionResponseV2Schema = z
     }
   });
 
-const opaqueKnowledgeImportIdentitySchema = z
-  .string()
-  .min(1)
-  .max(255)
-  .refine((value) => value === value.trim(), {
-    message: "opaque identity must not contain leading or trailing whitespace",
-  });
+const localArtifactIdentitySchema = z.string().regex(/^artifact_[a-f0-9]{64}$/);
 
-const GeoKnowledgeImportRequestBaseSchema = z.object({
-  companyName: z.string().trim().min(1).max(200),
-  taskId: opaqueKnowledgeImportIdentitySchema,
-  outputItemId: opaqueKnowledgeImportIdentitySchema,
-  fileId: opaqueKnowledgeImportIdentitySchema.optional(),
-  descriptorHash: sha256Schema,
-  artifactSha256: sha256Schema,
-  filename: z.string().trim().min(1).max(512),
-});
-
-export const GeoKnowledgeImportRequestV2Schema =
-  GeoKnowledgeImportRequestBaseSchema.extend({
-    schemaVersion: z.literal(2),
-  }).strict();
-
-export const GeoKnowledgeImportRequestV3Schema =
-  GeoKnowledgeImportRequestBaseSchema.extend({
-    schemaVersion: z.literal(3),
-    archiveContractVersion: z.union([
-      z.literal(1),
-      z.literal(2),
-      z.literal(3),
-      z.literal(4),
-    ]),
-    validationProfile: z.literal("website-lead-v1"),
-    packageManifestSha256: sha256Schema,
-  }).strict();
-
-export const GeoKnowledgeImportRequestV4Schema = z
+export const GeoKnowledgeImportRequestV5Schema = z
   .object({
-    schemaVersion: z.literal(4),
+    schemaVersion: z.literal(5),
     companyName: z.string().trim().min(1).max(200),
-    candidate: z
-      .object({
-        taskId: opaqueKnowledgeImportIdentitySchema,
-        outputItemId: opaqueKnowledgeImportIdentitySchema,
-        fileId: opaqueKnowledgeImportIdentitySchema.optional(),
-        descriptorHash: sha256Schema,
-        sha256: sha256Schema,
-      })
-      .strict(),
-    finalArtifact: z
-      .object({
-        fileId: opaqueKnowledgeImportIdentitySchema,
-        filename: z.string().trim().min(1).max(512),
-        sha256: sha256Schema,
-        archiveContractVersion: z.union([z.literal(3), z.literal(4)]),
-        validationProfile: z.literal("website-lead-v1"),
-        packageManifestSha256: sha256Schema,
-        finalizerVersion: z.literal("website-kb-finalizer-v1"),
-      })
-      .strict(),
+    candidateArtifactId: localArtifactIdentitySchema,
+    finalArtifactId: localArtifactIdentitySchema,
+    candidateSha256: sha256Schema,
+    finalSha256: sha256Schema,
+    packageManifestSha256: sha256Schema,
+    finalizerVersion: z.literal("website-kb-finalizer-v1"),
   })
   .strict();
 
-export const GeoKnowledgeImportRequestSchema = z.discriminatedUnion(
-  "schemaVersion",
-  [
-    GeoKnowledgeImportRequestV2Schema,
-    GeoKnowledgeImportRequestV3Schema,
-    GeoKnowledgeImportRequestV4Schema,
-  ],
-);
+export const GeoKnowledgeImportRequestSchema =
+  GeoKnowledgeImportRequestV5Schema;
 
 const knowledgeImportStatusSchema = z.enum([
   "pending",
@@ -467,41 +413,16 @@ const GeoKnowledgeImportResponsePayloadSchema = z
   })
   .strict();
 
-export const GeoKnowledgeImportResponseV2Schema = z
+export const GeoKnowledgeImportResponseV5Schema = z
   .object({
-    schemaVersion: z.literal(2),
+    schemaVersion: z.literal(5),
     knowledgeImport: GeoKnowledgeImportResponsePayloadSchema,
   })
   .strict();
 
-export const GeoKnowledgeImportResponseV3Schema = z
-  .object({
-    schemaVersion: z.literal(3),
-    knowledgeImport: GeoKnowledgeImportResponsePayloadSchema,
-  })
-  .strict();
+export const GeoKnowledgeImportResponseSchema =
+  GeoKnowledgeImportResponseV5Schema;
 
-export const GeoKnowledgeImportResponseV4Schema = z
-  .object({
-    schemaVersion: z.literal(4),
-    knowledgeImport: GeoKnowledgeImportResponsePayloadSchema,
-  })
-  .strict();
-
-export const GeoKnowledgeImportResponseSchema = z.discriminatedUnion(
-  "schemaVersion",
-  [
-    GeoKnowledgeImportResponseV2Schema,
-    GeoKnowledgeImportResponseV3Schema,
-    GeoKnowledgeImportResponseV4Schema,
-  ],
-);
-
-/*
- * Keep the v2 schemas and types exported during the receiver-first rollout.
- * Existing Website deployments can continue importing historical archives
- * while v3 binds new archives to their validation profile and manifest hash.
- */
 export type GeoKnowledgeImportRequest = z.infer<
   typeof GeoKnowledgeImportRequestSchema
 >;
@@ -509,31 +430,11 @@ export type GeoKnowledgeImportResponse = z.infer<
   typeof GeoKnowledgeImportResponseSchema
 >;
 
-/*
- * These aliases remain part of the public provisioning contract until every
- * in-flight v2 task has settled.
- */
-export type GeoKnowledgeImportRequestV2 = z.infer<
-  typeof GeoKnowledgeImportRequestV2Schema
+export type GeoKnowledgeImportRequestV5 = z.infer<
+  typeof GeoKnowledgeImportRequestV5Schema
 >;
-export type GeoKnowledgeImportResponseV2 = z.infer<
-  typeof GeoKnowledgeImportResponseV2Schema
->;
-
-/*
- * v3 is used only for newly validated website-lead-v1 products.
- */
-export type GeoKnowledgeImportRequestV3 = z.infer<
-  typeof GeoKnowledgeImportRequestV3Schema
->;
-export type GeoKnowledgeImportResponseV3 = z.infer<
-  typeof GeoKnowledgeImportResponseV3Schema
->;
-export type GeoKnowledgeImportRequestV4 = z.infer<
-  typeof GeoKnowledgeImportRequestV4Schema
->;
-export type GeoKnowledgeImportResponseV4 = z.infer<
-  typeof GeoKnowledgeImportResponseV4Schema
+export type GeoKnowledgeImportResponseV5 = z.infer<
+  typeof GeoKnowledgeImportResponseV5Schema
 >;
 
 export type GeoPurchaseProvisionRequestV2 = z.infer<
@@ -1416,26 +1317,15 @@ export function createGeoKnowledgeImporter(
         headers: {
           Accept: "application/json",
           "Content-Type": "application/json",
-          "Idempotency-Key":
-            request.schemaVersion === 4
-              ? [
-                  "geo-basic",
-                  parsedProjectId,
-                  request.finalArtifact.sha256,
-                  request.finalArtifact.packageManifestSha256,
-                  request.finalArtifact.finalizerVersion,
-                  "knowledge-v4",
-                ].join(":")
-              : request.schemaVersion === 3
-                ? [
-                    "geo-basic",
-                    parsedProjectId,
-                    request.descriptorHash,
-                    request.artifactSha256,
-                    request.packageManifestSha256,
-                    "knowledge-v3",
-                  ].join(":")
-                : `geo-basic:${parsedProjectId}:${request.descriptorHash}:${request.artifactSha256}:knowledge-v2`,
+          "Idempotency-Key": [
+            "geo-basic",
+            parsedProjectId,
+            request.candidateSha256,
+            request.finalSha256,
+            request.packageManifestSha256,
+            request.finalizerVersion,
+            "knowledge-v5",
+          ].join(":"),
           "x-frontmind-provisioning-token": serviceToken(env),
         },
         body: JSON.stringify(request),
