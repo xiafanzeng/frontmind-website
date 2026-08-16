@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import type { GeoPresalesBroker } from "./broker";
+import { PRESALES_CAPABILITIES, type GeoPresalesBroker } from "./broker";
 import type {
   GeoPaymentReceiptStore,
   GeoProjectOrderRegistry,
@@ -65,6 +65,7 @@ describe("GEO dependency health", () => {
         monitorCredentialConfigured: true,
         monitorCredentialAuthenticated: true,
         publicUrlConfigured: true,
+        capabilities: PRESALES_CAPABILITIES,
       },
       projectOrderRegistry: { ready: true },
       paymentReceiptLedger: { ready: true },
@@ -105,6 +106,7 @@ describe("GEO dependency health", () => {
         monitorCredentialConfigured: true,
         monitorCredentialAuthenticated: true,
         publicUrlConfigured: true,
+        capabilities: PRESALES_CAPABILITIES,
       },
     });
 

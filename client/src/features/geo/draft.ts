@@ -1,11 +1,14 @@
 import type { GeoFileReference, GeoProject } from "./types";
-import type { GeoUploadedFile } from "./api";
+import type { GeoUploadedFile, GeoUploadReservation } from "./api";
 
 export type PendingGeoDraft = {
   input: string;
   files: File[];
   requestId: string;
+  inviteContextToken: string;
+  businessOwnerName: string;
   uploadedFiles?: GeoUploadedFile[];
+  uploadReservations?: GeoUploadReservation[];
 };
 
 function draftFileReference(file: File, index: number): GeoFileReference {

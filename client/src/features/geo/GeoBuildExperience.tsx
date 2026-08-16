@@ -79,7 +79,6 @@ import {
   createGeoCustomQuestion,
   createGeoProject,
   createGeoServicePaymentCheckout,
-  deleteGeoProject as deleteRemoteGeoProject,
   downloadGeoArchive,
   expiredGeoCustomQuestionValidation,
   getGeoProject,
@@ -105,6 +104,7 @@ import {
   switchGeoServicePaymentCheckout,
   verifyGeoInvitation,
 } from "./api";
+import { normalizeBusinessOwnerName } from "@shared/business-owner-name";
 import {
   createGeoDraftProject,
   isGeoDraftProject,
@@ -375,6 +375,17 @@ export function isGeoProjectPaymentProtected(
       pendingPaymentProjectId &&
       projectId === pendingPaymentProjectId,
   );
+}
+
+export async function startFreshKnowledgeBaseUpload(input: {
+  project: GeoProject;
+  removeProjectFromDevice: (project: GeoProject) => Promise<void>;
+  openNewProjectBuilder: () => void;
+}) {
+  // Deliberately has no remote deletion callback. The failed remote record is
+  // diagnostic evidence and must not be removed by the fresh-upload CTA.
+  await input.removeProjectFromDevice(input.project);
+  input.openNewProjectBuilder();
 }
 
 export function geoPaymentRecoveryStatusForError(
@@ -879,6 +890,12 @@ function executionStatusLabel(status: GeoExecutionLogEntry["status"]) {
   return "排队中";
 }
 
+function isExecutionEntryPending(entry: GeoExecutionLogEntry | undefined) {
+  return Boolean(
+    entry && ["queued", "running", "waiting", "unknown"].includes(entry.status),
+  );
+}
+
 function errorMessage(error: unknown): string {
   return localizedUserFacingError(error);
 }
@@ -996,28 +1013,68 @@ function projectDisplayTitle(project: GeoProject): string {
   return project.title;
 }
 
+function isCompleteAssessment(assessment: GeoProject["assessment"]): boolean {
+  return Boolean(
+    assessment?.status === "ready" &&
+      assessment.quality?.completeness !== "partial" &&
+      assessment.totalScore !== undefined &&
+      assessment.dimensions.length === 5 &&
+      assessment.dimensions.every(
+        (dimension) =>
+          dimension.score !== undefined && dimension.maxScore !== undefined,
+      ),
+  );
+}
+
+function isCompleteForecast(
+  forecast: GeoProject["optimizationForecast"],
+): boolean {
+  return Boolean(
+    forecast?.status === "ready" &&
+      forecast.quality?.completeness !== "partial" &&
+      forecast.currentScore !== undefined &&
+      forecast.targetLow !== undefined &&
+      forecast.targetHigh !== undefined,
+  );
+}
+
 function canStartService(project: GeoProject): boolean {
   return Boolean(
     project.serviceActivation?.status === "active" ||
-      (project.assessment?.status === "ready" &&
-        project.optimizationForecast?.status === "ready" &&
+      (isCompleteAssessment(project.assessment) &&
+        isCompleteForecast(project.optimizationForecast) &&
         project.serviceActivation),
   );
 }
 
 function canPreviewServiceWorkspace(project: GeoProject): boolean {
   return Boolean(
-    project.assessment?.status === "ready" &&
+    isCompleteAssessment(project.assessment) &&
       (project.selectedQuestionId ||
         project.serviceActivation?.questionId ||
         project.questions.length > 0),
   );
 }
 
+function questionRecommendationStatus(
+  project: GeoProject,
+): NonNullable<GeoProject["questionRecommendation"]>["status"] {
+  if (project.questionRecommendation)
+    return project.questionRecommendation.status;
+  const recommendedCount = project.questions.filter(
+    (question) => !question.id.startsWith("custom-"),
+  ).length;
+  if (recommendedCount === 20) return "ready";
+  if (project.status === "recommending") return "pending";
+  if (project.status === "failed" && project.knowledgeBase) return "failed";
+  return "not_started";
+}
+
 function canOpenStage(project: GeoProject, stage: GeoStage): boolean {
   if (stage === "enterprise_analysis") return true;
   if (stage === "question_recommendation")
     return (
+      questionRecommendationStatus(project) !== "not_started" ||
       project.questions.length > 0 ||
       project.executionLog?.entries.some(
         (entry) => entry.stage === "question_recommendation",
@@ -1056,6 +1113,8 @@ function projectDefaultStage(project: GeoProject): GeoStage {
     return "current_assessment";
   if (project.monitoring?.runId) return "monitoring";
   if (project.selectedQuestionId) return "monitoring";
+  if (questionRecommendationStatus(project) !== "not_started")
+    return "question_recommendation";
   if (project.questions.length > 0) return "question_recommendation";
   const executionStage = project.executionLog?.entries.find(
     (entry) => entry.id === project.executionLog?.currentEntryId,
@@ -1072,8 +1131,8 @@ function isStageComplete(project: GeoProject, stage: GeoStage): boolean {
   if (stage === "monitoring") return project.monitoring?.status === "completed";
   if (stage === "current_assessment")
     return (
-      project.assessment?.status === "ready" &&
-      project.optimizationForecast?.status === "ready"
+      isCompleteAssessment(project.assessment) &&
+      isCompleteForecast(project.optimizationForecast)
     );
   return project.serviceActivation?.status === "active";
 }
@@ -1475,6 +1534,7 @@ function GeoBuildExperienceZh() {
   const [isDraggingFile, setIsDraggingFile] = useState(false);
   const [inviteOpen, setInviteOpen] = useState(false);
   const [inviteCode, setInviteCode] = useState("");
+  const [businessOwnerName, setBusinessOwnerName] = useState("");
   const [inviteError, setInviteError] = useState("");
   const [creating, setCreating] = useState(false);
   const [startingAnalysisId, setStartingAnalysisId] = useState<string>();
@@ -1498,9 +1558,11 @@ function GeoBuildExperienceZh() {
   const [contactOpen, setContactOpen] = useState(false);
   const [executionLogOpen, setExecutionLogOpen] = useState(false);
   const [deleteTarget, setDeleteTarget] = useState<GeoProject>();
-  const [deleteAction, setDeleteAction] = useState<"remote" | "local">();
+  const [deleteMode, setDeleteMode] = useState<"standard" | "fresh_start">(
+    "standard",
+  );
+  const [deleteAction, setDeleteAction] = useState<"local">();
   const [deleteError, setDeleteError] = useState("");
-  const [deleteRemoteCompleted, setDeleteRemoteCompleted] = useState(false);
   const [pendingQuestion, setPendingQuestion] = useState<GeoQuestion>();
   const [monitoringConfirmOpen, setMonitoringConfirmOpen] = useState(false);
   const [monitoringStarting, setMonitoringStarting] = useState(false);
@@ -1851,7 +1913,7 @@ function GeoBuildExperienceZh() {
       isGeoStylePreviewProject(project) ||
       isGeoDraftProject(project) ||
       !project.remoteToken ||
-      project.assessment?.status !== "ready" ||
+      !isCompleteAssessment(project.assessment) ||
       project.optimizationForecast?.status !== "failed" ||
       project.optimizationForecastRetryAvailable === false ||
       forecastStartInFlight.current.has(project.id)
@@ -2129,7 +2191,8 @@ function GeoBuildExperienceZh() {
 
   useEffect(() => {
     if (isGeoStylePreviewProject(activeProject)) return;
-    if (activeProject?.assessment?.status !== "ready") return;
+    if (!activeProject || !isCompleteAssessment(activeProject.assessment))
+      return;
     if (
       activeProject.optimizationForecast &&
       activeProject.optimizationForecast.status !== "not_started"
@@ -2162,6 +2225,7 @@ function GeoBuildExperienceZh() {
     if (isGeoStylePreviewProject(activeProject)) return;
     if (!activeProject?.monitoring?.runId) return;
     if (activeProject.monitoring.status !== "completed") return;
+    if (activeProject.monitoring.quality?.downstreamEligible === false) return;
     if (
       activeProject.assessment &&
       activeProject.assessment.status !== "not_started"
@@ -2267,6 +2331,7 @@ function GeoBuildExperienceZh() {
     setDraftError("");
     setInviteError("");
     setInviteCode("");
+    setBusinessOwnerName("");
     setInviteOpen(true);
   };
 
@@ -2276,15 +2341,28 @@ function GeoBuildExperienceZh() {
       setInviteError("请输入邀请码。");
       return;
     }
+    let normalizedBusinessOwnerName: string;
+    try {
+      normalizedBusinessOwnerName =
+        normalizeBusinessOwnerName(businessOwnerName);
+    } catch {
+      setInviteError("请输入有效的商务负责人姓名（最多 40 个字符）。");
+      return;
+    }
     setCreating(true);
     setInviteError("");
     try {
-      await verifyGeoInvitation(inviteCode.trim());
+      const inviteContext = await verifyGeoInvitation(
+        inviteCode.trim(),
+        normalizedBusinessOwnerName,
+      );
       const project = createGeoDraftProject(draftInput, draftFiles);
       pendingDrafts.current.set(project.id, {
         input: draftInput.trim(),
         files: [...draftFiles],
         requestId: crypto.randomUUID(),
+        inviteContextToken: inviteContext.inviteContextToken,
+        businessOwnerName: inviteContext.businessOwnerName,
       });
       setProjects((current) => [
         project,
@@ -2296,6 +2374,7 @@ function GeoBuildExperienceZh() {
       setDraftFiles([]);
       setInviteOpen(false);
       setInviteCode("");
+      setBusinessOwnerName("");
       setWorkbenchOpen(true);
       setMinimized(false);
     } catch (error) {
@@ -2322,13 +2401,38 @@ function GeoBuildExperienceZh() {
     setStorageNotice("");
     try {
       const project = await createGeoProject(draft.input, draft.files, {
+        inviteContextToken: draft.inviteContextToken,
         requestId: draft.requestId,
         uploadedFiles: draft.uploadedFiles,
+        uploadReservations: draft.uploadReservations,
         signal: controller.signal,
         onUploadsReady: (uploadedFiles) => {
           draft.uploadedFiles = uploadedFiles;
+        },
+        onUploadReservationsReady: (uploadReservations) => {
+          draft.uploadReservations = uploadReservations;
+        },
+        onUploadProgress: (progress) => {
+          const currentFile = `${formatFileSize(progress.fileLoadedBytes)} / ${formatFileSize(progress.fileTotalBytes)}`;
+          const wholeBatch = `${formatFileSize(progress.batchLoadedBytes)} / ${formatFileSize(progress.batchTotalBytes)}`;
+          const currentStatus = (() => {
+            switch (progress.phase) {
+              case "reserving":
+                return `正在为第 ${progress.fileIndex} / ${progress.fileCount} 份保留上传任务`;
+              case "awaiting_dashboard":
+                return `第 ${progress.fileIndex} / ${progress.fileCount} 份已发送，等待服务器确认`;
+              case "reconciling":
+                return `第 ${progress.fileIndex} / ${progress.fileCount} 份传输结果待确认，正在核对服务器回执`;
+              case "retrying":
+                return `第 ${progress.fileIndex} / ${progress.fileCount} 份连接中断，正在按原凭证重试`;
+              case "confirmed":
+                return `第 ${progress.fileIndex} / ${progress.fileCount} 份已确认`;
+              case "uploading":
+                return `正在上传第 ${progress.fileIndex} / ${progress.fileCount} 份：${currentFile}`;
+            }
+          })();
           setStorageNotice(
-            `企业资料上传中：已完成 ${uploadedFiles.length} / ${draft.files.length} 份；如后续失败，重试会复用已上传文件。`,
+            `企业资料上传中：${currentStatus}，全部资料 ${wholeBatch}。`,
           );
         },
       });
@@ -2339,6 +2443,7 @@ function GeoBuildExperienceZh() {
         ? project
         : { ...project, id: crypto.randomUUID() };
       pendingDrafts.current.delete(projectId);
+      setStorageNotice("资料已接收，正在创建企业分析。");
       setProjects((current) =>
         [readyProject, ...current.filter((item) => item.id !== projectId)].sort(
           (left, right) => right.updatedAt.localeCompare(left.updatedAt),
@@ -2351,7 +2456,22 @@ function GeoBuildExperienceZh() {
       setActiveStage("enterprise_analysis");
     } catch (error) {
       if (!controller.signal.aborted) {
-        setStorageNotice(`企业分析尚未启动：${errorMessage(error)}`);
+        const retainedFiles = draft.uploadedFiles?.length ?? 0;
+        setStorageNotice(
+          error instanceof GeoApiError &&
+            error.code === "PROJECT_START_CONFIRMATION_UNKNOWN"
+            ? errorMessage(error)
+            : error instanceof GeoApiError &&
+                (error.code?.startsWith("UPLOAD_") ||
+                  error.code === "INVALID_UPLOAD_TICKET" ||
+                  error.code === "INVALID_UPLOAD_CHECKPOINT")
+              ? `企业资料尚未全部上传：${errorMessage(error)}${
+                  error.code === "UPLOAD_RETRY_EXHAUSTED"
+                    ? ` 前 ${retainedFiles} 份已保留，只重试当前文件。`
+                    : ""
+                }`
+              : `企业分析尚未启动：${errorMessage(error)}`,
+        );
       }
     } finally {
       if (draftAnalysisControllers.current.get(projectId) === controller) {
@@ -2386,10 +2506,11 @@ function GeoBuildExperienceZh() {
   const continueToGeoQuestions = async () => {
     const project = activeProject;
     if (!project?.knowledgeBase) return;
+    const recommendationStatus = questionRecommendationStatus(project);
 
     if (
-      project.questions.length > 0 ||
-      project.status === "recommending" ||
+      recommendationStatus === "ready" ||
+      recommendationStatus === "pending" ||
       isGeoStylePreviewProject(project)
     ) {
       setActiveStage("question_recommendation");
@@ -2399,7 +2520,7 @@ function GeoBuildExperienceZh() {
       setStorageNotice("当前项目尚未连接后台，暂不能生成 GEO 问题。");
       return;
     }
-    if (project.status === "failed") {
+    if (recommendationStatus === "failed") {
       setStorageNotice(project.error || "问题推荐未能完成，请联系技术支持。");
       return;
     }
@@ -2810,7 +2931,7 @@ function GeoBuildExperienceZh() {
       const message =
         error instanceof GeoApiError &&
         error.code === "LEGACY_MONITOR_PAYMENT_RECOVERY_REQUIRED"
-          ? "检测到旧版监控订单，请保留原记录并联系技术支持核对后继续。"
+          ? "检测到此前未完成的监控确认，系统会先核对当前状态后继续。"
           : errorMessage(error);
       setMonitoringStartError(message);
       setStorageNotice(message);
@@ -3535,22 +3656,22 @@ function GeoBuildExperienceZh() {
       );
       return;
     }
-    if (
-      isGeoDraftProject(project) &&
-      draftAnalysisControllers.current.has(project.id)
-    ) {
-      setProjectMenuOpen(false);
-      setStorageNotice(
-        "项目正在远端创建，完成后即可永久删除。现在直接丢弃草稿可能遗留无法追踪的远端任务。",
-      );
-      return;
-    }
+    setDeleteMode("standard");
     setDeleteTarget(project);
     setDeleteError("");
-    setDeleteRemoteCompleted(false);
+  };
+
+  const openFreshStartDialog = (project: GeoProject) => {
+    setDeleteMode("fresh_start");
+    setDeleteTarget(project);
+    setDeleteError("");
   };
 
   const removeDraftFromMemory = (project: GeoProject) => {
+    draftAnalysisControllers.current
+      .get(project.id)
+      ?.abort(new DOMException("草稿已从当前浏览器移除。", "AbortError"));
+    draftAnalysisControllers.current.delete(project.id);
     pendingDrafts.current.delete(project.id);
     deletedProjectIds.current.add(project.id);
     const remaining = projects.filter((item) => item.id !== project.id);
@@ -3563,8 +3684,9 @@ function GeoBuildExperienceZh() {
     setProjectMenuOpen(false);
     setDeleteTarget(undefined);
     setDeleteError("");
-    setDeleteRemoteCompleted(false);
-    setStorageNotice("待启动草稿已永久删除，正在进行的上传已取消。");
+    setStorageNotice(
+      "待启动草稿已移除；文件、上传进度和启动坐标已清除，下次将创建全新任务。",
+    );
   };
 
   const removeProjectFromDevice = async (project: GeoProject) => {
@@ -3593,7 +3715,6 @@ function GeoBuildExperienceZh() {
     setProjectMenuOpen(false);
     setDeleteTarget(undefined);
     setDeleteError("");
-    setDeleteRemoteCompleted(false);
   };
 
   const confirmDeleteProject = async () => {
@@ -3615,44 +3736,29 @@ function GeoBuildExperienceZh() {
       setPaymentDialogOpen(false);
       setPaymentError("");
     }
-    if (deleteRemoteCompleted) {
-      setDeleteAction("local");
-      setDeleteError("");
-      try {
-        await removeProjectFromDevice(project);
-        setStorageNotice("项目已永久删除。");
-      } catch (error) {
-        setDeleteError(`本机记录删除失败：${errorMessage(error)}`);
-      } finally {
-        setDeleteAction(undefined);
-      }
-      return;
-    }
-
-    setDeleteAction("remote");
+    setDeleteAction("local");
     setDeleteError("");
     setStorageNotice("");
     try {
-      await deleteRemoteGeoProject(project);
-      setDeleteRemoteCompleted(true);
+      if (deleteMode === "fresh_start") {
+        await startFreshKnowledgeBaseUpload({
+          project,
+          removeProjectFromDevice,
+          openNewProjectBuilder: () => {
+            setDraftInput("");
+            setDraftFiles([]);
+            openNewProjectBuilder();
+          },
+        });
+        setStorageNotice(
+          "本次失败项目已从当前浏览器移除；远端诊断记录已保留。请重新选择全部资料并创建全新任务。",
+        );
+      } else {
+        await removeProjectFromDevice(project);
+        setStorageNotice("项目已从当前浏览器移除；远端任务与记录已保留。");
+      }
     } catch (error) {
-      setDeleteError(
-        `项目物理删除尚未完成：${errorMessage(error)}。项目已锁定，本机项目与 ZIP 暂未删除，请重试。`,
-      );
-      setStorageNotice(
-        "项目删除已开始，旧项目已停止继续付款、刷新和创建任务；请重新打开删除确认并重试。",
-      );
-      setDeleteAction(undefined);
-      return;
-    }
-
-    try {
-      await removeProjectFromDevice(project);
-      setStorageNotice("项目已永久删除。");
-    } catch (error) {
-      setDeleteError(
-        `项目的服务端删除已完成，但本机记录删除失败：${errorMessage(error)}。请重试删除本机记录。`,
-      );
+      setDeleteError(`本机记录删除失败：${errorMessage(error)}`);
     } finally {
       setDeleteAction(undefined);
     }
@@ -3963,15 +4069,29 @@ function GeoBuildExperienceZh() {
             </span>
             <DialogTitle className="geo-dialog-title">请输入邀请码</DialogTitle>
             <DialogDescription className="geo-dialog-description">
-              企业知识基建目前采用邀请制。验证通过后只会打开工作台，资料将在您点击“启动企业分析”后上传。
+              企业知识基建目前采用邀请制，资料将在您点击“开始构建企业知识库”后上传。
             </DialogDescription>
           </DialogHeader>
           <form onSubmit={handleInviteSubmit} className="geo-invite-form">
+            <label htmlFor="geo-business-owner-name">商务负责人姓名</label>
+            <input
+              id="geo-business-owner-name"
+              type="text"
+              autoFocus
+              autoComplete="name"
+              value={businessOwnerName}
+              disabled={creating}
+              maxLength={80}
+              onChange={(event) => {
+                setBusinessOwnerName(event.target.value);
+                setInviteError("");
+              }}
+              placeholder="请输入商务负责人姓名"
+            />
             <label htmlFor="geo-invite-code">邀请码</label>
             <input
               id="geo-invite-code"
               type="password"
-              autoFocus
               autoComplete="one-time-code"
               value={inviteCode}
               disabled={creating}
@@ -4135,7 +4255,6 @@ function GeoBuildExperienceZh() {
           if (!open && !deleteAction) {
             setDeleteTarget(undefined);
             setDeleteError("");
-            setDeleteRemoteCompleted(false);
           }
         }}
       >
@@ -4151,26 +4270,26 @@ function GeoBuildExperienceZh() {
             <DialogTitle className="geo-dialog-title">
               {deleteTarget && isGeoDraftProject(deleteTarget)
                 ? "删除待启动草稿？"
-                : deleteRemoteCompleted
-                  ? "删除本机项目记录？"
-                  : "永久删除项目？"}
+                : deleteMode === "fresh_start"
+                  ? "移除本次项目并重新上传？"
+                  : "从当前浏览器移除项目？"}
             </DialogTitle>
             <DialogDescription className="geo-dialog-description">
-              {deleteTarget && isGeoDraftProject(deleteTarget) ? (
+              {deleteMode === "fresh_start" ? (
                 <>
-                  “{deleteTarget.title}
-                  ”只存在于当前页面内存，删除不会调用远端接口，也不会产生费用。
+                  将仅从当前浏览器移除“{deleteTarget?.title}
+                  ”及本地副本，不会调用远端删除接口。旧失败记录将保留用于诊断；确认后请重新选择全部资料，并创建全新项目和任务。
                 </>
-              ) : deleteRemoteCompleted ? (
+              ) : deleteTarget && isGeoDraftProject(deleteTarget) ? (
                 <>
-                  “{deleteTarget?.title}
-                  ”的服务端项目删除已完成。现在将删除本机项目记录与本地知识库
-                  ZIP，此操作无法撤销。
+                  删除“{deleteTarget.title}
+                  ”将取消当前页面请求，并清除文件、上传进度和启动坐标；不会查找、接管或重建响应未知的旧任务。之后需重新选择资料并发起全新任务。
                 </>
               ) : (
                 <>
-                  将永久删除“{deleteTarget?.title}
-                  ”及其关联的项目记录与文件，此操作不可撤销。
+                  仅从当前浏览器移除“{deleteTarget?.title}
+                  ”和本地知识库
+                  ZIP；不会停止或删除远端任务及其记录。本机移除后无法撤销。
                 </>
               )}
             </DialogDescription>
@@ -4188,7 +4307,6 @@ function GeoBuildExperienceZh() {
               onClick={() => {
                 setDeleteTarget(undefined);
                 setDeleteError("");
-                setDeleteRemoteCompleted(false);
               }}
               disabled={Boolean(deleteAction)}
             >
@@ -4200,17 +4318,15 @@ function GeoBuildExperienceZh() {
               onClick={confirmDeleteProject}
               disabled={Boolean(deleteAction)}
             >
-              {deleteAction === "remote"
-                ? "正在清理远端…"
-                : deleteAction === "local"
-                  ? "正在删除本机记录…"
-                  : deleteRemoteCompleted
-                    ? "重试删除本机记录"
-                    : deleteError
-                      ? "重试删除项目"
-                      : deleteTarget && isGeoDraftProject(deleteTarget)
-                        ? "删除草稿"
-                        : "删除项目"}
+              {deleteAction === "local"
+                ? "正在移除本机记录…"
+                : deleteError
+                  ? "重试移除本机记录"
+                  : deleteTarget && isGeoDraftProject(deleteTarget)
+                    ? "删除草稿"
+                    : deleteMode === "fresh_start"
+                      ? "移除并开始全新上传"
+                      : "从本机移除"}
             </button>
           </DialogFooter>
         </DialogContent>
@@ -4396,8 +4512,15 @@ function GeoBuildExperienceZh() {
                     }
                     onDownload={downloadArchive}
                     onContact={() => setContactOpen(true)}
+                    onFreshStart={() => openFreshStartDialog(activeProject)}
                     onStart={startDraftAnalysis}
                     starting={startingAnalysisId === activeProject.id}
+                    hasUploadCheckpoint={Boolean(
+                      pendingDrafts.current.get(activeProject.id)
+                        ?.uploadReservations?.length ||
+                        pendingDrafts.current.get(activeProject.id)
+                          ?.uploadedFiles?.length,
+                    )}
                     onContinueToQuestions={continueToGeoQuestions}
                     startingQuestions={
                       startingQuestionProjectId === activeProject.id
@@ -4491,7 +4614,9 @@ export function StageNavigation({
   onOpenExecutionLog: () => void;
 }) {
   const currentEntry = project.executionLog?.entries.find(
-    (entry) => entry.id === project.executionLog?.currentEntryId,
+    (entry) =>
+      entry.id === project.executionLog?.currentEntryId &&
+      isExecutionEntryPending(entry),
   );
   const activeStageIndex = Math.max(
     0,
@@ -4546,7 +4671,7 @@ export function StageNavigation({
                 aria-current={activeStage === stage.id ? "step" : undefined}
                 aria-label={`步骤 ${index + 1}：${stage.title}，${subtitle}${
                   scopeLocked
-                    ? "，订单范围已锁定，只读查看"
+                    ? "，问题范围已锁定，只读查看"
                     : enabled
                       ? ""
                       : "，尚未解锁"
@@ -4590,31 +4715,29 @@ export function ExecutionLogDialog({
   onRefresh: () => void;
 }) {
   const log = project.executionLog;
+  const effectiveCurrentEntryId = log?.entries.find(
+    (entry) =>
+      entry.id === log.currentEntryId && isExecutionEntryPending(entry),
+  )?.id;
   const [selectedEntryId, setSelectedEntryId] = useState<string>();
   const [clock, setClock] = useState(() => Date.now());
 
   useEffect(() => {
     if (!open) return;
-    const currentEntryId =
-      log?.currentEntryId ||
-      [...(log?.entries || [])]
-        .reverse()
-        .find((entry) => entry.status !== "completed")?.id ||
-      log?.entries.at(-1)?.id;
+    const currentEntryId = effectiveCurrentEntryId || log?.entries.at(-1)?.id;
     setSelectedEntryId(currentEntryId);
     setClock(Date.now());
-  }, [log?.currentEntryId, log?.entries, open, project.id]);
+  }, [effectiveCurrentEntryId, log?.entries, open, project.id]);
 
   const selectedEntry =
     log?.entries.find((entry) => entry.id === selectedEntryId) ||
-    log?.entries.find((entry) => entry.id === log.currentEntryId) ||
+    log?.entries.find((entry) => entry.id === effectiveCurrentEntryId) ||
     log?.entries.at(-1);
   const shouldTick =
     open &&
     selectedEntry &&
-    (selectedEntry.status === "running" ||
-      selectedEntry.status === "waiting" ||
-      selectedEntry.status === "queued");
+    selectedEntry.id === effectiveCurrentEntryId &&
+    isExecutionEntryPending(selectedEntry);
 
   useEffect(() => {
     if (!shouldTick) return;
@@ -4696,7 +4819,7 @@ export function ExecutionLogDialog({
                 <header>
                   <div>
                     <span className="geo-execution-current-label">
-                      {selectedEntry.id === log.currentEntryId
+                      {selectedEntry.id === effectiveCurrentEntryId
                         ? "当前环节"
                         : "历史环节"}
                     </span>
@@ -4721,11 +4844,15 @@ export function ExecutionLogDialog({
                     <span>
                       <small>执行计时</small>
                       <b>
-                        {formatExecutionElapsed(
-                          selectedEntry.startedAt || project.createdAt,
-                          selectedEntry.completedAt,
-                          clock,
-                        )}
+                        {["completed", "failed", "partial_review"].includes(
+                          selectedEntry.status,
+                        ) && !selectedEntry.completedAt
+                          ? "--:--:--"
+                          : formatExecutionElapsed(
+                              selectedEntry.startedAt || project.createdAt,
+                              selectedEntry.completedAt,
+                              clock,
+                            )}
                       </b>
                     </span>
                   </div>
@@ -4744,8 +4871,10 @@ export function EnterpriseAnalysis({
   archivePersistenceVersion = 0,
   onDownload,
   onContact,
+  onFreshStart,
   onStart,
   starting,
+  hasUploadCheckpoint = false,
   onContinueToQuestions,
   startingQuestions = false,
 }: {
@@ -4753,8 +4882,10 @@ export function EnterpriseAnalysis({
   archivePersistenceVersion?: number;
   onDownload: () => void;
   onContact: () => void;
+  onFreshStart?: () => void;
   onStart: () => void;
   starting: boolean;
+  hasUploadCheckpoint?: boolean;
   onContinueToQuestions?: () => void;
   startingQuestions?: boolean;
 }) {
@@ -4815,11 +4946,13 @@ export function EnterpriseAnalysis({
             >
               {starting ? (
                 <>
-                  <span className="geo-spinner" /> 正在开始构建
+                  <span className="geo-spinner" />
+                  {hasUploadCheckpoint ? " 正在继续上传" : " 正在开始构建"}
                 </>
               ) : (
                 <>
-                  开始构建企业知识库 <ArrowRight size={17} />
+                  {hasUploadCheckpoint ? "继续上传" : "开始构建企业知识库"}{" "}
+                  <ArrowRight size={17} />
                 </>
               )}
             </button>
@@ -4838,6 +4971,11 @@ export function EnterpriseAnalysis({
       "failed_internal";
     const failureMessage =
       project.error || "企业知识库生成结果未通过校验，请联系技术支持。";
+    const freshUploadAllowed =
+      project.knowledgeBaseSupportRequired === false &&
+      !project.knowledgeBaseValidationCategory &&
+      !finalizationFailed &&
+      Boolean(onFreshStart);
     return (
       <div className="geo-failure-state" role="alert" aria-live="assertive">
         <span>
@@ -4847,13 +4985,23 @@ export function EnterpriseAnalysis({
           {finalizationFailed ? "知识库生成未能完成" : "企业知识库生成未能完成"}
         </h2>
         <p>{failureMessage}</p>
-        <button
-          type="button"
-          className="geo-primary-button"
-          onClick={onContact}
-        >
-          联系技术支持 <ArrowRight size={15} />
-        </button>
+        {!freshUploadAllowed ? (
+          <button
+            type="button"
+            className="geo-primary-button"
+            onClick={onContact}
+          >
+            联系技术支持 <ArrowRight size={15} />
+          </button>
+        ) : (
+          <button
+            type="button"
+            className="geo-primary-button"
+            onClick={() => onFreshStart?.()}
+          >
+            移除本次项目并重新上传 <ArrowRight size={15} />
+          </button>
+        )}
       </div>
     );
   }
@@ -4900,8 +5048,9 @@ export function EnterpriseAnalysis({
     sections[0];
   const activeLeaves = activeSection?.leaves ?? [];
   const hasQuestions = project.questions.length > 0;
+  const recommendationStatus = questionRecommendationStatus(project);
   const questionGenerationInProgress =
-    startingQuestions || project.status === "recommending";
+    startingQuestions || recommendationStatus === "pending";
 
   return (
     <div className="geo-analysis-shell">
@@ -4920,12 +5069,19 @@ export function EnterpriseAnalysis({
             <span>
               <Archive size={13} /> ZIP 可下载归档
             </span>
-            {project.status === "recommending" && (
+            {recommendationStatus === "pending" && (
               <span className="is-live">
                 <span className="geo-live-dot" /> 正在生成 GEO 问题
               </span>
             )}
           </div>
+        </div>
+        <div className="geo-kb-brand-card" aria-label="企业官方 Logo">
+          {logoAsset && (logoAsset.previewUrl || logoAsset.url) ? (
+            <KnowledgeAssetPreviewImage asset={logoAsset} />
+          ) : (
+            <span>暂无官方 Logo</span>
+          )}
         </div>
         <div className="geo-kb-actions">
           <button
@@ -4953,7 +5109,7 @@ export function EnterpriseAnalysis({
             disabled={
               !onContinueToQuestions ||
               questionGenerationInProgress ||
-              (project.status === "failed" && !hasQuestions)
+              recommendationStatus === "failed"
             }
           >
             {questionGenerationInProgress ? (
@@ -4980,7 +5136,7 @@ export function EnterpriseAnalysis({
         companyName={knowledgeBase.companyName || project.title}
       />
 
-      {project.status === "failed" && project.questions.length === 0 && (
+      {recommendationStatus === "failed" && (
         <section className="geo-recommendation-error" role="alert">
           <span>
             <CircleAlert size={17} />
@@ -5046,16 +5202,8 @@ export function EnterpriseAnalysis({
                   className={section.id === activeSection?.id ? "active" : ""}
                   onClick={() => setActiveSectionId(section.id)}
                 >
-                  <span
-                    className={`geo-branch-index ${
-                      index === 0 && logoAsset ? "has-logo" : ""
-                    }`}
-                  >
-                    {index === 0 && logoAsset ? (
-                      <KnowledgeAssetPreviewImage asset={logoAsset} />
-                    ) : (
-                      String(index + 1).padStart(2, "0")
-                    )}
+                  <span className="geo-branch-index">
+                    {String(index + 1).padStart(2, "0")}
                   </span>
                   <span>
                     <strong>{section.title}</strong>
@@ -5335,12 +5483,19 @@ export function QuestionRecommendation({
   const customRequestInFlight = useRef(false);
   const customAbortController = useRef<AbortController | undefined>(undefined);
   const [permissionVideoOpen, setPermissionVideoOpen] = useState(false);
+  const recommendationStatus = questionRecommendationStatus(project);
   const recommendedQuestions = project.questions.filter(
     (question) => !question.id.startsWith("custom-"),
   );
+  const unclassifiedQuestions = recommendedQuestions.filter(
+    (question) => question.classificationState === "unclassified",
+  );
+  const classifiedQuestions = recommendedQuestions.filter(
+    (question) => question.classificationState !== "unclassified",
+  );
   const countsValid = GEO_QUESTION_CATEGORIES.every(
     (category) =>
-      recommendedQuestions.filter(
+      classifiedQuestions.filter(
         (question) => question.category === category.id,
       ).length === 5,
   );
@@ -5351,7 +5506,8 @@ export function QuestionRecommendation({
     let cancelled = false;
     customAbortController.current?.abort();
     customAbortController.current = controller;
-    const shouldProbe = Boolean(onResumeCustom);
+    const shouldProbe =
+      recommendationStatus === "ready" && Boolean(onResumeCustom);
     customRequestInFlight.current = shouldProbe;
     setCustomQuestion(pending?.question ?? "");
     setCustomSubmitting(Boolean(pending) || shouldProbe);
@@ -5361,7 +5517,11 @@ export function QuestionRecommendation({
     setCustomRestartAfterExpiration(false);
     setValidatedCustomQuestion(undefined);
     setCustomStartedAt(pending || shouldProbe ? Date.now() : undefined);
-    void (onResumeCustom?.(controller.signal) ?? Promise.resolve(undefined))
+    void (
+      shouldProbe
+        ? onResumeCustom!(controller.signal)
+        : Promise.resolve(undefined)
+    )
       .then((question) => {
         if (cancelled || !question) return;
         setCustomQuestion(question.question);
@@ -5406,10 +5566,11 @@ export function QuestionRecommendation({
       customAbortController.current = undefined;
       customRequestInFlight.current = false;
     };
-    // Recovery is keyed by the durable project id. The callback intentionally
-    // does not restart polling when parent state adopts a rotated token.
+    // Recovery is keyed by the durable project id and starts only after the
+    // authoritative recommendation set becomes ready. Token rotation alone
+    // does not restart it.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [project.id]);
+  }, [project.id, recommendationStatus]);
 
   useEffect(() => {
     if (!customSubmitting || customStartedAt === undefined) return;
@@ -5427,6 +5588,78 @@ export function QuestionRecommendation({
           customClock,
         );
 
+  if (recommendationStatus === "pending") {
+    return (
+      <div className="geo-question-view" aria-live="polite">
+        <header className="geo-question-header">
+          <div>
+            <span className="geo-kb-kicker">
+              <LoaderCircle size={14} className="is-spinning" /> 问题推荐进行中
+            </span>
+            <h2 className="geo-stage-title">正在生成 GEO 问题</h2>
+          </div>
+        </header>
+        <div
+          className="geo-question-categories geo-question-pending-grid"
+          role="status"
+          aria-label="GEO 问题生成中"
+        >
+          {Array.from({ length: 4 }, (_, categoryIndex) => (
+            <section
+              key={`question-pending-${categoryIndex + 1}`}
+              className="geo-question-category"
+              aria-hidden="true"
+            >
+              <div className="geo-question-list">
+                {Array.from({ length: 5 }, (_, questionIndex) => (
+                  <div
+                    key={`question-pending-${categoryIndex + 1}-${questionIndex + 1}`}
+                    className="geo-question-skeleton"
+                  />
+                ))}
+              </div>
+            </section>
+          ))}
+        </div>
+      </div>
+    );
+  }
+
+  if (recommendationStatus === "failed") {
+    return (
+      <div className="geo-question-view">
+        <section className="geo-recommendation-error" role="alert">
+          <span>
+            <CircleAlert size={17} />
+          </span>
+          <div>
+            <strong>问题推荐未能完成</strong>
+            <p>
+              {project.questionRecommendation?.failureKind === "result_invalid"
+                ? "推荐结果未通过完整性校验，知识库仍已安全保留。"
+                : "问题推荐服务未能返回可用结果，知识库仍已安全保留。"}
+            </p>
+          </div>
+          <button type="button" onClick={onContact}>
+            联系技术支持 <ArrowRight size={14} />
+          </button>
+        </section>
+      </div>
+    );
+  }
+
+  if (recommendationStatus !== "ready") {
+    return (
+      <div className="geo-question-view">
+        <EmptyKnowledgeState
+          icon={<Sparkles size={22} />}
+          title="尚未启动问题推荐"
+          copy="请返回企业分析页，点击生成 GEO 问题。"
+        />
+      </div>
+    );
+  }
+
   return (
     <div className="geo-question-view">
       <header className="geo-question-header">
@@ -5442,7 +5675,7 @@ export function QuestionRecommendation({
         </div>
         <p>
           {selectionLocked ? (
-            "监控或订单范围已经确认，当前页面仅供查看，不能更换问题。"
+            "监控范围已经确认，当前页面仅供查看，不能更换问题。"
           ) : (
             <>
               请从 <strong>非行业排名类</strong> 问题中选择一项继续。
@@ -5452,8 +5685,7 @@ export function QuestionRecommendation({
       </header>
       {selectionLocked && (
         <div className="geo-validation-notice" role="status">
-          <LockKeyhole size={14} />{" "}
-          本次问题范围已锁定，避免支付、监控与评估结果错配。
+          <LockKeyhole size={14} /> 本次问题范围已锁定，避免监控与评估结果错配。
         </div>
       )}
       {!countsValid && (
@@ -5462,12 +5694,15 @@ export function QuestionRecommendation({
           已优先展示本次生成的 {recommendedQuestions.length}{" "}
           道问题；题目数量或分类未达到 4 类 × 5
           题时仍会正常展示，符合条件的问题可继续选择。
+          {unclassifiedQuestions.length > 0
+            ? ` 其中 ${unclassifiedQuestions.length} 道已放入待分类并锁定。`
+            : ""}
         </div>
       )}
 
       <div className="geo-question-categories">
         {GEO_QUESTION_CATEGORIES.map((category, categoryIndex) => {
-          const questions = recommendedQuestions.filter(
+          const questions = classifiedQuestions.filter(
             (question) => question.category === category.id,
           );
           const locked = category.id === "industry_ranking";
@@ -5538,6 +5773,37 @@ export function QuestionRecommendation({
             </section>
           );
         })}
+        {unclassifiedQuestions.length > 0 && (
+          <section
+            className="geo-question-category locked"
+            data-category="unclassified"
+          >
+            <header>
+              <span className="geo-category-icon" aria-hidden="true">
+                <CircleAlert size={18} />
+              </span>
+              <div>
+                <h3>
+                  待分类 <LockKeyhole size={14} />
+                </h3>
+                <p>分类语义存在冲突，可查看但不能用于付费选择。</p>
+              </div>
+              <small>{unclassifiedQuestions.length} 题</small>
+            </header>
+            <div className="geo-question-list">
+              {unclassifiedQuestions.map((question, index) => (
+                <button key={question.id} type="button" disabled>
+                  <span>{String(index + 1).padStart(2, "0")}</span>
+                  <span>
+                    <strong>{question.question}</strong>
+                    {question.rationale && <small>{question.rationale}</small>}
+                  </span>
+                  <LockKeyhole size={14} />
+                </button>
+              ))}
+            </div>
+          </section>
+        )}
       </div>
 
       <section className="geo-permission-card">
@@ -6057,7 +6323,7 @@ export function MonitoringConfirmDialog({
             确认并获取监控答案
           </DialogTitle>
           <DialogDescription className="geo-dialog-description">
-            问题监控现已免费。确认范围后将直接获取并留存回答，不会创建付款订单。
+            确认当前问题、监控版本和平台范围后，即可获取并留存本次回答。
           </DialogDescription>
         </DialogHeader>
         <section className="geo-payment-order-summary">
@@ -6081,7 +6347,7 @@ export function MonitoringConfirmDialog({
           </dl>
           {legacyPending && (
             <p className="geo-payment-inline-note">
-              检测到切换前的监控订单。系统会先权威核对旧状态，再免费继续；不会重复创建监控任务。
+              检测到此前未完成的监控确认，系统会先核对当前状态后继续。
             </p>
           )}
         </section>
@@ -6915,7 +7181,6 @@ export function MonitoringSetup({
         </div>
         <div className="geo-checkout-total">
           <span>本次监控</span>
-          <strong>免费获取</strong>
           <small>
             {selectedCount} 个平台 · {answers} 次回答
           </small>
@@ -6930,7 +7195,7 @@ export function MonitoringSetup({
               : selectedCount === 0
                 ? "请先选择至少一个监控平台"
                 : paymentPending
-                  ? "核对切换前的监控订单并免费继续"
+                  ? "核对此前监控状态并继续"
                   : "确认范围并获取监控答案"
           }
         >
@@ -7005,7 +7270,10 @@ export function CurrentAssessment({
     );
   }
 
-  const assessmentReady = assessment?.status === "ready";
+  const assessmentReady = isCompleteAssessment(assessment);
+  const assessmentPartial =
+    assessment?.status === "ready" &&
+    assessment.quality?.completeness === "partial";
   const assessmentFailed = assessment?.status === "failed";
 
   return (
@@ -7027,13 +7295,15 @@ export function CurrentAssessment({
             <span />
             {assessmentReady
               ? "评估已生成"
-              : retryingAssessment
-                ? "正在重新评估"
-                : assessmentFailed
-                  ? "评估需支持"
-                  : "正在生成评估"}
+              : assessmentPartial
+                ? "评估内容部分可用"
+                : retryingAssessment
+                  ? "正在重新评估"
+                  : assessmentFailed
+                    ? "评估需支持"
+                    : "正在生成评估"}
           </span>
-          {assessmentFailed && !preview && (
+          {(assessmentFailed || assessmentPartial) && !preview && (
             <>
               {onRetryAssessment && (
                 <button
@@ -7104,7 +7374,7 @@ export function CurrentAssessment({
       )}
 
       {assessmentReady &&
-        forecast?.status === "ready" &&
+        isCompleteForecast(forecast) &&
         project.serviceActivation &&
         onStartService && (
           <section className="geo-assessment-next-step">
@@ -7443,6 +7713,76 @@ export function AssessmentOverview({
       </section>
     );
   }
+  if (
+    assessment?.status === "ready" &&
+    assessment.quality?.completeness === "partial"
+  ) {
+    return (
+      <div className="geo-assessment-overview">
+        <section className="geo-assessment-alert warning" role="status">
+          <CircleAlert size={17} />
+          <div>
+            <strong>已展示通过校验的评估内容</strong>
+            <p>
+              {assessment.executiveSummary ||
+                assessment.summary ||
+                "本次结果未满足完整评分合同，因此不计算总分、等级，也不会启动预测或解锁服务。"}
+            </p>
+          </div>
+        </section>
+
+        {assessment.dimensions.length > 0 && (
+          <section className="geo-dimension-panel">
+            <header>
+              <h3>已验证的维度观察</h3>
+              <small>聚合分值暂不可用</small>
+            </header>
+            <div className="geo-dimension-list">
+              {assessment.dimensions.map((dimension, index) => (
+                <article key={dimension.id}>
+                  <span className="geo-dimension-index">
+                    {String(index + 1).padStart(2, "0")}
+                  </span>
+                  <div>
+                    <div className="geo-dimension-label">
+                      <strong>
+                        {customerFacingText(
+                          dimension.label,
+                          CUSTOMER_DIMENSION_LABELS[dimension.id],
+                        )}
+                      </strong>
+                      <span>—</span>
+                    </div>
+                    <small>
+                      {customerFacingText(
+                        dimension.currentFinding || dimension.summary,
+                        CUSTOMER_DIMENSION_COPY[dimension.id].finding,
+                      )}
+                    </small>
+                    {dimension.nextAction && (
+                      <p>
+                        {customerFacingText(
+                          dimension.nextAction,
+                          CUSTOMER_DIMENSION_COPY[dimension.id].action,
+                        )}
+                      </p>
+                    )}
+                  </div>
+                </article>
+              ))}
+            </div>
+          </section>
+        )}
+
+        <AssessmentSupportingResults assessment={assessment} />
+        {(assessment.limitations?.length ?? 0) > 0 && (
+          <aside className="geo-assessment-scope-note">
+            {assessment.limitations!.join("；")}
+          </aside>
+        )}
+      </div>
+    );
+  }
   if (!assessmentReady || assessment?.totalScore === undefined) {
     return (
       <section className="geo-evaluation-pending">
@@ -7517,7 +7857,13 @@ function DimensionScores({
 }: {
   dimensions: GeoAssessmentDimension[];
 }) {
-  if (dimensions.length === 0) {
+  if (
+    dimensions.length === 0 ||
+    dimensions.some(
+      (dimension) =>
+        dimension.score === undefined || dimension.maxScore === undefined,
+    )
+  ) {
     return (
       <div className="geo-no-derived-data">
         评估结果正在校验，完成前暂不展示分值。
@@ -7536,7 +7882,7 @@ function DimensionScores({
           };
           const ratio = Math.max(
             0,
-            Math.min(100, (dimension.score / dimension.maxScore) * 100),
+            Math.min(100, (dimension.score! / dimension.maxScore!) * 100),
           );
           return (
             <article key={dimension.id}>
@@ -7552,7 +7898,7 @@ function DimensionScores({
                     )}
                   </strong>
                   <span>
-                    {dimension.score} / {dimension.maxScore}
+                    {dimension.score!} / {dimension.maxScore!}
                   </span>
                 </div>
                 <div className="geo-dimension-track">
@@ -7573,8 +7919,12 @@ function DimensionScores({
   );
 }
 
-function formatAssessmentRate(value: number | null) {
-  return value === null ? "不适用" : `${Math.round(value * 1000) / 10}%`;
+function formatAssessmentRate(value: number | null | undefined) {
+  return value === undefined
+    ? "—"
+    : value === null
+      ? "不适用"
+      : `${Math.round(value * 1000) / 10}%`;
 }
 
 const INTERNAL_CUSTOMER_TERM_PATTERN =
@@ -7671,12 +8021,15 @@ function AssessmentSupportingResults({
                 citationCount?: number;
                 referenceCount?: number;
               };
+              const legacySourceCounts = [
+                sourceData.citationCount,
+                sourceData.referenceCount,
+              ].filter((count): count is number => count !== undefined);
               const sourceCount =
                 sourceData.sourceCount ??
-                Math.max(
-                  sourceData.citationCount ?? 0,
-                  sourceData.referenceCount ?? 0,
-                );
+                (legacySourceCounts.length
+                  ? Math.max(...legacySourceCounts)
+                  : undefined);
               return (
                 <article key={item.platformId}>
                   <div className="geo-assessment-platform-heading">
@@ -7703,7 +8056,7 @@ function AssessmentSupportingResults({
                     </div>
                     <div>
                       <dt>可追溯来源</dt>
-                      <dd>{sourceCount}</dd>
+                      <dd>{sourceCount ?? "—"}</dd>
                     </div>
                   </dl>
                   {item.verdict && (
@@ -7783,6 +8136,115 @@ export function OptimizationForecastView({
   const forecast = project.optimizationForecast;
   const horizonWeeks = forecast?.horizonWeeks ?? 4;
   const horizonLabel = horizonWeeks === 4 ? "一个月" : `${horizonWeeks} 周`;
+
+  if (
+    forecast?.status === "ready" &&
+    forecast.quality?.completeness === "partial"
+  ) {
+    return (
+      <div className="geo-forecast-view">
+        <section className="geo-assessment-alert warning" role="status">
+          <CircleAlert size={17} />
+          <div>
+            <strong>已展示通过校验的优化路线内容</strong>
+            <p>
+              {forecast.executiveSummary ||
+                forecast.summary ||
+                "本次结果未满足完整预测合同，因此不展示整体目标区间，也不会解锁服务。"}
+            </p>
+          </div>
+        </section>
+
+        {forecast.dimensions.length > 0 && (
+          <section className="geo-forecast-dimensions">
+            <header>
+              <div>
+                <span>已验证的维度建议</span>
+                <h3>目标分值暂不可用，先展示可执行方向</h3>
+              </div>
+            </header>
+            <div className="geo-forecast-dimension-grid">
+              {forecast.dimensions.map((dimension, index) => (
+                <article key={dimension.id}>
+                  <div className="geo-forecast-dimension-heading">
+                    <span>{String(index + 1).padStart(2, "0")}</span>
+                    <div>
+                      <strong>
+                        {customerFacingText(
+                          dimension.label,
+                          CUSTOMER_DIMENSION_LABELS[dimension.id],
+                        )}
+                      </strong>
+                      <small>
+                        {customerFacingText(
+                          dimension.currentFinding || dimension.summary,
+                          CUSTOMER_DIMENSION_COPY[dimension.id].finding,
+                        )}
+                      </small>
+                    </div>
+                  </div>
+                  <p className="geo-forecast-next-action">
+                    <Check size={13} />
+                    <span>
+                      {customerFacingText(
+                        dimension.nextAction,
+                        CUSTOMER_DIMENSION_COPY[dimension.id].action,
+                      )}
+                    </span>
+                  </p>
+                </article>
+              ))}
+            </div>
+          </section>
+        )}
+
+        {forecast.roadmap.length > 0 && (
+          <section className="geo-forecast-roadmap">
+            <header>
+              <span>已验证的分阶段路线</span>
+              <h3>{horizonLabel}优化推进片段</h3>
+            </header>
+            <ol>
+              {forecast.roadmap.map((item) => (
+                <li key={`${item.phase}-${item.weeks}`}>
+                  <span>{item.phase}</span>
+                  <div>
+                    <small>{item.weeks}</small>
+                    <h4>
+                      {customerFacingText(
+                        item.title,
+                        `第 ${item.phase} 周重点任务`,
+                      )}
+                    </h4>
+                    <ul>
+                      {item.actions.slice(0, 3).map((action) => (
+                        <li key={action}>
+                          {customerFacingText(
+                            action,
+                            "完成本阶段计划，并解决对应的事实与内容缺口。",
+                          )}
+                        </li>
+                      ))}
+                    </ul>
+                    <p>
+                      <ShieldCheck size={13} /> 验收标准：
+                      {customerFacingVerificationGate(item.verificationGate)}
+                    </p>
+                  </div>
+                </li>
+              ))}
+            </ol>
+          </section>
+        )}
+
+        {(forecast.limitations?.length ?? 0) > 0 && (
+          <aside className="geo-assessment-scope-note">
+            {forecast.limitations!.join("；")}
+          </aside>
+        )}
+      </div>
+    );
+  }
 
   if (
     forecast?.status !== "ready" ||
@@ -8430,8 +8892,8 @@ export function ServiceActivation({
   const sampleOnly =
     !active &&
     !(
-      project.assessment?.status === "ready" &&
-      project.optimizationForecast?.status === "ready" &&
+      isCompleteAssessment(project.assessment) &&
+      isCompleteForecast(project.optimizationForecast) &&
       activation &&
       question &&
       amountFen > 0

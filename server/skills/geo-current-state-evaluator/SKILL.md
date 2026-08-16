@@ -24,8 +24,8 @@ Complete the comparison and assessment in this one Skill. Read `references/raw-o
 - Do not use web search, screenshots, images, hidden reasoning, or unrelated archive files.
 - Do not create a second verifier pass or an intermediate comparison file.
 - Keep `knowledgeVsAnswers` to exactly 10 unique, question-relevant topics and sort them by relevance. Never output all 25 candidate topics.
-- `evidenceRefs` and `kbEvidenceRefs` are optional. Omit them or use empty arrays; never spend time constructing reference namespaces.
-- `sourceCount` may be `0` when uncertain because the server replaces it with the canonical monitoring count.
+- Every `evidenceRefs` and `kbEvidenceRefs` key is required by the transport shape. Use `[]` when no safe reference is available; never invent a reference namespace.
+- Derive each platform `sourceCount` from the attached monitoring records. Never guess it and never use `0` merely because it is unknown. Always include `citationCount: null` and `referenceCount: null`; those two transport-only fields are not business estimates.
 - Keep every customer-facing field in concise Simplified Chinese, normally under 120 Chinese characters each, even when the monitoring question or answers are English. This includes summaries, dimension findings/actions, platform verdicts, comparison topics, knowledge-base claims, explanations, recommended actions, priorities, and limitations.
 - `answerExcerpt` is customer-facing: when its source answer is English, write a faithful concise Chinese paraphrase of the relevant excerpt instead of copying the English text. Preserve the original meaning and factual strength; never invent a translation or claim. Platform/run references still identify the source record.
 - Do not calculate or output a final weighted score or grade.
@@ -42,3 +42,4 @@ Return exactly one `schemaVersion: 2`, `assessmentType: "question_baseline"` obj
 - Do not create, upload, attach, or link a result file. Never move the final object into a `.json` file or ordinary assistant text.
 - If the response risks exceeding the output limit, shorten customer-facing wording, limitations, and optional evidence-reference arrays while preserving every required field, exact monitoring scope, and the 10 selected comparisons. Keep the result inline.
 - Treat local schema validation as a preflight check only. The server is the final validation authority and decides whether the result is accepted and displayed.
+- Before returning, serialize and parse the single object once. Confirm every indicator, platform, comparison, and priority action includes its required evidence array; confirm every platform has a real `sourceCount` and explicit null citation/reference counts.

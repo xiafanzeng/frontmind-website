@@ -42,6 +42,8 @@ Read `references/output-schema.json` before producing the result.
 7. Return exactly one business object through the task Structured Output
    contract. Do not return Markdown, ordinary assistant text, a result file,
    answers to the question, or additional keys.
+8. Both accepted and rejected objects must include `questionEnglish: null`.
+   Never omit that transport key and never translate the question in this task.
 
 ## Evidence and anchor rules
 
@@ -94,7 +96,8 @@ Read `references/output-schema.json` before producing the result.
   - `reasonCode`: `ambiguous`
   - `category`: `ambiguous`
 
-Before returning, recheck the object against every required field and
-consistency rule in `references/output-schema.json`. Return that one valid
-Structured Output object exactly once, with no intermediate explanation,
-attachment, or second result.
+Before returning, serialize the object and parse it once, then recheck it
+against every required field and consistency rule in
+`references/output-schema.json`. Confirm `questionEnglish` is present and
+`null`. Return that one valid Structured Output object exactly once, with no
+intermediate explanation, attachment, or second result.

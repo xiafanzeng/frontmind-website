@@ -1,4 +1,4 @@
-import type { GeoPresalesBroker } from "./broker";
+import { PRESALES_CAPABILITIES, type GeoPresalesBroker } from "./broker";
 import type {
   GeoPaymentReceiptStore,
   GeoProjectOrderRegistry,
@@ -14,6 +14,7 @@ export type GeoDependencyReadiness = {
     monitorCredentialConfigured: true;
     monitorCredentialAuthenticated: true;
     publicUrlConfigured: true;
+    capabilities: typeof PRESALES_CAPABILITIES;
   };
   projectOrderRegistry: { ready: true };
   paymentReceiptLedger: { ready: true };
@@ -89,6 +90,7 @@ export function createGeoDependencyHealthChecker(options: {
           monitorCredentialConfigured: true,
           monitorCredentialAuthenticated: true,
           publicUrlConfigured: true,
+          capabilities: PRESALES_CAPABILITIES,
         },
         projectOrderRegistry: { ready: true },
         paymentReceiptLedger: { ready: true },

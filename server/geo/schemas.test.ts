@@ -552,6 +552,7 @@ describe("CreateProjectRequestSchema", () => {
   it("accepts public company URLs", () => {
     expect(
       CreateProjectRequestSchema.parse({
+        inviteContextToken: "invite-context-token-at-least-32-characters",
         input: "Acme https://www.example.com/about",
         attachments: [],
       }).input,
@@ -566,7 +567,11 @@ describe("CreateProjectRequestSchema", () => {
     "http://metadata.google.internal/",
   ])("rejects non-public crawl targets: %s", (target) => {
     expect(() =>
-      CreateProjectRequestSchema.parse({ input: target, attachments: [] }),
+      CreateProjectRequestSchema.parse({
+        inviteContextToken: "invite-context-token-at-least-32-characters",
+        input: target,
+        attachments: [],
+      }),
     ).toThrow(/public HTTP/);
   });
 });

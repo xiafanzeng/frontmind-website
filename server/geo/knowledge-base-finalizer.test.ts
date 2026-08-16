@@ -4,6 +4,7 @@ import { describe, expect, it } from "vitest";
 import JSZip from "jszip";
 import sharp from "sharp";
 import {
+  inspectAcceptedUploadCoverage,
   parseKnowledgeBaseCandidate,
   KnowledgeBaseCandidateError,
 } from "./knowledge-base-candidate";
@@ -15,9 +16,13 @@ import {
 import {
   assessKnowledgeBaseCandidate,
   finalizeKnowledgeBaseCandidate,
+  WEBSITE_KB_ARCHIVE_ROOT,
   WEBSITE_KB_FINALIZER_VERSION,
 } from "./knowledge-base-finalizer";
 import { finalizeKnowledgeBaseCandidate as finalizeKnowledgeBaseCandidateV3 } from "./knowledge-base-finalizer-v3";
+
+const finalArchivePath = (entryPath: string) =>
+  `${WEBSITE_KB_ARCHIVE_ROOT}/${entryPath}`;
 
 const factHeadings = [
   [
@@ -92,6 +97,7 @@ async function candidateZip(options?: {
   wrapper?: boolean;
   missingDimension?: boolean;
   malformedRun?: boolean;
+  invalidRunUtf8?: boolean;
   omitFacts?: boolean;
   omitCustomer?: boolean;
   headingAliases?: boolean;
@@ -104,6 +110,7 @@ async function candidateZip(options?: {
   invalidCustomerUtf8?: boolean;
   duplicateNormalizedPaths?: boolean;
   symbolicLink?: boolean;
+  runOverride?: unknown;
 }) {
   const zip = new JSZip();
   const prefix = options?.wrapper ? "example/" : "";
@@ -144,39 +151,44 @@ async function candidateZip(options?: {
     );
   }
   if (!options?.omitRun) {
+    const run =
+      options?.runOverride ??
+      ({
+        schemaVersion: 1,
+        company: {
+          name: "示例企业",
+          officialWebsite: "https://example.com/",
+          industryCluster: "C3",
+        },
+        sources: [
+          {
+            title: "示例企业官网",
+            kind: "official_web",
+            status: "read",
+            url: "https://example.com/",
+          },
+        ],
+        queries: ["示例企业"],
+        assets: options?.imageBytes
+          ? [
+              {
+                path: "assets/logo.png",
+                type: "brand_identity",
+                sourceKind: "official_web",
+                sourcePageUrl: "https://example.com/",
+                sourceAssetUrl: "https://example.com/assets/logo.png",
+                caption: "示例企业 Logo",
+              },
+            ]
+          : [],
+      } as const);
     zip.file(
       `${prefix}02_run.json`,
-      options?.malformedRun
-        ? "{"
-        : JSON.stringify({
-            schemaVersion: 1,
-            company: {
-              name: "示例企业",
-              officialWebsite: "https://example.com/",
-              industryCluster: "C3",
-            },
-            sources: [
-              {
-                title: "示例企业官网",
-                kind: "official_web",
-                status: "read",
-                url: "https://example.com/",
-              },
-            ],
-            queries: ["示例企业"],
-            assets: options?.imageBytes
-              ? [
-                  {
-                    path: "assets/logo.png",
-                    type: "brand_identity",
-                    sourceKind: "official_web",
-                    sourcePageUrl: "https://example.com/",
-                    sourceAssetUrl: "https://example.com/assets/logo.png",
-                    caption: "示例企业 Logo",
-                  },
-                ]
-              : [],
-          }),
+      options?.invalidRunUtf8
+        ? Buffer.from([0xff, 0xfe, 0xfd])
+        : options?.malformedRun
+          ? "{"
+          : JSON.stringify(run),
     );
   }
   if (options?.imageBytes) {
@@ -388,8 +400,8 @@ describe("website knowledge-base candidate v1", () => {
       [section, floor, topicCount, 1, true],
     ]) as Array<[string, number, number, number, boolean]>,
   )(
-    "enforces the restored %s presentation floor at offset %i",
-    async (section, floor, topicCount, offset, accepted) => {
+    "reports the restored %s presentation floor at offset %i without rejecting readable Markdown",
+    async (section, floor, topicCount, offset, _accepted) => {
       const bytes = await mutateV2CandidateZip((fixture) => {
         const sectionIndex = websitePresentationFloorCases.findIndex(
           ([title]) => title === section,
@@ -402,17 +414,10 @@ describe("website knowledge-base candidate v1", () => {
           `https://example.com/light-section-${sectionIndex + 1}`,
         );
       });
-      if (accepted) {
-        await expect(parseKnowledgeBaseCandidate(bytes)).resolves.toMatchObject(
-          {
-            run: { schemaVersion: 2 },
-          },
-        );
-      } else {
-        await expect(parseKnowledgeBaseCandidate(bytes)).rejects.toMatchObject({
-          category: "content",
-          message: expect.stringContaining(`${floor}-character floor`),
-        });
+      const parsed = await parseKnowledgeBaseCandidate(bytes);
+      expect(parsed.run).toMatchObject({ schemaVersion: 2 });
+      if (offset < 0) {
+        expect(parsed.qualityWarnings).toContain("CONTENT_COVERAGE_INCOMPLETE");
       }
     },
   );
@@ -445,7 +450,7 @@ describe("website knowledge-base candidate v1", () => {
   });
 
   it.each(["😀".repeat(12), "[来源](https://example.com/reason-only)"])(
-    "rejects a below-floor exception whose reason has fewer than 12 meaningful characters: %s",
+    "keeps readable prose and reports an incomplete below-floor exception: %s",
     async (reason) => {
       const bytes = await mutateV2CandidateZip((fixture) => {
         fixture.customerMarkdown = replaceV2SectionAtVisibleCount(
@@ -468,14 +473,12 @@ describe("website knowledge-base candidate v1", () => {
           },
         ];
       });
-      await expect(parseKnowledgeBaseCandidate(bytes)).rejects.toMatchObject({
-        category: "content",
-        message: expect.stringContaining("at least 12 characters"),
-      });
+      const parsed = await parseKnowledgeBaseCandidate(bytes);
+      expect(parsed.qualityWarnings).toContain("CONTENT_COVERAGE_INCOMPLETE");
     },
   );
 
-  it("rejects user-upload URLs as public-source attempts for a floor exception", async () => {
+  it("does not treat user-upload URLs as sufficient public-source coverage", async () => {
     const attemptedSourceUrls = [
       "https://uploads.example.test/one",
       "https://uploads.example.test/two",
@@ -507,13 +510,11 @@ describe("website knowledge-base candidate v1", () => {
         },
       ];
     });
-    await expect(parseKnowledgeBaseCandidate(bytes)).rejects.toMatchObject({
-      category: "content",
-      message: expect.stringContaining("recorded public-source attempts"),
-    });
+    const parsed = await parseKnowledgeBaseCandidate(bytes);
+    expect(parsed.qualityWarnings).toContain("CONTENT_COVERAGE_INCOMPLETE");
   });
 
-  it("revalidates floor exceptions inside the finalizer after candidate parsing", async () => {
+  it("keeps a mutated quality-only floor exception partial in the finalizer", async () => {
     const bytes = await mutateV2CandidateZip((fixture) => {
       fixture.customerMarkdown = replaceV2SectionAtVisibleCount(
         fixture.customerMarkdown,
@@ -538,16 +539,15 @@ describe("website knowledge-base candidate v1", () => {
     const parsed = await parseKnowledgeBaseCandidate(bytes);
     if (parsed.run?.schemaVersion !== 2) throw new Error("expected v2 run");
     parsed.run.contentFloorExceptions[0]!.reason = "资料不足";
-    await expect(
-      finalizeKnowledgeBaseCandidate({
-        candidate: parsed,
-        companyName: "轻量示例企业",
-        evaluatedAt: "2026-08-10T00:00:00.000Z",
-      }),
-    ).rejects.toMatchObject({
-      category: "content",
-      message: expect.stringContaining("at least 12 characters"),
+    const finalized = await finalizeKnowledgeBaseCandidate({
+      candidate: parsed,
+      companyName: "轻量示例企业",
+      evaluatedAt: "2026-08-10T00:00:00.000Z",
     });
+    expect(finalized.assessment.state).toBe("partial");
+    expect(finalized.assessment.warningCodes).toContain(
+      "CONTENT_COVERAGE_INCOMPLETE",
+    );
   });
 
   it("parses required Markdown through a single wrapper and reconstructs sources", async () => {
@@ -558,6 +558,7 @@ describe("website knowledge-base candidate v1", () => {
     expect(parsed.customerSections.size).toBe(7);
     expect(parsed.sources.length).toBeGreaterThanOrEqual(6);
     expect(parsed.run).toBeUndefined();
+    expect(parsed.qualityWarnings).toContain("RUN_METADATA_INCOMPLETE");
   });
 
   it("recovers a missing fact dimension without rejecting the candidate", async () => {
@@ -579,6 +580,133 @@ describe("website knowledge-base candidate v1", () => {
       "02_run.json could not be parsed and was ignored",
     );
     expect(parsed.sources.length).toBeGreaterThan(0);
+    expect(parsed.qualityWarnings).toContain("RUN_METADATA_INCOMPLETE");
+  });
+
+  it("ignores non-UTF-8 optional run metadata when core Markdown is readable", async () => {
+    const parsed = await parseKnowledgeBaseCandidate(
+      await candidateZip({ invalidRunUtf8: true }),
+    );
+    expect(parsed.run).toBeUndefined();
+    expect(parsed.diagnostics).toContain(
+      "02_run.json could not be parsed and was ignored",
+    );
+    expect(parsed.qualityWarnings).toContain("RUN_METADATA_INCOMPLETE");
+    expect(parsed.customerMarkdown).toContain("产品与服务");
+  });
+
+  it("keeps valid upload evidence when company metadata is invalid", async () => {
+    const parsed = await parseKnowledgeBaseCandidate(
+      await candidateZip({
+        runOverride: {
+          schemaVersion: 1,
+          company: { name: "", officialWebsite: "http://127.0.0.1/private" },
+          sources: [
+            {
+              title: "已读取上传资料",
+              kind: "user_upload",
+              status: "read",
+              attachmentName: "catalog.pdf",
+            },
+          ],
+          queries: [],
+          assets: [],
+        },
+      }),
+    );
+
+    expect(parsed.run).toMatchObject({
+      company: { name: "待核验企业", officialWebsite: null },
+      sources: [
+        {
+          kind: "user_upload",
+          status: "read",
+          attachmentName: "catalog.pdf",
+        },
+      ],
+    });
+    expect(parsed.sources).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          kind: "user_upload",
+          status: "read",
+          attachmentName: "catalog.pdf",
+        }),
+      ]),
+    );
+    expect(parsed.qualityWarnings).toEqual(
+      expect.arrayContaining([
+        "RUN_METADATA_INCOMPLETE",
+        "SOURCE_METADATA_DROPPED",
+      ]),
+    );
+    inspectAcceptedUploadCoverage(parsed, ["catalog.pdf"]);
+    expect(parsed.qualityWarnings).not.toContain("UPLOAD_COVERAGE_INCOMPLETE");
+  });
+
+  it("marks missing accepted-upload coverage partial without fabricating read evidence", async () => {
+    const parsed = await parseKnowledgeBaseCandidate(
+      await candidateZip({ omitRun: true }),
+    );
+    inspectAcceptedUploadCoverage(parsed, ["catalog.pdf"]);
+
+    expect(parsed.qualityWarnings).toContain("UPLOAD_COVERAGE_INCOMPLETE");
+    expect(parsed.sources).not.toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ kind: "user_upload" }),
+      ]),
+    );
+    expect(assessKnowledgeBaseCandidate(parsed)).toMatchObject({
+      state: "partial",
+      requiresSupplement: true,
+      warningCodes: expect.arrayContaining(["UPLOAD_COVERAGE_INCOMPLETE"]),
+    });
+  });
+
+  it("drops private candidate asset source URLs without dropping the optional asset", async () => {
+    const parsed = await parseKnowledgeBaseCandidate(
+      await candidateZip({
+        imageBytes: Buffer.from("synthetic-logo"),
+        runOverride: {
+          schemaVersion: 1,
+          company: { name: "示例企业" },
+          sources: [],
+          queries: [],
+          assets: [
+            {
+              path: "assets/logo.png",
+              type: "brand_identity",
+              sourceKind: "official_web",
+              sourcePageUrl: "http://127.0.0.1/private",
+              sourceAssetUrl: "http://169.254.169.254/logo.png",
+              caption: "示例企业 Logo",
+            },
+          ],
+        },
+      }),
+    );
+
+    expect(parsed.assets).toHaveLength(1);
+    expect(parsed.assets[0]).not.toHaveProperty("sourcePageUrl");
+    expect(parsed.assets[0]).not.toHaveProperty("sourceAssetUrl");
+    expect(parsed.qualityWarnings).toEqual(
+      expect.arrayContaining([
+        "SOURCE_METADATA_DROPPED",
+        "OPTIONAL_ASSET_SKIPPED",
+      ]),
+    );
+    const finalized = await finalizeKnowledgeBaseCandidate({
+      candidate: parsed,
+      companyName: "示例企业",
+      evaluatedAt: "2026-08-10T00:00:00.000Z",
+    });
+    const finalizedZip = await JSZip.loadAsync(finalized.bytes);
+    const completeness = JSON.parse(
+      await finalizedZip
+        .file(finalArchivePath("00_completeness.json"))!
+        .async("string"),
+    ) as { gaps: string[] };
+    expect(completeness.gaps).toContain("候选质量提示：OPTIONAL_ASSET_SKIPPED");
   });
 
   it("recovers the fixed 7 sections when only the fact draft exists", async () => {
@@ -756,13 +884,19 @@ describe("website knowledge-base candidate v1", () => {
       },
       /must mark every user upload as read/i,
     ],
-  ] as const)("rejects schema-v2 %s", async (_label, mutate, expectedError) => {
-    await expect(
-      parseKnowledgeBaseCandidate(await mutateV2CandidateZip(mutate)),
-    ).rejects.toMatchObject<Partial<KnowledgeBaseCandidateError>>({
-      category: "content",
-      message: expect.stringMatching(expectedError),
-    });
+  ] as const)("reports schema-v2 %s as partial", async (label, mutate) => {
+    const parsed = await parseKnowledgeBaseCandidate(
+      await mutateV2CandidateZip(mutate),
+    );
+    expect(parsed.qualityWarnings).toContain(
+      label.includes("H3")
+        ? "H3_COVERAGE_INCOMPLETE"
+        : label.includes("upload")
+          ? "UPLOAD_COVERAGE_INCOMPLETE"
+          : label.includes("characters")
+            ? "CONTENT_COVERAGE_INCOMPLETE"
+            : "RESEARCH_BUDGET_DRIFT",
+    );
   });
 });
 
@@ -846,7 +980,7 @@ describe("website knowledge-base finalizer", () => {
     );
   });
 
-  it("classifies rich, medium, and sparse candidates without requesting content retries", async () => {
+  it("classifies rich, medium, and sparse candidates while retaining partial metadata warnings", async () => {
     const parsed = await parseKnowledgeBaseCandidate(await candidateZip());
     parsed.metrics = {
       citedSourceCount: 8,
@@ -857,7 +991,9 @@ describe("website knowledge-base finalizer", () => {
     expect(assessKnowledgeBaseCandidate(parsed)).toMatchObject({
       tier: "rich",
       target: "按证据自适应",
-      requiresSupplement: false,
+      state: "partial",
+      requiresSupplement: true,
+      warningCodes: expect.arrayContaining(["RUN_METADATA_INCOMPLETE"]),
       missingDimensions: expect.arrayContaining(["D02 团队"]),
       allowedSources: expect.arrayContaining(["https://example.com/"]),
     });
@@ -871,7 +1007,8 @@ describe("website knowledge-base finalizer", () => {
     expect(assessKnowledgeBaseCandidate(parsed)).toMatchObject({
       tier: "medium",
       target: "按证据自适应",
-      requiresSupplement: false,
+      state: "partial",
+      requiresSupplement: true,
     });
 
     parsed.metrics = {
@@ -883,7 +1020,8 @@ describe("website knowledge-base finalizer", () => {
     expect(assessKnowledgeBaseCandidate(parsed)).toMatchObject({
       tier: "sparse",
       target: "按证据自适应",
-      requiresSupplement: false,
+      state: "partial",
+      requiresSupplement: true,
     });
   });
 
@@ -902,7 +1040,7 @@ describe("website knowledge-base finalizer", () => {
       evaluatedAt: "2026-07-30T01:00:00.000Z",
     });
 
-    expect(WEBSITE_KB_FINALIZER_VERSION).toBe("website-kb-finalizer-v4");
+    expect(WEBSITE_KB_FINALIZER_VERSION).toBe("website-kb-finalizer-v5");
     expect(first.sha256).toBe(second.sha256);
     expect(first.packageManifestSha256).toBe(
       first.manifest.packageManifestSha256,
@@ -913,8 +1051,22 @@ describe("website knowledge-base finalizer", () => {
     expect(first.metrics.packagedImages).toBe(0);
 
     const zip = await JSZip.loadAsync(first.bytes);
+    const physicalFiles = Object.values(zip.files).filter(
+      (entry) => !entry.dir,
+    );
+    expect(
+      Array.from(
+        new Set(physicalFiles.map((entry) => entry.name.split("/")[0])),
+      ),
+    ).toEqual([WEBSITE_KB_ARCHIVE_ROOT]);
+    expect(
+      physicalFiles.every((entry) =>
+        entry.name.startsWith(`${WEBSITE_KB_ARCHIVE_ROOT}/`),
+      ),
+    ).toBe(true);
+    expect(zip.file("00_package_manifest.json")).toBeNull();
     const completeness = JSON.parse(
-      await zip.file("00_completeness.json")!.async("string"),
+      await zip.file(finalArchivePath("00_completeness.json"))!.async("string"),
     );
     expect(Object.keys(completeness).sort()).toEqual([
       "acquisition",
@@ -923,13 +1075,21 @@ describe("website knowledge-base finalizer", () => {
       "gaps",
     ]);
     const manifest = JSON.parse(
-      await zip.file("00_package_manifest.json")!.async("string"),
+      await zip
+        .file(finalArchivePath("00_package_manifest.json"))!
+        .async("string"),
     );
     expect(manifest).toMatchObject({
       schemaVersion: 4,
       candidateContractVersion: 2,
       profile: "website-lead-v1",
     });
+    expect(
+      manifest.documents.every(
+        (document: { path: string }) =>
+          !document.path.startsWith(`${WEBSITE_KB_ARCHIVE_ROOT}/`),
+      ),
+    ).toBe(true);
     expect(manifest.branchEvidence).toHaveLength(7);
     const evidenceDocuments = manifest.documents.filter(
       (document: any) => document.kind === "evidence",
@@ -944,7 +1104,7 @@ describe("website knowledge-base finalizer", () => {
       (document: any) => document.kind === "leaf",
     );
     const companyOverview = await zip
-      .file("01_company_overview/overview.md")!
+      .file(finalArchivePath("01_company_overview/overview.md"))!
       .async("string");
     const overviewDocuments = manifest.documents.filter(
       (document: any) => document.kind === "overview",
@@ -963,9 +1123,11 @@ describe("website knowledge-base finalizer", () => {
     );
     const companyLeaf = await zip
       .file(
-        leaves.find(
-          (document: any) => document.branchId === "01_company_overview",
-        ).path,
+        finalArchivePath(
+          leaves.find(
+            (document: any) => document.branchId === "01_company_overview",
+          ).path,
+        ),
       )!
       .async("string");
     expect(companyOverview).not.toContain("示例企业面向企业客户提供软件产品");
@@ -974,7 +1136,9 @@ describe("website knowledge-base finalizer", () => {
       "企业与品牌分支的事实、来源与待核验边界已按条目分别整理。",
     );
     expect(companyOverview).not.toContain("详细事实与来源已按条目分别整理");
-    const teamOverview = await zip.file("02_team/overview.md")!.async("string");
+    const teamOverview = await zip
+      .file(finalArchivePath("02_team/overview.md"))!
+      .async("string");
     expect(teamOverview).not.toContain("团队与组织综述");
     expect(teamOverview).not.toContain(
       "团队与组织分支的事实、来源与待核验边界已按条目分别整理。",
@@ -1011,7 +1175,7 @@ describe("website knowledge-base finalizer", () => {
         ?.leaves.some((leaf) => leaf.title.includes("产品与服务主题")),
     ).toBe(true);
     const productOverview = await zip
-      .file("03_products/overview.md")!
+      .file(finalArchivePath("03_products/overview.md"))!
       .async("string");
     const productLeafDocument = leaves.find(
       (document: any) =>
@@ -1023,27 +1187,82 @@ describe("website knowledge-base finalizer", () => {
       throw new Error("Expected a platform product leaf document");
     }
     const productLeaf = await zip
-      .file(productLeafDocument.path)!
+      .file(finalArchivePath(productLeafDocument.path))!
       .async("string");
     expect(productLeaf).toContain("产品与服务主题1");
     expect(productOverview).not.toContain("产品与服务主题1");
   });
 
-  it("rejects a schema-v1 candidate at the v4 finalizer boundary", async () => {
+  it("publishes readable schema-v1 Markdown as a v5 partial without rewriting an old artifact", async () => {
     const legacyCandidate = await parseKnowledgeBaseCandidate(
       await candidateZip(),
     );
 
-    await expect(
-      finalizeKnowledgeBaseCandidate({
-        candidate: legacyCandidate,
-        companyName: "历史企业",
-        evaluatedAt: "2026-08-10T01:00:00.000Z",
-      }),
-    ).rejects.toMatchObject({
-      category: "content",
-      message: expect.stringContaining("requires a schema-v2 candidate"),
+    const finalized = await finalizeKnowledgeBaseCandidate({
+      candidate: legacyCandidate,
+      companyName: "历史企业",
+      evaluatedAt: "2026-08-10T01:00:00.000Z",
     });
+    expect(finalized.assessment).toMatchObject({
+      state: "partial",
+      requiresSupplement: true,
+      warningCodes: expect.arrayContaining(["RUN_METADATA_INCOMPLETE"]),
+    });
+  });
+
+  it("publishes readable source-free prose as needs-verification leaves without evidence claims", async () => {
+    const parsed = await parseKnowledgeBaseCandidate(
+      await candidateZip({ omitRun: true }),
+    );
+    parsed.sources = [];
+    for (const [key, value] of parsed.factSections) {
+      parsed.factSections.set(
+        key,
+        value.replace(/\[(?:来源|企业主张|权威来源|第三方来源)]\([^)]*\)/g, ""),
+      );
+    }
+    for (const [key, value] of parsed.customerSections) {
+      parsed.customerSections.set(
+        key,
+        value.replace(/\[(?:来源|企业主张|权威来源|第三方来源)]\([^)]*\)/g, ""),
+      );
+    }
+    const finalized = await finalizeKnowledgeBaseCandidate({
+      candidate: parsed,
+      companyName: "待核验企业",
+      evaluatedAt: "2026-08-10T01:00:00.000Z",
+    });
+    const zip = await JSZip.loadAsync(finalized.bytes);
+    const manifest = JSON.parse(
+      await zip
+        .file(finalArchivePath("00_package_manifest.json"))!
+        .async("string"),
+    ) as { documents: Array<Record<string, any>> };
+    const leaves = manifest.documents.filter(
+      (document) => document.kind === "leaf",
+    );
+    expect(leaves.length).toBeGreaterThan(0);
+    expect(
+      leaves.every(
+        (leaf) =>
+          ["needs_verification", "not_applicable"].includes(
+            leaf.evidenceStatus,
+          ) &&
+          !leaf.sourceIds?.length &&
+          !leaf.evidenceDocumentIds?.length,
+      ),
+    ).toBe(true);
+    await expect(
+      parseKnowledgeBaseArchive(finalized.bytes, {
+        companyName: "待核验企业",
+        validationProfile: "website-lead-v1",
+      }),
+    ).resolves.toBeTruthy();
+    await expect(
+      parseKnowledgeBaseArchive(finalized.bytes, {
+        companyName: "待核验企业",
+      }),
+    ).rejects.toThrow(/evidence-backed/);
   });
 
   it.each([
@@ -1064,7 +1283,9 @@ describe("website knowledge-base finalizer", () => {
       expect(finalized.metrics.leafCount).toBe(expectedLeaves);
       const zip = await JSZip.loadAsync(finalized.bytes);
       const packageManifest = JSON.parse(
-        await zip.file("00_package_manifest.json")!.async("string"),
+        await zip
+          .file(finalArchivePath("00_package_manifest.json"))!
+          .async("string"),
       ) as {
         schemaVersion: number;
         candidateContractVersion: number;
@@ -1112,7 +1333,7 @@ describe("website knowledge-base finalizer", () => {
       );
       expect(longProductLeaf).toBeTruthy();
       const longMarkdown = await zip
-        .file(longProductLeaf!.path)!
+        .file(finalArchivePath(longProductLeaf!.path))!
         .async("string");
       expect(longMarkdown.length).toBeGreaterThan(1_800);
       expect(longProductLeaf!.sourceIds).toHaveLength(1);
@@ -1243,13 +1464,17 @@ describe("website knowledge-base finalizer", () => {
     });
     const zip = await JSZip.loadAsync(finalized.bytes);
     const packageManifest = JSON.parse(
-      await zip.file("00_package_manifest.json")!.async("string"),
+      await zip
+        .file(finalArchivePath("00_package_manifest.json"))!
+        .async("string"),
     ) as { documents: Array<{ path: string; customerVisible: boolean }> };
     const customerText = (
       await Promise.all(
         packageManifest.documents
           .filter((document) => document.customerVisible)
-          .map((document) => zip.file(document.path)!.async("string")),
+          .map((document) =>
+            zip.file(finalArchivePath(document.path))!.async("string"),
+          ),
       )
     ).join("\n");
 
@@ -1277,7 +1502,9 @@ describe("website knowledge-base finalizer", () => {
     });
     const zip = await JSZip.loadAsync(finalized.bytes);
     const packageManifest = JSON.parse(
-      await zip.file("00_package_manifest.json")!.async("string"),
+      await zip
+        .file(finalArchivePath("00_package_manifest.json"))!
+        .async("string"),
     ) as {
       counts: { customerVisibleCharacters: number };
       documents: Array<{ path: string; customerVisible: boolean }>;
@@ -1286,7 +1513,9 @@ describe("website knowledge-base finalizer", () => {
       await Promise.all(
         packageManifest.documents
           .filter((document) => document.customerVisible)
-          .map((document) => zip.file(document.path)!.async("string")),
+          .map((document) =>
+            zip.file(finalArchivePath(document.path))!.async("string"),
+          ),
       )
     ).join("\n");
 
@@ -1322,7 +1551,9 @@ describe("website knowledge-base finalizer", () => {
     });
     const zip = await JSZip.loadAsync(finalized.bytes);
     const manifest = JSON.parse(
-      await zip.file("00_package_manifest.json")!.async("string"),
+      await zip
+        .file(finalArchivePath("00_package_manifest.json"))!
+        .async("string"),
     );
     expect(manifest.assets[0]).toMatchObject({
       mimeType: "image/png",
@@ -1330,6 +1561,6 @@ describe("website knowledge-base finalizer", () => {
       assetType: "brand_identity",
       displayRole: "badge",
     });
-    expect(zip.file(manifest.assets[0].path)).not.toBeNull();
+    expect(zip.file(finalArchivePath(manifest.assets[0].path))).not.toBeNull();
   });
 });

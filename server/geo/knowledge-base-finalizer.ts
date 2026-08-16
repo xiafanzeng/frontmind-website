@@ -5,6 +5,7 @@ import sharp from "sharp";
 import {
   KnowledgeBaseCompletenessInputSchema,
   parseKnowledgeBaseArchive,
+  WEBSITE_KB_ARCHIVE_ROOT,
   WebsiteLeadPackageManifestV4InputSchema,
   websiteLeadNarrativeCharacterCountForLeaf,
   type KnowledgeBaseManifest,
@@ -15,11 +16,13 @@ import {
   KnowledgeBaseCandidateError,
   validateWebsiteV2Candidate,
   type CandidateAsset,
+  type CandidateQualityWarningCode,
   type CandidateSource,
   type ParsedCandidate,
 } from "./knowledge-base-candidate";
 
-export const WEBSITE_KB_FINALIZER_VERSION = "website-kb-finalizer-v4";
+export const WEBSITE_KB_FINALIZER_VERSION = "website-kb-finalizer-v5";
+export { WEBSITE_KB_ARCHIVE_ROOT } from "./archive";
 const ZIP_DATE = new Date("1980-01-01T00:00:00.000Z");
 
 type EvidenceStatus =
@@ -296,11 +299,17 @@ function sourceKey(source: CandidateSource) {
 }
 
 function buildSources(candidate: ParsedCandidate) {
-  return candidate.sources.map((source, index) => ({
-    id: `S${String(index + 1).padStart(3, "0")}`,
-    source,
-    key: sourceKey(source),
-  }));
+  return candidate.sources
+    .filter(
+      (source) =>
+        source.status !== "failed" &&
+        (source.kind !== "user_upload" || source.status === "read"),
+    )
+    .map((source, index) => ({
+      id: `S${String(index + 1).padStart(3, "0")}`,
+      source,
+      key: sourceKey(source),
+    }));
 }
 
 function sourceIdsForMarkdown(markdown: string, sourceRecords: SourceRecord[]) {
@@ -378,9 +387,10 @@ function sanitizeSupportedNarrative(value: string) {
 
 function gapNarrative(value: string, title: string) {
   const retained = removeEvidenceMarkers(value).trim();
-  if (retained && /(?:暂无|尚未|未发现|未提供|待核验|不适用)/.test(retained)) {
-    return retained;
-  }
+  // Readable customer-safe prose is useful even when its evidence marker is
+  // missing. Keep it verbatim in a needs_verification leaf; the empty source
+  // and evidence arrays below prevent it from being presented as proved.
+  if (retained) return retained;
   return `公开资料暂未提供${title}的可核验信息。`;
 }
 
@@ -706,9 +716,11 @@ function candidateCluster(candidate: ParsedCandidate) {
 }
 
 export type CandidateContentAssessment = {
+  state: "complete" | "partial";
   tier: "rich" | "medium" | "sparse";
   target: string;
   requiresSupplement: boolean;
+  warningCodes: CandidateQualityWarningCode[];
   reasons: string[];
   missingDimensions: string[];
   unwrittenFactTopics: string[];
@@ -812,10 +824,15 @@ export function assessKnowledgeBaseCandidate(
     ),
   ).sort((left, right) => left.localeCompare(right));
   return {
+    state: candidate.qualityWarnings.length ? "partial" : "complete",
     tier,
     target: "按证据自适应",
-    requiresSupplement: false,
-    reasons,
+    requiresSupplement: candidate.qualityWarnings.length > 0,
+    warningCodes: [...candidate.qualityWarnings],
+    reasons: [
+      ...reasons,
+      ...candidate.qualityWarnings.map((code) => `候选质量提示：${code}`),
+    ],
     missingDimensions,
     unwrittenFactTopics,
     allowedSources,
@@ -827,7 +844,12 @@ function branchForAsset(type: CandidateAsset["type"]): CanonicalBranchId {
   return "01_company_overview";
 }
 
-function traceableAssetCandidate(asset: CandidateAsset) {
+function traceableAssetCandidate(asset: {
+  sourceKind: "official_web" | "official_document" | "user_upload";
+  sourcePageUrl?: string;
+  sourceAssetUrl?: string;
+  sourceDocumentName?: string;
+}) {
   if (
     asset.sourceKind === "official_web" &&
     asset.sourcePageUrl &&
@@ -875,6 +897,21 @@ async function normalizeImage(
   }).rotate();
   const metadata = await pipeline.metadata();
   if (!metadata.width || !metadata.height) throw new Error("图片没有有效尺寸");
+  const detectedMimeType =
+    metadata.format === "jpeg"
+      ? "image/jpeg"
+      : metadata.format === "svg"
+        ? "image/svg+xml"
+        : metadata.format
+          ? `image/${metadata.format}`
+          : undefined;
+  if (
+    candidateAsset.mimeType &&
+    detectedMimeType &&
+    candidateAsset.mimeType !== detectedMimeType
+  ) {
+    throw new Error("图片声明 MIME 与实际解码格式不一致");
+  }
   const shortEdge = Math.min(metadata.width, metadata.height);
   const longEdge = Math.max(metadata.width, metadata.height);
   if (shortEdge < 32 || longEdge < 128) {
@@ -931,9 +968,17 @@ async function finalizeAssets(
   const finalized: FinalizedAsset[] = [];
   const rejected: RejectedAsset[] = [];
   const usedCandidateKeys = new Set<string>();
+  const warnOptionalAssetSkipped = () => {
+    if (!candidate.qualityWarnings.includes("OPTIONAL_ASSET_SKIPPED")) {
+      candidate.qualityWarnings.push("OPTIONAL_ASSET_SKIPPED");
+    }
+  };
   for (const candidateAsset of candidate.assets) {
     const trace = traceableAssetCandidate(candidateAsset);
-    if (!trace) continue;
+    if (!trace) {
+      warnOptionalAssetSkipped();
+      continue;
+    }
     const sourceDocumentRecord =
       trace.method === "official_document"
         ? sourceRecords.find((record) => {
@@ -1020,6 +1065,7 @@ async function finalizeAssets(
         },
       });
     } catch (error) {
+      warnOptionalAssetSkipped();
       rejected.push({
         ...(trace.url ? { url: trace.url } : {}),
         ...(trace.sourcePageUrl ? { sourcePageUrl: trace.sourcePageUrl } : {}),
@@ -1116,17 +1162,13 @@ export async function finalizeKnowledgeBaseCandidate(input: {
   companyName: string;
   evaluatedAt: string;
 }): Promise<FinalizedKnowledgeBase> {
-  if (input.candidate.run?.schemaVersion !== 2) {
-    throw new KnowledgeBaseCandidateError(
-      "Website v4 finalizer requires a schema-v2 candidate",
-      "content",
-    );
-  }
+  // v5 treats 02_run.json as bounded metadata. The readable Markdown is the
+  // primary candidate payload, so an absent or partially invalid run ledger
+  // produces a partial package instead of discarding useful content.
   validateWebsiteV2Candidate(input.candidate);
   const evaluatedAt = isoDate(input.evaluatedAt);
   const date = evaluatedAt.slice(0, 10);
   const sourceRecords = buildSources(input.candidate);
-  const assessment = assessKnowledgeBaseCandidate(input.candidate);
   const markdownByPath = new Map<string, string>();
   const documents: PackageDocument[] = [];
   const evidenceById = new Map<
@@ -1534,6 +1576,7 @@ export async function finalizeKnowledgeBaseCandidate(input: {
     sourceRecords,
     evidenceBySourceId,
   );
+  const assessment = assessKnowledgeBaseCandidate(input.candidate);
   const traceableRunAssets = (input.candidate.run?.assets || []).filter(
     (asset) => traceableAssetCandidate(asset),
   );
@@ -1678,15 +1721,18 @@ export async function finalizeKnowledgeBaseCandidate(input: {
       webQueries: { completed: queries, total: queries },
     },
     gaps: Array.from(
-      new Set(
-        leafDrafts
+      new Set([
+        ...input.candidate.qualityWarnings.map(
+          (warning) => `候选质量提示：${warning}`,
+        ),
+        ...leafDrafts
           .filter(
             (leaf) =>
               leaf.status === "needs_verification" ||
               leaf.status === "not_applicable",
           )
           .map((leaf) => `${leaf.title}：${leaf.narrative}`),
-      ),
+      ]),
     ).slice(0, 200),
     evaluatedAt,
   });
@@ -1773,18 +1819,24 @@ export async function finalizeKnowledgeBaseCandidate(input: {
     .digest("hex");
 
   const zip = new JSZip();
+  const archivePath = (entryPath: string) =>
+    `${WEBSITE_KB_ARCHIVE_ROOT}/${entryPath}`;
   const sortedMarkdown = Array.from(markdownByPath.entries()).sort(
     ([left], [right]) => left.localeCompare(right),
   );
   for (const [entryPath, markdown] of sortedMarkdown) {
-    zip.file(entryPath, markdown.endsWith("\n") ? markdown : `${markdown}\n`, {
-      date: ZIP_DATE,
-      unixPermissions: 0o100644,
-      createFolders: false,
-    });
+    zip.file(
+      archivePath(entryPath),
+      markdown.endsWith("\n") ? markdown : `${markdown}\n`,
+      {
+        date: ZIP_DATE,
+        unixPermissions: 0o100644,
+        createFolders: false,
+      },
+    );
   }
   zip.file(
-    "00_completeness.json",
+    archivePath("00_completeness.json"),
     `${JSON.stringify(completeness, null, 2)}\n`,
     {
       date: ZIP_DATE,
@@ -1792,7 +1844,7 @@ export async function finalizeKnowledgeBaseCandidate(input: {
       createFolders: false,
     },
   );
-  zip.file("00_package_manifest.json", packageManifestText, {
+  zip.file(archivePath("00_package_manifest.json"), packageManifestText, {
     date: ZIP_DATE,
     unixPermissions: 0o100644,
     createFolders: false,
@@ -1800,7 +1852,7 @@ export async function finalizeKnowledgeBaseCandidate(input: {
   for (const finalized of assetResult.finalized.sort((left, right) =>
     left.asset.path.localeCompare(right.asset.path),
   )) {
-    zip.file(finalized.asset.path, finalized.bytes, {
+    zip.file(archivePath(finalized.asset.path), finalized.bytes, {
       date: ZIP_DATE,
       unixPermissions: 0o100644,
       createFolders: false,

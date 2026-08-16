@@ -69,8 +69,12 @@ export function shouldAutoRefreshGeoProject(project: GeoProject): boolean {
   if (project.monitoring?.status === "completed") return false;
 
   if (!project.knowledgeBase) return true;
+  if (project.questionRecommendation) {
+    return project.questionRecommendation.status === "pending";
+  }
+  // Compatibility for locally stored pre-projection projects. An empty
+  // question array alone never proves that a remote task exists.
   if (project.status === "recommending") return true;
-  if (project.questions.length === 0) return true;
   return false;
 }
 

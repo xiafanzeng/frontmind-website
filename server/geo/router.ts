@@ -1,5 +1,5 @@
 import crypto from "node:crypto";
-import { Readable } from "node:stream";
+import { Readable, Transform } from "node:stream";
 import express, {
   type NextFunction,
   type Request,
@@ -24,11 +24,13 @@ import {
   ASSESSMENT_SKILL_ARCHIVE_FILENAME,
   AssessmentTaskOutputValidationError,
   assertAssessmentOutputScope,
+  buildAssessmentDisplayOnlyProjection,
   buildGeoCurrentStateEvaluatorSkillArchive,
   buildAssessmentPrompt,
   buildAssessmentTaskInput,
   calculateQuestionBaselineAssessment,
   determineBsasGrade,
+  isCompleteAssessment,
   resolveAssessmentTaskOutput as resolveAssessmentTaskOutputRaw,
 } from "./assessment";
 import {
@@ -37,12 +39,14 @@ import {
   buildOptimizationOutcomeForecastPrompt,
   buildOptimizationOutcomeForecastTaskInput,
   calculateOptimizationOutcomeForecast,
+  buildForecastDisplayOnlyProjection,
   FORECAST_HORIZON_WEEKS,
   FORECAST_OUTPUT_RESULT_FILENAME,
   FORECAST_OUTPUT_TEMPLATE_FILENAME,
   FORECAST_SKILL_ARCHIVE_FILENAME,
   FORECAST_TASK_INPUT_FILENAME,
   ForecastTaskOutputValidationError,
+  isCompleteForecast,
   resolveOptimizationOutcomeForecastTaskOutput as resolveOptimizationOutcomeForecastTaskOutputRaw,
 } from "./forecast";
 import { buildGeoExecutionLog } from "./execution";
@@ -50,6 +54,7 @@ import {
   createGeoPresalesBrokerFromEnv,
   PRESALES_CONTRACTS,
   type BrokerArtifact,
+  type BrokerLocalAsset,
   type BrokerMonitorRun,
   geoMonitoringPriceFen,
   GEO_MONITOR_PLATFORM_IDS,
@@ -67,15 +72,17 @@ import {
   toPublicMonitorView,
 } from "./monitoring";
 import {
-  isExplicitKnowledgeCandidateDescriptor,
+  KnowledgeArchiveSelectionError,
   knowledgeArchiveDescriptorHash,
   MAX_KNOWLEDGE_ARCHIVE_CANDIDATE_BYTES,
   MAX_KNOWLEDGE_ARCHIVE_TOTAL_BYTES,
-  rankedKnowledgeArchiveDescriptors,
+  selectUniqueKnowledgeArchiveDescriptor,
 } from "./knowledge-base-artifact";
 import {
+  inspectAcceptedUploadCoverage,
   KnowledgeBaseCandidateError,
   parseKnowledgeBaseCandidate,
+  type CandidateQualityWarningCode,
 } from "./knowledge-base-candidate";
 import {
   assessKnowledgeBaseCandidate,
@@ -99,9 +106,11 @@ import {
 } from "./payment";
 import {
   findArchiveDescriptor,
+  knowledgeBaseTaskFailurePresentation,
   normalizeTask,
   normalizeTaskStatus,
   parseQuestionSetFromTask,
+  questionSetQualityFromTask,
 } from "./output";
 import {
   resolveCustomQuestionClassificationTaskOutput,
@@ -217,15 +226,20 @@ import {
   GeoByteLimitError,
   readResponseBufferLimited,
 } from "./streams";
+import { normalizeBusinessOwnerName } from "../../shared/business-owner-name";
 
 const SESSION_COOKIE = "frontmind_geo_session";
 export const GEO_LEGACY_CUSTOM_QUESTION_COMPATIBILITY_WAIT_MS = 15_000;
 const GEO_LEGACY_CUSTOM_QUESTION_COMPATIBILITY_POLL_MS = 500;
 const SESSION_TTL_MS = 365 * 24 * 60 * 60 * 1000;
+const INVITE_CONTEXT_TTL_MS = 24 * 60 * 60 * 1000;
 const PROJECT_TTL_MS = 365 * 24 * 60 * 60 * 1000;
 const PAYMENT_INTENT_TTL_MS = 24 * 60 * 60 * 1000;
 const UPLOAD_TTL_MS = 60 * 60 * 1000;
 const MAX_UPLOAD_BYTES = 50 * 1024 * 1024;
+const UPLOAD_PREFLIGHT_TIMEOUT_MS = 30_000;
+const UPLOAD_DATA_IDLE_MS = 120_000;
+const UPLOAD_CONFIRMATION_MS = 6 * 60 * 1000;
 const MAX_ARCHIVE_COPY_BYTES = 150 * 1024 * 1024;
 const MAX_VALIDATED_ARCHIVE_BYTES = MAX_KNOWLEDGE_ARCHIVE_CANDIDATE_BYTES;
 const MAX_ASSESSMENT_INPUT_BYTES = 12 * 1024 * 1024;
@@ -269,6 +283,23 @@ const KNOWLEDGE_BASE_VALIDATION_PUBLIC_ERRORS: Record<
 const KNOWLEDGE_BASE_FINALIZATION_PUBLIC_ERROR =
   "企业知识库最终整理未通过校验，请联系技术支持。";
 
+function calculateCompleteAssessment(value: unknown) {
+  if (!isCompleteAssessment(value)) {
+    throw new AssessmentTaskOutputValidationError("SCHEMA_MISMATCH");
+  }
+  return calculateQuestionBaselineAssessment(value);
+}
+
+function calculateCompleteForecast(
+  assessment: ReturnType<typeof calculateQuestionBaselineAssessment>,
+  value: unknown,
+) {
+  if (!isCompleteForecast(value)) {
+    throw new ForecastTaskOutputValidationError("SCHEMA_MISMATCH");
+  }
+  return calculateOptimizationOutcomeForecast(assessment, value);
+}
+
 function knowledgeCandidateDiagnosticCode(value: string) {
   if (value.startsWith("Selected candidate root:"))
     return "candidate_root_selected";
@@ -297,6 +328,8 @@ type UploadTokenValue = {
   filename: string;
   sessionId: string;
   sizeBytes: number;
+  traceId: string;
+  attachmentIndex?: number;
   contentType?: string;
   upstreamUploadTicket?: string;
 };
@@ -306,10 +339,18 @@ type SessionTokenValue = {
   nonce: string;
 };
 
+type InviteContextTokenValue = {
+  schemaVersion: 1;
+  sessionNonce: string;
+  businessOwnerName: string;
+  contextId: string;
+};
+
 type ProjectTokenValue = {
   projectContractVersion: 2;
   projectId: string;
   ownerSessionId: string;
+  businessOwnerName?: string;
   companyName: string;
   companyNameSource?: "explicit" | "input" | "website" | "attachment";
   knowledgeBaseTaskId: string;
@@ -334,6 +375,7 @@ type ProjectTokenValue = {
     finalizerVersion:
       | "website-kb-finalizer-v2"
       | "website-kb-finalizer-v3"
+      | "website-kb-finalizer-v4"
       | typeof WEBSITE_KB_FINALIZER_VERSION;
     candidate: {
       taskId: string;
@@ -341,6 +383,11 @@ type ProjectTokenValue = {
       artifactId: string;
       descriptorHash: string;
       sha256: string;
+      quality?: {
+        state: "complete" | "partial";
+        requiresSupplement: boolean;
+        warningCodes: CandidateQualityWarningCode[];
+      };
     };
     final: {
       artifactId: string;
@@ -459,6 +506,8 @@ type GeoRouterOptions = {
   monitorQuestionTranslationWaitMs?: number;
   monitorQuestionTranslationPollMs?: number;
   customQuestionValidationNow?: () => number;
+  uploadDataIdleMs?: number;
+  uploadConfirmationMs?: number;
   env?: NodeJS.ProcessEnv;
 };
 
@@ -637,6 +686,9 @@ export function createGeoRouter(options: GeoRouterOptions = {}): Router {
     MONITOR_QUESTION_TRANSLATION_POLL_MS;
   const customQuestionValidationNow =
     options.customQuestionValidationNow ?? Date.now;
+  const uploadDataIdleMs = options.uploadDataIdleMs ?? UPLOAD_DATA_IDLE_MS;
+  const uploadConfirmationMs =
+    options.uploadConfirmationMs ?? UPLOAD_CONFIRMATION_MS;
   if (
     !Number.isInteger(legacyCustomQuestionCompatibilityWaitMs) ||
     legacyCustomQuestionCompatibilityWaitMs <= 0 ||
@@ -646,7 +698,11 @@ export function createGeoRouter(options: GeoRouterOptions = {}): Router {
     monitorQuestionTranslationWaitMs <= 0 ||
     !Number.isInteger(monitorQuestionTranslationPollMs) ||
     monitorQuestionTranslationPollMs <= 0 ||
-    monitorQuestionTranslationPollMs > monitorQuestionTranslationWaitMs
+    monitorQuestionTranslationPollMs > monitorQuestionTranslationWaitMs ||
+    !Number.isInteger(uploadDataIdleMs) ||
+    uploadDataIdleMs <= 0 ||
+    !Number.isInteger(uploadConfirmationMs) ||
+    uploadConfirmationMs <= 0
   ) {
     throw new Error("GEO asynchronous compatibility timing is invalid");
   }
@@ -695,6 +751,16 @@ export function createGeoRouter(options: GeoRouterOptions = {}): Router {
   // expose an ownerSessionId + projectId order lookup.
   const projectOrderProtections = new Map<string, ProjectOrderProtection>();
   const activeUploadsBySession = new Map<string, number>();
+  const activeUploadsByAsset = new Map<
+    string,
+    {
+      traceId: string;
+      declaredBytes: number;
+      receivedBytes: number;
+      startedAt: number;
+    }
+  >();
+  const chargedUploadOperations = new Map<string, { expiresAt: number }>();
   let activeUploads = 0;
   const knowledgeBaseFinalizations = new Map<
     string,
@@ -767,6 +833,7 @@ export function createGeoRouter(options: GeoRouterOptions = {}): Router {
       [
         "website-kb-finalizer-v2",
         "website-kb-finalizer-v3",
+        "website-kb-finalizer-v4",
         WEBSITE_KB_FINALIZER_VERSION,
       ].includes(existingArtifact.finalizerVersion)
     ) {
@@ -798,9 +865,24 @@ export function createGeoRouter(options: GeoRouterOptions = {}): Router {
       };
     }
 
-    const candidateDescriptors = rankedKnowledgeArchiveDescriptors(
-      task.result?.artifacts,
-    );
+    let selectedDescriptor;
+    try {
+      selectedDescriptor = selectUniqueKnowledgeArchiveDescriptor(
+        task.result?.artifacts,
+      );
+    } catch (error) {
+      if (!(error instanceof KnowledgeArchiveSelectionError)) throw error;
+      return {
+        value: {
+          ...value,
+          knowledgeBaseCandidateFailure: {
+            category: error.category,
+            message: error.message,
+          },
+        },
+      };
+    }
+    const candidateDescriptors = selectedDescriptor ? [selectedDescriptor] : [];
     if (!candidateDescriptors.length) {
       return {
         value: {
@@ -847,6 +929,9 @@ export function createGeoRouter(options: GeoRouterOptions = {}): Router {
       });
       let bytes: Buffer;
       try {
+        if (descriptor.bytes > MAX_KNOWLEDGE_ARCHIVE_CANDIDATE_BYTES) {
+          throw new GeoByteLimitError(MAX_KNOWLEDGE_ARCHIVE_CANDIDATE_BYTES);
+        }
         const response = await broker.downloadArtifact(descriptor.artifactId);
         const declaredLength = Number(
           response.headers.get("content-length") || 0,
@@ -863,15 +948,33 @@ export function createGeoRouter(options: GeoRouterOptions = {}): Router {
           response,
           MAX_VALIDATED_ARCHIVE_BYTES,
         );
+        if (
+          bytes.byteLength !== descriptor.bytes ||
+          crypto.createHash("sha256").update(bytes).digest("hex") !==
+            descriptor.sha256
+        ) {
+          throw new KnowledgeBaseCandidateError(
+            "候选 ZIP 的实际字节或 SHA 与输出描述不一致",
+            "unsafe",
+          );
+        }
         downloadedCandidateBytes += bytes.byteLength;
         if (downloadedCandidateBytes > MAX_KNOWLEDGE_ARCHIVE_TOTAL_BYTES) {
           throw new GeoByteLimitError(MAX_KNOWLEDGE_ARCHIVE_TOTAL_BYTES);
         }
       } catch (error) {
-        if (!(error instanceof GeoByteLimitError)) throw error;
+        if (
+          !(error instanceof GeoByteLimitError) &&
+          !(error instanceof KnowledgeBaseCandidateError)
+        ) {
+          throw error;
+        }
         const failure = {
           category: "unsafe" as const,
-          message: "候选 ZIP 超出允许大小",
+          message:
+            error instanceof KnowledgeBaseCandidateError
+              ? error.message
+              : "候选 ZIP 超出允许大小",
           score: 3,
         };
         bestFailure = failure;
@@ -883,61 +986,25 @@ export function createGeoRouter(options: GeoRouterOptions = {}): Router {
           category: failure.category,
           diagnosticCode: "candidate_byte_budget_exceeded",
         });
-        if (isExplicitKnowledgeCandidateDescriptor(descriptor)) {
-          return {
-            value: {
-              ...value,
-              knowledgeBaseCandidateFailure: {
-                category: failure.category,
-                message: failure.message,
-              },
+        return {
+          value: {
+            ...value,
+            knowledgeBaseCandidateFailure: {
+              category: failure.category,
+              message: failure.message,
             },
-          };
-        }
-        continue;
+          },
+        };
       }
 
       const parseStartedAt = Date.now();
       try {
         candidate = await parseKnowledgeBaseCandidate(bytes);
-        const expectedCandidateSchemaVersion =
-          selectedSkillVersion === WEBSITE_KB_SKILL_VERSION ? 2 : 1;
-        if (candidate.run?.schemaVersion !== expectedCandidateSchemaVersion) {
-          throw new KnowledgeBaseCandidateError(
-            `Website knowledge-base Skill v${selectedSkillVersion} requires candidate schema v${expectedCandidateSchemaVersion}`,
-            "content",
-          );
-        }
-        if (candidate.run?.schemaVersion === 2) {
-          const expectedUploads = new Set(
-            (value.uploadFilenames || []).map((filename) =>
-              filename.normalize("NFKC").trim().toLowerCase(),
-            ),
-          );
-          const recordedUploads = new Set(
-            candidate.run.sources
-              .filter(
-                (source) =>
-                  source.kind === "user_upload" && source.status === "read",
-              )
-              .map((source) =>
-                source.attachmentName?.normalize("NFKC").trim().toLowerCase(),
-              )
-              .filter((filename): filename is string => Boolean(filename)),
-          );
-          if (
-            expectedUploads.size !== (value.uploadFileIds || []).length ||
-            recordedUploads.size !== expectedUploads.size ||
-            Array.from(expectedUploads).some(
-              (filename) => !recordedUploads.has(filename),
-            )
-          ) {
-            throw new KnowledgeBaseCandidateError(
-              "Website v2 candidate did not record every accepted user upload",
-              "content",
-            );
-          }
-        }
+        inspectAcceptedUploadCoverage(
+          candidate,
+          value.uploadFilenames || [],
+          (value.uploadFileIds || []).length,
+        );
         candidateParseMs = Date.now() - parseStartedAt;
         candidateDescriptor = descriptor;
         candidateBytes = bytes;
@@ -965,20 +1032,15 @@ export function createGeoRouter(options: GeoRouterOptions = {}): Router {
           category: error.category,
           diagnosticCode: "candidate_contract_rejected",
         });
-        if (
-          error.category === "unsafe" &&
-          isExplicitKnowledgeCandidateDescriptor(descriptor)
-        ) {
-          return {
-            value: {
-              ...value,
-              knowledgeBaseCandidateFailure: {
-                category: error.category,
-                message: error.message,
-              },
+        return {
+          value: {
+            ...value,
+            knowledgeBaseCandidateFailure: {
+              category: error.category,
+              message: error.message,
             },
-          };
-        }
+          },
+        };
       }
     }
 
@@ -1255,7 +1317,9 @@ export function createGeoRouter(options: GeoRouterOptions = {}): Router {
               ? error.code
               : "FINAL_ARCHIVE_UPLOAD_OR_READBACK_FAILED",
         });
-        await broker.deleteAsset(finalAsset.localAssetId).catch(() => undefined);
+        await broker
+          .deleteAsset(finalAsset.localAssetId)
+          .catch(() => undefined);
         throw error;
       }
       const nextValue: ProjectTokenValue = {
@@ -1274,10 +1338,7 @@ export function createGeoRouter(options: GeoRouterOptions = {}): Router {
           updatedAt: new Date().toISOString(),
         },
         archiveFileIds: Array.from(
-          new Set([
-            ...(value.archiveFileIds || []),
-            finalAsset.localAssetId,
-          ]),
+          new Set([...(value.archiveFileIds || []), finalAsset.localAssetId]),
         ),
         knowledgeBaseArtifact: {
           finalizerVersion: selectedFinalizerVersion,
@@ -1287,6 +1348,11 @@ export function createGeoRouter(options: GeoRouterOptions = {}): Router {
             artifactId: selectedCandidateDescriptor.artifactId,
             descriptorHash,
             sha256: candidateSha,
+            quality: {
+              state: assessment.state,
+              requiresSupplement: assessment.requiresSupplement,
+              warningCodes: assessment.warningCodes,
+            },
           },
           final: {
             artifactId: promotedArtifact.artifactId,
@@ -2151,6 +2217,56 @@ export function createGeoRouter(options: GeoRouterOptions = {}): Router {
     }
   };
 
+  const requireInviteContext = (
+    inviteContextToken: string,
+    sessionId: string,
+  ) => {
+    let inviteContext: InviteContextTokenValue;
+    try {
+      inviteContext = codec.open<InviteContextTokenValue>(
+        inviteContextToken,
+        "invite-context",
+      ).value;
+    } catch {
+      throw new GeoHttpError(
+        "邀请码验证上下文无效或已过期，请重新验证",
+        401,
+        "INVITE_CONTEXT_INVALID",
+      );
+    }
+    let businessOwnerName: string;
+    try {
+      businessOwnerName = normalizeBusinessOwnerName(
+        inviteContext.businessOwnerName,
+      );
+    } catch {
+      throw new GeoHttpError(
+        "邀请码验证上下文无效或已过期，请重新验证",
+        401,
+        "INVITE_CONTEXT_INVALID",
+      );
+    }
+    if (
+      inviteContext.schemaVersion !== 1 ||
+      inviteContext.sessionNonce !== sessionId ||
+      inviteContext.businessOwnerName !== businessOwnerName ||
+      !/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(
+        inviteContext.contextId,
+      )
+    ) {
+      throw new GeoHttpError(
+        inviteContext.sessionNonce !== sessionId
+          ? "邀请码验证上下文不属于当前会话"
+          : "邀请码验证上下文无效或已过期，请重新验证",
+        inviteContext.sessionNonce !== sessionId ? 403 : 401,
+        inviteContext.sessionNonce !== sessionId
+          ? "INVITE_CONTEXT_SESSION_MISMATCH"
+          : "INVITE_CONTEXT_INVALID",
+      );
+    }
+    return { ...inviteContext, businessOwnerName };
+  };
+
   const consumeSessionRate = (
     res: Response,
     action: string,
@@ -2293,47 +2409,15 @@ export function createGeoRouter(options: GeoRouterOptions = {}): Router {
     return value;
   };
 
-  const limitUploadConcurrency = (
-    _req: Request,
-    res: Response,
-    next: NextFunction,
-  ) => {
-    const sessionId = String(res.locals.geoSessionId || "");
-    const sessionActive = activeUploadsBySession.get(sessionId) || 0;
-    if (activeUploads >= 2 || sessionActive >= 1) {
-      next(
-        new GeoHttpError(
-          "已有文件正在上传，请等待当前上传完成",
-          429,
-          "UPLOAD_CONCURRENCY_LIMITED",
-        ),
-      );
-      return;
-    }
-    activeUploads += 1;
-    activeUploadsBySession.set(sessionId, sessionActive + 1);
-    let released = false;
-    const release = () => {
-      if (released) return;
-      released = true;
-      activeUploads = Math.max(0, activeUploads - 1);
-      const remaining = (activeUploadsBySession.get(sessionId) || 1) - 1;
-      if (remaining > 0) activeUploadsBySession.set(sessionId, remaining);
-      else activeUploadsBySession.delete(sessionId);
-    };
-    res.once("finish", release);
-    res.once("close", release);
-    next();
-  };
-
   const requireUploadToken = (
     req: Request,
     res: Response,
     next: NextFunction,
   ) => {
     try {
-      const token =
-        headerValue(req, "x-geo-upload-token") || stringQuery(req.query.token);
+      // Upload capabilities are header-only. Query-string tokens can be
+      // copied into reverse-proxy request lines and error logs.
+      const token = headerValue(req, "x-geo-upload-token");
       if (!token)
         throw new GeoHttpError("缺少上传令牌", 400, "UPLOAD_TOKEN_REQUIRED");
       const payload = codec.open<UploadTokenValue>(token, "upload").value;
@@ -2347,23 +2431,64 @@ export function createGeoRouter(options: GeoRouterOptions = {}): Router {
           "UPLOAD_TOKEN_SESSION_MISMATCH",
         );
       }
-      const contentLength = Number(req.headers["content-length"] || 0);
-      if (
-        contentLength &&
-        (!Number.isSafeInteger(contentLength) ||
+      const contentLengthHeader = req.headers["content-length"];
+      if (req.method === "PUT" && contentLengthHeader !== undefined) {
+        const contentLength = Number(contentLengthHeader);
+        if (
+          !Number.isSafeInteger(contentLength) ||
           contentLength < 0 ||
-          contentLength !== payload.sizeBytes)
-      ) {
-        throw new GeoHttpError(
-          "上传文件大小与申请记录不一致",
-          400,
-          "UPLOAD_SIZE_MISMATCH",
-        );
+          contentLength !== payload.sizeBytes
+        ) {
+          throw new GeoHttpError(
+            "上传文件大小与申请记录不一致",
+            400,
+            "UPLOAD_SIZE_MISMATCH",
+          );
+        }
       }
-      res.locals.geoUpload = payload;
+      res.locals.geoUpload = {
+        ...payload,
+        traceId:
+          typeof payload.traceId === "string" && payload.traceId.trim()
+            ? payload.traceId
+            : `upload-${sha256(
+                JSON.stringify({
+                  sessionId: payload.sessionId,
+                  fileId: payload.fileId,
+                  sizeBytes: payload.sizeBytes,
+                }),
+              ).slice(0, 24)}`,
+      } satisfies UploadTokenValue;
       next();
     } catch (error) {
       next(error);
+    }
+  };
+
+  const assertUploadAssetMatches = (
+    asset: BrokerLocalAsset,
+    payload: UploadTokenValue,
+  ) => {
+    if (
+      asset.localAssetId !== payload.fileId ||
+      asset.filename !== payload.filename
+    ) {
+      throw new GeoHttpError(
+        "上传文件归属与申请记录不一致",
+        409,
+        "UPLOAD_ASSET_CONFLICT",
+      );
+    }
+    if (
+      asset.status === "uploaded" &&
+      asset.bytes !== undefined &&
+      asset.bytes !== payload.sizeBytes
+    ) {
+      throw new GeoHttpError(
+        "已上传文件大小与申请记录不一致",
+        409,
+        "UPLOAD_ASSET_CONFLICT",
+      );
     }
   };
 
@@ -2373,19 +2498,22 @@ export function createGeoRouter(options: GeoRouterOptions = {}): Router {
     requireSession,
     requireSessionRate("upload-content", 30),
     requireUploadToken,
-    limitUploadConcurrency,
-    express.raw({ type: "*/*", limit: MAX_UPLOAD_BYTES }),
     asyncHandler(async (req, res) => {
       const payload = res.locals.geoUpload as UploadTokenValue;
-      const body = Buffer.isBuffer(req.body) ? req.body : Buffer.alloc(0);
-      if (!body.length)
-        throw new GeoHttpError("上传内容为空", 400, "EMPTY_UPLOAD");
-      if (body.length !== payload.sizeBytes)
+      const uploadAttemptHeader = headerValue(
+        req,
+        "x-geo-upload-attempt",
+      ).trim();
+      if (uploadAttemptHeader && !/^[1-3]$/.test(uploadAttemptHeader)) {
         throw new GeoHttpError(
-          "上传文件大小与申请记录不一致",
+          "上传重试序号无效",
           400,
-          "UPLOAD_SIZE_MISMATCH",
+          "UPLOAD_ATTEMPT_INVALID",
         );
+      }
+      const uploadAttempt = uploadAttemptHeader
+        ? Number(uploadAttemptHeader)
+        : 1;
       const originalContentType =
         headerValue(req, "x-original-content-type") ||
         req.headers["content-type"] ||
@@ -2401,17 +2529,385 @@ export function createGeoRouter(options: GeoRouterOptions = {}): Router {
           "UPLOAD_TYPE_MISMATCH",
         );
       }
-      const result = await broker.uploadAsset(
-        payload.fileId,
-        body,
-        String(originalContentType),
-        payload.upstreamUploadTicket,
-      );
-      res.json({
-        ok: true,
+      if (activeUploadsByAsset.has(payload.fileId)) {
+        res.setHeader("Retry-After", "1");
+        throw new GeoHttpError(
+          "该文件正在上传，请等待当前传输完成",
+          429,
+          "UPLOAD_IN_PROGRESS",
+        );
+      }
+      const sessionId = String(res.locals.geoSessionId || "");
+      const sessionActive = activeUploadsBySession.get(sessionId) || 0;
+      if (activeUploads >= 2 || sessionActive >= 1) {
+        throw new GeoHttpError(
+          "已有文件正在上传，请等待当前上传完成",
+          429,
+          "UPLOAD_CONCURRENCY_LIMITED",
+        );
+      }
+
+      const startedAt = Date.now();
+      const flight = {
+        traceId: payload.traceId,
+        declaredBytes: payload.sizeBytes,
+        receivedBytes: 0,
+        startedAt,
+      };
+      activeUploads += 1;
+      activeUploadsBySession.set(sessionId, sessionActive + 1);
+      activeUploadsByAsset.set(payload.fileId, flight);
+
+      const downstreamController = new AbortController();
+      let abortReason:
+        | "client_aborted"
+        | "client_closed"
+        | "response_closed"
+        | "data_idle"
+        | "confirmation_timeout"
+        | "size_mismatch"
+        | undefined;
+      let dataIdleTimer: NodeJS.Timeout | undefined;
+      let confirmationTimer: NodeJS.Timeout | undefined;
+      let outcome = "failed";
+      let responseUnavailable = false;
+      let transportError:
+        | { source: "stream" | "socket"; code: string }
+        | undefined;
+      const progressMilestones = [25, 50, 75, 100] as const;
+      let nextProgressMilestone = 0;
+      const abortDownstream = (reason: NonNullable<typeof abortReason>) => {
+        if (abortReason) return;
+        abortReason = reason;
+        downstreamController.abort();
+      };
+      const clearDataIdleTimer = () => {
+        if (dataIdleTimer) clearTimeout(dataIdleTimer);
+        dataIdleTimer = undefined;
+      };
+      const resetDataIdleTimer = () => {
+        clearDataIdleTimer();
+        dataIdleTimer = setTimeout(() => {
+          abortDownstream("data_idle");
+          req.unpipe(uploadStream);
+          req.resume();
+          uploadStream.destroy();
+        }, uploadDataIdleMs);
+        dataIdleTimer.unref?.();
+      };
+      const recordTransportError = (
+        source: "stream" | "socket",
+        error: unknown,
+      ) => {
+        const rawCode =
+          error && typeof error === "object" && "code" in error
+            ? String((error as { code?: unknown }).code || "")
+            : "";
+        const code = /^[A-Z0-9_]{1,80}$/.test(rawCode)
+          ? rawCode
+          : source === "socket"
+            ? "SOCKET_ERROR"
+            : "STREAM_ERROR";
+        if (!transportError) transportError = { source, code };
+        console.warn("[GEO upload]", {
+          event: "transport_error",
+          traceId: payload.traceId,
+          fileId: payload.fileId,
+          attachmentIndex: payload.attachmentIndex ?? null,
+          attempt: uploadAttempt,
+          source,
+          code,
+        });
+      };
+      const uploadStream = new Transform({
+        transform(chunk: Buffer, _encoding, callback) {
+          flight.receivedBytes += chunk.byteLength;
+          if (
+            flight.receivedBytes > payload.sizeBytes ||
+            flight.receivedBytes > MAX_UPLOAD_BYTES
+          ) {
+            abortDownstream("size_mismatch");
+            const sizeError = new Error() as NodeJS.ErrnoException;
+            sizeError.code = "UPLOAD_SIZE_MISMATCH";
+            callback(sizeError);
+            return;
+          }
+          while (
+            nextProgressMilestone < progressMilestones.length &&
+            flight.receivedBytes * 100 >=
+              payload.sizeBytes * progressMilestones[nextProgressMilestone]!
+          ) {
+            console.info("[GEO upload]", {
+              event: "proxy_progress",
+              traceId: payload.traceId,
+              fileId: payload.fileId,
+              attachmentIndex: payload.attachmentIndex ?? null,
+              attempt: uploadAttempt,
+              milestone: progressMilestones[nextProgressMilestone],
+              declaredBytes: payload.sizeBytes,
+              receivedBytes: flight.receivedBytes,
+              durationMs: Date.now() - startedAt,
+            });
+            nextProgressMilestone += 1;
+          }
+          resetDataIdleTimer();
+          callback(null, chunk);
+        },
+      });
+      const onUploadStreamError = (error: Error) =>
+        recordTransportError("stream", error);
+      const onRequestStreamError = (error: Error) =>
+        recordTransportError("stream", error);
+      const onSocketError = (error: Error) =>
+        recordTransportError("socket", error);
+      // fetch consumes the stream error; this listener records only its safe,
+      // normalized code and also prevents an uncaught local stream failure.
+      uploadStream.on("error", onUploadStreamError);
+      req.on("error", onRequestStreamError);
+      req.socket.on("error", onSocketError);
+      const onRequestAborted = () => {
+        if (req.complete) responseUnavailable = true;
+        else abortDownstream("client_aborted");
+      };
+      const onRequestClose = () => {
+        if (!req.complete) abortDownstream("client_closed");
+      };
+      const onResponseClose = () => {
+        if (res.writableFinished) return;
+        responseUnavailable = true;
+        if (!req.complete) abortDownstream("response_closed");
+      };
+      const onRequestEnd = () => {
+        clearDataIdleTimer();
+        if (flight.receivedBytes !== payload.sizeBytes) {
+          abortDownstream("size_mismatch");
+          return;
+        }
+        confirmationTimer = setTimeout(() => {
+          abortDownstream("confirmation_timeout");
+        }, uploadConfirmationMs);
+        confirmationTimer.unref?.();
+      };
+      req.once("aborted", onRequestAborted);
+      req.once("close", onRequestClose);
+      req.once("end", onRequestEnd);
+      res.once("close", onResponseClose);
+      console.info("[GEO upload]", {
+        event: "proxy_started",
+        traceId: payload.traceId,
         fileId: payload.fileId,
-        filename: payload.filename,
-        status: uploadStatus(result),
+        attachmentIndex: payload.attachmentIndex ?? null,
+        attempt: uploadAttempt,
+        declaredBytes: payload.sizeBytes,
+      });
+
+      try {
+        const asset = await broker.getAsset(payload.fileId, {
+          signal: AbortSignal.any([
+            downstreamController.signal,
+            AbortSignal.timeout(UPLOAD_PREFLIGHT_TIMEOUT_MS),
+          ]),
+        });
+        assertUploadAssetMatches(asset, payload);
+        if (asset.status === "uploaded") {
+          if (!req.complete) req.resume();
+          throw new GeoHttpError(
+            "该文件已完整提交，请核对上传状态",
+            409,
+            "UPLOAD_ALREADY_COMMITTED",
+          );
+        }
+        resetDataIdleTimer();
+        const downstream = broker.uploadAsset(
+          payload.fileId,
+          uploadStream,
+          String(originalContentType),
+          payload.upstreamUploadTicket,
+          {
+            signal: downstreamController.signal,
+            sizeBytes: payload.sizeBytes,
+          },
+        );
+        console.info("[GEO upload]", {
+          event: "downstream_started",
+          traceId: payload.traceId,
+          fileId: payload.fileId,
+          attachmentIndex: payload.attachmentIndex ?? null,
+          attempt: uploadAttempt,
+          declaredBytes: payload.sizeBytes,
+        });
+        req.pipe(uploadStream);
+        const result = await downstream;
+        const resultStatus = uploadStatus(result);
+        if (
+          resultStatus === "uploaded" &&
+          (!req.complete || flight.receivedBytes !== payload.sizeBytes)
+        ) {
+          req.unpipe(uploadStream);
+          if (!req.aborted) req.resume();
+          throw new GeoHttpError(
+            "上传结果需要通过状态接口核对",
+            409,
+            "UPLOAD_ALREADY_COMMITTED",
+          );
+        }
+        if (resultStatus !== "uploaded") {
+          throw new GeoHttpError(
+            "上传服务未返回完整提交状态",
+            502,
+            "UPLOAD_CONFIRMATION_INVALID",
+          );
+        }
+        if (abortReason === "size_mismatch") {
+          throw new GeoHttpError(
+            "上传文件大小与申请记录不一致",
+            400,
+            "UPLOAD_SIZE_MISMATCH",
+          );
+        }
+        if (abortReason === "data_idle") {
+          throw new GeoHttpError(
+            "上传长时间没有收到新数据，请重试当前文件",
+            408,
+            "UPLOAD_DATA_IDLE_TIMEOUT",
+          );
+        }
+        if (abortReason === "confirmation_timeout") {
+          throw new GeoHttpError(
+            "文件已发送，服务端确认暂未返回，请先核对上传状态",
+            504,
+            "UPLOAD_CONFIRMATION_TIMEOUT",
+          );
+        }
+        if (
+          abortReason === "client_aborted" ||
+          abortReason === "client_closed" ||
+          abortReason === "response_closed"
+        ) {
+          outcome = abortReason;
+          return;
+        }
+        if (responseUnavailable || res.destroyed || !res.writable) {
+          outcome = "uploaded_response_unavailable";
+          return;
+        }
+        if (!req.complete) {
+          req.unpipe(uploadStream);
+          req.resume();
+        }
+        outcome = "uploaded";
+        res.json({
+          ok: true,
+          fileId: payload.fileId,
+          filename: payload.filename,
+          status: resultStatus,
+          traceId: payload.traceId,
+        });
+      } catch (error) {
+        if (!req.complete && !req.aborted) req.resume();
+        outcome =
+          error instanceof GeoHttpError || error instanceof GeoBrokerError
+            ? error.code
+            : "upload_failed";
+        if (abortReason === "data_idle") {
+          outcome = "UPLOAD_DATA_IDLE_TIMEOUT";
+          throw new GeoHttpError(
+            "上传长时间没有收到新数据，请重试当前文件",
+            408,
+            "UPLOAD_DATA_IDLE_TIMEOUT",
+          );
+        }
+        if (abortReason === "confirmation_timeout") {
+          outcome = "UPLOAD_CONFIRMATION_TIMEOUT";
+          throw new GeoHttpError(
+            "文件已发送，服务端确认暂未返回，请先核对上传状态",
+            504,
+            "UPLOAD_CONFIRMATION_TIMEOUT",
+          );
+        }
+        if (abortReason === "size_mismatch") {
+          outcome = "UPLOAD_SIZE_MISMATCH";
+          throw new GeoHttpError(
+            "上传文件大小与申请记录不一致",
+            400,
+            "UPLOAD_SIZE_MISMATCH",
+          );
+        }
+        if (
+          abortReason === "client_aborted" ||
+          abortReason === "client_closed" ||
+          abortReason === "response_closed"
+        ) {
+          outcome = abortReason;
+          return;
+        }
+        if (responseUnavailable || res.destroyed || !res.writable) {
+          outcome = `${outcome}_response_unavailable`;
+          return;
+        }
+        throw error;
+      } finally {
+        clearDataIdleTimer();
+        if (confirmationTimer) clearTimeout(confirmationTimer);
+        req.off("aborted", onRequestAborted);
+        req.off("close", onRequestClose);
+        req.off("end", onRequestEnd);
+        res.off("close", onResponseClose);
+        uploadStream.off("error", onUploadStreamError);
+        req.off("error", onRequestStreamError);
+        req.socket.off("error", onSocketError);
+        req.unpipe(uploadStream);
+        if (!uploadStream.destroyed) uploadStream.destroy();
+        if (activeUploadsByAsset.get(payload.fileId) === flight) {
+          activeUploadsByAsset.delete(payload.fileId);
+        }
+        activeUploads = Math.max(0, activeUploads - 1);
+        const remaining = (activeUploadsBySession.get(sessionId) || 1) - 1;
+        if (remaining > 0) activeUploadsBySession.set(sessionId, remaining);
+        else activeUploadsBySession.delete(sessionId);
+        console.info("[GEO upload]", {
+          event: "proxy_finished",
+          traceId: payload.traceId,
+          fileId: payload.fileId,
+          attachmentIndex: payload.attachmentIndex ?? null,
+          attempt: uploadAttempt,
+          declaredBytes: payload.sizeBytes,
+          receivedBytes: flight.receivedBytes,
+          durationMs: Date.now() - startedAt,
+          requestAborted: req.aborted,
+          requestComplete: req.complete,
+          outcome,
+          abortReason: abortReason ?? null,
+          responseUnavailable,
+          transportErrorSource: transportError?.source ?? null,
+          transportErrorCode: transportError?.code ?? null,
+        });
+      }
+    }),
+  );
+
+  router.get(
+    "/uploads/status",
+    requireConfiguration,
+    requireSession,
+    requireSessionRate("upload-status", 120, 60 * 1000),
+    requireUploadToken,
+    asyncHandler(async (_req, res) => {
+      const payload = res.locals.geoUpload as UploadTokenValue;
+      const asset = await broker.getAsset(payload.fileId);
+      assertUploadAssetMatches(asset, payload);
+      const flight = activeUploadsByAsset.get(payload.fileId);
+      res.json({
+        fileId: payload.fileId,
+        assetStatus: asset.status,
+        transferState: flight ? "uploading" : "idle",
+        declaredBytes: payload.sizeBytes,
+        receivedBytes:
+          asset.status === "uploaded"
+            ? (asset.bytes ?? payload.sizeBytes)
+            : (flight?.receivedBytes ?? asset.bytes ?? 0),
+        ...(asset.sha256 ? { sha256: asset.sha256 } : {}),
+        traceId: payload.traceId,
       });
     }),
   );
@@ -2535,7 +3031,7 @@ export function createGeoRouter(options: GeoRouterOptions = {}): Router {
         );
       }
 
-      const { code } = InviteRequestSchema.parse(req.body);
+      const { code, businessOwnerName } = InviteRequestSchema.parse(req.body);
       if (!safeSecretEqual(code.trim(), inviteCode)) {
         const active =
           current && current.resetAt > now
@@ -2567,10 +3063,22 @@ export function createGeoRouter(options: GeoRouterOptions = {}): Router {
           // An absent, expired, or invalid cookie starts a new browser session.
         }
       }
+      const sessionNonce = nonce || crypto.randomUUID();
       const token = codec.seal(
         "session",
-        { scope: "geo", nonce: nonce || crypto.randomUUID() },
+        { scope: "geo", nonce: sessionNonce },
         SESSION_TTL_MS,
+      );
+      const inviteContextExpiresAt = now + INVITE_CONTEXT_TTL_MS;
+      const inviteContextToken = codec.seal<InviteContextTokenValue>(
+        "invite-context",
+        {
+          schemaVersion: 1,
+          sessionNonce,
+          businessOwnerName,
+          contextId: crypto.randomUUID(),
+        },
+        INVITE_CONTEXT_TTL_MS,
       );
       res.cookie(SESSION_COOKIE, token, {
         httpOnly: true,
@@ -2579,7 +3087,13 @@ export function createGeoRouter(options: GeoRouterOptions = {}): Router {
         path: "/",
         maxAge: SESSION_TTL_MS,
       });
-      res.json({ ok: true, expiresAt });
+      res.json({
+        ok: true,
+        expiresAt,
+        inviteContextExpiresAt,
+        inviteContextToken,
+        businessOwnerName,
+      });
     }),
   );
 
@@ -2591,27 +3105,72 @@ export function createGeoRouter(options: GeoRouterOptions = {}): Router {
     "/uploads/init",
     requireConfiguration,
     requireSession,
-    requireSessionRate("upload-init", 20),
     asyncHandler(async (req, res) => {
       const input = UploadInitRequestSchema.parse(req.body);
-      consumeSessionRate(
-        res,
-        "upload-bytes",
-        200 * 1024 * 1024,
-        input.sizeBytes,
-      );
-      consumeIdentityRate(
-        req,
-        "upload-bytes",
-        200 * 1024 * 1024,
-        input.sizeBytes,
-      );
+      const sessionId = String(res.locals.geoSessionId || "");
+      requireInviteContext(input.inviteContextToken, sessionId);
+      // Every init invocation consumes the cheap request-count budget. Only
+      // the byte-cost budget is idempotent by the stable upload operation.
+      consumeSessionRate(res, "upload-init", 20);
       const filename = safeCustomerUploadFilename(input.filename);
-      const asset = await broker.createAsset({
-        filename,
-        mimeType: input.contentType,
-        sizeBytes: input.sizeBytes,
-      });
+      const requestIdentity =
+        input.clientRequestId !== undefined &&
+        input.attachmentIndex !== undefined
+          ? {
+              clientRequestId: input.clientRequestId,
+              attachmentIndex: input.attachmentIndex,
+            }
+          : { legacyRequestNonce: crypto.randomUUID() };
+      const idempotencyKey = `geo-upload-init:v1:${sha256(
+        JSON.stringify({ schemaVersion: 1, sessionId, ...requestIdentity }),
+      )}`;
+      const traceId = `upload-${sha256(idempotencyKey).slice(0, 24)}`;
+      const now = Date.now();
+      pruneExpiringMap(chargedUploadOperations, now, 10_000);
+      if (!chargedUploadOperations.has(idempotencyKey)) {
+        consumeSessionRate(
+          res,
+          "upload-bytes",
+          200 * 1024 * 1024,
+          input.sizeBytes,
+        );
+        consumeIdentityRate(
+          req,
+          "upload-bytes",
+          200 * 1024 * 1024,
+          input.sizeBytes,
+        );
+        chargedUploadOperations.set(idempotencyKey, {
+          expiresAt: now + UPLOAD_TTL_MS,
+        });
+      }
+      let asset: BrokerLocalAsset;
+      try {
+        asset = await broker.createAsset({
+          filename,
+          mimeType: input.contentType,
+          sizeBytes: input.sizeBytes,
+          idempotencyKey,
+        });
+      } catch (error) {
+        if (
+          error instanceof GeoBrokerError &&
+          (error.status === 400 || error.status === 422)
+        ) {
+          console.error("[GEO API]", {
+            event: "upload_init_broker_contract_error",
+            diagnosticCode: "GEO_UPLOAD_BROKER_CONTRACT_ERROR",
+            brokerStatus: error.status,
+            brokerCode: error.code,
+          });
+          throw new GeoHttpError(
+            "附件上传服务合同暂时不一致，请稍后重试",
+            502,
+            "GEO_UPLOAD_BROKER_CONTRACT_ERROR",
+          );
+        }
+        throw error;
+      }
       if (!asset.localAssetId)
         throw new GeoHttpError("创建上传文件失败", 502, "UPLOAD_INIT_FAILED");
       const uploadToken = codec.seal<UploadTokenValue>(
@@ -2621,15 +3180,31 @@ export function createGeoRouter(options: GeoRouterOptions = {}): Router {
           filename: asset.filename || filename,
           sessionId: String(res.locals.geoSessionId || ""),
           sizeBytes: input.sizeBytes,
+          traceId,
+          ...(input.attachmentIndex !== undefined
+            ? { attachmentIndex: input.attachmentIndex }
+            : {}),
           contentType: input.contentType,
           upstreamUploadTicket: asset.uploadTicket,
         },
         UPLOAD_TTL_MS,
       );
-      res.status(201).json({
+      console.info("[GEO upload]", {
+        event: "init_reserved",
+        traceId,
+        fileId: asset.localAssetId,
+        attachmentIndex: input.attachmentIndex ?? null,
+        declaredBytes: input.sizeBytes,
+        assetStatus: asset.status,
+        replayed: asset.replayed === true,
+      });
+      res.status(asset.replayed ? 200 : 201).json({
         fileId: asset.localAssetId,
         filename: asset.filename || filename,
         uploadToken,
+        status: asset.status,
+        replayed: asset.replayed === true,
+        traceId,
       });
     }),
   );
@@ -2641,17 +3216,15 @@ export function createGeoRouter(options: GeoRouterOptions = {}): Router {
     requireCostRate("project-create", 5),
     asyncHandler(async (req, res) => {
       const input = CreateProjectRequestSchema.parse(req.body);
-      const uploads = validateProjectAttachments(
-        input,
-        codec,
-        String(res.locals.geoSessionId || ""),
+      const sessionId = String(res.locals.geoSessionId || "");
+      const inviteContext = requireInviteContext(
+        input.inviteContextToken,
+        sessionId,
       );
+      const businessOwnerName = inviteContext.businessOwnerName;
+      const uploads = validateProjectAttachments(input, codec, sessionId);
       const projectId = input.clientRequestId
-        ? deterministicProjectId(
-            String(res.locals.geoSessionId || ""),
-            input.clientRequestId,
-            input,
-          )
+        ? deterministicProjectId(sessionId, input.clientRequestId, input)
         : crypto.randomUUID();
       const customerAttachments = input.attachments.map(
         (attachment, index) => ({
@@ -2674,8 +3247,12 @@ export function createGeoRouter(options: GeoRouterOptions = {}): Router {
           "DUPLICATE_ATTACHMENT_FILENAME",
         );
       }
+      const {
+        inviteContextToken: _inviteContextToken,
+        ...customerProjectInput
+      } = input;
       const promptInput = {
-        ...input,
+        ...customerProjectInput,
         attachments: customerAttachments.map(({ filename }) => ({ filename })),
       };
       const created = await createWebsiteKnowledgeBaseTaskWithSkill(broker, {
@@ -2685,6 +3262,7 @@ export function createGeoRouter(options: GeoRouterOptions = {}): Router {
         taskInput: buildWebsiteKnowledgeBaseTaskInput(promptInput),
         localAssets: customerAttachments,
         idempotencyKey: `geo:${projectId}:knowledge-base:1`,
+        businessOwnerName,
       });
       const task = created.task;
       const taskId = taskIdFrom(task);
@@ -2706,6 +3284,7 @@ export function createGeoRouter(options: GeoRouterOptions = {}): Router {
         projectContractVersion: 2,
         projectId,
         ownerSessionId: String(res.locals.geoSessionId || ""),
+        businessOwnerName,
         companyName: companyIdentity.name,
         companyNameSource: companyIdentity.source,
         knowledgeBaseTaskId: taskId,
@@ -3267,7 +3846,7 @@ export function createGeoRouter(options: GeoRouterOptions = {}): Router {
               rawMonitorRun.platforms,
               rawMonitorRun,
             );
-            scoredAssessment = calculateQuestionBaselineAssessment(
+            scoredAssessment = calculateCompleteAssessment(
               await currentAssessmentOutputPromise,
             );
           } catch {
@@ -3312,7 +3891,7 @@ export function createGeoRouter(options: GeoRouterOptions = {}): Router {
                   : normalizeTask(
                       currentOptimizationForecastTask,
                       "optimization-forecast",
-                    ).error || "上一次优化效果评估任务执行失败";
+                    ).failure?.code || "上一次优化效果评估任务执行失败";
             } else if (forecastStatus === "completed") {
               try {
                 currentForecastOutputPromise ??=
@@ -3323,15 +3902,14 @@ export function createGeoRouter(options: GeoRouterOptions = {}): Router {
                       taskId: taskIdFrom(currentOptimizationForecastTask),
                     },
                   );
-                calculateOptimizationOutcomeForecast(
+                calculateCompleteForecast(
                   scoredAssessment,
                   await currentForecastOutputPromise,
                 );
               } catch (error) {
-                // Strict-output failures are repaired once on this same task.
-                // Keep the existing task after either a pending repair or a
-                // second invalid result; only transport-terminal task states
-                // below may create a fresh business attempt.
+                // A completed-but-invalid forecast is displayable as a failed
+                // attempt. It is never continued on the same Provider task;
+                // an explicit retry creates a fresh task below.
                 logAssessmentOutputValidation(
                   error,
                   currentOptimizationForecastTask,
@@ -3426,24 +4004,43 @@ export function createGeoRouter(options: GeoRouterOptions = {}): Router {
     asyncHandler(async (req, res) => {
       let value = openOwnedProject(req, res);
       if (value.questionTaskId) {
+        const previousQuestionTaskId = value.questionTaskId;
         const [knowledgeBaseTask, questionTask] = await Promise.all([
           getResolvedTask(broker, value.knowledgeBaseTaskId),
           getResolvedQuestionTask(broker, value.questionTaskId),
         ]);
         const currentValue = trackArchiveFile(value, knowledgeBaseTask);
-        const currentToken =
-          currentValue === value
-            ? req.params.projectToken
-            : codec.seal("project", currentValue, PROJECT_TTL_MS);
-        const project = await buildProjectView(
-          broker,
-          currentValue,
-          currentToken,
-          knowledgeBaseTask,
-          questionTask,
-        );
-        res.json({ projectToken: currentToken, project });
-        return;
+        const questionStatus = normalizeTaskStatus(questionTask.status);
+        const retryWithFreshTask =
+          ["failed", "cancelled"].includes(questionStatus) ||
+          (questionStatus === "completed" &&
+            !parseQuestionSetFromTask(questionTask)?.questions.length);
+        if (!retryWithFreshTask) {
+          const currentToken =
+            currentValue === value
+              ? req.params.projectToken
+              : codec.seal("project", currentValue, PROJECT_TTL_MS);
+          const project = await buildProjectView(
+            broker,
+            currentValue,
+            currentToken,
+            knowledgeBaseTask,
+            questionTask,
+          );
+          res.json({ projectToken: currentToken, project });
+          return;
+        }
+        value = {
+          ...currentValue,
+          questionTaskId: undefined,
+          questionSubmittedAt: undefined,
+          previousQuestionTaskIds: Array.from(
+            new Set([
+              ...(currentValue.previousQuestionTaskIds || []),
+              previousQuestionTaskId,
+            ]),
+          ),
+        };
       }
 
       const knowledgeBaseTask = await getResolvedTask(
@@ -3488,37 +4085,50 @@ export function createGeoRouter(options: GeoRouterOptions = {}): Router {
         trackArchiveFile(value, knowledgeBaseTask),
         knowledgeBaseTask,
       );
-      const archiveAttachment = await materializeArchiveAttachment(
-        broker,
-        trackedValue.knowledgeBaseTaskId,
-        archive,
-        {
-          projectId: trackedValue.projectId,
-          idempotencyKey: `geo:${trackedValue.projectId}:questions:1:knowledge-base-archive`,
-        },
-      );
+      const archiveAttachment = await (async () => {
+        try {
+          return await materializeArchiveAttachment(
+            broker,
+            trackedValue.knowledgeBaseTaskId,
+            archive,
+            {
+              projectId: trackedValue.projectId,
+              idempotencyKey: `geo:${trackedValue.projectId}:questions:1:knowledge-base-archive`,
+            },
+          );
+        } catch (error) {
+          throw mapGeoQuestionBrokerContractError(error);
+        }
+      })();
       const questionPromptInput = {
         companyName: trackedValue.companyName,
         archiveFilename: archiveAttachment.filename,
       };
-      const { task: questionTask, skillAttachments } =
-        await createGeoTaskWithSkillPackages(
-          broker,
-          {
-            projectId: trackedValue.projectId,
-            prompt: await buildGeoQuestionPrompt(questionPromptInput),
-            localAssets: [archiveAttachment],
-            idempotencyKey: `geo:${trackedValue.projectId}:questions:1`,
-            contract: PRESALES_CONTRACTS.questionRecommendation,
-          },
-          [
+      const questionAttempt =
+        (trackedValue.previousQuestionTaskIds?.length || 0) + 1;
+      const { task: questionTask, skillAttachments } = await (async () => {
+        try {
+          return await createGeoTaskWithSkillPackages(
+            broker,
             {
-              filename: QUESTION_SKILL_ARCHIVE_FILENAME,
-              body: await buildGeoQuestionRecommenderSkillArchive(),
+              projectId: trackedValue.projectId,
+              prompt: await buildGeoQuestionPrompt(questionPromptInput),
+              localAssets: [archiveAttachment],
+              idempotencyKey: `geo:${trackedValue.projectId}:questions:${questionAttempt}`,
+              contract: PRESALES_CONTRACTS.questionRecommendation,
             },
-            buildGeoQuestionTaskInput(questionPromptInput),
-          ],
-        );
+            [
+              {
+                filename: QUESTION_SKILL_ARCHIVE_FILENAME,
+                body: await buildGeoQuestionRecommenderSkillArchive(),
+              },
+              buildGeoQuestionTaskInput(questionPromptInput),
+            ],
+          );
+        } catch (error) {
+          throw mapGeoQuestionBrokerContractError(error);
+        }
+      })();
       const questionTaskId = taskIdFrom(questionTask);
       if (!questionTaskId)
         throw new GeoHttpError(
@@ -3535,7 +4145,9 @@ export function createGeoRouter(options: GeoRouterOptions = {}): Router {
           new Set([
             ...(trackedValue.temporaryFileIds || []),
             ...skillAttachments.map((item) => item.localAssetId),
-            ...(archiveAttachment.temporary ? [archiveAttachment.localAssetId] : []),
+            ...(archiveAttachment.temporary
+              ? [archiveAttachment.localAssetId]
+              : []),
           ]),
         ),
       };
@@ -5180,12 +5792,10 @@ export function createGeoRouter(options: GeoRouterOptions = {}): Router {
               monitorRun.platforms,
               monitorRun,
             );
-            calculateQuestionBaselineAssessment(await assessmentOutputPromise);
+            calculateCompleteAssessment(await assessmentOutputPromise);
           } catch (error) {
             logAssessmentOutputValidation(error, assessmentTask);
-            // The strict resolver already reserved the sole same-task repair.
-            // Do not translate a pending or second-invalid format result into
-            // a fresh Provider task.
+            manualRestart = true;
           }
         }
         if (manualRestart) {
@@ -5323,7 +5933,9 @@ export function createGeoRouter(options: GeoRouterOptions = {}): Router {
         );
       } catch (error) {
         if (!shouldRetainGeneratedTaskFilesForReplay(error)) {
-          await broker.deleteAsset(monitoringFile.localAssetId).catch(() => undefined);
+          await broker
+            .deleteAsset(monitoringFile.localAssetId)
+            .catch(() => undefined);
         }
         throw error;
       }
@@ -5404,7 +6016,9 @@ export function createGeoRouter(options: GeoRouterOptions = {}): Router {
             ...(value.temporaryFileIds || []),
             monitoringFile.localAssetId,
             ...skillAttachments.map((item) => item.localAssetId),
-            ...(archiveAttachment.temporary ? [archiveAttachment.localAssetId] : []),
+            ...(archiveAttachment.temporary
+              ? [archiveAttachment.localAssetId]
+              : []),
           ]),
         ),
       };
@@ -5487,7 +6101,7 @@ export function createGeoRouter(options: GeoRouterOptions = {}): Router {
         monitorRun,
       );
       try {
-        scoredAssessment = calculateQuestionBaselineAssessment(
+        scoredAssessment = calculateCompleteAssessment(
           await assessmentOutputPromise,
         );
         if (scoredAssessment.schemaVersion !== 2) {
@@ -5537,7 +6151,7 @@ export function createGeoRouter(options: GeoRouterOptions = {}): Router {
             forecastStatus === "cancelled"
               ? "上一次优化效果评估任务已取消"
               : normalizeTask(optimizationForecastTask, "optimization-forecast")
-                  .error || "上一次优化效果评估任务执行失败";
+                  .failure?.code || "上一次优化效果评估任务执行失败";
         } else if (forecastStatus === "completed") {
           try {
             existingForecastOutputPromise =
@@ -5546,12 +6160,13 @@ export function createGeoRouter(options: GeoRouterOptions = {}): Router {
                 optimizationForecastTask,
                 { taskId: taskIdFrom(optimizationForecastTask) },
               );
-            calculateOptimizationOutcomeForecast(
+            calculateCompleteForecast(
               scoredAssessment,
               await existingForecastOutputPromise,
             );
           } catch (error) {
             logAssessmentOutputValidation(error, optimizationForecastTask);
+            forecastRetryReason = publicForecastValidationMessage(error);
           }
         }
         if (forecastRetryReason) {
@@ -7448,154 +8063,19 @@ export function createGeoRouter(options: GeoRouterOptions = {}): Router {
 
   router.delete(
     "/projects/:projectToken",
-    requireConfiguration,
     requireSession,
     requireSessionRate("project-delete", 150, 10 * 60 * 1000),
     asyncHandler(async (req, res) => {
       const value = openOwnedProject(req, res);
-      const monitorDeletion =
-        await monitorFreeReservationStore.fenceProjectDeletion(value.projectId);
-      // Fence first so the self-contained project token cannot create fresh
-      // work while its remote resources are being removed. DELETE itself stays
-      // retryable after the fence, and every other project route returns 410.
-      await customQuestionValidationStore.fenceProjectDeletion(
-        value.projectId,
-        { force: true },
-      );
-      let deletedOrders = 0;
-      try {
-        deletedOrders = (
-          await projectOrderRegistry.deleteProject(value.projectId)
-        ).deletedOrders;
-      } catch (error) {
-        throw new GeoHttpError(
-          `项目删除保护未能建立：${error instanceof Error ? error.message : "未知错误"}`,
-          502,
-          "PROJECT_DELETE_INCOMPLETE",
-        );
-      }
-      const validationTargets =
-        await customQuestionValidationStore.getProjectDeletionTargets(
-          value.projectId,
-        );
-      const protectedMonitorRunId = projectOrderProtections.get(value.projectId)
-        ?.monitoring?.runId;
-      const taskIds = [
-        value.knowledgeBaseTaskId,
-        value.questionTaskId,
-        value.assessmentTaskId,
-        value.optimizationForecastTaskId,
-        ...(value.previousKnowledgeBaseTaskIds || []),
-        ...(value.previousQuestionTaskIds || []),
-        ...(value.previousAssessmentTaskIds || []),
-        ...(value.previousOptimizationForecastTaskIds || []),
-        ...validationTargets.localTaskIds,
-      ].filter((item): item is string => Boolean(item));
-      const monitorRunIds = [
-        value.monitorRunId,
-        protectedMonitorRunId,
-        monitorDeletion.runId,
-      ].filter((item): item is string => Boolean(item));
-      const fileIds = [
-        ...(value.uploadFileIds || []),
-        ...(value.archiveFileIds || []),
-        ...(value.temporaryFileIds || []),
-        ...validationTargets.temporaryLocalAssetIds,
-      ];
-      const uniqueTaskIds = new Set(taskIds);
-      const uniqueFileIds = new Set(fileIds);
-      const uniqueMonitorRunIds = new Set(monitorRunIds);
-      const resourceOperations = [
-        ...Array.from(uniqueTaskIds).map(() => "task"),
-        ...Array.from(uniqueFileIds).map(() => "file"),
-      ];
-      const resourceResults = await Promise.allSettled([
-        ...Array.from(uniqueTaskIds).map((taskId) => broker.deleteTask(taskId)),
-        ...Array.from(uniqueFileIds).map((fileId) => broker.deleteAsset(fileId)),
-      ]);
-      const monitorResults = await Promise.allSettled(
-        Array.from(uniqueMonitorRunIds).map((runId) =>
-          broker.deleteMonitorRun(value.projectId, runId),
-        ),
-      );
-      const failed = [...resourceResults, ...monitorResults].filter(
-        (result) =>
-          result.status === "rejected" &&
-          !isAlreadyDeletedGeoResource(result.reason) &&
-          !isPendingGeoResourceDeletion(result.reason),
-      ).length;
-      const deleted = resourceResults.length + monitorResults.length - failed;
-      if (failed > 0) {
-        throw new GeoHttpError(
-          `远端项目清理未完成（成功 ${deleted}/${resourceOperations.length + monitorResults.length}），请重试删除`,
-          502,
-          "PROJECT_DELETE_INCOMPLETE",
-        );
-      }
-      const pendingResources = resourceResults.filter(
-        (result) =>
-          result.status === "rejected" &&
-          isPendingGeoResourceDeletion(result.reason),
-      ).length;
-      const pendingMonitorRuns = monitorResults.filter(
-        (result) =>
-          result.status === "fulfilled" && result.value === "deleting",
-      ).length;
-      if (pendingResources > 0 || pendingMonitorRuns > 0) {
-        res.setHeader("Retry-After", "2");
-        res.status(202).json({
-          ok: false,
-          status: "deleting",
-          retryAfterMs: 2_000,
-          pendingResources,
-          pendingMonitorRuns,
-        });
-        return;
-      }
-      const projectTaskDeletion = await broker.deleteProjectTasks(
-        value.projectId,
-      );
-      if (projectTaskDeletion.status === "deleting") {
-        res.setHeader(
-          "Retry-After",
-          String(
-            Math.max(1, Math.ceil(projectTaskDeletion.retryAfterMs / 1000)),
-          ),
-        );
-        res.status(202).json({
-          ok: false,
-          status: "deleting",
-          retryAfterMs: projectTaskDeletion.retryAfterMs,
-          pendingReservations: projectTaskDeletion.pendingReservations,
-          remainingTasks: projectTaskDeletion.remainingTasks,
-        });
-        return;
-      }
-
-      await customQuestionValidationStore.purgeProjectRecords(value.projectId);
-      await monitorFreeReservationStore.purgeProject(value.projectId);
-
-      for (const map of [
-        serviceOrderLocks,
-        monitoringOrderLocks,
-        monitoringPaymentSwitches,
-      ]) {
-        for (const key of Array.from(map.keys())) {
-          try {
-            const scope = JSON.parse(key) as { projectId?: unknown };
-            if (scope.projectId === value.projectId) map.delete(key);
-          } catch {
-            // Only JSON-scoped project keys are used by these registries.
-          }
-        }
-      }
-      projectOrderProtections.delete(value.projectId);
+      // Cached clients from older Website builds can still call this route
+      // before removing their IndexedDB copy. Treat it as a compatibility
+      // acknowledgement only: a Website project deletion must never stop or
+      // delete Manus tasks, provider records, uploaded assets, orders, or
+      // recovery reservations.
       res.json({
         ok: true,
-        deletedTasks: uniqueTaskIds.size + projectTaskDeletion.deletedTasks,
-        deletedFiles: uniqueFileIds.size + projectTaskDeletion.deletedFiles,
-        deletedMonitorRuns: uniqueMonitorRunIds.size,
-        deletedOrders,
+        projectId: value.projectId,
+        retention: "provider_records_retained",
       });
     }),
   );
@@ -7662,7 +8142,7 @@ function publicGeoQuestion(
 function mergeProjectQuestions(
   value: ProjectTokenValue,
   generatedQuestions: GeoQuestion[],
-) {
+): GeoQuestion[] {
   const customQuestion = validCustomQuestion(value);
   return customQuestion
     ? [...generatedQuestions, customQuestion]
@@ -7674,9 +8154,12 @@ function findOwnedQuestion(
   generatedQuestions: GeoQuestion[] | undefined,
   questionId: string,
 ) {
-  return mergeProjectQuestions(value, generatedQuestions || []).find(
+  const question = mergeProjectQuestions(value, generatedQuestions || []).find(
     (candidate) => candidate.id === questionId,
   );
+  return question?.classificationState === "unclassified"
+    ? undefined
+    : question;
 }
 
 async function validateServiceAssessmentOutputs(
@@ -7694,7 +8177,7 @@ async function validateServiceAssessmentOutputs(
     platforms,
     monitorRun,
   );
-  const assessment = calculateQuestionBaselineAssessment(assessmentOutput);
+  const assessment = calculateCompleteAssessment(assessmentOutput);
   const forecastOutput = await resolveOptimizationOutcomeForecastTaskOutput(
     broker,
     forecastTask,
@@ -7702,7 +8185,7 @@ async function validateServiceAssessmentOutputs(
       taskId: taskIdFrom(forecastTask),
     },
   );
-  calculateOptimizationOutcomeForecast(assessment, forecastOutput);
+  calculateCompleteForecast(assessment, forecastOutput);
   return { assessmentOutput, forecastOutput };
 }
 
@@ -7734,6 +8217,17 @@ async function parseScopedAssessmentTaskOutput(
   });
   if (!monitorRun) return scoped;
 
+  const sourceCounts = monitorSourceCountsByPlatform(monitorRun);
+  return {
+    ...scoped,
+    platformBreakdown: scoped.platformBreakdown.map((platform) => ({
+      ...platform,
+      sourceCount: sourceCounts.get(platform.platform) ?? 0,
+    })),
+  };
+}
+
+function monitorSourceCountsByPlatform(monitorRun: BrokerMonitorRun) {
   const sourceCounts = new Map<string, Set<string>>();
   for (const record of monitorRun.records || []) {
     if (record.status !== "completed") continue;
@@ -7747,13 +8241,12 @@ async function parseScopedAssessmentTaskOutput(
     }
     sourceCounts.set(record.platform, identities);
   }
-  return {
-    ...scoped,
-    platformBreakdown: scoped.platformBreakdown.map((platform) => ({
-      ...platform,
-      sourceCount: sourceCounts.get(platform.platform)?.size || 0,
-    })),
-  };
+  return new Map<string, number>(
+    monitorRun.platforms.map((platform) => [
+      platform,
+      sourceCounts.get(platform)?.size ?? 0,
+    ]),
+  );
 }
 
 function publicAssessmentFailureCode(
@@ -7854,18 +8347,6 @@ async function buildProjectView(
     forecast?: ReturnType<typeof resolveOptimizationOutcomeForecastTaskOutput>;
   },
 ) {
-  if (
-    questionTask &&
-    normalizeTaskStatus(questionTask.status) === "completed" &&
-    !parseQuestionSetFromTask(questionTask)
-  ) {
-    questionTask =
-      (await requestStructuredTaskRepair(
-        broker,
-        questionTask,
-        PRESALES_CONTRACTS.questionRecommendation,
-      )) ?? questionTask;
-  }
   const knowledgeBase = normalizeTask(knowledgeBaseTask, "knowledge-base");
   const questionsTaskView = questionTask
     ? normalizeTask(questionTask, "questions")
@@ -7903,8 +8384,8 @@ async function buildProjectView(
     value.knowledgeBaseCandidateFailure
   ) {
     knowledgeBaseValidationFailure = new KnowledgeBaseArchiveValidationError(
-      value.knowledgeBaseCandidateFailure.message,
       value.knowledgeBaseCandidateFailure.category,
+      value.knowledgeBaseCandidateFailure.message,
     );
   } else if (
     knowledgeBase.status === "completed" &&
@@ -7912,8 +8393,8 @@ async function buildProjectView(
     !knowledgeBaseFinalizationFailure
   ) {
     knowledgeBaseValidationFailure = new KnowledgeBaseArchiveValidationError(
-      "completed task does not contain a ZIP artifact",
       "structure",
+      "completed task does not contain a ZIP artifact",
     );
   } else if (archiveDescriptor) {
     try {
@@ -7935,6 +8416,11 @@ async function buildProjectView(
         knowledgeBaseValidationFailure.category
       ]
     : KNOWLEDGE_BASE_VALIDATION_PUBLIC_ERRORS.structure;
+  const knowledgeBaseTaskFailure = ["failed", "cancelled"].includes(
+    knowledgeBase.status,
+  )
+    ? knowledgeBaseTaskFailurePresentation(knowledgeBaseTask)
+    : undefined;
   const archiveUrl =
     archiveDescriptor && knowledgeBaseManifest
       ? `/api/geo/projects/${encodeURIComponent(projectToken)}/archive`
@@ -7959,24 +8445,47 @@ async function buildProjectView(
             status: "running" as const,
             error: undefined,
           }
-        : knowledgeBase;
+        : knowledgeBaseTaskFailure
+          ? {
+              ...knowledgeBase,
+              status: "failed" as const,
+              progress: 100,
+              error: knowledgeBaseTaskFailure.message,
+            }
+          : knowledgeBase;
   const executionKnowledgeBaseTask = knowledgeBaseFinalizationFailure
+    ? {
+        ...knowledgeBaseTask,
+        status: "failed" as const,
+        error: {
+          code: KNOWLEDGE_BASE_FINALIZATION_PUBLIC_ERROR,
+          retryable: true,
+        },
+      }
+    : knowledgeBaseValidationFailure
       ? {
           ...knowledgeBaseTask,
           status: "failed" as const,
-          error: { code: "KB_FINALIZATION_FAILED", retryable: true },
+          error: { code: knowledgeBaseValidationPublicError, retryable: false },
         }
-    : knowledgeBaseValidationFailure
+      : knowledgeBaseTaskFailure
         ? {
             ...knowledgeBaseTask,
             status: "failed" as const,
-            error: { code: "KB_VALIDATION_FAILED", retryable: false },
+            error: {
+              code: knowledgeBaseTaskFailure.message,
+              retryable: false,
+            },
           }
-      : knowledgeBaseTask;
+        : knowledgeBaseTask;
   const generatedQuestions =
     questionTask && questionsTaskView?.status === "completed"
       ? parseQuestionSetFromTask(questionTask)?.questions
       : undefined;
+  const questionResultQuality =
+    questionTask && questionsTaskView?.status === "completed"
+      ? questionSetQualityFromTask(questionTask)
+      : null;
   const questions = generatedQuestions
     ? mergeProjectQuestions(value, generatedQuestions)
     : undefined;
@@ -8042,10 +8551,10 @@ async function buildProjectView(
     resolveForecastOutputForView
   ) {
     try {
-      const assessment = calculateQuestionBaselineAssessment(
+      const assessment = calculateCompleteAssessment(
         await resolveAssessmentOutputForView(),
       );
-      calculateOptimizationOutcomeForecast(
+      calculateCompleteForecast(
         assessment,
         await resolveForecastOutputForView(),
       );
@@ -8199,11 +8708,21 @@ async function buildProjectView(
           resolveForecastOutputForView,
         )
       : undefined;
-  const questionRetryAvailable = false;
+  const isCompleteAssessmentView =
+    publicAssessment?.status === "ready" &&
+    publicAssessment.quality?.completeness === "complete";
+  const isCompleteForecastView =
+    publicOptimizationForecast?.status === "ready" &&
+    publicOptimizationForecast.quality?.completeness === "complete";
+  const questionRetryAvailable =
+    Boolean(questionTask) &&
+    (invalidQuestionResult ||
+      ["failed", "cancelled"].includes(questionsTaskView?.status || ""));
   const assessmentRetryAvailable =
     Boolean(assessmentTask) &&
     assessmentTaskView?.status !== "unknown" &&
     (publicAssessment?.status === "failed" ||
+      publicAssessment?.quality?.completeness === "partial" ||
       ["failed", "cancelled"].includes(assessmentTaskView?.status || ""));
   const optimizationForecastRetryAvailable =
     Boolean(optimizationForecastTask) &&
@@ -8211,6 +8730,7 @@ async function buildProjectView(
       MAX_OPTIMIZATION_FORECAST_ATTEMPTS &&
     optimizationForecastTaskView?.status !== "unknown" &&
     (publicOptimizationForecast?.status === "failed" ||
+      publicOptimizationForecast?.quality?.completeness === "partial" ||
       ["failed", "cancelled"].includes(
         optimizationForecastTaskView?.status || "",
       ));
@@ -8232,29 +8752,84 @@ async function buildProjectView(
         ? archiveDescriptor?.filename
         : undefined,
       questionCount: questions?.length,
-      assessmentReady: publicAssessment?.status === "ready",
+      questionResultInvalid: invalidQuestionResult,
+      assessmentReady: isCompleteAssessmentView,
       assessmentFailureCode:
         publicAssessment?.status === "failed"
           ? publicAssessment.failureCode
           : undefined,
-      assessmentSummary:
-        publicAssessment?.status === "ready"
-          ? publicAssessment.summary
-          : undefined,
-      comparisonCount:
-        publicAssessment?.status === "ready"
-          ? publicAssessment.comparisons.length
-          : undefined,
-      forecastReady: publicOptimizationForecast?.status === "ready",
-      forecastSummary:
-        publicOptimizationForecast?.status === "ready"
-          ? publicOptimizationForecast.summary
-          : undefined,
+      assessmentSummary: isCompleteAssessmentView
+        ? publicAssessment.summary
+        : undefined,
+      comparisonCount: isCompleteAssessmentView
+        ? publicAssessment.comparisons.length
+        : undefined,
+      forecastReady: isCompleteForecastView,
+      forecastSummary: isCompleteForecastView
+        ? publicOptimizationForecast.summary
+        : undefined,
       serviceActivatedAt: serviceActive
         ? value.serviceActivatedAt || value.serviceProvisionedAt
         : undefined,
     },
   });
+  const questionExecutionEntry = executionLog.entries.find(
+    (entry) => entry.id === "question-recommendation",
+  );
+  const questionFailureCode = String(questionsTaskView?.failure?.code || "")
+    .trim()
+    .toUpperCase();
+  const questionFailureKind =
+    invalidQuestionResult ||
+    [
+      "RESULT_INVALID_OR_MISSING",
+      "RESULT_COORDINATE_AMBIGUOUS",
+      // Read-only compatibility for tasks that reached the legacy repair
+      // terminal before same-task repair was removed. No repair is attempted.
+      "TASK_REPAIR_EXHAUSTED",
+    ].includes(questionFailureCode) ||
+    (questionFailureCode.includes("QUESTION") &&
+      questionFailureCode.includes("VALIDATION"))
+      ? "result_invalid"
+      : "provider_unavailable";
+  const questionRecommendation = !questionTask
+    ? ({ status: "not_started" } as const)
+    : generatedQuestions?.length
+      ? ({
+          status: "ready",
+          startedAt:
+            questionTask.providerStartedAt ?? value.questionSubmittedAt,
+          terminalAt:
+            questionTask.terminalAt ?? questionExecutionEntry?.completedAt,
+          ...(questionResultQuality ? { quality: questionResultQuality } : {}),
+        } as const)
+      : invalidQuestionResult
+        ? ({
+            status: "failed",
+            startedAt:
+              questionTask.providerStartedAt ?? value.questionSubmittedAt,
+            terminalAt:
+              questionTask.terminalAt ?? questionExecutionEntry?.completedAt,
+            failureKind: "result_invalid",
+          } as const)
+        : ["failed", "cancelled"].includes(questionsTaskView?.status || "")
+          ? ({
+              status: "failed",
+              startedAt:
+                questionTask.providerStartedAt ?? value.questionSubmittedAt,
+              terminalAt:
+                questionTask.terminalAt ?? questionExecutionEntry?.completedAt,
+              failureKind: questionFailureKind,
+            } as const)
+          : ({
+              status: "pending",
+              startedAt:
+                questionTask.providerStartedAt ?? value.questionSubmittedAt,
+            } as const);
+  const publicKnowledgeImportMessage =
+    value.serviceKnowledgeImportStatus === "failed"
+      ? undefined
+      : value.serviceKnowledgeImportMessage;
 
   return {
     id: value.projectId,
@@ -8300,6 +8875,7 @@ async function buildProjectView(
           archiveUrl,
         }
       : undefined,
+    questionRecommendation,
     questions: questions?.map(publicGeoQuestion),
     selectedQuestionId: value.monitorQuestionId,
     selectedPlatformIds: value.monitorPlatformIds || [],
@@ -8307,10 +8883,15 @@ async function buildProjectView(
     knowledgeBaseSupportRequired:
       Boolean(knowledgeBaseFinalizationFailure) ||
       Boolean(knowledgeBaseValidationFailure) ||
-      ["failed", "cancelled"].includes(knowledgeBase.status) ||
+      knowledgeBaseTaskFailure?.supportRequired === true ||
       (!knowledgeBaseFinalizationFailure &&
         statusSyncPending(knowledgeBase.status) &&
         hasElapsed(value.knowledgeBaseSubmittedAt, 15 * 60 * 1_000)),
+    error: knowledgeBaseFinalizationFailure
+      ? KNOWLEDGE_BASE_FINALIZATION_PUBLIC_ERROR
+      : knowledgeBaseValidationFailure
+        ? knowledgeBaseValidationPublicError
+        : knowledgeBaseTaskFailure?.message,
     knowledgeBaseFinalization: {
       finalizationState:
         value.knowledgeBaseFinalization?.state ??
@@ -8378,14 +8959,13 @@ async function buildProjectView(
               ? {
                   status: value.serviceKnowledgeImportStatus,
                   retryable: value.serviceKnowledgeImportRetryable,
-                  message: value.serviceKnowledgeImportMessage,
+                  message: publicKnowledgeImportMessage,
                   updatedAt: value.serviceKnowledgeImportUpdatedAt,
                 }
               : undefined,
             error:
               manualActivationStatus === "failed"
-                ? value.serviceKnowledgeImportMessage ||
-                  value.serviceManualOrderMessage ||
+                ? value.serviceManualOrderMessage ||
                   (value.serviceManualOrderStatus === "rejected"
                     ? "签约资料未通过管理员审核"
                     : "服务开通未完成，请重试")
@@ -8435,15 +9015,13 @@ async function buildProjectView(
                   ? {
                       status: value.serviceKnowledgeImportStatus || "pending",
                       retryable: value.serviceKnowledgeImportRetryable,
-                      message: value.serviceKnowledgeImportMessage,
+                      message: publicKnowledgeImportMessage,
                       updatedAt: value.serviceKnowledgeImportUpdatedAt,
                     }
                   : undefined,
               error:
                 v2ActivationStatus === "failed"
-                  ? value.serviceKnowledgeImportMessage ||
-                    value.serviceProvisioningMessage ||
-                    "服务开通未完成，请重试"
+                  ? value.serviceProvisioningMessage || "服务开通未完成，请重试"
                   : undefined,
             }
           : serviceAssessmentReady && serviceCategory && serviceQuestion
@@ -8461,11 +9039,6 @@ async function buildProjectView(
     questionValidationError: invalidQuestionResult
       ? "推荐任务未返回可展示的问题，请联系技术支持"
       : undefined,
-    error: knowledgeBaseFinalizationFailure
-      ? KNOWLEDGE_BASE_FINALIZATION_PUBLIC_ERROR
-      : knowledgeBaseValidationFailure
-        ? knowledgeBaseValidationPublicError
-        : undefined,
   };
 }
 
@@ -8483,7 +9056,10 @@ async function toPublicAssessmentView(
       status: syncing ? ("running" as const) : taskView.status,
       dimensions: {},
       comparisons: [],
-      error: syncing ? undefined : taskView.error,
+      error:
+        syncing || !taskView.failure
+          ? undefined
+          : "现状评估任务未能完成，请联系技术支持。",
     };
   }
   try {
@@ -8507,7 +9083,7 @@ async function toPublicAssessmentView(
         comparisons: [],
       };
     }
-    const result = calculateQuestionBaselineAssessment(raw);
+    const result = calculateCompleteAssessment(raw);
     const dimensionEntries = [
       ["semantic_visibility", result.dimensions.semanticVisibility],
       ["semantic_coherence", result.dimensions.semanticCoherence],
@@ -8527,6 +9103,10 @@ async function toPublicAssessmentView(
     return {
       status: "ready",
       schemaVersion: 2 as const,
+      quality: {
+        completeness: "complete" as const,
+        downstreamEligible: true,
+      },
       totalScore: result.overview.score,
       grade: result.overview.grade,
       coverage: result.overview.coverage.ratio,
@@ -8662,14 +9242,132 @@ async function toPublicAssessmentView(
       ],
     };
   } catch (error) {
-    if (error instanceof StructuredTaskRepairPendingError) {
+    logAssessmentOutputValidation(error, task);
+    const partial =
+      question && monitorRun
+        ? buildAssessmentDisplayOnlyProjection(task, {
+            question: {
+              id: question.id,
+              text: question.question,
+              category: question.category,
+              rankingMetricEligible: question.category !== "reputation",
+            },
+            platforms: monitorRun.platforms,
+            successfulResponses: monitorRun.completedItems,
+            failedResponses: monitorRun.failedItems,
+            sourceCountByPlatform: monitorSourceCountsByPlatform(monitorRun),
+          })
+        : undefined;
+    if (partial) {
+      const dimensionMetadata = {
+        semanticVisibility: {
+          id: "semantic_visibility",
+          label: "语义可见度",
+        },
+        semanticCoherence: {
+          id: "semantic_coherence",
+          label: "语义一致性",
+        },
+        semanticRichness: {
+          id: "semantic_richness",
+          label: "语义多样性与深度",
+        },
+        semanticAuthority: {
+          id: "semantic_authority",
+          label: "语义权威性",
+        },
+        competitiveAdvantage: {
+          id: "competitive_advantage",
+          label: "竞品占优度",
+        },
+      } as const;
+      const verdictStatus = {
+        supported: "aligned",
+        contradicted: "conflict",
+        omitted: "missing",
+        unverifiable: "opportunity",
+      } as const;
+      const allowedPlatforms = new Set<string>(GEO_MONITOR_PLATFORM_IDS);
       return {
-        status: "running" as const,
-        dimensions: {},
-        comparisons: [],
+        status: "ready" as const,
+        schemaVersion: 2 as const,
+        quality: {
+          completeness: "partial" as const,
+          warnings: [
+            { code: "RESULT_INCOMPLETE" as const, area: "assessment" },
+            { code: "AGGREGATE_UNAVAILABLE" as const, area: "assessment" },
+          ],
+          downstreamEligible: false,
+        },
+        summary: partial.executiveSummary,
+        executiveSummary: partial.executiveSummary,
+        dimensions: Object.entries(partial.dimensionNarratives).map(
+          ([key, narrative]) => ({
+            ...dimensionMetadata[key as keyof typeof dimensionMetadata],
+            currentFinding: narrative.currentFinding,
+            summary: narrative.currentFinding,
+            nextAction: narrative.nextAction,
+          }),
+        ),
+        comparisons: partial.knowledgeVsAnswers.map((comparison) => ({
+          id: comparison.id,
+          topic: publicAssessmentText(
+            comparison.topic || comparison.kbClaimText,
+            "知识库事实对照",
+          ),
+          status: verdictStatus[comparison.verdict],
+          knowledgeBaseFact: publicAssessmentText(
+            comparison.kbClaimText,
+            "知识库暂未提供对应事实。",
+          ),
+          answerExcerpt: publicAssessmentText(
+            comparison.answerExcerpt,
+            "当前回答未直接覆盖该事实。",
+          ),
+          explanation: publicAssessmentText(
+            comparison.explanation,
+            "已完成该项事实与回答对照。",
+          ),
+          answerFinding: publicAssessmentText(
+            comparison.explanation || comparison.answerExcerpt,
+            "已完成该项事实与回答对照。",
+          ),
+          recommendedAction: publicAssessmentText(
+            comparison.recommendedAction,
+            "补充清晰、可追溯的事实说明。",
+          ),
+          platforms:
+            comparison.platform && allowedPlatforms.has(comparison.platform)
+              ? [comparison.platform]
+              : [],
+        })),
+        platformBreakdown: partial.platformBreakdown.map((platform) => ({
+          ...platform,
+          verdict: publicAssessmentText(
+            platform.verdict,
+            "当前平台已返回可展示的观察结论。",
+          ),
+        })),
+        priorityActions: partial.priorityActions.map((action) => ({
+          priority: action.priority,
+          dimension: action.dimension,
+          action: publicAssessmentText(
+            action.action,
+            "补齐该维度的可核验内容。",
+          ),
+          expectedImpact: publicAssessmentText(
+            action.expectedImpact,
+            "提升回答的准确性与可追溯性。",
+          ),
+        })),
+        limitations: Array.from(
+          new Set([
+            ...partial.limitations,
+            "本次仅展示已通过逐项校验的文字与行动；聚合分数、等级和预测入口不可用。",
+          ]),
+        ),
       };
     }
-    logAssessmentOutputValidation(error, task);
     return {
       status: "failed",
       dimensions: {},
@@ -8699,10 +9397,14 @@ async function toPublicOptimizationForecastView(
       dimensions: [],
       assumptions: [],
       roadmap: [],
-      error: syncing ? undefined : taskView.error,
+      error:
+        syncing || !taskView.failure
+          ? undefined
+          : "优化效果评估任务未能完成，请联系技术支持。",
     };
   }
 
+  let completeAssessmentAvailable = false;
   try {
     const rawAssessment = resolveAssessmentRaw
       ? await resolveAssessmentRaw()
@@ -8717,7 +9419,8 @@ async function toPublicOptimizationForecastView(
         : await resolveAssessmentTaskOutput(broker, assessmentTask, {
             taskId: taskIdFrom(assessmentTask),
           });
-    const assessment = calculateQuestionBaselineAssessment(rawAssessment);
+    const assessment = calculateCompleteAssessment(rawAssessment);
+    completeAssessmentAvailable = true;
     const rawForecast = resolveForecastRaw
       ? await resolveForecastRaw()
       : await resolveOptimizationOutcomeForecastTaskOutput(broker, task, {
@@ -8731,10 +9434,7 @@ async function toPublicOptimizationForecastView(
         roadmap: [],
       };
     }
-    const result = calculateOptimizationOutcomeForecast(
-      assessment,
-      rawForecast,
-    );
+    const result = calculateCompleteForecast(assessment, rawForecast);
     const dimensionEntries = [
       ["semantic_visibility", result.dimensions.semanticVisibility],
       ["semantic_coherence", result.dimensions.semanticCoherence],
@@ -8756,6 +9456,10 @@ async function toPublicOptimizationForecastView(
     return {
       status: "ready",
       schemaVersion: 2 as const,
+      quality: {
+        completeness: "complete" as const,
+        downstreamEligible: true,
+      },
       horizonWeeks: result.horizonWeeks,
       currentScore: result.applicableTotal.current,
       targetLow: result.applicableTotal.low,
@@ -8827,20 +9531,83 @@ async function toPublicOptimizationForecastView(
       generatedAt: new Date().toISOString(),
     };
   } catch (error) {
-    if (error instanceof StructuredTaskRepairPendingError) {
-      return {
-        status: "running" as const,
-        dimensions: [],
-        assumptions: [],
-        roadmap: [],
-      };
-    }
     logAssessmentOutputValidation(
       error,
       error instanceof ForecastTaskOutputValidationError
         ? task
         : assessmentTask,
     );
+    const partial = completeAssessmentAvailable
+      ? buildForecastDisplayOnlyProjection(task)
+      : undefined;
+    if (partial) {
+      const dimensionMetadata = {
+        semanticVisibility: {
+          id: "semantic_visibility",
+          label: "语义可见度",
+        },
+        semanticCoherence: {
+          id: "semantic_coherence",
+          label: "语义一致性",
+        },
+        semanticRichness: {
+          id: "semantic_richness",
+          label: "语义多样性与深度",
+        },
+        semanticAuthority: {
+          id: "semantic_authority",
+          label: "语义权威性",
+        },
+        competitiveAdvantage: {
+          id: "competitive_advantage",
+          label: "竞品占优度",
+        },
+      } as const;
+      return {
+        status: "ready" as const,
+        schemaVersion: 2 as const,
+        quality: {
+          completeness: "partial" as const,
+          warnings: [
+            { code: "RESULT_INCOMPLETE" as const, area: "forecast" },
+            { code: "AGGREGATE_UNAVAILABLE" as const, area: "forecast" },
+          ],
+          downstreamEligible: false,
+        },
+        horizonWeeks: partial.horizonWeeks,
+        summary: partial.executiveSummary,
+        executiveSummary: partial.executiveSummary,
+        dimensions: Object.entries(partial.dimensionNarratives).map(
+          ([key, narrative]) => ({
+            ...dimensionMetadata[key as keyof typeof dimensionMetadata],
+            currentFinding: narrative.currentFinding,
+            summary: narrative.currentFinding,
+            nextAction: narrative.nextAction,
+            actions: [narrative.nextAction],
+          }),
+        ),
+        assumptions: [],
+        roadmap: partial.roadmap.map((phase) => ({
+          ...phase,
+          title: publicAssessmentText(phase.title, `第 ${phase.phase} 周重点`),
+          actions: phase.actions
+            .slice(0, 3)
+            .map((action) =>
+              publicAssessmentText(action, "完成对应优化动作。"),
+            ),
+          verificationGate: publicAssessmentText(
+            phase.verificationGate,
+            "检查本周交付物是否完整、可访问且可追溯。",
+          ),
+        })),
+        limitations: Array.from(
+          new Set([
+            ...partial.limitations,
+            "本次仅展示已通过逐项校验的叙事与路线；整体目标区间和服务入口不可用。",
+          ]),
+        ),
+      };
+    }
     return {
       status: "failed",
       dimensions: [],
@@ -8927,8 +9694,8 @@ async function loadKnowledgeBaseManifest(
     } catch (error) {
       if (error instanceof GeoByteLimitError) {
         throw new KnowledgeBaseArchiveValidationError(
-          "Knowledge-base archive exceeds the compressed size limit",
           "unsafe",
+          "Knowledge-base archive exceeds the compressed size limit",
         );
       }
       console.warn("[GEO KB]", {
@@ -8978,8 +9745,8 @@ async function loadKnowledgeBaseManifest(
           ? error.category
           : ("structure" as const);
       throw new KnowledgeBaseArchiveValidationError(
-        knowledgeBaseValidationReason(error),
         category,
+        knowledgeBaseValidationReason(error),
       );
     }
     if (
@@ -9071,96 +9838,11 @@ async function getResolvedTask(broker: GeoPresalesBroker, taskId: string) {
   }
 }
 
-const REPAIRABLE_STRUCTURED_CONTRACT_NAMES = new Set<string>([
-  PRESALES_CONTRACTS.questionRecommendation.name,
-  PRESALES_CONTRACTS.customQuestionClassifier.name,
-  PRESALES_CONTRACTS.currentStateAssessment.name,
-  PRESALES_CONTRACTS.optimizationForecast.name,
-  PRESALES_CONTRACTS.monitorQuestionTranslation.name,
-]);
-
-class StructuredTaskRepairPendingError extends Error {
-  readonly name = "StructuredTaskRepairPendingError";
-
-  constructor(
-    readonly task: BrokerTask,
-    readonly cause?: unknown,
-  ) {
-    super("Structured task repair is still pending");
-  }
-}
-
-function structuredTaskRepairKey(taskId: string, contract: PresalesContract) {
-  if (!REPAIRABLE_STRUCTURED_CONTRACT_NAMES.has(contract.name)) {
-    throw new Error("STRUCTURED_TASK_REPAIR_CONTRACT_NOT_ALLOWED");
-  }
-  return `geo:structured-repair:${contract.name}:${taskId}:1`;
-}
-
-async function requestStructuredTaskRepair(
-  broker: GeoPresalesBroker,
-  task: BrokerTask,
-  contract: PresalesContract,
-): Promise<BrokerTask | null> {
-  const taskId = taskIdFrom(task);
-  if (!taskId || normalizeTaskStatus(task.status) !== "completed") return null;
-  try {
-    return await broker.repairTask(taskId, {
-      idempotencyKey: structuredTaskRepairKey(taskId, contract),
-    });
-  } catch (error) {
-    if (
-      error instanceof GeoBrokerError &&
-      ["TASK_REPAIR_EXHAUSTED", "TASK_REPAIR_NOT_AVAILABLE"].includes(
-        error.code,
-      )
-    ) {
-      return null;
-    }
-    throw error;
-  }
-}
-
-async function repairStructuredTaskAfterValidation(
-  broker: GeoPresalesBroker,
-  task: BrokerTask,
-  contract: PresalesContract,
-  validationError: unknown,
-) {
-  let repaired: BrokerTask | null;
-  try {
-    repaired = await requestStructuredTaskRepair(broker, task, contract);
-  } catch (error) {
-    // A transport failure does not prove that the durable repair reservation
-    // was absent. Preserve the same task and stable repair key for the next
-    // observation instead of falling back to a fresh Provider task.
-    throw new StructuredTaskRepairPendingError(task, error);
-  }
-  if (!repaired) throw validationError;
-  if (normalizeTaskStatus(repaired.status) !== "completed") {
-    throw new StructuredTaskRepairPendingError(repaired);
-  }
-  return repaired;
-}
-
 async function getResolvedQuestionTask(
   broker: GeoPresalesBroker,
   taskId: string,
 ) {
-  const task = await getResolvedTask(broker, taskId);
-  if (
-    normalizeTaskStatus(task.status) !== "completed" ||
-    parseQuestionSetFromTask(task)
-  ) {
-    return task;
-  }
-  return (
-    (await requestStructuredTaskRepair(
-      broker,
-      task,
-      PRESALES_CONTRACTS.questionRecommendation,
-    )) ?? task
-  );
+  return await getResolvedTask(broker, taskId);
 }
 
 async function resolveAssessmentTaskOutput(
@@ -9168,20 +9850,7 @@ async function resolveAssessmentTaskOutput(
   task: BrokerTask,
   options: Parameters<typeof resolveAssessmentTaskOutputRaw>[2] = {},
 ) {
-  try {
-    return await resolveAssessmentTaskOutputRaw(broker, task, options);
-  } catch (error) {
-    if (!(error instanceof AssessmentTaskOutputValidationError)) throw error;
-    const repaired = await repairStructuredTaskAfterValidation(
-      broker,
-      task,
-      PRESALES_CONTRACTS.currentStateAssessment,
-      error,
-    );
-    // Validate the repaired result exactly once with the same local business
-    // schema and scope callback. A second invalid result is terminal.
-    return await resolveAssessmentTaskOutputRaw(broker, repaired, options);
-  }
+  return await resolveAssessmentTaskOutputRaw(broker, task, options);
 }
 
 async function resolveOptimizationOutcomeForecastTaskOutput(
@@ -9191,26 +9860,11 @@ async function resolveOptimizationOutcomeForecastTaskOutput(
     typeof resolveOptimizationOutcomeForecastTaskOutputRaw
   >[2] = {},
 ) {
-  try {
-    return await resolveOptimizationOutcomeForecastTaskOutputRaw(
-      broker,
-      task,
-      options,
-    );
-  } catch (error) {
-    if (!(error instanceof ForecastTaskOutputValidationError)) throw error;
-    const repaired = await repairStructuredTaskAfterValidation(
-      broker,
-      task,
-      PRESALES_CONTRACTS.optimizationForecast,
-      error,
-    );
-    return await resolveOptimizationOutcomeForecastTaskOutputRaw(
-      broker,
-      repaired,
-      options,
-    );
-  }
+  return await resolveOptimizationOutcomeForecastTaskOutputRaw(
+    broker,
+    task,
+    options,
+  );
 }
 
 function hasTrustedCompletedTaskOutput(task: BrokerTask): boolean {
@@ -9329,41 +9983,16 @@ async function resolveMonitorQuestionForEdition(
   // An idempotent create replay can already contain the complete answer even
   // while the status endpoint is still eventually consistent. A strict schema
   // plus source digest makes that complete typed assistant output authoritative.
-  let createdTranslation =
-    await resolveGeoMonitorQuestionTranslationTaskOutput(
-      broker,
-      task,
-      question.question,
-      { taskId: taskIdFrom(task) || undefined },
-    );
+  let createdTranslation = await resolveGeoMonitorQuestionTranslationTaskOutput(
+    broker,
+    task,
+    question.question,
+    { taskId: taskIdFrom(task) || undefined },
+  );
   if (createdTranslation) return createdTranslation;
   let createdStatus = normalizeTaskStatus(task.status);
   if (["failed", "cancelled"].includes(createdStatus)) throw failed();
-  if (createdStatus === "completed") {
-    let repaired: BrokerTask | null;
-    try {
-      repaired = await requestStructuredTaskRepair(
-        broker,
-        task,
-        PRESALES_CONTRACTS.monitorQuestionTranslation,
-      );
-    } catch {
-      throw pending();
-    }
-    if (!repaired) throw failed();
-    task = repaired;
-    createdTranslation =
-      await resolveGeoMonitorQuestionTranslationTaskOutput(
-        broker,
-        task,
-        question.question,
-        { taskId: taskIdFrom(task) || undefined },
-      );
-    if (createdTranslation) return createdTranslation;
-    createdStatus = normalizeTaskStatus(task.status);
-    if (createdStatus === "completed") throw failed();
-    if (["failed", "cancelled"].includes(createdStatus)) throw failed();
-  }
+  if (createdStatus === "completed") throw failed();
 
   const taskId = taskIdFrom(task);
   if (!taskId) throw failed();
@@ -9390,33 +10019,9 @@ async function resolveMonitorQuestionForEdition(
     );
     if (translated) return translated;
 
-    let status = normalizeTaskStatus(resolved.status);
+    const status = normalizeTaskStatus(resolved.status);
     if (["failed", "cancelled"].includes(status)) throw failed();
-    if (status === "completed") {
-      let repaired: BrokerTask | null;
-      try {
-        repaired = await requestStructuredTaskRepair(
-          broker,
-          resolved,
-          PRESALES_CONTRACTS.monitorQuestionTranslation,
-        );
-      } catch {
-        throw pending();
-      }
-      if (!repaired) throw failed();
-      const repairedTranslation =
-        await resolveGeoMonitorQuestionTranslationTaskOutput(
-          broker,
-          repaired,
-          question.question,
-          { taskId },
-        );
-      if (repairedTranslation) return repairedTranslation;
-      status = normalizeTaskStatus(repaired.status);
-      if (["completed", "failed", "cancelled"].includes(status)) {
-        throw failed();
-      }
-    }
+    if (status === "completed") throw failed();
     if (!(await waitForNextObservation())) throw pending();
   }
 }
@@ -9690,38 +10295,6 @@ async function advanceCustomQuestionValidation(input: {
       return exhausted ? cleanup(record) : record;
     };
     const scheduleFormatRetryOrFail = async () => {
-      if (record.formatRetryCount === 0 && record.localTaskId) {
-        let repaired: BrokerTask | null;
-        try {
-          repaired = await requestStructuredTaskRepair(
-            input.broker,
-            observedTask ??
-              (await getResolvedTask(input.broker, record.localTaskId)),
-            PRESALES_CONTRACTS.customQuestionClassifier,
-          );
-        } catch (error) {
-          return await persistTransientFailure(
-            error,
-            "CUSTOM_QUESTION_CLASSIFIER_REPAIR_UNAVAILABLE",
-            "问题验证结果修复暂时无法提交，请重试当前问题",
-          );
-        }
-        if (repaired) {
-          record = await persist({
-            ...record,
-            state: "submitted",
-            formatRetryCount: 1,
-            lastObservedStatus: String(repaired.status ?? "unknown").slice(
-              0,
-              100,
-            ),
-            transientErrorCount: 0,
-            firstTransientErrorAt: undefined,
-            lastTransientError: undefined,
-          });
-          return record;
-        }
-      }
       record = await persist({
         ...record,
         state: "failed",
@@ -9845,7 +10418,9 @@ async function advanceCustomQuestionValidation(input: {
               skillStagingAttachment: stagingAttachment,
             });
           } catch (error) {
-            await input.broker.deleteAsset(file.localAssetId).catch(() => undefined);
+            await input.broker
+              .deleteAsset(file.localAssetId)
+              .catch(() => undefined);
             throw error;
           }
         }
@@ -9913,7 +10488,9 @@ async function advanceCustomQuestionValidation(input: {
               promptInputStagingAttachment: stagingAttachment,
             });
           } catch (error) {
-            await input.broker.deleteAsset(file.localAssetId).catch(() => undefined);
+            await input.broker
+              .deleteAsset(file.localAssetId)
+              .catch(() => undefined);
             throw error;
           }
         }
@@ -10058,10 +10635,9 @@ async function advanceCustomQuestionValidation(input: {
           lastTransientError: undefined,
         });
       } catch (error) {
-        // A confirmed project deletion can win immediately after upstream task
-        // creation. Do not leave that uncommitted task outside the deletion
-        // target inventory.
-        await input.broker.deleteTask(taskId).catch(() => undefined);
+        // Keep the idempotently-created task. The durable reservation/orphan
+        // marker adopts it on a later read; Website rollback must never delete
+        // a Manus record after task creation succeeds.
         throw error;
       }
     }
@@ -10339,10 +10915,6 @@ async function cleanupCustomQuestionValidation(
 
 function isAlreadyDeletedGeoResource(error: unknown) {
   return error instanceof GeoBrokerError && error.status === 404;
-}
-
-function isPendingGeoResourceDeletion(error: unknown) {
-  return error instanceof GeoBrokerError && error.status === 425;
 }
 
 export function createGeoCustomQuestionRecoveryWorker(input: {
@@ -10646,9 +11218,9 @@ async function createGeoTaskEvidenceFile(
       asset.uploadTicket,
     );
   } catch (error) {
-    if (!shouldRetainGeneratedTaskFilesForReplay(error)) {
-      await broker.deleteAsset(asset.localAssetId).catch(() => undefined);
-    }
+    // Generated task inputs use deterministic operation keys. Retaining the
+    // asset lets a retry recover the same object and avoids a deleted-asset
+    // tombstone winning over the idempotency record.
     throw error;
   }
   return asset;
@@ -10662,6 +11234,7 @@ async function createGeoTaskWithSkillPackages(
     localAssets: Array<{ localAssetId: string; filename: string }>;
     idempotencyKey: string;
     contract: PresalesContract;
+    businessOwnerName?: string;
   },
   skillPackages: GeoTaskSkillPackage[],
 ) {
@@ -10669,7 +11242,6 @@ async function createGeoTaskWithSkillPackages(
     localAssetId: string;
     filename: string;
   }> = [];
-  let taskSubmissionStarted = false;
   try {
     for (
       let packageIndex = 0;
@@ -10700,10 +11272,14 @@ async function createGeoTaskWithSkillPackages(
         asset.uploadTicket,
       );
     }
-    taskSubmissionStarted = true;
     const task = await broker.createTask({
       ...input,
-      localAssets: [...skillAttachments, ...input.localAssets],
+      localAssets: [...skillAttachments, ...input.localAssets].map(
+        (attachment) => ({
+          localAssetId: attachment.localAssetId,
+          filename: attachment.filename,
+        }),
+      ),
     });
     if (!taskIdFrom(task)) {
       throw new GeoHttpError(
@@ -10714,21 +11290,10 @@ async function createGeoTaskWithSkillPackages(
     }
     return { task, skillAttachments };
   } catch (error) {
-    // A timeout/5xx/409 can arrive after the Dashboard or upstream task has
-    // committed. Keep deterministic generated files in that case: the next
-    // request recreates them with the same file operation keys, reuploads the
-    // same bytes, and retries the identical task payload. Deterministic 4xx
-    // setup failures remain safe to clean immediately.
-    const retainForReplay =
-      isAmbiguousGeneratedAttachmentError(error) ||
-      (taskSubmissionStarted && shouldRetainGeneratedTaskFilesForReplay(error));
-    if (!retainForReplay) {
-      await Promise.allSettled(
-        skillAttachments.map((attachment) =>
-          broker.deleteAsset(attachment.localAssetId),
-        ),
-      );
-    }
+    // Always retain deterministic generated files after a failed attempt.
+    // A synchronous delete used to leave the Dashboard idempotency index
+    // pointing at a tombstone, so the next click failed with an invalid local
+    // asset response instead of replaying the original operation safely.
     throw error;
   }
 }
@@ -10742,6 +11307,7 @@ async function createWebsiteKnowledgeBaseTaskWithSkill(
     taskInput: GeoTaskSkillPackage;
     localAssets: Array<{ localAssetId: string; filename: string }>;
     idempotencyKey: string;
+    businessOwnerName: string;
   },
 ) {
   const { taskInput, skillVersion, ...taskInputWithoutGeneratedAttachment } =
@@ -11331,6 +11897,22 @@ function asyncHandler(
   };
 }
 
+function mapGeoQuestionBrokerContractError(error: unknown): unknown {
+  if (error instanceof GeoBrokerError && [400, 422].includes(error.status)) {
+    console.warn("[GEO question creation]", {
+      event: "broker_contract_rejected",
+      diagnosticCode: error.code,
+      status: error.status,
+    });
+    return new GeoHttpError(
+      "问题生成服务合同异常，知识库已保留，请重试或重置项目",
+      502,
+      "GEO_QUESTION_BROKER_CONTRACT_ERROR",
+    );
+  }
+  return error;
+}
+
 class GeoHttpError extends Error {
   constructor(
     message: string,
@@ -11342,18 +11924,29 @@ class GeoHttpError extends Error {
   }
 }
 
-class KnowledgeBaseArchiveValidationError extends GeoHttpError {
+export class KnowledgeBaseArchiveValidationError extends GeoHttpError {
   constructor(
+    category: KnowledgeBaseValidationCategory,
     readonly validationReason: string,
-    readonly category: KnowledgeBaseValidationCategory = "structure",
   ) {
+    const safeCategory: KnowledgeBaseValidationCategory = [
+      "structure",
+      "media",
+      "content",
+      "unsafe",
+    ].includes(category)
+      ? category
+      : "structure";
     super(
-      KNOWLEDGE_BASE_VALIDATION_PUBLIC_ERRORS[category],
+      KNOWLEDGE_BASE_VALIDATION_PUBLIC_ERRORS[safeCategory],
       422,
-      `ARCHIVE_${category.toUpperCase()}_VALIDATION_FAILED`,
+      `ARCHIVE_${safeCategory.toUpperCase()}_VALIDATION_FAILED`,
     );
     this.name = "KnowledgeBaseArchiveValidationError";
+    this.category = safeCategory;
   }
+
+  readonly category: KnowledgeBaseValidationCategory;
 }
 
 function knowledgeBaseValidationReason(error: unknown) {

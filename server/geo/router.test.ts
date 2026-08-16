@@ -1,7 +1,8 @@
 import { createHash } from "node:crypto";
 import { promises as fs } from "node:fs";
 import type { AddressInfo } from "node:net";
-import type { Server } from "node:http";
+import { request as httpRequest, type Server } from "node:http";
+import { Readable } from "node:stream";
 import os from "node:os";
 import path from "node:path";
 import { deflateSync } from "node:zlib";
@@ -18,6 +19,7 @@ import {
   type BrokerLocalAsset,
   type BrokerMonitorRun,
   type BrokerTask,
+  type BrokerUploadOptions,
   type GeoMonitoringEdition,
   type GeoMonitorPlatformId,
   type GeoPresalesBroker,
@@ -31,7 +33,9 @@ import {
   createGeoCustomQuestionRecoveryWorker,
   createGeoRouter,
   GEO_LEGACY_CUSTOM_QUESTION_COMPATIBILITY_WAIT_MS,
+  KnowledgeBaseArchiveValidationError,
 } from "./router";
+
 import {
   geoCustomQuestionHash,
   geoCustomQuestionRequestHash,
@@ -43,10 +47,13 @@ import {
   type GeoMonitorFreeReservationStore,
 } from "./monitor-free-reservation-store";
 import { parseKnowledgeBaseArchive } from "./archive";
-import { finalizeKnowledgeBaseCandidate } from "./knowledge-base-finalizer";
+import {
+  finalizeKnowledgeBaseCandidate,
+  WEBSITE_KB_ARCHIVE_ROOT,
+} from "./knowledge-base-finalizer";
 import { buildValidQuestionSet } from "./question-set.test-fixture";
 import type { GeoQuestion } from "./schemas";
-import { GeoTokenCodec } from "./tokens";
+import { GeoTokenCodec, parseCookies } from "./tokens";
 import { GeoAccountProvisioningError } from "./provisioning";
 import {
   type GeoPaymentCheckout,
@@ -73,6 +80,21 @@ import type {
   GeoPurchaseProvisionRequestV2,
   GeoPurchaseProvisionResponseV2,
 } from "./provisioning";
+
+describe("knowledge-base archive validation error arguments", () => {
+  it.each(["structure", "media", "content", "unsafe"] as const)(
+    "keeps category/message order for %s",
+    (category) => {
+      const error = new KnowledgeBaseArchiveValidationError(
+        category,
+        `private ${category} reason`,
+      );
+      expect(error.category).toBe(category);
+      expect(error.validationReason).toBe(`private ${category} reason`);
+      expect(error.message).not.toContain("private");
+    },
+  );
+});
 
 function monitorTranslationTaskOutput(
   sourceQuestion: string,
@@ -139,7 +161,7 @@ async function finalizeKnowledgeBaseCandidateAsV4(
 ) {
   const finalized = await finalizeKnowledgeBaseCandidate(input);
   const zip = await JSZip.loadAsync(finalized.bytes);
-  const packageManifestPath = "00_package_manifest.json";
+  const packageManifestPath = `${WEBSITE_KB_ARCHIVE_ROOT}/00_package_manifest.json`;
   const packageManifest = JSON.parse(
     await zip.file(packageManifestPath)!.async("string"),
   ) as {
@@ -154,7 +176,7 @@ async function finalizeKnowledgeBaseCandidateAsV4(
   };
   const allPaths = Object.values(zip.files)
     .filter((entry) => !entry.dir)
-    .map((entry) => entry.name)
+    .map((entry) => entry.name.slice(WEBSITE_KB_ARCHIVE_ROOT.length + 1))
     .sort();
   const evidencePaths = packageManifest.documents
     .filter(
@@ -216,6 +238,7 @@ class MockBroker implements GeoPresalesBroker {
   tasks = new Map<string, any>();
   prompts: string[] = [];
   taskContracts: PresalesContract[] = [];
+  taskBusinessOwnerNames: Array<string | undefined> = [];
   uploads = new Map<string, Buffer>();
   skillUploads = new Map<string, Buffer>();
   taskInputUploads = new Map<string, Buffer>();
@@ -384,12 +407,17 @@ class MockBroker implements GeoPresalesBroker {
     filename: string;
     mimeType?: string;
     sizeBytes: number;
-    idempotencyKey?: string;
+    idempotencyKey: string;
   }): Promise<BrokerLocalAsset> {
     if (input.idempotencyKey) {
       this.fileCreateOperationKeys.push(input.idempotencyKey);
       const replay = this.idempotentFiles.get(input.idempotencyKey);
-      if (replay) return replay;
+      if (replay) {
+        return {
+          ...(await this.getAsset(replay.localAssetId)),
+          replayed: true,
+        };
+      }
     }
     let file: BrokerLocalAsset;
     if (input.filename.endsWith(".skill.zip")) {
@@ -433,10 +461,42 @@ class MockBroker implements GeoPresalesBroker {
         );
       }
     }
-    return file;
+    return { ...file, replayed: false };
   }
 
-  async uploadAsset(fileId: string, body: Buffer) {
+  async getAsset(
+    fileId: string,
+    _options: { signal?: AbortSignal } = {},
+  ): Promise<BrokerLocalAsset> {
+    const asset = Array.from(this.idempotentFiles.values()).find(
+      (candidate) => candidate.localAssetId === fileId,
+    );
+    if (!asset) {
+      throw new GeoBrokerError("missing asset", 404, "LOCAL_ASSET_NOT_FOUND");
+    }
+    const uploaded =
+      this.uploads.get(fileId) ??
+      this.skillUploads.get(fileId) ??
+      this.taskInputUploads.get(fileId);
+    return {
+      ...asset,
+      status: uploaded ? "uploaded" : "pending",
+      ...(uploaded
+        ? {
+            bytes: uploaded.byteLength,
+            sha256: createHash("sha256").update(uploaded).digest("hex"),
+          }
+        : {}),
+    };
+  }
+
+  async uploadAsset(
+    fileId: string,
+    body: Buffer | Readable,
+    _contentType = "application/octet-stream",
+    _uploadTicket?: string,
+    _options: BrokerUploadOptions = {},
+  ) {
     this.uploadAttempts.push(fileId);
     if (fileId.startsWith("skill-file-") && this.skillUploadError) {
       throw this.skillUploadError;
@@ -444,12 +504,19 @@ class MockBroker implements GeoPresalesBroker {
     if (!fileId.startsWith("skill-file-") && this.regularUploadError) {
       throw this.regularUploadError;
     }
+    const bytes = Buffer.isBuffer(body)
+      ? body
+      : Buffer.concat(
+          await Array.fromAsync(body, (chunk) =>
+            Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk),
+          ),
+        );
     if (fileId.startsWith("skill-file-")) {
-      this.skillUploads.set(fileId, body);
+      this.skillUploads.set(fileId, bytes);
     } else if (fileId.startsWith("task-input-file-")) {
-      this.taskInputUploads.set(fileId, body);
+      this.taskInputUploads.set(fileId, bytes);
     } else {
-      this.uploads.set(fileId, body);
+      this.uploads.set(fileId, bytes);
     }
     return { status: "uploaded" };
   }
@@ -487,7 +554,9 @@ class MockBroker implements GeoPresalesBroker {
       operationId: `operation:${id}`,
       status,
       safeEvents: [],
-      ...(status === "succeeded" || structuredResult !== undefined || artifacts.length
+      ...(status === "succeeded" ||
+      structuredResult !== undefined ||
+      artifacts.length
         ? {
             result: {
               ...(structuredResult !== undefined ? { structuredResult } : {}),
@@ -506,7 +575,10 @@ class MockBroker implements GeoPresalesBroker {
     const visit = (candidate: unknown, depth: number): unknown => {
       if (depth > 10 || candidate === null || candidate === undefined) return;
       if (typeof candidate === "string") {
-        const trimmed = candidate.trim().replace(/^```(?:json)?\s*/i, "").replace(/\s*```$/, "");
+        const trimmed = candidate
+          .trim()
+          .replace(/^```(?:json)?\s*/i, "")
+          .replace(/\s*```$/, "");
         try {
           return visit(JSON.parse(trimmed), depth + 1);
         } catch {
@@ -579,7 +651,12 @@ class MockBroker implements GeoPresalesBroker {
               : undefined;
       const filename =
         typeof item.filename === "string" ? item.filename : undefined;
-      if (artifactId && filename && filename.toLowerCase().endsWith(".zip") && !seenIds.has(artifactId)) {
+      if (
+        artifactId &&
+        filename &&
+        filename.toLowerCase().endsWith(".zip") &&
+        !seenIds.has(artifactId)
+      ) {
         const bytes =
           this.downloadOverrides.get(artifactId) ||
           this.uploads.get(artifactId) ||
@@ -605,6 +682,7 @@ class MockBroker implements GeoPresalesBroker {
     localAssets: Array<{ localAssetId: string; filename: string }>;
     idempotencyKey: string;
     contract: PresalesContract;
+    businessOwnerName?: string;
   }) {
     const attachments = input.localAssets.map((asset) => ({
       file_id: asset.localAssetId,
@@ -630,6 +708,7 @@ class MockBroker implements GeoPresalesBroker {
     if (existing) return existing;
     this.prompts.push(input.prompt);
     this.taskContracts.push(input.contract);
+    this.taskBusinessOwnerNames.push(input.businessOwnerName);
     this.taskAttachments.push(attachments);
     const isQuestionTask = input.prompt.includes(
       "geo-question-recommender.skill.zip",
@@ -948,6 +1027,7 @@ class MockBroker implements GeoPresalesBroker {
 
 let server: Server;
 let baseUrl: string;
+const inviteContextByCookie = new Map<string, string>();
 let broker: MockBroker;
 let paymentCalls: GeoPaymentVerificationInput[];
 let paymentCheckoutCalls: GeoPaymentCheckoutInput[];
@@ -1008,6 +1088,7 @@ const CONTRACT_AUTH_CODE = "frontmind666";
 const BANK_TRANSFER_CONFIRMATION_CODE = "frontmind888";
 
 beforeEach(async () => {
+  inviteContextByCookie.clear();
   broker = new MockBroker();
   knowledgeBaseFinalizerOverride = undefined;
   customQuestionValidationNowMs = Date.parse("2026-08-01T00:00:00.000Z");
@@ -1445,7 +1526,7 @@ beforeEach(async () => {
               status: "failed",
               updatedAt: "2026-07-22T10:14:00.000Z",
               retryable: true,
-              message: "知识库导入暂时失败",
+              message: "知识库 ZIP 必须只包含一个企业知识库根目录",
             },
           };
         }
@@ -1511,7 +1592,10 @@ describe("GEO API", () => {
     const denied = await fetch(`${baseUrl}/invite/verify`, {
       method: "POST",
       headers: { "content-type": "application/json" },
-      body: JSON.stringify({ code: "wrong" }),
+      body: JSON.stringify({
+        code: "wrong",
+        businessOwnerName: "测试商务负责人",
+      }),
     });
     expect(denied.status).toBe(401);
     expect(await denied.json()).toMatchObject({
@@ -1525,6 +1609,290 @@ describe("GEO API", () => {
     expect(allowed.response.headers.get("set-cookie")).toContain(
       "Max-Age=31536000",
     );
+  });
+
+  it("seals the normalized business owner into a 24-hour session-bound invite context", async () => {
+    const invited = await verifyInvite("", "  Ａｌｉｃｅ　张三  ");
+    const codec = new GeoTokenCodec(
+      "test-session-secret-at-least-16-characters",
+    );
+    const context = codec.open<{
+      schemaVersion: number;
+      sessionNonce: string;
+      businessOwnerName: string;
+      contextId: string;
+    }>(invited.inviteContextToken, "invite-context");
+    const sessionToken = parseCookies(invited.cookie).get(
+      "frontmind_geo_session",
+    );
+    expect(sessionToken).toBeTruthy();
+    const session = codec.open<{ scope: string; nonce: string }>(
+      sessionToken!,
+      "session",
+    );
+
+    expect(invited.businessOwnerName).toBe("Alice 张三");
+    expect(context.expiresAt - context.issuedAt).toBe(24 * 60 * 60 * 1000);
+    expect(context.value).toMatchObject({
+      schemaVersion: 1,
+      sessionNonce: session.value.nonce,
+      businessOwnerName: "Alice 张三",
+    });
+    expect(context.value.contextId).toMatch(
+      /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i,
+    );
+  });
+
+  it.each(["Alice\n张三", "Alice‮张三", "Alice(张三)", "Alice/张三"])(
+    "rejects unsafe business-owner text before issuing an invite context: %s",
+    async (businessOwnerName) => {
+      const response = await fetch(`${baseUrl}/invite/verify`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ code: "frontmind666", businessOwnerName }),
+      });
+
+      expect(response.status).toBe(400);
+      expect(await response.json()).toMatchObject({
+        error: { code: "INVALID_REQUEST" },
+      });
+      expect(response.headers.get("set-cookie")).toBeNull();
+    },
+  );
+
+  it("requires an intact invite context from the same browser session", async () => {
+    const owner = await verifyInvite();
+    const otherBrowser = await verifyInvite();
+    const requestUpload = (cookie: string, inviteContextToken?: string) =>
+      fetch(`${baseUrl}/uploads/init`, {
+        method: "POST",
+        headers: { cookie, "content-type": "application/json" },
+        body: JSON.stringify({
+          ...(inviteContextToken ? { inviteContextToken } : {}),
+          filename: "blocked.pdf",
+          contentType: "application/pdf",
+          sizeBytes: 3,
+        }),
+      });
+    const requestProject = (cookie: string, inviteContextToken?: string) =>
+      fetch(`${baseUrl}/projects`, {
+        method: "POST",
+        headers: { cookie, "content-type": "application/json" },
+        body: JSON.stringify({
+          ...(inviteContextToken ? { inviteContextToken } : {}),
+          input: "Acme",
+          attachments: [],
+        }),
+      });
+
+    const missingUpload = await requestUpload(owner.cookie);
+    expect(missingUpload.status).toBe(400);
+    await expect(missingUpload.json()).resolves.toMatchObject({
+      error: { code: "INVALID_REQUEST" },
+    });
+
+    const tamperedUpload = await requestUpload(
+      owner.cookie,
+      `${owner.inviteContextToken}x`,
+    );
+    expect(tamperedUpload.status).toBe(401);
+    await expect(tamperedUpload.json()).resolves.toMatchObject({
+      error: { code: "INVITE_CONTEXT_INVALID" },
+    });
+
+    const crossSessionUpload = await requestUpload(
+      otherBrowser.cookie,
+      owner.inviteContextToken,
+    );
+    expect(crossSessionUpload.status).toBe(403);
+    await expect(crossSessionUpload.json()).resolves.toMatchObject({
+      error: { code: "INVITE_CONTEXT_SESSION_MISMATCH" },
+    });
+
+    const codec = new GeoTokenCodec(
+      "test-session-secret-at-least-16-characters",
+    );
+    const sessionToken = parseCookies(owner.cookie).get(
+      "frontmind_geo_session",
+    )!;
+    const session = codec.open<{ scope: string; nonce: string }>(
+      sessionToken,
+      "session",
+    ).value;
+    const expiredContext = codec.seal(
+      "invite-context",
+      {
+        schemaVersion: 1,
+        sessionNonce: session.nonce,
+        businessOwnerName: owner.businessOwnerName,
+        contextId: "11111111-1111-4111-8111-111111111111",
+      },
+      -1,
+    );
+    const expiredUpload = await requestUpload(owner.cookie, expiredContext);
+    expect(expiredUpload.status).toBe(401);
+    await expect(expiredUpload.json()).resolves.toMatchObject({
+      error: { code: "INVITE_CONTEXT_INVALID" },
+    });
+
+    expect(broker.createdFileIds).toEqual([]);
+    expect(broker.uploadAttempts).toEqual([]);
+    expect(broker.taskBusinessOwnerNames).toEqual([]);
+
+    const missing = await requestProject(owner.cookie);
+    expect(missing.status).toBe(400);
+    await expect(missing.json()).resolves.toMatchObject({
+      error: { code: "INVALID_REQUEST" },
+    });
+
+    const tampered = await requestProject(
+      owner.cookie,
+      `${owner.inviteContextToken}x`,
+    );
+    expect(tampered.status).toBe(401);
+    await expect(tampered.json()).resolves.toMatchObject({
+      error: { code: "INVITE_CONTEXT_INVALID" },
+    });
+
+    const crossSession = await requestProject(
+      otherBrowser.cookie,
+      owner.inviteContextToken,
+    );
+    expect(crossSession.status).toBe(403);
+    await expect(crossSession.json()).resolves.toMatchObject({
+      error: { code: "INVITE_CONTEXT_SESSION_MISMATCH" },
+    });
+    const expiredProject = await requestProject(owner.cookie, expiredContext);
+    expect(expiredProject.status).toBe(401);
+    await expect(expiredProject.json()).resolves.toMatchObject({
+      error: { code: "INVITE_CONTEXT_INVALID" },
+    });
+    expect(broker.createdFileIds).toEqual([]);
+    expect(broker.uploadAttempts).toEqual([]);
+    expect(broker.taskBusinessOwnerNames).toEqual([]);
+  });
+
+  it("sends the business owner only as initial task metadata and never in model inputs", async () => {
+    const invited = await verifyInvite("", "  Ａｌｉｃｅ　张三  ");
+    const created = await jsonRequest("/projects", invited.cookie, {
+      method: "POST",
+      body: {
+        inviteContextToken: invited.inviteContextToken,
+        input: "Acme",
+        attachments: [],
+      },
+    });
+    expect(created.response.status).toBe(201);
+    expect(broker.taskBusinessOwnerNames).toEqual(["Alice 张三"]);
+    const privateValues = ["Alice 张三", invited.inviteContextToken];
+    const modelInputs = [
+      ...broker.prompts,
+      ...Array.from(broker.taskInputUploads.values(), (value) =>
+        value.toString("utf8"),
+      ),
+    ].join("\n");
+    for (const privateValue of privateValues) {
+      expect(modelInputs).not.toContain(privateValue);
+    }
+
+    const initial = created.body as Record<string, string>;
+    const initialProject = new GeoTokenCodec(
+      "test-session-secret-at-least-16-characters",
+    ).open<{ knowledgeBaseTaskId: string }>(
+      initial.projectToken,
+      "project",
+    ).value;
+    broker.tasks.set(initialProject.knowledgeBaseTaskId, {
+      id: initialProject.knowledgeBaseTaskId,
+      status: "completed",
+      output: [
+        {
+          id: "message-kb-owner",
+          type: "message",
+          role: "assistant",
+          content: [
+            {
+              type: "output_file",
+              file_id: "archive-1",
+              filename: "Acme.zip",
+            },
+          ],
+        },
+      ],
+    });
+    const recommended = await jsonRequest(
+      `/projects/${encodeURIComponent(initial.projectToken)}/questions`,
+      invited.cookie,
+      { method: "POST", body: {} },
+    );
+    expect(recommended.response.status).toBe(201);
+    expect(broker.taskBusinessOwnerNames).toEqual(["Alice 张三", undefined]);
+  });
+
+  it("keeps the invite context out of the deterministic project identity", async () => {
+    const first = await verifyInvite();
+    const refreshed = await verifyInvite(first.cookie);
+    expect(refreshed.inviteContextToken).not.toBe(first.inviteContextToken);
+    const clientRequestId = "22222222-2222-4222-8222-222222222222";
+    const create = (cookie: string, inviteContextToken: string) =>
+      jsonRequest("/projects", cookie, {
+        method: "POST",
+        body: {
+          inviteContextToken,
+          clientRequestId,
+          input: "Acme",
+          attachments: [],
+        },
+      });
+
+    const firstCreate = await create(first.cookie, first.inviteContextToken);
+    const replay = await create(refreshed.cookie, refreshed.inviteContextToken);
+    expect(firstCreate.response.status).toBe(201);
+    expect(replay.response.status).toBe(201);
+    const codec = new GeoTokenCodec(
+      "test-session-secret-at-least-16-characters",
+    );
+    const firstValue = codec.open<{ projectId: string }>(
+      (firstCreate.body as Record<string, string>).projectToken,
+      "project",
+    ).value;
+    const replayValue = codec.open<{ projectId: string }>(
+      (replay.body as Record<string, string>).projectToken,
+      "project",
+    ).value;
+    expect(replayValue.projectId).toBe(firstValue.projectId);
+  });
+
+  it("keeps pre-owner project capabilities readable", async () => {
+    const invited = await verifyInvite();
+    const created = await jsonRequest("/projects", invited.cookie, {
+      method: "POST",
+      body: { input: "Acme", attachments: [] },
+    });
+    expect(created.response.status).toBe(201);
+    const codec = new GeoTokenCodec(
+      "test-session-secret-at-least-16-characters",
+    );
+    const value = codec.open<Record<string, unknown>>(
+      (created.body as Record<string, string>).projectToken,
+      "project",
+    ).value;
+    expect(value.businessOwnerName).toBe("测试商务负责人");
+    const { businessOwnerName: _businessOwnerName, ...legacyValue } = value;
+    const legacyToken = codec.seal(
+      "project",
+      legacyValue,
+      365 * 24 * 60 * 60 * 1000,
+    );
+
+    const restored = await jsonRequest(
+      `/projects/${encodeURIComponent(legacyToken)}`,
+      invited.cookie,
+    );
+    expect(restored.response.status).toBe(200);
+    expect(restored.body).toMatchObject({
+      project: { id: value.projectId },
+    });
   });
 
   it("refreshes an existing browser session without changing project ownership", async () => {
@@ -1658,7 +2026,10 @@ describe("GEO API", () => {
         {
           method: "POST",
           headers: { "content-type": "application/json" },
-          body: JSON.stringify({ code: "frontmind666" }),
+          body: JSON.stringify({
+            code: "frontmind666",
+            businessOwnerName: "测试商务负责人",
+          }),
         },
       );
       expect(response.status).toBe(503);
@@ -1702,7 +2073,10 @@ describe("GEO API", () => {
           {
             method: "POST",
             headers: { "content-type": "application/json" },
-            body: JSON.stringify({ code: unsafeInviteCode }),
+            body: JSON.stringify({
+              code: unsafeInviteCode,
+              businessOwnerName: "测试商务负责人",
+            }),
           },
         );
         expect(response.status).toBe(503);
@@ -1752,6 +2126,7 @@ describe("GEO API", () => {
             headers: { "content-type": "application/json" },
             body: JSON.stringify({
               code: "secure-production-invite-20260802",
+              businessOwnerName: "测试商务负责人",
             }),
           },
         );
@@ -1796,6 +2171,7 @@ describe("GEO API", () => {
           headers: { "content-type": "application/json" },
           body: JSON.stringify({
             code: "secure-production-invite-20260728",
+            businessOwnerName: "测试商务负责人",
           }),
         },
       );
@@ -1808,6 +2184,221 @@ describe("GEO API", () => {
         shortSecretServer.close((error) => (error ? reject(error) : resolve())),
       );
     }
+  });
+
+  it("derives stable opaque upload keys from the session, request id, and attachment index", async () => {
+    const { cookie } = await verifyInvite();
+    const request = {
+      method: "POST" as const,
+      body: {
+        filename: "catalog.pdf",
+        contentType: "application/pdf",
+        sizeBytes: 3,
+        clientRequestId: "11111111-1111-4111-8111-111111111111",
+        attachmentIndex: 0,
+      },
+    };
+    const createdBefore = broker.createdFileIds.length;
+    const keysBefore = broker.fileCreateOperationKeys.length;
+
+    const first = await jsonRequest("/uploads/init", cookie, request);
+    const replay = await jsonRequest("/uploads/init", cookie, request);
+    const next = await jsonRequest("/uploads/init", cookie, {
+      ...request,
+      body: { ...request.body, attachmentIndex: 1 },
+    });
+
+    expect(first.response.status).toBe(201);
+    expect(replay.response.status).toBe(200);
+    expect(next.response.status).toBe(201);
+    expect((first.body as any).fileId).toBe((replay.body as any).fileId);
+    expect((next.body as any).fileId).not.toBe((first.body as any).fileId);
+    expect(first.body).toMatchObject({
+      status: "pending",
+      replayed: false,
+    });
+    expect(replay.body).toMatchObject({
+      status: "pending",
+      replayed: true,
+      traceId: (first.body as any).traceId,
+    });
+    expect(
+      new GeoTokenCodec("test-session-secret-at-least-16-characters").open<
+        Record<string, unknown>
+      >((first.body as any).uploadToken, "upload").value,
+    ).toMatchObject({ attachmentIndex: 0 });
+    expect(broker.createdFileIds).toHaveLength(createdBefore + 2);
+    const keys = broker.fileCreateOperationKeys.slice(keysBefore);
+    expect(keys).toHaveLength(3);
+    expect(keys[0]).toMatch(/^geo-upload-init:v1:[a-f0-9]{64}$/);
+    expect(keys[1]).toBe(keys[0]);
+    expect(keys[2]).not.toBe(keys[0]);
+  });
+
+  it("charges one stable upload operation only once against the byte quota", async () => {
+    const { cookie } = await verifyInvite();
+    const clientRequestId = "11111111-1111-4111-8111-111111111111";
+    const initialize = (attachmentIndex: number, sizeBytes: number) =>
+      jsonRequest("/uploads/init", cookie, {
+        method: "POST",
+        body: {
+          filename: `catalog-${attachmentIndex}.pdf`,
+          contentType: "application/pdf",
+          sizeBytes,
+          clientRequestId,
+          attachmentIndex,
+        },
+      });
+    const fiftyMiB = 50 * 1024 * 1024;
+
+    const first = await initialize(0, fiftyMiB);
+    const replay = await initialize(0, fiftyMiB);
+    const second = await initialize(1, fiftyMiB);
+    const third = await initialize(2, fiftyMiB);
+    const fourth = await initialize(3, fiftyMiB);
+    const overQuota = await initialize(4, 1);
+
+    expect(first.response.status).toBe(201);
+    expect(replay.response.status).toBe(200);
+    expect(replay.body).toMatchObject({ replayed: true });
+    expect(
+      [second, third, fourth].map(({ response }) => response.status),
+    ).toEqual([201, 201, 201]);
+    expect(overQuota.response.status).toBe(429);
+    expect(overQuota.body).toMatchObject({
+      error: { code: "SESSION_RATE_LIMITED" },
+    });
+  });
+
+  it("charges every upload init request count while charging stable bytes once", async () => {
+    const { cookie } = await verifyInvite();
+    const request = {
+      method: "POST" as const,
+      body: {
+        filename: "stable.pdf",
+        contentType: "application/pdf",
+        sizeBytes: 3,
+        clientRequestId: "11111111-1111-4111-8111-111111111111",
+        attachmentIndex: 0,
+      },
+    };
+    const operationKeysBefore = broker.fileCreateOperationKeys.length;
+
+    for (let invocation = 0; invocation < 20; invocation += 1) {
+      const response = await jsonRequest("/uploads/init", cookie, request);
+      expect(response.response.status).toBe(invocation === 0 ? 201 : 200);
+      expect(response.body).toMatchObject({
+        status: "pending",
+        replayed: invocation > 0,
+      });
+    }
+    const rateLimited = await jsonRequest("/uploads/init", cookie, request);
+
+    expect(rateLimited.response.status).toBe(429);
+    expect(rateLimited.body).toMatchObject({
+      error: { code: "SESSION_RATE_LIMITED" },
+    });
+    expect(broker.fileCreateOperationKeys.length - operationKeysBefore).toBe(
+      20,
+    );
+    expect(
+      new Set(broker.fileCreateOperationKeys.slice(operationKeysBefore)).size,
+    ).toBe(1);
+  });
+
+  it("keeps legacy upload init compatible and requires new identity fields as a pair", async () => {
+    const { cookie } = await verifyInvite();
+    const legacy = await jsonRequest("/uploads/init", cookie, {
+      method: "POST",
+      body: {
+        filename: "legacy.pdf",
+        contentType: "application/pdf",
+        sizeBytes: 3,
+      },
+    });
+    expect(legacy.response.status).toBe(201);
+
+    for (const identity of [
+      { clientRequestId: "11111111-1111-4111-8111-111111111111" },
+      { attachmentIndex: 0 },
+    ]) {
+      const invalid = await jsonRequest("/uploads/init", cookie, {
+        method: "POST",
+        body: {
+          filename: "invalid.pdf",
+          contentType: "application/pdf",
+          sizeBytes: 3,
+          ...identity,
+        },
+      });
+      expect(invalid.response.status).toBe(400);
+      expect(invalid.body).toMatchObject({
+        error: { code: "INVALID_REQUEST" },
+      });
+    }
+  });
+
+  it("maps Dashboard upload contract rejection to a Website 502", async () => {
+    const { cookie } = await verifyInvite();
+    const createAsset = broker.createAsset.bind(broker);
+    const consoleError = vi
+      .spyOn(console, "error")
+      .mockImplementation(() => {});
+    broker.createAsset = async () => {
+      throw new GeoBrokerError(
+        "Dashboard rejected the internal contract",
+        400,
+        "AGENT_REQUEST_FAILED",
+      );
+    };
+    try {
+      const response = await jsonRequest("/uploads/init", cookie, {
+        method: "POST",
+        body: {
+          filename: "catalog.pdf",
+          contentType: "application/pdf",
+          sizeBytes: 3,
+          clientRequestId: "11111111-1111-4111-8111-111111111111",
+          attachmentIndex: 0,
+        },
+      });
+      expect(response.response.status).toBe(502);
+      expect(response.body).toMatchObject({
+        error: { code: "GEO_UPLOAD_BROKER_CONTRACT_ERROR" },
+      });
+    } finally {
+      broker.createAsset = createAsset;
+      consoleError.mockRestore();
+    }
+  });
+
+  it("accepts upload capabilities only in the private header", async () => {
+    const { cookie } = await verifyInvite();
+    const initialized = await jsonRequest("/uploads/init", cookie, {
+      method: "POST",
+      body: {
+        filename: "catalog.pdf",
+        contentType: "application/pdf",
+        sizeBytes: 3,
+        clientRequestId: "12121212-1212-4121-8121-121212121212",
+        attachmentIndex: 0,
+      },
+    });
+    const ticket = initialized.body as Record<string, string>;
+
+    const queryOnly = await fetch(
+      `${baseUrl}/uploads/status?token=${encodeURIComponent(ticket.uploadToken)}`,
+      { headers: { cookie } },
+    );
+    expect(queryOnly.status).toBe(400);
+    await expect(queryOnly.json()).resolves.toMatchObject({
+      error: { code: "UPLOAD_TOKEN_REQUIRED" },
+    });
+
+    const headerOnly = await fetch(`${baseUrl}/uploads/status`, {
+      headers: { cookie, "x-geo-upload-token": ticket.uploadToken },
+    });
+    expect(headerOnly.status).toBe(200);
   });
 
   it("supports proxy upload and attachment-only project creation with opaque task ids", async () => {
@@ -1908,6 +2499,707 @@ describe("GEO API", () => {
     );
   });
 
+  it("streams the first browser chunk before EOF and exposes active then uploaded status", async () => {
+    const { cookie } = await verifyInvite();
+    const initialized = await jsonRequest("/uploads/init", cookie, {
+      method: "POST",
+      body: {
+        filename: "streamed.pdf",
+        contentType: "application/pdf",
+        sizeBytes: 3,
+        clientRequestId: "11111111-1111-4111-8111-111111111111",
+        attachmentIndex: 0,
+      },
+    });
+    const ticket = initialized.body as Record<string, string>;
+    const originalUploadAsset = broker.uploadAsset.bind(broker);
+    const firstChunkSeen = Promise.withResolvers<void>();
+    const consoleInfo = vi.spyOn(console, "info").mockImplementation(() => {});
+    broker.uploadAsset = async (
+      fileId,
+      body,
+      contentType,
+      uploadTicket,
+      options,
+    ) => {
+      expect(Buffer.isBuffer(body)).toBe(false);
+      const chunks: Buffer[] = [];
+      for await (const chunk of body as Readable) {
+        chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
+        if (chunks.length === 1) firstChunkSeen.resolve();
+      }
+      return originalUploadAsset(
+        fileId,
+        Buffer.concat(chunks),
+        contentType,
+        uploadTicket,
+        options,
+      );
+    };
+
+    try {
+      const responseDone = Promise.withResolvers<{
+        status: number;
+        body: Record<string, unknown>;
+      }>();
+      const request = httpRequest(
+        `${baseUrl}/uploads/proxy`,
+        {
+          method: "PUT",
+          headers: {
+            cookie,
+            "content-type": "application/pdf",
+            "content-length": "3",
+            "x-geo-upload-attempt": "2",
+            "x-geo-upload-token": ticket.uploadToken,
+          },
+        },
+        (response) => {
+          const chunks: Buffer[] = [];
+          response.on("data", (chunk) => chunks.push(Buffer.from(chunk)));
+          response.on("end", () =>
+            responseDone.resolve({
+              status: response.statusCode || 0,
+              body: JSON.parse(Buffer.concat(chunks).toString("utf8")),
+            }),
+          );
+        },
+      );
+      request.on("error", responseDone.reject);
+      request.write("p");
+
+      await firstChunkSeen.promise;
+      const active = await fetch(`${baseUrl}/uploads/status`, {
+        headers: { cookie, "x-geo-upload-token": ticket.uploadToken },
+      });
+      expect(active.status).toBe(200);
+      await expect(active.json()).resolves.toMatchObject({
+        fileId: ticket.fileId,
+        assetStatus: "pending",
+        transferState: "uploading",
+        declaredBytes: 3,
+        receivedBytes: 1,
+        traceId: ticket.traceId,
+      });
+
+      request.end("df");
+      await expect(responseDone.promise).resolves.toMatchObject({
+        status: 200,
+        body: { status: "uploaded", traceId: ticket.traceId },
+      });
+      const completed = await fetch(`${baseUrl}/uploads/status`, {
+        headers: { cookie, "x-geo-upload-token": ticket.uploadToken },
+      });
+      await expect(completed.json()).resolves.toMatchObject({
+        assetStatus: "uploaded",
+        transferState: "idle",
+        declaredBytes: 3,
+        receivedBytes: 3,
+      });
+      const replayed = await jsonRequest("/uploads/init", cookie, {
+        method: "POST",
+        body: {
+          filename: "streamed.pdf",
+          contentType: "application/pdf",
+          sizeBytes: 3,
+          clientRequestId: "11111111-1111-4111-8111-111111111111",
+          attachmentIndex: 0,
+        },
+      });
+      expect(replayed.response.status).toBe(200);
+      expect(replayed.body).toMatchObject({
+        fileId: ticket.fileId,
+        status: "uploaded",
+        replayed: true,
+        traceId: ticket.traceId,
+      });
+      const uploadAttemptsBeforeReplay = broker.uploadAttempts.length;
+      const replayUpload = await fetch(`${baseUrl}/uploads/proxy`, {
+        method: "PUT",
+        headers: {
+          cookie,
+          "content-type": "application/pdf",
+          "x-geo-upload-attempt": "3",
+          "x-geo-upload-token": ticket.uploadToken,
+        },
+        body: Buffer.from("pdf"),
+      });
+      expect(replayUpload.status).toBe(409);
+      await expect(replayUpload.json()).resolves.toMatchObject({
+        error: { code: "UPLOAD_ALREADY_COMMITTED" },
+      });
+      expect(broker.uploadAttempts).toHaveLength(uploadAttemptsBeforeReplay);
+
+      const uploadLogs = consoleInfo.mock.calls
+        .filter(([label]) => label === "[GEO upload]")
+        .map(([, detail]) => detail as Record<string, unknown>);
+      expect(
+        uploadLogs.find(
+          (detail) =>
+            detail.event === "downstream_started" && detail.attempt === 2,
+        ),
+      ).toMatchObject({
+        attachmentIndex: 0,
+        declaredBytes: 3,
+      });
+      expect(
+        uploadLogs
+          .filter(
+            (detail) =>
+              detail.event === "proxy_progress" && detail.attempt === 2,
+          )
+          .map((detail) => detail.milestone),
+      ).toEqual([25, 50, 75, 100]);
+      expect(JSON.stringify(uploadLogs)).not.toContain("streamed.pdf");
+      expect(JSON.stringify(uploadLogs)).not.toContain(ticket.uploadToken);
+    } finally {
+      broker.uploadAsset = originalUploadAsset;
+      consoleInfo.mockRestore();
+    }
+  });
+
+  it("does not treat normal request close after EOF as a caller abort while Dashboard confirms", async () => {
+    const { cookie } = await verifyInvite();
+    const initialized = await jsonRequest("/uploads/init", cookie, {
+      method: "POST",
+      body: {
+        filename: "delayed-confirmation.pdf",
+        contentType: "application/pdf",
+        sizeBytes: 3,
+      },
+    });
+    const ticket = initialized.body as Record<string, string>;
+    const originalUploadAsset = broker.uploadAsset.bind(broker);
+    const bodyReceived = Promise.withResolvers<Buffer>();
+    const confirm = Promise.withResolvers<void>();
+    broker.uploadAsset = async (fileId, body) => {
+      const chunks: Buffer[] = [];
+      for await (const chunk of body as Readable) {
+        chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
+      }
+      const bytes = Buffer.concat(chunks);
+      bodyReceived.resolve(bytes);
+      await confirm.promise;
+      broker.uploads.set(fileId, bytes);
+      return { status: "uploaded" };
+    };
+
+    try {
+      const uploaded = fetch(`${baseUrl}/uploads/proxy`, {
+        method: "PUT",
+        headers: {
+          cookie,
+          "content-type": "application/pdf",
+          "x-geo-upload-token": ticket.uploadToken,
+        },
+        body: Buffer.from("pdf"),
+      });
+      await expect(bodyReceived.promise).resolves.toEqual(Buffer.from("pdf"));
+      await new Promise<void>((resolve) => setImmediate(resolve));
+      const waiting = await fetch(`${baseUrl}/uploads/status`, {
+        headers: { cookie, "x-geo-upload-token": ticket.uploadToken },
+      });
+      await expect(waiting.json()).resolves.toMatchObject({
+        assetStatus: "pending",
+        transferState: "uploading",
+        receivedBytes: 3,
+      });
+      const duplicate = await fetch(`${baseUrl}/uploads/proxy`, {
+        method: "PUT",
+        headers: {
+          cookie,
+          "content-type": "application/pdf",
+          "x-geo-upload-token": ticket.uploadToken,
+        },
+        body: Buffer.from("pdf"),
+      });
+      expect(duplicate.status).toBe(429);
+      await expect(duplicate.json()).resolves.toMatchObject({
+        error: { code: "UPLOAD_IN_PROGRESS" },
+      });
+
+      confirm.resolve();
+      expect((await uploaded).status).toBe(200);
+    } finally {
+      confirm.resolve();
+      broker.uploadAsset = originalUploadAsset;
+    }
+  });
+
+  it("keeps the completed upload flight alive when the browser drops only the response", async () => {
+    const { cookie } = await verifyInvite();
+    const initialized = await jsonRequest("/uploads/init", cookie, {
+      method: "POST",
+      body: {
+        filename: "lost-response.pdf",
+        contentType: "application/pdf",
+        sizeBytes: 3,
+      },
+    });
+    const ticket = initialized.body as Record<string, string>;
+    const originalUploadAsset = broker.uploadAsset.bind(broker);
+    const bodyCompleted = Promise.withResolvers<Buffer>();
+    const confirm = Promise.withResolvers<void>();
+    let downstreamSignal: AbortSignal | undefined;
+    broker.uploadAsset = async (fileId, body, _type, _ticket, options) => {
+      downstreamSignal = options?.signal;
+      const chunks: Buffer[] = [];
+      for await (const chunk of body as Readable) {
+        chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
+      }
+      const bytes = Buffer.concat(chunks);
+      bodyCompleted.resolve(bytes);
+      await confirm.promise;
+      broker.uploads.set(fileId, bytes);
+      return { status: "uploaded" };
+    };
+
+    const browserController = new AbortController();
+    const browserRequest = fetch(`${baseUrl}/uploads/proxy`, {
+      method: "PUT",
+      headers: {
+        cookie,
+        "content-type": "application/pdf",
+        "x-geo-upload-token": ticket.uploadToken,
+      },
+      body: Buffer.from("pdf"),
+      signal: browserController.signal,
+    });
+
+    try {
+      await expect(bodyCompleted.promise).resolves.toEqual(Buffer.from("pdf"));
+      browserController.abort();
+      await expect(browserRequest).rejects.toMatchObject({
+        name: "AbortError",
+      });
+      await new Promise<void>((resolve) => setImmediate(resolve));
+      expect(downstreamSignal?.aborted).toBe(false);
+
+      const waiting = await fetch(`${baseUrl}/uploads/status`, {
+        headers: { cookie, "x-geo-upload-token": ticket.uploadToken },
+      });
+      await expect(waiting.json()).resolves.toMatchObject({
+        assetStatus: "pending",
+        transferState: "uploading",
+        receivedBytes: 3,
+      });
+
+      confirm.resolve();
+      let completed: Record<string, unknown> | undefined;
+      for (let attempt = 0; attempt < 20; attempt += 1) {
+        const response = await fetch(`${baseUrl}/uploads/status`, {
+          headers: { cookie, "x-geo-upload-token": ticket.uploadToken },
+        });
+        completed = (await response.json()) as Record<string, unknown>;
+        if (
+          completed.assetStatus === "uploaded" &&
+          completed.transferState === "idle"
+        ) {
+          break;
+        }
+        await new Promise((resolve) => setTimeout(resolve, 5));
+      }
+      expect(completed).toMatchObject({
+        assetStatus: "uploaded",
+        transferState: "idle",
+        receivedBytes: 3,
+      });
+      expect(downstreamSignal?.aborted).toBe(false);
+    } finally {
+      confirm.resolve();
+      broker.uploadAsset = originalUploadAsset;
+    }
+  });
+
+  it("requires status reconciliation when Dashboard reports uploaded before browser EOF", async () => {
+    const { cookie } = await verifyInvite();
+    const initialized = await jsonRequest("/uploads/init", cookie, {
+      method: "POST",
+      body: {
+        filename: "early-dashboard-response.pdf",
+        contentType: "application/pdf",
+        sizeBytes: 3,
+      },
+    });
+    const ticket = initialized.body as Record<string, string>;
+    const originalUploadAsset = broker.uploadAsset.bind(broker);
+    const downstreamReturned = Promise.withResolvers<void>();
+    broker.uploadAsset = async (fileId) => {
+      broker.uploads.set(fileId, Buffer.from("pdf"));
+      downstreamReturned.resolve();
+      return { status: "uploaded" };
+    };
+
+    const responseDone = Promise.withResolvers<{
+      status: number;
+      body: Record<string, any>;
+    }>();
+    const request = httpRequest(
+      `${baseUrl}/uploads/proxy`,
+      {
+        method: "PUT",
+        headers: {
+          cookie,
+          "content-type": "application/pdf",
+          "content-length": "3",
+          "x-geo-upload-token": ticket.uploadToken,
+        },
+      },
+      (response) => {
+        const chunks: Buffer[] = [];
+        response.on("data", (chunk) => chunks.push(Buffer.from(chunk)));
+        response.on("end", () =>
+          responseDone.resolve({
+            status: response.statusCode || 0,
+            body: JSON.parse(Buffer.concat(chunks).toString("utf8")),
+          }),
+        );
+      },
+    );
+    request.on("error", responseDone.reject);
+
+    try {
+      request.write("p");
+      await downstreamReturned.promise;
+      await expect(responseDone.promise).resolves.toMatchObject({
+        status: 409,
+        body: { error: { code: "UPLOAD_ALREADY_COMMITTED" } },
+      });
+      const status = await fetch(`${baseUrl}/uploads/status`, {
+        headers: { cookie, "x-geo-upload-token": ticket.uploadToken },
+      });
+      await expect(status.json()).resolves.toMatchObject({
+        assetStatus: "uploaded",
+        transferState: "idle",
+        receivedBytes: 3,
+      });
+    } finally {
+      request.destroy();
+      broker.uploadAsset = originalUploadAsset;
+    }
+  });
+
+  it("rejects a mismatched upload MIME type before starting Dashboard transfer", async () => {
+    const { cookie } = await verifyInvite();
+    const initialized = await jsonRequest("/uploads/init", cookie, {
+      method: "POST",
+      body: {
+        filename: "mime.pdf",
+        contentType: "application/pdf",
+        sizeBytes: 3,
+      },
+    });
+    const ticket = initialized.body as Record<string, string>;
+    const attemptsBefore = broker.uploadAttempts.length;
+
+    const response = await fetch(`${baseUrl}/uploads/proxy`, {
+      method: "PUT",
+      headers: {
+        cookie,
+        "content-type": "text/plain",
+        "x-geo-upload-token": ticket.uploadToken,
+      },
+      body: Buffer.from("pdf"),
+    });
+
+    expect(response.status).toBe(400);
+    await expect(response.json()).resolves.toMatchObject({
+      error: { code: "UPLOAD_TYPE_MISMATCH" },
+    });
+    expect(broker.uploadAttempts).toHaveLength(attemptsBefore);
+  });
+
+  it("rejects short and long chunked bodies and records only a safe stream error code", async () => {
+    const { cookie } = await verifyInvite();
+    const consoleInfo = vi.spyOn(console, "info").mockImplementation(() => {});
+    const consoleWarn = vi.spyOn(console, "warn").mockImplementation(() => {});
+
+    try {
+      for (const [attachmentIndex, bytes] of [
+        [0, Buffer.from("pd")],
+        [1, Buffer.from("long")],
+      ] as const) {
+        const initialized = await jsonRequest("/uploads/init", cookie, {
+          method: "POST",
+          body: {
+            filename: `size-${attachmentIndex}.pdf`,
+            contentType: "application/pdf",
+            sizeBytes: 3,
+            clientRequestId: "11111111-1111-4111-8111-111111111111",
+            attachmentIndex,
+          },
+        });
+        const ticket = initialized.body as Record<string, string>;
+        const response = await fetch(`${baseUrl}/uploads/proxy`, {
+          method: "PUT",
+          headers: {
+            cookie,
+            "content-type": "application/pdf",
+            "x-geo-upload-token": ticket.uploadToken,
+          },
+          body: Readable.from([bytes]),
+          duplex: "half",
+        } as RequestInit & { duplex: "half" });
+
+        expect(response.status).toBe(400);
+        await expect(response.json()).resolves.toMatchObject({
+          error: { code: "UPLOAD_SIZE_MISMATCH" },
+        });
+      }
+
+      const safeWarnings = consoleWarn.mock.calls
+        .filter(([label]) => label === "[GEO upload]")
+        .map(([, detail]) => detail as Record<string, unknown>);
+      expect(safeWarnings).toContainEqual(
+        expect.objectContaining({
+          event: "transport_error",
+          source: "stream",
+          code: "UPLOAD_SIZE_MISMATCH",
+        }),
+      );
+      const finishLogs = consoleInfo.mock.calls
+        .filter(([label]) => label === "[GEO upload]")
+        .map(([, detail]) => detail as Record<string, unknown>)
+        .filter((detail) => detail.event === "proxy_finished");
+      expect(finishLogs).toContainEqual(
+        expect.objectContaining({
+          transportErrorSource: "stream",
+          transportErrorCode: "UPLOAD_SIZE_MISMATCH",
+        }),
+      );
+      const serializedLogs = JSON.stringify([...safeWarnings, ...finishLogs]);
+      expect(serializedLogs).not.toContain("size-0.pdf");
+      expect(serializedLogs).not.toContain("size-1.pdf");
+    } finally {
+      consoleInfo.mockRestore();
+      consoleWarn.mockRestore();
+    }
+  });
+
+  it("allows upload status GET with an explicit zero Content-Length", async () => {
+    const { cookie } = await verifyInvite();
+    const initialized = await jsonRequest("/uploads/init", cookie, {
+      method: "POST",
+      body: {
+        filename: "status.pdf",
+        contentType: "application/pdf",
+        sizeBytes: 3,
+      },
+    });
+    const ticket = initialized.body as Record<string, string>;
+
+    const response = await fetch(`${baseUrl}/uploads/status`, {
+      headers: {
+        cookie,
+        "content-length": "0",
+        "x-geo-upload-token": ticket.uploadToken,
+      },
+    });
+
+    expect(response.status).toBe(200);
+    await expect(response.json()).resolves.toMatchObject({
+      assetStatus: "pending",
+      transferState: "idle",
+      declaredBytes: 3,
+      receivedBytes: 0,
+    });
+  });
+
+  it("aborts the downstream stream and releases the asset flight when the browser disconnects", async () => {
+    const { cookie } = await verifyInvite();
+    const initialized = await jsonRequest("/uploads/init", cookie, {
+      method: "POST",
+      body: {
+        filename: "aborted.pdf",
+        contentType: "application/pdf",
+        sizeBytes: 3,
+      },
+    });
+    const ticket = initialized.body as Record<string, string>;
+    const originalUploadAsset = broker.uploadAsset.bind(broker);
+    const downstreamStarted = Promise.withResolvers<void>();
+    const downstreamAborted = Promise.withResolvers<void>();
+    broker.uploadAsset = async (_fileId, _body, _type, _ticket, options) => {
+      downstreamStarted.resolve();
+      return new Promise((_resolve, reject) => {
+        options?.signal?.addEventListener(
+          "abort",
+          () => {
+            downstreamAborted.resolve();
+            reject(
+              new GeoBrokerError("caller aborted", 502, "AGENT_UNAVAILABLE"),
+            );
+          },
+          { once: true },
+        );
+      });
+    };
+
+    const request = httpRequest(`${baseUrl}/uploads/proxy`, {
+      method: "PUT",
+      headers: {
+        cookie,
+        "content-type": "application/pdf",
+        "content-length": "3",
+        "x-geo-upload-token": ticket.uploadToken,
+      },
+    });
+    const requestClosed = new Promise<void>((resolve) => {
+      request.once("error", () => resolve());
+      request.once("close", () => resolve());
+    });
+    request.write("p");
+    await downstreamStarted.promise;
+    request.destroy();
+    await downstreamAborted.promise;
+    await requestClosed;
+
+    try {
+      for (let attempt = 0; attempt < 20; attempt += 1) {
+        const status = await fetch(`${baseUrl}/uploads/status`, {
+          headers: { cookie, "x-geo-upload-token": ticket.uploadToken },
+        });
+        const payload = (await status.json()) as Record<string, unknown>;
+        if (payload.transferState === "idle") break;
+        await new Promise((resolve) => setTimeout(resolve, 5));
+      }
+    } finally {
+      broker.uploadAsset = originalUploadAsset;
+    }
+
+    const retried = await fetch(`${baseUrl}/uploads/proxy`, {
+      method: "PUT",
+      headers: {
+        cookie,
+        "content-type": "application/pdf",
+        "x-geo-upload-token": ticket.uploadToken,
+      },
+      body: Buffer.from("pdf"),
+    });
+    expect(retried.status).toBe(200);
+  });
+
+  it("returns a retryable error after the streamed request has no byte growth", async () => {
+    await restartWithUploadTimeouts({
+      uploadDataIdleMs: 20,
+      uploadConfirmationMs: 1_000,
+    });
+    const { cookie } = await verifyInvite();
+    const initialized = await jsonRequest("/uploads/init", cookie, {
+      method: "POST",
+      body: {
+        filename: "idle.pdf",
+        contentType: "application/pdf",
+        sizeBytes: 3,
+      },
+    });
+    const ticket = initialized.body as Record<string, string>;
+    const chunkSeen = Promise.withResolvers<void>();
+    broker.uploadAsset = async (_fileId, body, _type, _ticket, options) => {
+      (body as Readable).once("data", () => chunkSeen.resolve());
+      return new Promise((_resolve, reject) => {
+        options?.signal?.addEventListener(
+          "abort",
+          () =>
+            reject(
+              new GeoBrokerError("idle timeout", 502, "AGENT_UNAVAILABLE"),
+            ),
+          { once: true },
+        );
+      });
+    };
+
+    const responseDone = Promise.withResolvers<{
+      status: number;
+      body: Record<string, any>;
+    }>();
+    const request = httpRequest(
+      `${baseUrl}/uploads/proxy`,
+      {
+        method: "PUT",
+        headers: {
+          cookie,
+          "content-type": "application/pdf",
+          "content-length": "3",
+          "x-geo-upload-token": ticket.uploadToken,
+        },
+      },
+      (response) => {
+        const chunks: Buffer[] = [];
+        response.on("data", (chunk) => chunks.push(Buffer.from(chunk)));
+        response.on("end", () =>
+          responseDone.resolve({
+            status: response.statusCode || 0,
+            body: JSON.parse(Buffer.concat(chunks).toString("utf8")),
+          }),
+        );
+      },
+    );
+    request.on("error", responseDone.reject);
+    request.write("p");
+    await chunkSeen.promise;
+
+    await expect(responseDone.promise).resolves.toMatchObject({
+      status: 408,
+      body: { error: { code: "UPLOAD_DATA_IDLE_TIMEOUT" } },
+    });
+    request.destroy();
+  });
+
+  it("bounds only the post-body Dashboard confirmation wait", async () => {
+    await restartWithUploadTimeouts({
+      uploadDataIdleMs: 1_000,
+      uploadConfirmationMs: 20,
+    });
+    const { cookie } = await verifyInvite();
+    const initialized = await jsonRequest("/uploads/init", cookie, {
+      method: "POST",
+      body: {
+        filename: "confirmation.pdf",
+        contentType: "application/pdf",
+        sizeBytes: 3,
+      },
+    });
+    const ticket = initialized.body as Record<string, string>;
+    const bodyCompleted = Promise.withResolvers<void>();
+    broker.uploadAsset = async (_fileId, body, _type, _ticket, options) => {
+      for await (const _chunk of body as Readable) {
+        // Drain the complete request before waiting on Dashboard confirmation.
+      }
+      bodyCompleted.resolve();
+      return new Promise((_resolve, reject) => {
+        options?.signal?.addEventListener(
+          "abort",
+          () =>
+            reject(
+              new GeoBrokerError(
+                "confirmation timeout",
+                502,
+                "AGENT_UNAVAILABLE",
+              ),
+            ),
+          { once: true },
+        );
+      });
+    };
+
+    const responsePromise = fetch(`${baseUrl}/uploads/proxy`, {
+      method: "PUT",
+      headers: {
+        cookie,
+        "content-type": "application/pdf",
+        "x-geo-upload-token": ticket.uploadToken,
+      },
+      body: Buffer.from("pdf"),
+    });
+    await bodyCompleted.promise;
+    const response = await responsePromise;
+    expect(response.status).toBe(504);
+    await expect(response.json()).resolves.toMatchObject({
+      error: { code: "UPLOAD_CONFIRMATION_TIMEOUT" },
+    });
+  });
+
   it("uses the immutable v6 writer and v3 finalizer only when the rollout gate is explicitly disabled", async () => {
     const legacyBroker = new MockBroker();
     legacyBroker.archive = await fixtureLegacyCandidateArchive();
@@ -1937,13 +3229,21 @@ describe("GEO API", () => {
       const invited = await fetch(`${origin}/api/geo/invite/verify`, {
         method: "POST",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify({ code: "frontmind666" }),
+        body: JSON.stringify({
+          code: "frontmind666",
+          businessOwnerName: "测试商务负责人",
+        }),
       });
+      const inviteContext = (await invited.json()) as Record<string, string>;
       const cookie = invited.headers.get("set-cookie")!.split(";")[0]!;
       const created = await fetch(`${origin}/api/geo/projects`, {
         method: "POST",
         headers: { cookie, "content-type": "application/json" },
-        body: JSON.stringify({ input: "Acme", attachments: [] }),
+        body: JSON.stringify({
+          inviteContextToken: inviteContext.inviteContextToken,
+          input: "Acme",
+          attachments: [],
+        }),
       });
       expect(created.status).toBe(201);
       const initial = (await created.json()) as Record<string, any>;
@@ -2054,7 +3354,7 @@ describe("GEO API", () => {
     }
   });
 
-  it("rejects a schema-v1 candidate for a project pinned to writer v7", async () => {
+  it("publishes readable schema-v1 content as a v5 partial for a writer-v7 project", async () => {
     broker.archive = await fixtureLegacyCandidateArchive();
     const { cookie } = await verifyInvite();
     const created = await jsonRequest("/projects", cookie, {
@@ -2093,23 +3393,28 @@ describe("GEO API", () => {
     expect(polled.response.status).toBe(200);
     expect(polled.body).toMatchObject({
       project: {
-        status: "failed",
-        knowledgeBaseValidationCategory: "content",
-        knowledgeBaseSupportRequired: true,
+        status: "ready_for_questions",
+        knowledgeBase: { sections: expect.any(Array) },
       },
     });
-    expect(
-      (polled.body as Record<string, any>).project.knowledgeBase,
-    ).toBeUndefined();
-    const failedValue = codec.open<any>(
+    const completedValue = codec.open<any>(
       (polled.body as Record<string, any>).projectToken,
       "project",
     ).value;
-    expect(failedValue).toMatchObject({
+    expect(completedValue).toMatchObject({
       knowledgeBaseSkillVersion: 7,
-      knowledgeBaseCandidateFailure: { category: "content" },
+      knowledgeBaseArtifact: {
+        finalizerVersion: "website-kb-finalizer-v5",
+        candidate: {
+          quality: {
+            state: "partial",
+            requiresSupplement: true,
+            warningCodes: expect.arrayContaining(["RUN_METADATA_INCOMPLETE"]),
+          },
+        },
+      },
     });
-    expect(failedValue.knowledgeBaseArtifact).toBeUndefined();
+    expect(completedValue.knowledgeBaseCandidateFailure).toBeUndefined();
   });
 
   it("renames customer uploads that collide with server-owned Skill or task-input files", async () => {
@@ -2246,6 +3551,21 @@ describe("GEO API", () => {
     });
     expect(wrongSession.status).toBe(403);
 
+    const invalidAttempt = await fetch(`${baseUrl}/uploads/proxy`, {
+      method: "PUT",
+      headers: {
+        cookie: first.cookie,
+        "content-type": "application/pdf",
+        "x-geo-upload-attempt": "4",
+        "x-geo-upload-token": ticket.uploadToken,
+      },
+      body: Buffer.from("pdf"),
+    });
+    expect(invalidAttempt.status).toBe(400);
+    await expect(invalidAttempt.json()).resolves.toMatchObject({
+      error: { code: "UPLOAD_ATTEMPT_INVALID" },
+    });
+
     const wrongSize = await fetch(`${baseUrl}/uploads/proxy`, {
       method: "PUT",
       headers: {
@@ -2258,7 +3578,7 @@ describe("GEO API", () => {
     expect(wrongSize.status).toBe(400);
   });
 
-  it("finalizes a candidate, returns fixed knowledge sections and strict questions, then physically deletes both tasks", async () => {
+  it("finalizes a candidate, returns fixed knowledge sections and strict questions, then retains both tasks on local delete", async () => {
     const { cookie } = await verifyInvite();
     const created = await jsonRequest("/projects", cookie, {
       method: "POST",
@@ -2320,6 +3640,12 @@ describe("GEO API", () => {
     expect(recommended.response.status).toBe(201);
     const recommendedPayload = recommended.body as Record<string, any>;
     expect(recommendedPayload.project.questions).toHaveLength(20);
+    expect(recommendedPayload.project.questionRecommendation).toMatchObject({
+      status: "ready",
+    });
+    expect(
+      recommendedPayload.project.executionLog.currentEntryId,
+    ).toBeUndefined();
     expect(recommendedPayload.project.stage).toBe("question_recommendation");
     expect(recommendedPayload.projectToken).not.toBe(initial.projectToken);
     expect(broker.prompts[1]).toContain(
@@ -2345,6 +3671,25 @@ describe("GEO API", () => {
     expect(replayedOldToken.response.status).toBe(201);
     expect(broker.questionTaskCount).toBe(1);
 
+    broker.tasks.set("question-1", {
+      ...broker.tasks.get("question-1"),
+      providerStartedAt: "2026-08-15T13:00:00.000Z",
+      terminalAt: "2026-08-15T13:12:00.000Z",
+    });
+    const timestamped = await jsonRequest(
+      `/projects/${encodeURIComponent(recommendedPayload.projectToken)}`,
+      cookie,
+    );
+    expect(timestamped.body).toMatchObject({
+      project: {
+        questionRecommendation: {
+          status: "ready",
+          startedAt: "2026-08-15T13:00:00.000Z",
+          terminalAt: "2026-08-15T13:12:00.000Z",
+        },
+      },
+    });
+
     const archiveResponse = await fetch(
       `${baseUrl}/projects/${encodeURIComponent(recommendedPayload.projectToken)}/archive`,
       { headers: { cookie } },
@@ -2366,10 +3711,10 @@ describe("GEO API", () => {
     );
     expect(removed.body).toMatchObject({
       ok: true,
-      deletedTasks: 2,
+      retention: "provider_records_retained",
     });
-    expect(broker.tasks.has("kb-1")).toBe(false);
-    expect(broker.tasks.has("question-1")).toBe(false);
+    expect(broker.tasks.has("kb-1")).toBe(true);
+    expect(broker.tasks.has("question-1")).toBe(true);
   });
 
   it("keeps both v4 archive path inventories out of the public project payload", async () => {
@@ -2435,8 +3780,12 @@ describe("GEO API", () => {
       const invited = await fetch(`${origin}/api/geo/invite/verify`, {
         method: "POST",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify({ code: "frontmind666" }),
+        body: JSON.stringify({
+          code: "frontmind666",
+          businessOwnerName: "测试商务负责人",
+        }),
       });
+      const inviteContext = (await invited.json()) as Record<string, string>;
       const cookie = invited.headers.get("set-cookie")!.split(";")[0]!;
       const created = await fetch(`${origin}/api/geo/projects`, {
         method: "POST",
@@ -2444,7 +3793,11 @@ describe("GEO API", () => {
           cookie,
           "content-type": "application/json",
         },
-        body: JSON.stringify({ input: "Acme", attachments: [] }),
+        body: JSON.stringify({
+          inviteContextToken: inviteContext.inviteContextToken,
+          input: "Acme",
+          attachments: [],
+        }),
       });
       const initial = (await created.json()) as Record<string, any>;
       v2Broker.tasks.set("kb-1", {
@@ -2485,11 +3838,16 @@ describe("GEO API", () => {
       const value = codec.open<any>(completed.projectToken, "project").value;
       expect(value).toMatchObject({
         knowledgeBaseArtifact: {
-          finalizerVersion: "website-kb-finalizer-v4",
+          finalizerVersion: "website-kb-finalizer-v5",
           candidate: {
             taskId: "kb-1",
             artifactId: "candidate-v2",
             sha256: expect.stringMatching(/^[a-f0-9]{64}$/),
+            quality: {
+              state: "complete",
+              requiresSupplement: false,
+              warningCodes: [],
+            },
           },
           final: {
             archiveContractVersion: 4,
@@ -2531,6 +3889,7 @@ describe("GEO API", () => {
       for (const legacyFinalizerVersion of [
         "website-kb-finalizer-v2",
         "website-kb-finalizer-v3",
+        "website-kb-finalizer-v4",
       ] as const) {
         const legacyToken = codec.seal(
           "project",
@@ -2789,13 +4148,21 @@ describe("GEO API", () => {
       const invited = await fetch(`${origin}/api/geo/invite/verify`, {
         method: "POST",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify({ code: "frontmind666" }),
+        body: JSON.stringify({
+          code: "frontmind666",
+          businessOwnerName: "测试商务负责人",
+        }),
       });
+      const inviteContext = (await invited.json()) as Record<string, string>;
       const cookie = invited.headers.get("set-cookie")!.split(";")[0]!;
       const created = await fetch(`${origin}/api/geo/projects`, {
         method: "POST",
         headers: { cookie, "content-type": "application/json" },
-        body: JSON.stringify({ input: "Acme", attachments: [] }),
+        body: JSON.stringify({
+          inviteContextToken: inviteContext.inviteContextToken,
+          input: "Acme",
+          attachments: [],
+        }),
       });
       const initial = (await created.json()) as Record<string, any>;
       mismatchBroker.tasks.set("kb-1", {
@@ -2867,13 +4234,21 @@ describe("GEO API", () => {
       const invited = await fetch(`${origin}/api/geo/invite/verify`, {
         method: "POST",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify({ code: "frontmind666" }),
+        body: JSON.stringify({
+          code: "frontmind666",
+          businessOwnerName: "测试商务负责人",
+        }),
       });
+      const inviteContext = (await invited.json()) as Record<string, string>;
       const cookie = invited.headers.get("set-cookie")!.split(";")[0]!;
       const created = await fetch(`${origin}/api/geo/projects`, {
         method: "POST",
         headers: { cookie, "content-type": "application/json" },
-        body: JSON.stringify({ input: "Acme", attachments: [] }),
+        body: JSON.stringify({
+          inviteContextToken: inviteContext.inviteContextToken,
+          input: "Acme",
+          attachments: [],
+        }),
       });
       const initial = (await created.json()) as Record<string, any>;
       failureBroker.tasks.set("kb-1", {
@@ -2907,7 +4282,7 @@ describe("GEO API", () => {
         error: "企业知识库最终整理未通过校验，请联系技术支持。",
         knowledgeBaseFinalization: {
           finalizationState: "failed_internal",
-          finalizerVersion: "website-kb-finalizer-v4",
+          finalizerVersion: "website-kb-finalizer-v5",
           candidateSha256: expect.stringMatching(/^[a-f0-9]{64}$/),
           errorCode: "KB_FINALIZER_CONTRACT_VIOLATION",
         },
@@ -3046,7 +4421,7 @@ describe("GEO API", () => {
     expect((rejected.body as any).project.knowledgeBase).toBeUndefined();
   });
 
-  it("continues to a generic ZIP after a named candidate has only a structural mismatch", async () => {
+  it("does not fall back to a generic ZIP after the unique candidate-like ZIP is structurally invalid", async () => {
     const structurallyInvalid = new JSZip();
     structurallyInvalid.file("02_run.json", '{"schemaVersion":1}');
     broker.uploads.set(
@@ -3082,20 +4457,23 @@ describe("GEO API", () => {
       ],
     });
 
-    const completed = await jsonRequest(
+    const rejected = await jsonRequest(
       `/projects/${encodeURIComponent(initial.projectToken)}`,
       cookie,
     );
-    expect(completed.response.status).toBe(200);
-    expect((completed.body as any).project.knowledgeBase.sections).toHaveLength(
-      7,
-    );
+    expect(rejected.response.status).toBe(200);
+    expect(rejected.body).toMatchObject({
+      project: {
+        status: "failed",
+        knowledgeBaseValidationCategory: "structure",
+        knowledgeBaseSupportRequired: true,
+      },
+    });
+    expect((rejected.body as any).project.knowledgeBase).toBeUndefined();
     const tokenValue = new GeoTokenCodec(
       "test-session-secret-at-least-16-characters",
-    ).open<any>((completed.body as any).projectToken, "project").value;
-    expect(tokenValue.knowledgeBaseArtifact.candidate.artifactId).toBe(
-      "generic-valid",
-    );
+    ).open<any>((rejected.body as any).projectToken, "project").value;
+    expect(tokenValue.knowledgeBaseArtifact).toBeUndefined();
   });
 
   it("uses ZIP validation as a gate for preview, recommendation, and download", async () => {
@@ -3164,6 +4542,73 @@ describe("GEO API", () => {
       });
     }
     expect(broker.questionTaskCount).toBe(0);
+  });
+
+  it("maps a Dashboard question-contract 400, retains generated assets, and retries one task", async () => {
+    const { cookie } = await verifyInvite();
+    const created = await jsonRequest("/projects", cookie, {
+      method: "POST",
+      body: { input: "Acme", attachments: [] },
+    });
+    const initial = created.body as Record<string, any>;
+    broker.tasks.set("kb-1", {
+      id: "kb-1",
+      status: "completed",
+      output: [
+        {
+          role: "assistant",
+          content: [
+            {
+              type: "output_file",
+              file_id: "archive-1",
+              filename: "Acme.zip",
+            },
+          ],
+        },
+      ],
+    });
+    const filesBefore = new Set(broker.createdFileIds);
+    broker.createTaskErrors.push(
+      new GeoBrokerError(
+        "strict task schema rejected an internal attachment field",
+        400,
+        "INVALID_REQUEST",
+      ),
+    );
+
+    const failed = await jsonRequest(
+      `/projects/${encodeURIComponent(initial.projectToken)}/questions`,
+      cookie,
+      { method: "POST", body: {} },
+    );
+    expect(failed.response.status).toBe(502);
+    expect(failed.body).toMatchObject({
+      error: {
+        code: "GEO_QUESTION_BROKER_CONTRACT_ERROR",
+        message: "问题生成服务合同异常，知识库已保留，请重试或重置项目",
+      },
+    });
+    const retainedGeneratedFiles = broker.createdFileIds.filter(
+      (fileId) => !filesBefore.has(fileId),
+    );
+    expect(retainedGeneratedFiles.length).toBeGreaterThanOrEqual(2);
+    expect(retainedGeneratedFiles).toSatisfy((fileIds) =>
+      fileIds.every((fileId) => !broker.deletedFiles.includes(fileId)),
+    );
+    expect(broker.questionTaskCount).toBe(0);
+
+    const retried = await jsonRequest(
+      `/projects/${encodeURIComponent(initial.projectToken)}/questions`,
+      cookie,
+      { method: "POST", body: {} },
+    );
+    expect(retried.response.status).toBe(201);
+    expect(broker.questionTaskCount).toBe(1);
+    expect(
+      broker.createdFileIds.filter((fileId) =>
+        retainedGeneratedFiles.includes(fileId),
+      ),
+    ).toEqual(retainedGeneratedFiles);
   });
 
   it("creates exactly one Base knowledge-base task and never regenerates it", async () => {
@@ -3254,7 +4699,7 @@ describe("GEO API", () => {
     });
   });
 
-  it("reports incomplete remote cleanup and allows an idempotent retry", async () => {
+  it("acknowledges local removal without consulting remote cleanup", async () => {
     const { cookie } = await verifyInvite();
     const initialized = await jsonRequest("/uploads/init", cookie, {
       method: "POST",
@@ -3295,9 +4740,10 @@ describe("GEO API", () => {
       cookie,
       { method: "DELETE" },
     );
-    expect(failed.response.status).toBe(502);
+    expect(failed.response.status).toBe(200);
     expect(failed.body).toMatchObject({
-      error: { code: "PROJECT_DELETE_INCOMPLETE" },
+      ok: true,
+      retention: "provider_records_retained",
     });
 
     broker.failDeleteFile = false;
@@ -3309,15 +4755,14 @@ describe("GEO API", () => {
     expect(retried.response.status).toBe(200);
     expect(retried.body).toMatchObject({
       ok: true,
-      deletedTasks: 1,
-      deletedFiles: 3,
+      retention: "provider_records_retained",
     });
-    expect(retainedTaskIds.every((taskId) => !broker.tasks.has(taskId))).toBe(
+    expect(retainedTaskIds.every((taskId) => broker.tasks.has(taskId))).toBe(
       true,
     );
   });
 
-  it("returns a retryable deletion receipt while a project task reservation is still in flight", async () => {
+  it("does not consult project-task deletion while acknowledging local removal", async () => {
     const ready = await createReadyProject();
     const deleteProjectTasks = broker.deleteProjectTasks.bind(broker);
     let attempts = 0;
@@ -3344,11 +4789,10 @@ describe("GEO API", () => {
         ready.cookie,
         { method: "DELETE" },
       );
-      expect(pending.response.status).toBe(202);
+      expect(pending.response.status).toBe(200);
       expect(pending.body).toMatchObject({
-        status: "deleting",
-        pendingReservations: 1,
-        retryAfterMs: 1_000,
+        ok: true,
+        retention: "provider_records_retained",
       });
     }
 
@@ -3358,10 +4802,14 @@ describe("GEO API", () => {
       { method: "DELETE" },
     );
     expect(completed.response.status).toBe(200);
-    expect(completed.body).toMatchObject({ ok: true });
+    expect(completed.body).toMatchObject({
+      ok: true,
+      retention: "provider_records_retained",
+    });
+    expect(attempts).toBe(0);
   });
 
-  it("keeps project deletion pending until an in-flight monitor submission settles", async () => {
+  it("does not stop an in-flight monitor when removing the browser project", async () => {
     const ready = await createReadyProject();
     const monitored = await startOnePlatformMonitor(ready);
     const deleteMonitorRun = broker.deleteMonitorRun.bind(broker);
@@ -3377,11 +4825,10 @@ describe("GEO API", () => {
       ready.cookie,
       { method: "DELETE" },
     );
-    expect(pending.response.status).toBe(202);
+    expect(pending.response.status).toBe(200);
     expect(pending.body).toMatchObject({
-      status: "deleting",
-      pendingMonitorRuns: 1,
-      retryAfterMs: 2_000,
+      ok: true,
+      retention: "provider_records_retained",
     });
 
     const completed = await jsonRequest(
@@ -3391,9 +4838,10 @@ describe("GEO API", () => {
     );
     expect(completed.response.status).toBe(200);
     expect(completed.body).toMatchObject({ ok: true });
+    expect(attempts).toBe(0);
   });
 
-  it("keeps project deletion pending until an in-flight task write settles", async () => {
+  it("does not stop an in-flight task when removing the browser project", async () => {
     const ready = await createReadyProject();
     const deleteTask = broker.deleteTask.bind(broker);
     let taskDeletionPending = true;
@@ -3413,15 +4861,12 @@ describe("GEO API", () => {
       ready.cookie,
       { method: "DELETE" },
     );
-    expect(pending.response.status).toBe(202);
+    expect(pending.response.status).toBe(200);
     expect(pending.body).toMatchObject({
-      status: "deleting",
-      pendingResources: expect.any(Number),
-      retryAfterMs: 2_000,
+      ok: true,
+      retention: "provider_records_retained",
     });
-    expect(
-      Number((pending.body as Record<string, unknown>).pendingResources),
-    ).toBeGreaterThan(0);
+    expect(taskDeletionPending).toBe(true);
 
     taskDeletionPending = false;
     const completed = await jsonRequest(
@@ -3453,7 +4898,7 @@ describe("GEO API", () => {
     expect(deleted.body).toMatchObject({ ok: true });
   });
 
-  it("physically deletes a project with a legacy pending monitoring order and permanently fences its old token", async () => {
+  it("retains a legacy pending monitoring order and keeps the remote token readable", async () => {
     const ready = await createReadyProject();
     const projectId = new GeoTokenCodec(
       "test-session-secret-at-least-16-characters",
@@ -3478,16 +4923,19 @@ describe("GEO API", () => {
       { method: "DELETE" },
     );
     expect(pendingDelete.response.status).toBe(200);
-    expect(pendingDelete.body).toMatchObject({ ok: true, deletedOrders: 1 });
-    expect(projectOrders.size).toBe(0);
+    expect(pendingDelete.body).toMatchObject({
+      ok: true,
+      retention: "provider_records_retained",
+    });
+    expect(projectOrders.size).toBe(1);
 
     const fencedRead = await jsonRequest(
       `/projects/${encodeURIComponent(ready.projectToken)}`,
       ready.cookie,
     );
-    expect(fencedRead.response.status).toBe(410);
+    expect(fencedRead.response.status).toBe(200);
     expect(fencedRead.body).toMatchObject({
-      error: { code: "PROJECT_DELETED" },
+      project: { id: expect.any(String) },
     });
 
     const repeatedDelete = await jsonRequest(
@@ -3496,7 +4944,10 @@ describe("GEO API", () => {
       { method: "DELETE" },
     );
     expect(repeatedDelete.response.status).toBe(200);
-    expect(repeatedDelete.body).toMatchObject({ ok: true, deletedOrders: 0 });
+    expect(repeatedDelete.body).toMatchObject({
+      ok: true,
+      retention: "provider_records_retained",
+    });
 
     const restartedApp = express();
     restartedApp.use(
@@ -3524,9 +4975,9 @@ describe("GEO API", () => {
         `http://127.0.0.1:${restartedPort}/api/geo/projects/${encodeURIComponent(ready.projectToken)}`,
         { headers: { cookie: ready.cookie } },
       );
-      expect(restartedRead.status).toBe(410);
+      expect(restartedRead.status).toBe(200);
       expect(await restartedRead.json()).toMatchObject({
-        error: { code: "PROJECT_DELETED" },
+        project: { id: expect.any(String) },
       });
     } finally {
       await new Promise<void>((resolve, reject) =>
@@ -3535,7 +4986,7 @@ describe("GEO API", () => {
     }
   });
 
-  it("allows deletion after a paid monitoring run has explicitly terminated", async () => {
+  it("retains an explicitly terminated paid monitoring run", async () => {
     const ready = await createReadyProject();
     await jsonRequest(
       `/projects/${encodeURIComponent(ready.projectToken)}/payments`,
@@ -3566,11 +5017,12 @@ describe("GEO API", () => {
     expect(removed.response.status).toBe(200);
     expect(removed.body).toMatchObject({
       ok: true,
-      deletedMonitorRuns: 1,
+      retention: "provider_records_retained",
     });
+    expect(broker.monitorRuns.has("monitor-1")).toBe(true);
   });
 
-  it("allows deletion when a completed order's old monitor history is no longer visible", async () => {
+  it("retains a completed order when old monitor history is no longer visible", async () => {
     const ready = await createReadyProject();
     const monitored = await startOnePlatformMonitor(ready);
     const projectId = new GeoTokenCodec(
@@ -3614,11 +5066,11 @@ describe("GEO API", () => {
     expect(deleted.response.status).toBe(200);
     expect(deleted.body).toMatchObject({
       ok: true,
-      deletedMonitorRuns: 1,
+      retention: "provider_records_retained",
     });
   });
 
-  it("does not consult deletion eligibility before physically deleting a project", async () => {
+  it("does not consult deletion eligibility or delete tasks for local removal", async () => {
     const ready = await createReadyProject();
     projectOrderRegistry.findByProject = async () => {
       throw new Error("database unavailable");
@@ -3631,8 +5083,8 @@ describe("GEO API", () => {
     );
     expect(removed.response.status).toBe(200);
     expect(removed.body).toMatchObject({ ok: true });
-    expect(broker.tasks.has("kb-1")).toBe(false);
-    expect(broker.tasks.has("question-1")).toBe(false);
+    expect(broker.tasks.has("kb-1")).toBe(true);
+    expect(broker.tasks.has("question-1")).toBe(true);
   });
 
   it("deduplicates a replayed initial project request within the same session", async () => {
@@ -3993,33 +5445,12 @@ describe("GEO API", () => {
     expect(projectOrders.size).toBe(0);
   });
 
-  it("repairs one source-mismatched translation on the same task", async () => {
-    const sourceQuestion = "Acme 的服务模块 1 主要解决哪些业务问题？";
+  it("rejects a source-mismatched translation without continuing the same task", async () => {
     broker.monitorQuestionTranslationRawOutput = {
       schemaVersion: 1,
       sourceQuestionSha256: "0".repeat(64),
       questionEnglish: "Is this unrelated platform stable?",
     };
-    broker.repairResultFactory = (taskId) =>
-      taskId.startsWith("monitor-question-translation-")
-        ? {
-            localTaskId: taskId,
-            operationId: `operation:${taskId}`,
-            status: "succeeded",
-            safeEvents: [],
-            result: {
-              structuredResult: {
-                schemaVersion: 1,
-                sourceQuestionSha256: createHash("sha256")
-                  .update(sourceQuestion, "utf8")
-                  .digest("hex"),
-                questionEnglish:
-                  "Which business problems does Acme Service Module 1 primarily solve?",
-              },
-              artifacts: [],
-            },
-          }
-        : undefined;
     const ready = await createReadyProject();
 
     const started = await jsonRequest(
@@ -4037,13 +5468,13 @@ describe("GEO API", () => {
       },
     );
 
-    expect(started.response.status).toBe(201);
+    expect(started.response.status).toBe(502);
+    expect(started.body).toMatchObject({
+      error: { code: "QUESTION_TRANSLATION_FAILED" },
+    });
     expect(broker.monitorQuestionTranslationTaskCount).toBe(1);
-    expect(broker.monitorCreates).toBe(1);
-    expect(broker.repairCalls).toHaveLength(1);
-    expect(broker.repairCalls[0]!.taskId).toBe(
-      "monitor-question-translation-1",
-    );
+    expect(broker.monitorCreates).toBe(0);
+    expect(broker.repairCalls).toHaveLength(0);
   });
 
   it("persists an existing recommended question as a no-active terminal receipt that old clients may ACK", async () => {
@@ -4719,7 +6150,7 @@ describe("GEO API", () => {
     expect(broker.customQuestionClassifierTaskCount).toBe(2);
   });
 
-  it("allows confirmed deletion to terminate an active custom-question validation", async () => {
+  it("keeps active custom-question validation recoverable after local removal", async () => {
     const ready = await createReadyProject();
     broker.customQuestionClassifierPendingPolls = 99;
     const pathname = `/projects/${encodeURIComponent(
@@ -4749,18 +6180,18 @@ describe("GEO API", () => {
       .projectId;
     await expect(
       customQuestionValidationStore.getActive(projectId),
-    ).resolves.toBeUndefined();
-    await expect(customQuestionValidationStore.listActive()).resolves.toEqual(
-      [],
-    );
+    ).resolves.toMatchObject({ state: "submitted" });
+    await expect(customQuestionValidationStore.listActive()).resolves.toEqual([
+      expect.objectContaining({ state: "submitted" }),
+    ]);
 
     const preciseStatus = await jsonRequest(
       `${pathname}/${CUSTOM_QUESTION_CLIENT_REQUEST_ID}`,
       ready.cookie,
     );
-    expect(preciseStatus.response.status).toBe(410);
+    expect(preciseStatus.response.status).toBe(202);
     expect(preciseStatus.body).toMatchObject({
-      error: { code: "PROJECT_DELETED" },
+      validation: { state: "submitted" },
     });
 
     const worker = createGeoCustomQuestionRecoveryWorker({
@@ -4772,7 +6203,7 @@ describe("GEO API", () => {
     expect(broker.customQuestionClassifierTaskCount).toBe(1);
   });
 
-  it("force-fences a record-only validation crash and still deletes the project", async () => {
+  it("retains a record-only validation crash for later recovery", async () => {
     const ready = await createReadyProject();
     let crashOnce = true;
     const crashedStore = new MemoryGeoCustomQuestionValidationStore({
@@ -4809,17 +6240,19 @@ describe("GEO API", () => {
       ready.projectToken,
       "project",
     ).value;
-    expect(broker.tasks.has(project.knowledgeBaseTaskId)).toBe(false);
-    await expect(crashedStore.listActive()).resolves.toEqual([]);
+    expect(broker.tasks.has(project.knowledgeBaseTaskId)).toBe(true);
+    await expect(crashedStore.listActive()).resolves.toEqual([
+      expect.objectContaining({ state: "reserved" }),
+    ]);
     await expect(
       crashedStore.get(project.projectId, CUSTOM_QUESTION_CLIENT_REQUEST_ID),
-    ).rejects.toMatchObject({ code: "PROJECT_DELETION_FENCED" });
+    ).resolves.toMatchObject({ state: "reserved" });
     await expect(
       crashedStore.getProjectDeletionTargets(project.projectId),
     ).resolves.toEqual({ localTaskIds: [], temporaryLocalAssetIds: [] });
     await expect(
       crashedStore.isProjectDeletionFenced(project.projectId),
-    ).resolves.toBe(true);
+    ).resolves.toBe(false);
   });
 
   it("bridges a cached client without clientRequestId to one deterministic upstream task", async () => {
@@ -5948,22 +7381,9 @@ describe("GEO API", () => {
     expect(broker.customQuestionClassifierTaskCount).toBe(1);
   });
 
-  it("repairs one malformed classifier result on the same task", async () => {
+  it("fails one malformed classifier result without continuing the same task", async () => {
     const ready = await createReadyProject();
     broker.customQuestionClassifierRawText = "not-json";
-    broker.repairResultFactory = (taskId) =>
-      taskId.startsWith("custom-question-classifier-")
-        ? {
-            localTaskId: taskId,
-            operationId: `operation:${taskId}`,
-            status: "succeeded",
-            safeEvents: [],
-            result: {
-              structuredResult: broker.customQuestionClassifierOutput,
-              artifacts: [],
-            },
-          }
-        : undefined;
     const pathname = `/projects/${encodeURIComponent(
       ready.projectToken,
     )}/questions/custom`;
@@ -5975,25 +7395,15 @@ describe("GEO API", () => {
         clientRequestId: CUSTOM_QUESTION_CLIENT_REQUEST_ID,
       },
     });
-    expect(started.response.status).toBe(202);
+    expect(started.response.status).toBe(502);
     expect(started.body).toMatchObject({
-      validation: { state: "submitted" },
-    });
-
-    const completed = await jsonRequest(
-      `${pathname}/${CUSTOM_QUESTION_CLIENT_REQUEST_ID}`,
-      ready.cookie,
-    );
-    expect(completed.response.status).toBe(200);
-    expect(completed.body).toMatchObject({
-      validation: { state: "completed" },
-      question: { category: "product_scenario" },
+      validation: {
+        state: "failed",
+        error: { code: "CUSTOM_QUESTION_CLASSIFIER_INVALID_RESPONSE" },
+      },
     });
     expect(broker.customQuestionClassifierTaskCount).toBe(1);
-    expect(broker.repairCalls).toHaveLength(1);
-    expect(broker.repairCalls[0]!.taskId).toBe(
-      "custom-question-classifier-1",
-    );
+    expect(broker.repairCalls).toHaveLength(0);
   });
 
   it("consumes a Dashboard-localized classifier result without downloading a Provider output file", async () => {
@@ -6854,6 +8264,11 @@ describe("GEO API", () => {
     expect((refreshed.body as any).project.monitoring).toMatchObject({
       status: "completed",
       completedRecords: 5,
+      quality: {
+        completeness: "complete",
+        stats: { acceptedCount: 5, expectedCount: 5, droppedCount: 0 },
+        downstreamEligible: true,
+      },
     });
     expect(
       (refreshed.body as any).project.monitoring.records[0].answerText,
@@ -7082,7 +8497,7 @@ describe("GEO API", () => {
     ).toHaveLength(2);
   });
 
-  it("repairs one invalid assessment on the same local task without creating a replacement", async () => {
+  it("shows a scope-safe partial assessment and creates a fresh task on explicit retry", async () => {
     const ready = await createReadyProject();
     const monitored = await startOnePlatformMonitor(ready);
     const run = broker.monitorRuns.get("monitor-1")!;
@@ -7119,47 +8534,41 @@ describe("GEO API", () => {
         },
       ],
     });
-    broker.repairResults.set("assessment-1", [
-      {
-        localTaskId: "assessment-1",
-        operationId: "operation:assessment-1",
-        status: "running",
-        safeEvents: [],
-      },
-    ]);
-
     const viewed = await jsonRequest(
       `/projects/${encodeURIComponent((first.body as any).projectToken)}`,
       ready.cookie,
     );
     expect(viewed.response.status).toBe(200);
     expect((viewed.body as any).project.assessment).toMatchObject({
-      status: "running",
+      status: "ready",
+      quality: {
+        completeness: "partial",
+        downstreamEligible: false,
+      },
     });
+    expect((viewed.body as any).project.assessment.totalScore).toBeUndefined();
+    expect((viewed.body as any).project.optimizationForecast).toBeUndefined();
+    expect((viewed.body as any).project.serviceActivation).toBeUndefined();
     expect(broker.assessmentTaskCount).toBe(1);
-    expect(broker.repairCalls).toHaveLength(1);
-    expect(broker.repairCalls[0]).toMatchObject({ taskId: "assessment-1" });
-    expect(broker.repairCalls[0]!.idempotencyKey).toContain(
-      "website.current-state-assessment:assessment-1:1",
-    );
+    expect(broker.repairCalls).toHaveLength(0);
     const repeated = await jsonRequest(
       `/projects/${encodeURIComponent((viewed.body as any).projectToken)}`,
       ready.cookie,
     );
     expect(repeated.response.status).toBe(200);
     expect(broker.assessmentTaskCount).toBe(1);
-    expect(broker.repairCalls).toHaveLength(1);
+    expect(broker.repairCalls).toHaveLength(0);
 
     const manuallyRetried = await jsonRequest(
       `/projects/${encodeURIComponent((viewed.body as any).projectToken)}/assessment`,
       ready.cookie,
       { method: "POST", body: {} },
     );
-    expect(manuallyRetried.response.status).toBe(200);
+    expect(manuallyRetried.response.status).toBe(201);
     expect((manuallyRetried.body as any).project.assessment).toMatchObject({
       status: "running",
     });
-    expect(broker.assessmentTaskCount).toBe(1);
+    expect(broker.assessmentTaskCount).toBe(2);
   });
 
   it("uses the Dashboard-localized assessment result without downloading a Provider output file", async () => {
@@ -7897,7 +9306,7 @@ describe("GEO API", () => {
     ).toBe(4);
   });
 
-  it("repairs one invalid optimization forecast on the same local task", async () => {
+  it("shows a safe partial forecast and creates a fresh task on explicit retry", async () => {
     const ready = await createReadyProject();
     const monitored = await startOnePlatformMonitor(ready);
     const run = broker.monitorRuns.get("monitor-1")!;
@@ -7922,38 +9331,45 @@ describe("GEO API", () => {
     );
     expect(firstForecast.response.status).toBe(201);
     expect(broker.forecastTaskCount).toBe(1);
+    const partialForecast = validForecastOutput() as Record<string, unknown>;
+    delete partialForecast.dimensions;
     broker.tasks.set("forecast-1", {
       id: "forecast-1",
       status: "completed",
-      output: [{ content: [{ text: '{"assessmentType":"not-a-forecast"}' }] }],
+      output: [{ content: [{ text: JSON.stringify(partialForecast) }] }],
     });
-    broker.repairResults.set("forecast-1", [
-      {
-        localTaskId: "forecast-1",
-        operationId: "operation:forecast-1",
-        status: "succeeded",
-        safeEvents: [],
-        result: { structuredResult: validForecastOutput(), artifacts: [] },
-      },
-    ]);
-
-    const retried = await jsonRequest(
+    const viewed = await jsonRequest(
       `/projects/${encodeURIComponent((firstForecast.body as any).projectToken)}`,
       ready.cookie,
     );
-    expect((retried.body as any).project.optimizationForecast).toMatchObject({
+    expect((viewed.body as any).project.optimizationForecast).toMatchObject({
       status: "ready",
+      quality: {
+        completeness: "partial",
+        downstreamEligible: false,
+      },
     });
-    expect(retried.response.status).toBe(200);
+    expect(
+      (viewed.body as any).project.optimizationForecast.targetLow,
+    ).toBeUndefined();
+    expect((viewed.body as any).project.serviceActivation).toBeUndefined();
+    expect(viewed.response.status).toBe(200);
     expect(broker.forecastTaskCount).toBe(1);
-    expect(broker.repairCalls).toHaveLength(1);
-    expect(broker.repairCalls[0]).toMatchObject({ taskId: "forecast-1" });
-    expect(broker.repairCalls[0]!.idempotencyKey).toContain(
-      "website.optimization-forecast:forecast-1:1",
+    expect(broker.repairCalls).toHaveLength(0);
+    expect(
+      (viewed.body as any).project.executionLog.currentEntryId,
+    ).toBeUndefined();
+
+    const retried = await jsonRequest(
+      `/projects/${encodeURIComponent((viewed.body as any).projectToken)}/optimization-forecast`,
+      ready.cookie,
+      { method: "POST", body: {} },
     );
-    expect((retried.body as any).project.executionLog.currentEntryId).toBe(
-      "optimization-forecast",
-    );
+    expect(retried.response.status).toBe(201);
+    expect((retried.body as any).project.optimizationForecast).toMatchObject({
+      status: "running",
+    });
+    expect(broker.forecastTaskCount).toBe(2);
   });
 
   it("keeps one automatic retry and allows a later explicit manual forecast retry", async () => {
@@ -9660,6 +11076,21 @@ describe("GEO API", () => {
         finalizerVersion: "website-kb-finalizer-v1",
       },
     });
+    const importedArchive = await broker.downloadArtifact(
+      knowledgeImportCalls[0]!.request.finalArtifactId,
+    );
+    const importedZip = await JSZip.loadAsync(
+      Buffer.from(await importedArchive.arrayBuffer()),
+    );
+    const importedFiles = Object.values(importedZip.files).filter(
+      (entry) => !entry.dir,
+    );
+    expect(
+      Array.from(
+        new Set(importedFiles.map((entry) => entry.name.split("/")[0])),
+      ),
+    ).toEqual([WEBSITE_KB_ARCHIVE_ROOT]);
+    expect(importedZip.file("00_package_manifest.json")).toBeNull();
     const accountPoll = await jsonRequest(
       `/projects/${encodeURIComponent((active.body as any).projectToken)}/services/account/status`,
       payable.cookie,
@@ -9668,6 +11099,55 @@ describe("GEO API", () => {
     expect(accountPoll.body).toMatchObject({
       project: { serviceActivation: { status: "active" } },
     });
+    expect(knowledgeImportCalls).toHaveLength(1);
+  });
+
+  it("keeps a knowledge-import parser error internal while preserving the retry state", async () => {
+    const ready = await createServiceReadyProject();
+    const payable = await advanceManualOrder(ready);
+    const checkout = await jsonRequest(
+      `/projects/${encodeURIComponent(payable.projectToken)}/services/payments`,
+      payable.cookie,
+      { method: "POST", body: { method: "alipay" } },
+    );
+    const started = await jsonRequest(
+      `/projects/${encodeURIComponent(payable.projectToken)}/services/start`,
+      payable.cookie,
+      {
+        method: "POST",
+        body: {
+          authorization: (checkout.body as any).payment.authorization,
+        },
+      },
+    );
+    knowledgeImportShouldFail = true;
+
+    const accountSubmitted = await jsonRequest(
+      `/projects/${encodeURIComponent((started.body as any).projectToken)}/services/account`,
+      payable.cookie,
+      {
+        method: "POST",
+        body: {
+          displayName: "Acme",
+          username: "geo.acme",
+          password: "StrongPassword123",
+        },
+      },
+    );
+
+    expect(accountSubmitted.response.status).toBe(201);
+    expect(accountSubmitted.body).toMatchObject({
+      project: {
+        serviceActivation: {
+          status: "failed",
+          knowledgeImport: { status: "failed", retryable: true },
+          error: "服务开通未完成，请重试",
+        },
+      },
+    });
+    expect(
+      JSON.stringify((accountSubmitted.body as any).project.serviceActivation),
+    ).not.toContain("知识库 ZIP 必须只包含一个企业知识库根目录");
     expect(knowledgeImportCalls).toHaveLength(1);
   });
 
@@ -9801,7 +11281,7 @@ describe("GEO API", () => {
     expect(servicePaymentCheckoutCalls).toHaveLength(0);
   });
 
-  it("keeps one Pro question task after a transient result read failure", async () => {
+  it("keeps one question task after a transient read and uses a fresh task for an invalid result", async () => {
     const ready = await createReadyProject();
     broker.tasks.set("question-1", {
       id: "question-1",
@@ -9850,19 +11330,25 @@ describe("GEO API", () => {
       { method: "POST", body: {} },
     );
 
-    expect(structurallyInvalid.response.status).toBe(200);
+    expect(structurallyInvalid.response.status).toBe(201);
     expect(structurallyInvalid.body).toMatchObject({
       project: {
-        status: "failed",
+        status: "completed",
+        questionRecommendation: {
+          status: "ready",
+          quality: { completeness: "complete" },
+        },
         questionRetryAvailable: false,
-        questionValidationError: "推荐任务未返回可展示的问题，请联系技术支持",
       },
     });
-    expect(broker.questionTaskCount).toBe(1);
-    expect(broker.prompts).toHaveLength(2);
+    expect(
+      (structurallyInvalid.body as any).project.executionLog.currentEntryId,
+    ).toBeUndefined();
+    expect(broker.questionTaskCount).toBe(2);
+    expect(broker.prompts).toHaveLength(3);
   });
 
-  it("fails closed when recommendation quality checks fail", async () => {
+  it("keeps safe questions visible when whole-set recommendation checks fail", async () => {
     const ready = await createReadyProject();
     const relaxed = validQuestionSet() as Record<string, any>;
     relaxed.questions[5].question =
@@ -9892,14 +11378,25 @@ describe("GEO API", () => {
 
     expect(refreshed.response.status).toBe(200);
     expect(project).toMatchObject({
-      status: "failed",
+      status: "completed",
       stage: "question_recommendation",
+      questionRecommendation: {
+        status: "ready",
+        quality: {
+          completeness: "partial",
+        },
+      },
     });
-    expect(project.questionValidationError).toEqual(expect.any(String));
+    expect(project.questions.length).toBeGreaterThan(0);
+    expect(project.questions.length).toBeLessThanOrEqual(20);
+    expect(
+      project.questions.filter((question: any) => !question.selectable).length,
+    ).toBeGreaterThan(5);
+    expect(project.questionValidationError).toBeUndefined();
     expect(broker.questionTaskCount).toBe(1);
   });
 
-  it("rejects the first recommendation request with a partial question set", async () => {
+  it("shows the first partial recommendation while keeping unsafe questions locked", async () => {
     broker.questionTaskOutput = {
       questions: [
         {
@@ -9957,14 +11454,25 @@ describe("GEO API", () => {
 
     expect(recommended.response.status).toBe(201);
     expect(project).toMatchObject({
-      status: "failed",
+      status: "completed",
       stage: "question_recommendation",
+      questionRecommendation: {
+        status: "ready",
+        quality: {
+          completeness: "partial",
+          downstreamEligible: false,
+        },
+      },
     });
-    expect(project.questionValidationError).toEqual(expect.any(String));
+    expect(project.questions).toHaveLength(3);
+    expect(
+      project.questions.every((question: any) => !question.selectable),
+    ).toBe(true);
+    expect(project.questionValidationError).toBeUndefined();
     expect(broker.questionTaskCount).toBe(1);
   });
 
-  it("never creates a second task for an invalid question result", async () => {
+  it("keeps invalid question polling read-only and creates a fresh task only on explicit retry", async () => {
     broker.invalidFirstQuestionTask = true;
     const { cookie } = await verifyInvite();
     const created = await jsonRequest("/projects", cookie, {
@@ -9999,6 +11507,7 @@ describe("GEO API", () => {
     );
     const readOnlyPayload = readOnlyPoll.body as Record<string, any>;
     expect(readOnlyPayload.project.questionValidationError).toBeTruthy();
+    expect(readOnlyPayload.project.questionRetryAvailable).toBe(true);
     expect(broker.questionTaskCount).toBe(1);
 
     const replayed = await jsonRequest(
@@ -10006,21 +11515,26 @@ describe("GEO API", () => {
       cookie,
       { method: "POST", body: {} },
     );
-    expect(replayed.response.status).toBe(200);
+    expect(replayed.response.status).toBe(201);
     expect(replayed.body).toMatchObject({
       project: {
-        status: "failed",
+        status: "completed",
+        questionRecommendation: {
+          status: "ready",
+          quality: { completeness: "complete" },
+        },
         questionRetryAvailable: false,
       },
     });
-    expect(broker.questionTaskCount).toBe(1);
+    expect(broker.questionTaskCount).toBe(2);
     expect(broker.taskContracts).toEqual([
       PRESALES_CONTRACTS.knowledgeBaseCandidate,
+      PRESALES_CONTRACTS.questionRecommendation,
       PRESALES_CONTRACTS.questionRecommendation,
     ]);
   });
 
-  it("does not retry a cancelled question task", async () => {
+  it("creates a fresh question task after an explicitly retried cancellation", async () => {
     const ready = await createReadyProject();
     broker.tasks.set("question-1", {
       id: "question-1",
@@ -10034,15 +11548,83 @@ describe("GEO API", () => {
       { method: "POST", body: {} },
     );
 
-    expect(replayed.response.status).toBe(200);
+    expect(replayed.response.status).toBe(201);
     expect(replayed.body).toMatchObject({
       project: {
-        status: "failed",
+        status: "completed",
+        questionRecommendation: {
+          status: "ready",
+          quality: { completeness: "complete" },
+        },
         questionRetryAvailable: false,
+      },
+    });
+    expect(broker.questionTaskCount).toBe(2);
+  });
+
+  it.each([
+    "RESULT_INVALID_OR_MISSING",
+    "RESULT_COORDINATE_AMBIGUOUS",
+    "QUESTION_RESULT_VALIDATION_FAILED",
+    "TASK_REPAIR_EXHAUSTED",
+  ])("classifies %s as an invalid recommendation result", async (code) => {
+    const ready = await createReadyProject();
+    broker.tasks.set("question-1", {
+      localTaskId: "question-1",
+      operationId: "operation:question-1",
+      status: "failed",
+      safeEvents: [],
+      error: { code, retryable: false },
+    });
+
+    const refreshed = await jsonRequest(
+      `/projects/${encodeURIComponent(ready.projectToken)}`,
+      ready.cookie,
+    );
+
+    expect(refreshed.response.status).toBe(200);
+    expect(refreshed.body).toMatchObject({
+      project: {
+        status: "failed",
+        questionRecommendation: {
+          status: "failed",
+          failureKind: "result_invalid",
+        },
       },
     });
     expect(broker.questionTaskCount).toBe(1);
   });
+
+  it.each(["PROVIDER_DEADLINE_EXCEEDED", "PROVIDER_UNAVAILABLE"])(
+    "classifies %s as provider unavailable",
+    async (code) => {
+      const ready = await createReadyProject();
+      broker.tasks.set("question-1", {
+        localTaskId: "question-1",
+        operationId: "operation:question-1",
+        status: "failed",
+        safeEvents: [],
+        error: { code, retryable: false },
+      });
+
+      const refreshed = await jsonRequest(
+        `/projects/${encodeURIComponent(ready.projectToken)}`,
+        ready.cookie,
+      );
+
+      expect(refreshed.response.status).toBe(200);
+      expect(refreshed.body).toMatchObject({
+        project: {
+          status: "failed",
+          questionRecommendation: {
+            status: "failed",
+            failureKind: "provider_unavailable",
+          },
+        },
+      });
+      expect(broker.questionTaskCount).toBe(1);
+    },
+  );
 
   it("keeps a create response without status waiting and reuses the original task", async () => {
     broker.omitNextKnowledgeTaskStatus = true;
@@ -10077,6 +11659,71 @@ describe("GEO API", () => {
     expect((refreshed.body as any).project.status).toBe("running");
     expect(broker.prompts).toHaveLength(1);
   });
+
+  it.each([
+    [
+      "FILE_UPLOAD_CONFIRMATION_UNKNOWN",
+      "attention_required",
+      undefined,
+      false,
+      "向分析服务提交资料未完成",
+    ],
+    [
+      "CREATE_OUTCOME_UNKNOWN",
+      "attention_required",
+      undefined,
+      false,
+      "任务创建结果暂时无法确认",
+    ],
+    [
+      "PROVIDER_RUNTIME_FAILED",
+      "failed",
+      "2026-08-17T00:00:00.000Z",
+      true,
+      "联系技术支持",
+    ],
+  ] as const)(
+    "publishes %s as the correct knowledge-base terminal",
+    async (
+      code,
+      status,
+      providerStartedAt,
+      supportRequired,
+      expectedMessage,
+    ) => {
+      const { cookie } = await verifyInvite();
+      const created = await jsonRequest("/projects", cookie, {
+        method: "POST",
+        body: { input: "Acme", attachments: [] },
+      });
+      const initial = created.body as Record<string, any>;
+      broker.tasks.set("kb-1", {
+        localTaskId: "kb-1",
+        operationId: "operation:kb-1",
+        status,
+        safeEvents: [],
+        error: { code, retryable: false },
+        ...(providerStartedAt ? { providerStartedAt } : {}),
+      });
+
+      const refreshed = await jsonRequest(
+        `/projects/${encodeURIComponent(initial.projectToken)}`,
+        cookie,
+      );
+      expect(refreshed.body).toMatchObject({
+        project: {
+          status: "failed",
+          knowledgeBaseSupportRequired: supportRequired,
+          error: expect.stringContaining(expectedMessage),
+          kbTask: {
+            status: "failed",
+            error: expect.stringContaining(expectedMessage),
+          },
+        },
+      });
+      expect(JSON.stringify(refreshed.body)).not.toContain(code);
+    },
+  );
 
   it("keeps unrecognized knowledge-base and question states waiting without duplicating tasks", async () => {
     const { cookie } = await verifyInvite();
@@ -10133,6 +11780,7 @@ describe("GEO API", () => {
     );
     expect((unknownQuestion.body as any).project).toMatchObject({
       status: "running",
+      questionRecommendation: { status: "pending" },
       questionRetryAvailable: false,
       questionTask: {
         status: "running",
@@ -10147,7 +11795,7 @@ describe("GEO API", () => {
     expect(broker.questionTaskCount).toBe(1);
   });
 
-  it("repairs an invalid recommendation result once without changing its local task id", async () => {
+  it("keeps an invalid recommendation terminal and creates a fresh task on explicit retry", async () => {
     const ready = await createReadyProject();
     const stored = new GeoTokenCodec(
       "test-session-secret-at-least-16-characters",
@@ -10159,30 +11807,33 @@ describe("GEO API", () => {
       safeEvents: [],
       result: { structuredResult: { questions: [] }, artifacts: [] },
     });
-    broker.repairResults.set(stored.questionTaskId, [
-      {
-        localTaskId: stored.questionTaskId,
-        operationId: `operation:${stored.questionTaskId}`,
-        status: "succeeded",
-        safeEvents: [],
-        result: {
-          structuredResult: validQuestionSet(),
-          artifacts: [],
-        },
-      },
-    ]);
-
-    const repaired = await jsonRequest(
+    const viewed = await jsonRequest(
       `/projects/${encodeURIComponent(ready.projectToken)}`,
       ready.cookie,
     );
-
-    expect(repaired.response.status).toBe(200);
-    expect((repaired.body as any).project.questions).toHaveLength(20);
+    expect(viewed.response.status).toBe(200);
+    expect((viewed.body as any).project).toMatchObject({
+      questionRecommendation: { status: "failed" },
+      questionRetryAvailable: true,
+    });
     expect(broker.questionTaskCount).toBe(1);
-    expect(broker.repairCalls).toHaveLength(1);
-    expect(broker.repairCalls[0]).toMatchObject({
-      taskId: stored.questionTaskId,
+    expect(broker.repairCalls).toHaveLength(0);
+
+    const retried = await jsonRequest(
+      `/projects/${encodeURIComponent((viewed.body as any).projectToken)}/questions`,
+      ready.cookie,
+      { method: "POST", body: {} },
+    );
+    expect(retried.response.status).toBe(201);
+    expect((retried.body as any).project.questions).toHaveLength(20);
+    expect(broker.questionTaskCount).toBe(2);
+    expect(
+      Array.from(broker.idempotentTasks.keys()).some((key) =>
+        key.endsWith(":questions:2"),
+      ),
+    ).toBe(true);
+    expect((retried.body as any).project.questionTask).not.toMatchObject({
+      id: stored.questionTaskId,
     });
   });
 
@@ -10764,17 +12415,36 @@ describe("GEO API", () => {
   });
 });
 
-async function verifyInvite(existingCookie = "") {
+async function verifyInvite(
+  existingCookie = "",
+  businessOwnerName = "测试商务负责人",
+) {
   const response = await fetch(`${baseUrl}/invite/verify`, {
     method: "POST",
     headers: {
       "content-type": "application/json",
       ...(existingCookie ? { cookie: existingCookie } : {}),
     },
-    body: JSON.stringify({ code: "frontmind666" }),
+    body: JSON.stringify({
+      code: "frontmind666",
+      businessOwnerName,
+    }),
   });
   const cookie = response.headers.get("set-cookie")?.split(";")[0] || "";
-  return { response, cookie };
+  const body = (await response.json()) as Record<string, unknown>;
+  if (cookie && typeof body.inviteContextToken === "string") {
+    inviteContextByCookie.set(cookie, body.inviteContextToken);
+  }
+  return {
+    response,
+    cookie,
+    inviteContextToken:
+      typeof body.inviteContextToken === "string"
+        ? body.inviteContextToken
+        : "",
+    businessOwnerName:
+      typeof body.businessOwnerName === "string" ? body.businessOwnerName : "",
+  };
 }
 
 async function jsonRequest(
@@ -10782,17 +12452,59 @@ async function jsonRequest(
   cookie: string,
   options: { method?: string; body?: unknown } = {},
 ) {
+  const requestBody =
+    (pathname === "/projects" || pathname === "/uploads/init") &&
+    (options.method || "GET") === "POST" &&
+    options.body &&
+    typeof options.body === "object" &&
+    !Array.isArray(options.body) &&
+    !("inviteContextToken" in options.body)
+      ? {
+          ...options.body,
+          inviteContextToken: inviteContextByCookie.get(cookie),
+        }
+      : options.body;
   const response = await fetch(`${baseUrl}${pathname}`, {
     method: options.method || "GET",
     headers: {
       cookie,
-      ...(options.body === undefined
+      ...(requestBody === undefined
         ? {}
         : { "content-type": "application/json" }),
     },
-    body: options.body === undefined ? undefined : JSON.stringify(options.body),
+    body: requestBody === undefined ? undefined : JSON.stringify(requestBody),
   });
   return { response, body: await response.json() };
+}
+
+async function restartWithUploadTimeouts(options: {
+  uploadDataIdleMs: number;
+  uploadConfirmationMs: number;
+}) {
+  await new Promise<void>((resolve, reject) =>
+    server.close((error) => (error ? reject(error) : resolve())),
+  );
+  const app = express();
+  app.use(
+    "/api/geo",
+    createGeoRouter({
+      broker,
+      customQuestionValidationStore,
+      monitorFreeReservationStore,
+      projectOrderRegistry,
+      uploadDataIdleMs: options.uploadDataIdleMs,
+      uploadConfirmationMs: options.uploadConfirmationMs,
+      env: {
+        NODE_ENV: "test",
+        FRONTMIND_GEO_INVITE_CODE: "frontmind666",
+        FRONTMIND_GEO_SESSION_SECRET:
+          "test-session-secret-at-least-16-characters",
+      },
+    }),
+  );
+  server = app.listen(0);
+  await new Promise<void>((resolve) => server.once("listening", resolve));
+  baseUrl = `http://127.0.0.1:${(server.address() as AddressInfo).port}/api/geo`;
 }
 
 async function restartWithCustomQuestionValidationStore(

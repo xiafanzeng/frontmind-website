@@ -43,6 +43,7 @@ import {
   assertFrontMindReleaseRuntime,
   frontmindReleaseChannel,
 } from "./release-channel";
+import { configureWebsiteHttpServer } from "./http-server-timeouts";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -138,7 +139,7 @@ async function startServer() {
     await getWebsiteRuntimeReadiness();
   }
   const app = express();
-  const server = createServer(app);
+  const server = configureWebsiteHttpServer(createServer(app));
   installBaseSecurityHeaders(app);
   if (!releaseProfile.publishSearchIndexes) {
     app.use((_req, res, next) => {

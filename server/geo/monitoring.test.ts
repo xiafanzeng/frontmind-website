@@ -43,6 +43,15 @@ function completedRun() {
   };
 }
 
+function cleanCompletedRun() {
+  const payload = completedRun();
+  payload.records = payload.records.map((record) => ({
+    ...record,
+    media: [record.media[0]],
+  }));
+  return payload;
+}
+
 describe("monitor result adapter", () => {
   it("keeps final text, safe media and one canonical source collection", () => {
     const run = normalizeMonitorRun(completedRun(), {
@@ -62,6 +71,16 @@ describe("monitor result adapter", () => {
       ],
       sources: [{ title: "实际引用" }, { title: "检索参考" }],
     });
+    expect(run.records).toHaveLength(5);
+    expect(run.status).toBe("partial_review_required");
+    expect(run.quality).toMatchObject({
+      completeness: "partial",
+      stats: { acceptedCount: 5, expectedCount: 5, droppedCount: 0 },
+      warnings: expect.arrayContaining([
+        { code: "EVIDENCE_INCOMPLETE", area: "monitoring.sources_media" },
+      ]),
+      downstreamEligible: false,
+    });
     expect(JSON.stringify(toPublicMonitorView(run))).not.toContain(
       "reasoningProcess",
     );
@@ -71,6 +90,21 @@ describe("monitor result adapter", () => {
     expect(JSON.stringify(toPublicMonitorView(run))).not.toContain(
       "javascript:",
     );
+  });
+
+  it("marks a fully retained terminal result complete and downstream eligible", () => {
+    const payload = cleanCompletedRun();
+
+    const run = normalizeMonitorRun(payload);
+
+    expect(run.status).toBe("completed");
+    expect(toPublicMonitorView(run)).toMatchObject({
+      quality: {
+        completeness: "complete",
+        stats: { acceptedCount: 5, expectedCount: 5, droppedCount: 0 },
+        downstreamEligible: true,
+      },
+    });
   });
 
   it("accepts the longest translated overseas question allowed at checkout", () => {
@@ -145,18 +179,31 @@ describe("monitor result adapter", () => {
     ).toEqual([]);
   });
 
-  it("fails closed on an incomplete completed snapshot", () => {
-    const payload = completedRun();
+  it("keeps valid records and marks an incomplete completed snapshot partial", () => {
+    const payload = cleanCompletedRun();
     payload.records.pop();
-    expect(() => normalizeMonitorRun(payload)).toThrow(
-      "监控记录状态与汇总数量不一致",
-    );
+    expect(normalizeMonitorRun(payload)).toMatchObject({
+      status: "partial_review_required",
+      completedItems: 4,
+      failedItems: 0,
+      quality: {
+        completeness: "partial",
+        stats: { acceptedCount: 4, expectedCount: 5, droppedCount: 1 },
+        downstreamEligible: false,
+      },
+      records: expect.arrayContaining([
+        expect.objectContaining({ recordId: "record-1" }),
+      ]),
+    });
   });
 
   it("accepts a terminal status summary without records only in summary mode", () => {
     const { records: _records, ...summary } = completedRun();
 
-    expect(() => normalizeMonitorRun(summary)).toThrow("监控完成快照不完整");
+    expect(normalizeMonitorRun(summary)).toMatchObject({
+      status: "partial_review_required",
+      records: undefined,
+    });
     expect(
       normalizeMonitorRun(
         summary,
@@ -170,42 +217,97 @@ describe("monitor result adapter", () => {
     });
   });
 
-  it("still rejects explicit partial records in terminal summary mode", () => {
+  it("keeps explicit partial records in terminal summary mode", () => {
     const payload = completedRun();
     payload.records.pop();
 
-    expect(() =>
+    expect(
       normalizeMonitorRun(payload, undefined, {
         allowTerminalSummaryWithoutRecords: true,
       }),
-    ).toThrow("监控记录状态与汇总数量不一致");
+    ).toMatchObject({
+      status: "partial_review_required",
+      completedItems: 4,
+    });
   });
 
-  it("fails closed on duplicate platform/run slots", () => {
+  it("drops only the duplicate platform/run record", () => {
     const payload = completedRun();
     payload.records[4].runIndex = 1;
-    expect(() => normalizeMonitorRun(payload)).toThrow("重复的平台轮次");
+    const run = normalizeMonitorRun(payload);
+    expect(run).toMatchObject({
+      status: "partial_review_required",
+      completedItems: 4,
+    });
+    expect(run.records).toHaveLength(4);
   });
 
-  it("fails closed on duplicate provider record IDs", () => {
+  it("drops only the duplicate provider record ID", () => {
     const payload = completedRun();
     payload.records[4].recordId = payload.records[0].recordId;
-    expect(() => normalizeMonitorRun(payload)).toThrow("重复的记录 ID");
+    const run = normalizeMonitorRun(payload);
+    expect(run).toMatchObject({
+      status: "partial_review_required",
+      completedItems: 4,
+    });
+    expect(run.records).toHaveLength(4);
   });
 
-  it("fails closed when record states disagree with provider totals", () => {
+  it("recomputes record totals when the provider summary disagrees", () => {
     const payload = completedRun();
     payload.completedItems = 4;
-    expect(() => normalizeMonitorRun(payload)).toThrow(
-      "监控记录状态与汇总数量不一致",
-    );
+    expect(normalizeMonitorRun(payload)).toMatchObject({
+      status: "partial_review_required",
+      completedItems: 5,
+      failedItems: 0,
+    });
   });
 
-  it("rejects a completed record whose final answer is only whitespace", () => {
+  it("drops one completed record whose final answer is only whitespace", () => {
     const payload = completedRun();
     payload.records[0].answerText = " \n\t ";
 
-    expect(() => normalizeMonitorRun(payload)).toThrow("完成记录缺少最终文字");
+    const run = normalizeMonitorRun(payload);
+    expect(run).toMatchObject({
+      status: "partial_review_required",
+      completedItems: 4,
+    });
+    expect(run.records?.some((record) => record.recordId === "record-1")).toBe(
+      false,
+    );
+  });
+
+  it("drops malformed source and media items without deleting the legal answer", () => {
+    const payload = cleanCompletedRun();
+    payload.records[0] = {
+      ...payload.records[0],
+      media: [
+        { type: "image", url: "https://media.example.com/valid.png" },
+        { type: "document", url: "https://media.example.com/bad.pdf" },
+      ],
+      sources: [
+        { title: "可核验来源", url: "https://source.example/report" },
+        { title: 42 },
+      ],
+    } as (typeof payload.records)[number];
+
+    const run = normalizeMonitorRun(payload);
+    expect(run.records?.[0]).toMatchObject({
+      recordId: "record-1",
+      answerText: "最终回答 1",
+      media: [{ url: "https://media.example.com/valid.png" }],
+      sources: [{ title: "可核验来源" }],
+    });
+    expect(run.records).toHaveLength(5);
+    expect(run.status).toBe("partial_review_required");
+    expect(run.quality).toMatchObject({
+      completeness: "partial",
+      stats: { acceptedCount: 5, droppedCount: 0 },
+      warnings: expect.arrayContaining([
+        { code: "EVIDENCE_INCOMPLETE", area: "monitoring.sources_media" },
+      ]),
+      downstreamEligible: false,
+    });
   });
 
   it("does not silently treat a partially failed provider run as complete", () => {

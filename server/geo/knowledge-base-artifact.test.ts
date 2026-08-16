@@ -5,6 +5,7 @@ import {
   isExplicitKnowledgeCandidateDescriptor,
   knowledgeArchiveDescriptorHash,
   rankedKnowledgeArchiveDescriptors,
+  selectUniqueKnowledgeArchiveDescriptor,
   WEBSITE_KNOWLEDGE_CANDIDATE_FILENAME,
 } from "./knowledge-base-artifact";
 
@@ -27,7 +28,9 @@ function artifact(
 
 describe("Website v2 local knowledge artifact contract", () => {
   it("accepts only complete local ZIP artifact metadata", () => {
-    expect(collectKnowledgeArchiveDescriptors([artifact("artifact-1")])).toEqual([
+    expect(
+      collectKnowledgeArchiveDescriptors([artifact("artifact-1")]),
+    ).toEqual([
       {
         outputItemId: "artifact:0:artifact-1",
         artifactId: "artifact-1",
@@ -41,7 +44,11 @@ describe("Website v2 local knowledge artifact contract", () => {
 
   it.each([
     { ...artifact("artifact-1"), artifactId: " artifact-1" },
-    { ...artifact("artifact-1"), filename: "candidate.txt", mimeType: "text/plain" },
+    {
+      ...artifact("artifact-1"),
+      filename: "candidate.txt",
+      mimeType: "text/plain",
+    },
     { ...artifact("artifact-1"), bytes: 0 },
     { ...artifact("artifact-1"), sha256: "not-a-hash" },
     { fileId: "provider-file", filename: "candidate.zip" },
@@ -67,8 +74,12 @@ describe("Website v2 local knowledge artifact contract", () => {
   });
 
   it("binds the canonical descriptor hash to local identity and content", () => {
-    const first = collectKnowledgeArchiveDescriptors([artifact("artifact-1")])[0]!;
-    const replay = collectKnowledgeArchiveDescriptors([artifact("artifact-1")])[0]!;
+    const first = collectKnowledgeArchiveDescriptors([
+      artifact("artifact-1"),
+    ])[0]!;
+    const replay = collectKnowledgeArchiveDescriptors([
+      artifact("artifact-1"),
+    ])[0]!;
     const changed = collectKnowledgeArchiveDescriptors([
       artifact("artifact-1", WEBSITE_KNOWLEDGE_CANDIDATE_FILENAME, SHA_B),
     ])[0]!;
@@ -77,6 +88,34 @@ describe("Website v2 local knowledge artifact contract", () => {
     );
     expect(knowledgeArchiveDescriptorHash(changed)).not.toBe(
       knowledgeArchiveDescriptorHash(first),
+    );
+  });
+
+  it("selects one exact candidate and never falls back to a generic ZIP", () => {
+    expect(
+      selectUniqueKnowledgeArchiveDescriptor([
+        artifact("generic", "generic.zip"),
+        artifact("exact", WEBSITE_KNOWLEDGE_CANDIDATE_FILENAME),
+      ])?.artifactId,
+    ).toBe("exact");
+  });
+
+  it.each([
+    ["multiple exact candidates", [artifact("one"), artifact("two")]],
+    [
+      "multiple candidate-like ZIPs",
+      [
+        artifact("one", "website-lead-candidate-extra.zip"),
+        artifact("two", "knowledge-base-candidate-extra.zip"),
+      ],
+    ],
+    [
+      "multiple generic ZIPs",
+      [artifact("one", "one.zip"), artifact("two", "two.zip")],
+    ],
+  ])("rejects %s instead of guessing", (_label, artifacts) => {
+    expect(() => selectUniqueKnowledgeArchiveDescriptor(artifacts)).toThrow(
+      /多个/,
     );
   });
 });

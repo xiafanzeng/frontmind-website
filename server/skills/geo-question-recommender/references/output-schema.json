@@ -24,7 +24,12 @@
           "id",
           "category",
           "question",
+          "questionEnglish",
           "rationale",
+          "enterpriseAnchor",
+          "offeringAnchor",
+          "competitorAnchor",
+          "qaIntent",
           "evidenceRefs",
           "selectable"
         ],
@@ -47,24 +52,30 @@
             "maxLength": 120,
             "pattern": "^(?!.*[,，])(?!.*(?:reputation|product_scenario|industry_ranking|competitor_comparison|第\\s*(?:\\d+|[一二三四五六七八九十]+)\\s*个(?:问题|问句)|测试问题|值得优化吗)).*？$"
           },
+          "questionEnglish": { "type": "null" },
           "rationale": { "type": "string", "minLength": 8, "maxLength": 240 },
           "enterpriseAnchor": {
-            "type": "string",
+            "type": ["string", "null"],
             "minLength": 2,
             "maxLength": 120
           },
           "offeringAnchor": {
-            "type": "string",
+            "type": ["string", "null"],
             "minLength": 2,
             "maxLength": 120
           },
           "competitorAnchor": {
-            "type": "string",
-            "minLength": 2,
-            "maxLength": 120,
-            "not": {
-              "pattern": "^(?:竞品[甲乙丙丁一二三四五0-9]*|(?:同类|其他|传统|原生|自建|替代|第三方|开源|主流|类似)(?:产品|平台|方案|工具|接口|集群|服务|厂商|品牌|公司)?|竞品|对手|友商)$"
-            }
+            "anyOf": [
+              {
+                "type": "string",
+                "minLength": 2,
+                "maxLength": 120,
+                "not": {
+                  "pattern": "^(?:竞品[甲乙丙丁一二三四五0-9]*|(?:同类|其他|传统|原生|自建|替代|第三方|开源|主流|类似)(?:产品|平台|方案|工具|接口|集群|服务|厂商|品牌|公司)?|竞品|对手|友商)$"
+                }
+              },
+              { "type": "null" }
+            ]
           },
           "qaIntent": {
             "enum": [
@@ -72,7 +83,8 @@
               "feature_mechanism",
               "scenario_fit",
               "delivery_usage",
-              "support_boundary"
+              "support_boundary",
+              null
             ]
           },
           "evidenceRefs": {
@@ -95,7 +107,16 @@
             "then": {
               "required": ["enterpriseAnchor"],
               "properties": {
+                "enterpriseAnchor": {
+                  "type": "string",
+                  "minLength": 2,
+                  "maxLength": 120
+                },
+                "offeringAnchor": { "const": null },
+                "competitorAnchor": { "const": null },
+                "qaIntent": { "const": null },
                 "question": {
+                  "type": "string",
                   "pattern": "(?:怎么样|好不好|好吗|靠谱吗|靠不靠谱|可靠吗|稳不稳定|稳定吗|安全(?:吗|性如何)|正规吗|可信(?:吗|度如何)|值得信赖吗|是否(?:值得信赖|可信|可靠|稳定|安全|正规)|是不是(?:正规|官方|正品|可信|可靠|安全)|口碑(?:如何|怎么样|好吗)|评价(?:如何|怎么样)|如何评价|售后(?:服务)?(?:如何|怎么样|好吗)|投诉(?:多吗|严重吗)|风险(?:高吗|大吗)|满意(?:吗|度如何))"
                 }
               }
@@ -109,7 +130,45 @@
               "required": ["category"]
             },
             "then": {
-              "required": ["enterpriseAnchor", "offeringAnchor", "qaIntent"]
+              "required": ["enterpriseAnchor", "offeringAnchor", "qaIntent"],
+              "properties": {
+                "enterpriseAnchor": {
+                  "type": "string",
+                  "minLength": 2,
+                  "maxLength": 120
+                },
+                "offeringAnchor": {
+                  "type": "string",
+                  "minLength": 2,
+                  "maxLength": 120
+                },
+                "competitorAnchor": { "const": null },
+                "qaIntent": {
+                  "enum": [
+                    "offering_definition",
+                    "feature_mechanism",
+                    "scenario_fit",
+                    "delivery_usage",
+                    "support_boundary"
+                  ]
+                }
+              }
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "category": { "const": "industry_ranking" }
+              },
+              "required": ["category"]
+            },
+            "then": {
+              "properties": {
+                "enterpriseAnchor": { "const": null },
+                "offeringAnchor": { "const": null },
+                "competitorAnchor": { "const": null },
+                "qaIntent": { "const": null }
+              }
             }
           },
           {
@@ -120,7 +179,24 @@
               "required": ["category"]
             },
             "then": {
-              "required": ["enterpriseAnchor", "competitorAnchor"]
+              "required": ["enterpriseAnchor", "competitorAnchor"],
+              "properties": {
+                "enterpriseAnchor": {
+                  "type": "string",
+                  "minLength": 2,
+                  "maxLength": 120
+                },
+                "offeringAnchor": { "const": null },
+                "competitorAnchor": {
+                  "type": "string",
+                  "minLength": 2,
+                  "maxLength": 120,
+                  "not": {
+                    "pattern": "^(?:竞品[甲乙丙丁一二三四五0-9]*|(?:同类|其他|传统|原生|自建|替代|第三方|开源|主流|类似)(?:产品|平台|方案|工具|接口|集群|服务|厂商|品牌|公司)?|竞品|对手|友商)$"
+                  }
+                },
+                "qaIntent": { "const": null }
+              }
             }
           }
         ]

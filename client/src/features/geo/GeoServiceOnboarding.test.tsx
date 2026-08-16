@@ -148,7 +148,8 @@ describe("GeoServiceOnboarding", () => {
     expect(html).toContain("本次签约申请未通过");
     expect(html).toContain("当前申请不能继续提交合同码");
     expect(html).toContain("联系支持处理");
-    expect(html).toContain('href="mailto:xiafanzeng@frontmind.com.cn');
+    expect(html).toContain("lucide-qr-code");
+    expect(html).not.toContain("mailto:");
     expect(html).not.toContain("提交资料并联系管理员");
     expect(html).not.toContain("企业直接创建看板账号");
     expect(html).not.toContain("前往付款");
@@ -332,8 +333,8 @@ describe("GeoServiceOnboarding", () => {
     });
 
     expect(html).toContain("联系技术支持");
-    expect(html).toContain('href="mailto:xiafanzeng@frontmind.com.cn');
-    expect(html).toContain("FM202607240001");
+    expect(html).toContain("lucide-qr-code");
+    expect(html).not.toContain("mailto:");
     expect(html).not.toContain("重试查询");
     expect(html).not.toContain("重试同步");
   });

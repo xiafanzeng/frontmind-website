@@ -281,6 +281,44 @@ describe("GEO project refresh policy", () => {
     },
   );
 
+  it("polls only while question recommendation is explicitly pending", () => {
+    const base = {
+      status: "recommending" as const,
+      questions: [],
+      selectedQuestionId: undefined,
+      selectedPlatformIds: [],
+    };
+    expect(
+      shouldAutoRefreshGeoProject(
+        project({
+          ...base,
+          questionRecommendation: { status: "pending" },
+        }),
+      ),
+    ).toBe(true);
+    expect(
+      shouldAutoRefreshGeoProject(
+        project({
+          ...base,
+          status: "ready",
+          questionRecommendation: { status: "not_started" },
+        }),
+      ),
+    ).toBe(false);
+    expect(
+      shouldAutoRefreshGeoProject(
+        project({
+          ...base,
+          status: "failed",
+          questionRecommendation: {
+            status: "failed",
+            failureKind: "result_invalid",
+          },
+        }),
+      ),
+    ).toBe(false);
+  });
+
   it("does not auto-refresh previews, drafts, or hidden pages", () => {
     expect(shouldAutoRefreshGeoProject(project({ preview: true }))).toBe(false);
     expect(

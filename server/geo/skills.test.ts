@@ -328,6 +328,8 @@ describe("website one-shot knowledge-base skill", () => {
     expect(prompt).toContain(WEBSITE_KB_SKILL_ARCHIVE_FILENAME);
     expect(prompt).toContain("先解压 ZIP 并完整读取根目录 SKILL.md");
     expect(prompt).toContain("website-lead-candidate-v1");
+    expect(prompt).toContain("已完成，候选 ZIP 已附上。");
+    expect(prompt).toContain("不得输出 Provider 文件 ID");
     expect(prompt).toContain(
       "不得开启、调用、切换或推荐 Wide Research / Deep Research",
     );
@@ -949,7 +951,7 @@ describe("GEO question-recommender skill", () => {
     expect(skill).toContain("Five-question intent matrices");
     expect(skill).toContain("Never write placeholder structures");
     expect(skill).toContain("all twenty rationales are specific");
-    expect(skill).not.toContain("questionEnglish");
+    expect(skill).toContain("questionEnglish: null");
   });
 
   it("builds a JSON-only grounded recommendation prompt", async () => {
@@ -1007,7 +1009,7 @@ describe("GEO question-recommender skill", () => {
     expect(manifest.files).toHaveLength(3);
     expect(
       await zip.file("references/output-schema.json")!.async("string"),
-    ).not.toContain("questionEnglish");
+    ).toContain('"questionEnglish": { "type": "null" }');
   });
 });
 
@@ -1025,7 +1027,7 @@ describe("GEO custom-question classifier skill", () => {
     ]) {
       expect(skill.toLowerCase()).toContain(invariant.toLowerCase());
     }
-    expect(skill).not.toContain("questionEnglish");
+    expect(skill).toContain("questionEnglish: null");
   });
 
   it("builds a one-question, JSON-only, knowledge-grounded classifier prompt", async () => {
@@ -1080,7 +1082,7 @@ describe("GEO custom-question classifier skill", () => {
     );
     expect(
       await zip.file("references/output-schema.json")!.async("string"),
-    ).not.toContain("questionEnglish");
+    ).toContain('"questionEnglish": { "type": "null" }');
   });
 });
 

@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { normalizeBusinessOwnerName } from "../../shared/business-owner-name";
 import {
   GEO_MONITORING_EDITIONS,
   GEO_MONITOR_PLATFORM_IDS,
@@ -456,8 +457,17 @@ export const GeoQuestionSetSchema = z
     }
   });
 
-export type GeoQuestion = z.infer<typeof GeoQuestionSchema>;
-export type GeoQuestionSet = z.infer<typeof GeoQuestionSetSchema>;
+export type GeoQuestion = z.infer<typeof GeoQuestionSchema> & {
+  /**
+   * Website-owned display state. Provider transport never supplies this
+   * field; the partial decoder sets it only when semantic classification is
+   * unsafe to use for a paid selection.
+   */
+  classificationState?: "classified" | "unclassified";
+};
+export type GeoQuestionSet = {
+  questions: GeoQuestion[];
+};
 
 function normalizeCustomQuestionText(value: string) {
   const normalized = value
@@ -578,21 +588,55 @@ export function inferCustomQuestionCategory(
   return "product_scenario";
 }
 
+const BusinessOwnerNameSchema = z.string().transform((value, context) => {
+  try {
+    return normalizeBusinessOwnerName(value);
+  } catch {
+    context.addIssue({
+      code: "custom",
+      message: "商务负责人姓名格式不正确",
+    });
+    return z.NEVER;
+  }
+});
+
 export const InviteRequestSchema = z
-  .object({ code: z.string().min(1).max(128) })
+  .object({
+    code: z.string().min(1).max(128),
+    businessOwnerName: BusinessOwnerNameSchema,
+  })
   .strict();
 
 export const UploadInitRequestSchema = z
   .object({
+    inviteContextToken: z.string().min(32).max(4096),
     filename: z.string().min(1).max(180),
     contentType: z.string().max(160).optional(),
+    clientRequestId: z.string().uuid().optional(),
+    attachmentIndex: z.number().int().min(0).max(9).optional(),
     sizeBytes: z
       .number()
       .int()
       .positive()
       .max(50 * 1024 * 1024),
   })
-  .strict();
+  .strict()
+  .superRefine((value, context) => {
+    if (
+      (value.clientRequestId === undefined) !==
+      (value.attachmentIndex === undefined)
+    ) {
+      context.addIssue({
+        code: "custom",
+        message:
+          "clientRequestId and attachmentIndex must be provided together",
+        path:
+          value.clientRequestId === undefined
+            ? ["clientRequestId"]
+            : ["attachmentIndex"],
+      });
+    }
+  });
 
 export const ProjectAttachmentSchema = z
   .object({
@@ -604,6 +648,7 @@ export const ProjectAttachmentSchema = z
 
 export const CreateProjectRequestSchema = z
   .object({
+    inviteContextToken: z.string().min(32).max(4096),
     input: z.string().trim().max(4000).default(""),
     clientRequestId: z.string().uuid().optional(),
     companyName: z.string().trim().min(1).max(200).optional(),

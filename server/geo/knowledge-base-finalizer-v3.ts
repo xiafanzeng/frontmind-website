@@ -694,7 +694,12 @@ function branchForAsset(type: CandidateAsset["type"]): CanonicalBranchId {
   return "01_company_overview";
 }
 
-function traceableAssetCandidate(asset: CandidateAsset) {
+function traceableAssetCandidate(asset: {
+  sourceKind: "official_web" | "official_document" | "user_upload";
+  sourcePageUrl?: string;
+  sourceAssetUrl?: string;
+  sourceDocumentName?: string;
+}) {
   if (
     asset.sourceKind === "official_web" &&
     asset.sourcePageUrl &&

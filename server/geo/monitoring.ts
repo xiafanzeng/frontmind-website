@@ -7,6 +7,11 @@ import {
   type BrokerMonitorRun,
   type GeoMonitorPlatformId,
 } from "./broker";
+import type { ResultQuality } from "./output";
+
+type NormalizedMonitorRun = BrokerMonitorRun & {
+  quality?: ResultQuality;
+};
 
 const PlatformSchema = z.enum(GEO_MONITOR_PLATFORM_IDS);
 const StatusSchema = z.enum([
@@ -55,12 +60,12 @@ const RecordSchema = z
     runIndex: z.number().int().min(1).max(5),
     status: RecordStatusSchema,
     answerText: z.string().max(200_000).optional(),
-    media: z.array(MediaSchema).max(24).default([]),
+    media: z.array(z.unknown()).max(24).default([]),
     // Optional on purpose: an explicitly supplied empty canonical collection
     // must not fall back to stale legacy citation/reference fields.
-    sources: z.array(SourceSchema).max(200).optional(),
-    citations: z.array(SourceSchema).max(100).default([]),
-    references: z.array(SourceSchema).max(200).default([]),
+    sources: z.array(z.unknown()).max(200).optional(),
+    citations: z.array(z.unknown()).max(100).default([]),
+    references: z.array(z.unknown()).max(200).default([]),
     error: z.string().max(2000).optional(),
     completedAt: z.string().max(80).optional(),
   })
@@ -77,7 +82,7 @@ const RunSchema = z
     failedItems: z.number().int().nonnegative().max(30),
     submittedAt: z.string().max(80).optional(),
     nextPollAt: z.string().max(80).optional(),
-    records: z.array(RecordSchema).max(30).optional(),
+    records: z.array(z.unknown()).max(30).optional(),
     error: z.string().max(2000).optional(),
   })
   .passthrough();
@@ -110,7 +115,7 @@ export function normalizeMonitorRun(
   options: {
     allowTerminalSummaryWithoutRecords?: boolean;
   } = {},
-): BrokerMonitorRun {
+): NormalizedMonitorRun {
   const root = asRecord(payload);
   const candidate = root.run ?? root.data ?? payload;
   const parsed = RunSchema.safeParse(candidate);
@@ -142,76 +147,150 @@ export function normalizeMonitorRun(
 
   const slots = new Set<string>();
   const recordIds = new Set<string>();
-  const records: BrokerMonitorRecord[] | undefined = run.records?.map(
-    (record) => {
-      if (!uniquePlatforms.includes(record.platform))
-        throw new GeoMonitorContractError("监控结果包含范围外平台");
-      const slot = `${record.platform}:${record.runIndex}`;
-      if (slots.has(slot))
-        throw new GeoMonitorContractError("监控结果包含重复的平台轮次");
-      slots.add(slot);
-      if (recordIds.has(record.recordId))
-        throw new GeoMonitorContractError("监控结果包含重复的记录 ID");
-      recordIds.add(record.recordId);
-      if (
-        record.status === "completed" &&
-        (!record.answerText?.trim() || record.error)
-      ) {
-        throw new GeoMonitorContractError("完成记录缺少最终文字或同时包含错误");
-      }
-      return {
-        recordId: record.recordId,
-        platform: record.platform,
-        runIndex: record.runIndex,
-        status: record.status,
-        answerText: record.answerText,
-        media: record.media.flatMap((item) => {
-          const normalized = normalizePublicMedia(item);
+  let droppedRecords = 0;
+  let droppedOptionalItems = 0;
+  const records: BrokerMonitorRecord[] | undefined = run.records
+    ? run.records.flatMap((candidate) => {
+        const parsedRecord = RecordSchema.safeParse(candidate);
+        if (!parsedRecord.success) {
+          droppedRecords += 1;
+          return [];
+        }
+        const record = parsedRecord.data;
+        const slot = `${record.platform}:${record.runIndex}`;
+        if (
+          !uniquePlatforms.includes(record.platform) ||
+          slots.has(slot) ||
+          recordIds.has(record.recordId) ||
+          (record.status === "completed" &&
+            (!record.answerText?.trim() || record.error))
+        ) {
+          droppedRecords += 1;
+          return [];
+        }
+        slots.add(slot);
+        recordIds.add(record.recordId);
+
+        const media = record.media.flatMap((item) => {
+          const parsed = MediaSchema.safeParse(item);
+          if (!parsed.success) {
+            droppedOptionalItems += 1;
+            return [];
+          }
+          const normalized = normalizePublicMedia(parsed.data);
+          if (!normalized) droppedOptionalItems += 1;
           return normalized ? [normalized] : [];
-        }),
-        sources: normalizeMonitorSources(
+        });
+        const rawSources =
           record.sources !== undefined
             ? record.sources
-            : [...record.citations, ...record.references],
-        ),
-        error: record.error,
-        completedAt: record.completedAt,
-      };
-    },
+            : [...record.citations, ...record.references];
+        const validSources = rawSources.flatMap((item) => {
+          const parsed = SourceSchema.safeParse(item);
+          if (!parsed.success) {
+            droppedOptionalItems += 1;
+            return [];
+          }
+          const normalized = normalizeSource(parsed.data);
+          if (!normalized.title && !normalized.url && !normalized.domain) {
+            droppedOptionalItems += 1;
+            return [];
+          }
+          return [parsed.data];
+        });
+        return [
+          {
+            recordId: record.recordId,
+            platform: record.platform,
+            runIndex: record.runIndex,
+            status: record.status,
+            answerText: record.answerText,
+            media,
+            sources: normalizeMonitorSources(validSources),
+            error: record.error,
+            completedAt: record.completedAt,
+          },
+        ];
+      })
+    : undefined;
+  const observedCompleted = records
+    ? records.filter((record) => record.status === "completed").length
+    : run.completedItems;
+  const observedFailed = records
+    ? records.filter((record) =>
+        ["failed", "stopped", "error"].includes(record.status),
+      ).length
+    : run.failedItems;
+  const terminal = ["completed", "partial_review_required"].includes(
+    run.status,
   );
-  if (records) {
-    const observedCompleted = records.filter(
-      (record) => record.status === "completed",
-    ).length;
-    const observedFailed = records.filter((record) =>
-      ["failed", "stopped", "error"].includes(record.status),
-    ).length;
-    if (
-      observedCompleted !== run.completedItems ||
-      observedFailed !== run.failedItems
-    ) {
-      throw new GeoMonitorContractError("监控记录状态与汇总数量不一致");
-    }
-  }
-  if (
-    ["completed", "partial_review_required"].includes(run.status) &&
-    !(
-      options.allowTerminalSummaryWithoutRecords === true &&
-      records === undefined
-    ) &&
-    (records?.length !== run.expectedItems ||
+  const summaryOnlyAccepted =
+    options.allowTerminalSummaryWithoutRecords === true &&
+    records === undefined;
+  const incompleteTerminalRecords =
+    terminal &&
+    !summaryOnlyAccepted &&
+    (records === undefined ||
+      records.length !== run.expectedItems ||
       records.some(
         (record) =>
           !["completed", "failed", "stopped", "error"].includes(record.status),
-      ))
-  ) {
-    throw new GeoMonitorContractError("监控完成快照不完整");
-  }
-  const publicStatus =
-    run.status === "completed" &&
-    (run.failedItems > 0 || run.completedItems !== run.expectedItems)
-      ? "partial_review_required"
-      : run.status;
+      ));
+  const summaryMismatch =
+    records !== undefined &&
+    (observedCompleted !== run.completedItems ||
+      observedFailed !== run.failedItems);
+  const partial =
+    run.status === "partial_review_required" ||
+    incompleteTerminalRecords ||
+    summaryMismatch ||
+    droppedRecords > 0 ||
+    droppedOptionalItems > 0 ||
+    observedFailed > 0 ||
+    (terminal && observedCompleted !== run.expectedItems);
+  const publicStatus = partial ? "partial_review_required" : run.status;
+  const retainedRecordCount =
+    records?.length ??
+    (summaryOnlyAccepted ? observedCompleted + observedFailed : 0);
+  const droppedCount = Math.max(
+    droppedRecords,
+    run.expectedItems - retainedRecordCount,
+    0,
+  );
+  const quality: ResultQuality | undefined = terminal
+    ? {
+        completeness: partial ? "partial" : "complete",
+        stats: {
+          acceptedCount: retainedRecordCount,
+          expectedCount: run.expectedItems,
+          droppedCount,
+        },
+        ...(partial
+          ? {
+              warnings: [
+                { code: "RESULT_INCOMPLETE" as const, area: "monitoring" },
+                ...(droppedCount > 0
+                  ? [
+                      {
+                        code: "ITEM_DROPPED" as const,
+                        area: "monitoring",
+                      },
+                    ]
+                  : []),
+                ...(droppedOptionalItems > 0
+                  ? [
+                      {
+                        code: "EVIDENCE_INCOMPLETE" as const,
+                        area: "monitoring.sources_media",
+                      },
+                    ]
+                  : []),
+              ],
+            }
+          : {}),
+        downstreamEligible: !partial,
+      }
+    : undefined;
 
   return {
     runId: run.runId,
@@ -220,12 +299,13 @@ export function normalizeMonitorRun(
     platforms: uniquePlatforms,
     repeatPerPlatform: 5,
     expectedItems: run.expectedItems,
-    completedItems: run.completedItems,
-    failedItems: run.failedItems,
+    completedItems: observedCompleted,
+    failedItems: observedFailed,
     submittedAt: run.submittedAt,
     nextPollAt: run.nextPollAt,
     records,
     error: run.error,
+    ...(quality ? { quality } : {}),
   };
 }
 
@@ -426,6 +506,7 @@ function safeHttpUrl(value?: string) {
 }
 
 export function toPublicMonitorView(run: BrokerMonitorRun) {
+  const quality = (run as NormalizedMonitorRun).quality;
   return {
     runId: run.runId,
     status: run.status,
@@ -438,5 +519,6 @@ export function toPublicMonitorView(run: BrokerMonitorRun) {
     nextPollAt: run.nextPollAt,
     records: run.records,
     error: run.error,
+    ...(quality ? { quality } : {}),
   };
 }

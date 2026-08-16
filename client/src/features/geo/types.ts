@@ -166,6 +166,7 @@ export type GeoMonitoringResult = {
   startedAt?: string;
   completedAt?: string;
   partialAccepted?: boolean;
+  quality?: GeoResultQuality;
   answers: GeoMonitoringAnswer[];
   error?: string;
 };
@@ -180,8 +181,8 @@ export type GeoAssessmentDimensionId =
 export type GeoAssessmentDimension = {
   id: GeoAssessmentDimensionId;
   label: string;
-  score: number;
-  maxScore: number;
+  score?: number;
+  maxScore?: number;
   summary?: string;
   currentFinding?: string;
   nextAction?: string;
@@ -213,11 +214,11 @@ export type GeoAssessmentPlatformBreakdown = {
   platformId: GeoPlatformId;
   responseCount: number;
   successfulResponses: number;
-  brandMentionRate: number | null;
-  averageRank: number | null;
-  factAccuracy: number | null;
-  propositionHitRate: number | null;
-  sourceCount: number;
+  brandMentionRate?: number | null;
+  averageRank?: number | null;
+  factAccuracy?: number | null;
+  propositionHitRate?: number | null;
+  sourceCount?: number;
   /** @deprecated v1 assessment compatibility. */
   citationCount?: number;
   /** @deprecated v1 assessment compatibility. */
@@ -288,6 +289,7 @@ export type GeoAssessmentResult = {
   generatedAt?: string;
   error?: string;
   failureCode?: GeoAssessmentFailureCode;
+  quality?: GeoResultQuality;
 };
 
 export type GeoOptimizationForecastDimension = {
@@ -342,6 +344,7 @@ export type GeoOptimizationForecastResult = {
   generatedAt?: string;
   error?: string;
   failureCode?: GeoAssessmentFailureCode;
+  quality?: GeoResultQuality;
 };
 
 export type GeoFileReference = {
@@ -484,12 +487,43 @@ export type GeoKnowledgeBase = {
 export type GeoQuestion = {
   id: string;
   category: GeoQuestionCategory;
+  classificationState?: "classified" | "unclassified";
   question: string;
   /** @deprecated Legacy local-data compatibility only; runtime monitoring translates `question`. */
   questionEnglish?: string;
   rationale?: string;
   evidenceRefs?: string[];
   selectable: boolean;
+};
+
+export type GeoResultQuality = {
+  completeness: "complete" | "partial";
+  stats?: {
+    acceptedCount: number;
+    expectedCount?: number;
+    droppedCount: number;
+    selectableCount?: number;
+  };
+  warnings?: Array<{
+    code:
+      | "RESULT_INCOMPLETE"
+      | "ITEM_DROPPED"
+      | "EVIDENCE_INCOMPLETE"
+      | "AGGREGATE_UNAVAILABLE"
+      | "OPTIONAL_ASSET_SKIPPED"
+      | "COVERAGE_INCOMPLETE";
+    area?: string;
+  }>;
+  downstreamEligible?: boolean;
+  publishable?: boolean;
+};
+
+export type GeoQuestionRecommendation = {
+  status: "not_started" | "pending" | "ready" | "failed";
+  startedAt?: string;
+  terminalAt?: string;
+  failureKind?: "provider_unavailable" | "result_invalid";
+  quality?: GeoResultQuality;
 };
 
 export type GeoServiceCategory = Exclude<
@@ -602,6 +636,8 @@ export type GeoProject = {
   optimizationForecastRetryAvailable?: boolean;
   files: GeoFileReference[];
   knowledgeBase?: GeoKnowledgeBase;
+  /** Server-authoritative lifecycle for the one recommendation task. */
+  questionRecommendation?: GeoQuestionRecommendation;
   questions: GeoQuestion[];
   selectedQuestionId?: string;
   /** Missing on historical projects and therefore resolved as `domestic`. */

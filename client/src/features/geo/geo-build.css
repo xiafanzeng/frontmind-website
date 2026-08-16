@@ -612,10 +612,13 @@
 }
 .geo-invite-form label {
   display: block;
-  margin-bottom: 8px;
+  margin: 14px 0 8px;
   color: #413b47;
   font-size: 15px;
   font-weight: 700;
+}
+.geo-invite-form label:first-child {
+  margin-top: 0;
 }
 
 .geo-invite-form input {
@@ -1784,6 +1787,34 @@
 .geo-kb-hero > div {
   max-width: 760px;
 }
+.geo-kb-hero > div:first-child {
+  min-width: 0;
+  flex: 1 1 auto;
+}
+.geo-kb-brand-card {
+  display: grid;
+  width: 112px;
+  min-width: 112px;
+  height: 92px;
+  place-items: center;
+  overflow: hidden;
+  border: 1px solid #ded7e4;
+  background: #fff;
+  padding: 10px;
+  box-shadow: 0 8px 22px rgb(61 21 96 / 7%);
+}
+.geo-kb-brand-card img {
+  display: block;
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+}
+.geo-kb-brand-card > span {
+  color: #968d9c;
+  font-size: 12px;
+  line-height: 1.4;
+  text-align: center;
+}
 .geo-kb-hero h2,
 .geo-progress-copy h2,
 .geo-question-header h2,
@@ -2055,18 +2086,6 @@
   color: #a198a6;
   font-family: "DM Serif Display", Georgia, serif;
   font-size: 14px;
-}
-.geo-branch-index.has-logo {
-  display: grid;
-  width: 28px;
-  height: 28px;
-  place-items: center;
-}
-.geo-branch-index.has-logo img {
-  display: block;
-  width: 100%;
-  height: 100%;
-  object-fit: contain;
 }
 .geo-knowledge-browser aside > button > span:nth-child(2) {
   display: flex;
@@ -3454,6 +3473,10 @@
   --geo-category-accent: #496f9d;
   --geo-category-tint: #edf3fa;
 }
+.geo-question-category[data-category="unclassified"] {
+  --geo-category-accent: #756c78;
+  --geo-category-tint: #f3f1f4;
+}
 .geo-question-category > header {
   display: grid;
   min-height: 78px;
@@ -4241,7 +4264,7 @@
 .geo-checkout-total {
   display: grid;
   min-width: 118px;
-  grid-template-columns: auto auto;
+  grid-template-columns: auto;
   align-items: end;
   gap: 0 9px;
   border-left: 1px solid rgba(255, 255, 255, 0.14);
@@ -4250,15 +4273,6 @@
 .geo-checkout-total > span {
   color: rgba(255, 255, 255, 0.7);
   font-size: 13px;
-}
-.geo-checkout-total strong {
-  grid-row: 1 / span 2;
-  grid-column: 2;
-  color: #e1c47a;
-  font-family: "DM Serif Display", Georgia, serif;
-  font-size: 26px;
-  font-weight: 400;
-  line-height: 1;
 }
 .geo-checkout-total small {
   color: rgba(255, 255, 255, 0.56);
@@ -11306,6 +11320,13 @@
   }
   .geo-kb-hero h2 {
     font-size: 24px;
+  }
+  .geo-kb-brand-card {
+    width: 80px;
+    min-width: 80px;
+    height: 68px;
+    margin-top: 14px;
+    padding: 8px;
   }
   .geo-kb-actions {
     width: 100%;

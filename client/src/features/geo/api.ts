@@ -29,27 +29,59 @@ import type {
   GeoProjectStatus,
   GeoQuestion,
   GeoQuestionCategory,
+  GeoQuestionRecommendation,
+  GeoResultQuality,
   GeoServiceActivation,
   GeoServiceCategory,
   GeoServiceContractProfile,
   GeoStage,
 } from "./types";
+import { normalizeBusinessOwnerName } from "@shared/business-owner-name";
 import { resolveGeoMonitoringEdition } from "./types";
 import { localizedUserFacingError } from "./error-localization";
 import { visibleKnowledgeSectionSummary } from "./knowledge-section-markdown";
 
 const GEO_API_ROOT = "/api/geo";
 const DEFAULT_REQUEST_TIMEOUT_MS = 30_000;
+const GEO_PROJECT_CREATE_TIMEOUT_MS = 75_000;
 const GEO_MONITOR_START_TIMEOUT_MS = 75_000;
 const UPLOAD_REQUEST_TIMEOUT_MS = 5 * 60_000;
+const UPLOAD_BROWSER_STALL_TIMEOUT_MS = 2 * 60_000;
+const UPLOAD_SERVER_RESPONSE_TIMEOUT_MS = 6 * 60_000;
+const UPLOAD_INIT_RETRY_DELAY_MS = 1_000;
+const UPLOAD_TRANSFER_RETRY_DELAYS_MS = [1_000, 3_000] as const;
+const UPLOAD_STATUS_POLL_INTERVAL_MS = 1_000;
 const GEO_CUSTOM_QUESTION_POLL_RECOVERY_MAX_MS = 2 * 60_000;
 
 type JsonRecord = Record<string, unknown>;
 type TimedRequestInit = RequestInit & { timeoutMs?: number };
-export type GeoUploadedFile = GeoFileReference & {
+export type GeoUploadReservation = GeoFileReference & {
   uploadToken: string;
   sourceName: string;
   sourceLastModified: number;
+  traceId?: string;
+  requiresStatusOnly?: boolean;
+};
+
+export type GeoUploadedFile = GeoUploadReservation;
+
+export type GeoUploadProgress = {
+  phase:
+    | "reserving"
+    | "uploading"
+    | "awaiting_dashboard"
+    | "reconciling"
+    | "retrying"
+    | "confirmed";
+  /** One-based index of the file currently being transferred. */
+  fileIndex: number;
+  fileCount: number;
+  filename: string;
+  fileLoadedBytes: number;
+  fileTotalBytes: number;
+  batchLoadedBytes: number;
+  batchTotalBytes: number;
+  confirmedFiles: number;
 };
 
 export type GeoPaymentMethod = "alipay" | "wxpay";
@@ -789,7 +821,30 @@ async function requestJson(
   );
 }
 
-function normalizeCategory(value: unknown): GeoQuestionCategory {
+function retryableProjectStartConfirmation(error: unknown): boolean {
+  if (error instanceof GeoApiError) {
+    return (
+      error.status === 408 ||
+      error.status === 429 ||
+      (error.status >= 500 && error.status <= 599)
+    );
+  }
+  // Browser fetch reports a connection-level failure (including status 0)
+  // as a TypeError. Replaying the stable project request is safe because the
+  // upload tokens and clientRequestId are unchanged.
+  return error instanceof TypeError;
+}
+
+function projectStartConfirmationUnknown(error: unknown): GeoApiError {
+  const status = error instanceof GeoApiError ? error.status : 502;
+  return new GeoApiError(
+    "启动确认暂未返回，重试将复用本次上传，不会重复上传文件。",
+    status,
+    "PROJECT_START_CONFIRMATION_UNKNOWN",
+  );
+}
+
+function normalizeCategory(value: unknown): GeoQuestionCategory | undefined {
   const category = String(value ?? "")
     .toLowerCase()
     .replace(/[\s-]+/g, "_");
@@ -823,7 +878,18 @@ function normalizeCategory(value: unknown): GeoQuestionCategory {
   ) {
     return "industry_ranking";
   }
-  return "competitor_comparison";
+  if (
+    [
+      "competitor_comparison",
+      "competitor",
+      "comparison",
+      "竞品对比",
+      "竞品比较",
+    ].includes(category)
+  ) {
+    return "competitor_comparison";
+  }
+  return undefined;
 }
 
 function normalizeQuestions(value: unknown): GeoQuestion[] {
@@ -838,13 +904,22 @@ function normalizeQuestions(value: unknown): GeoQuestion[] {
     const record = asRecord(item);
     const question = textValue(record.question, record.text, record.title);
     if (!question) return [];
-    const category = normalizeCategory(record.category ?? record.type);
+    const normalizedCategory = normalizeCategory(
+      record.category ?? record.type,
+    );
+    const category = normalizedCategory ?? "reputation";
+    const classificationState =
+      textValue(record.classificationState, record.classification_state) ===
+        "unclassified" || !normalizedCategory
+        ? "unclassified"
+        : "classified";
 
     return [
       {
         id:
           textValue(record.id, record.questionId) ?? `${category}-${index + 1}`,
         category,
+        classificationState,
         question,
         rationale: textValue(
           record.rationale,
@@ -861,7 +936,9 @@ function normalizeQuestions(value: unknown): GeoQuestion[] {
           )
           .filter((source): source is string => Boolean(source)),
         selectable:
-          category !== "industry_ranking" && record.selectable !== false,
+          classificationState === "classified" &&
+          category !== "industry_ranking" &&
+          record.selectable !== false,
       },
     ];
   });
@@ -1184,6 +1261,35 @@ function normalizeSources(value: unknown): GeoKnowledgeSource[] {
   });
 }
 
+function normalizeKnowledgeAssetType(
+  value: unknown,
+): GeoKnowledgeAsset["assetType"] {
+  const candidate = textValue(value);
+  return candidate &&
+    [
+      "brand_identity",
+      "product_ui",
+      "product_diagram",
+      "case_photo",
+      "team_photo",
+      "environment_photo",
+      "certificate_badge",
+      "document_figure",
+      "other",
+    ].includes(candidate)
+    ? (candidate as GeoKnowledgeAsset["assetType"])
+    : undefined;
+}
+
+function normalizeKnowledgeAssetDisplayRole(
+  value: unknown,
+): GeoKnowledgeAsset["displayRole"] {
+  const candidate = textValue(value);
+  return candidate && ["hero", "inline", "badge"].includes(candidate)
+    ? (candidate as GeoKnowledgeAsset["displayRole"])
+    : undefined;
+}
+
 function normalizeAssets(value: unknown): GeoKnowledgeAsset[] {
   return asArray(value).flatMap((item, index) => {
     const record = asRecord(item);
@@ -1235,6 +1341,12 @@ function normalizeAssets(value: unknown): GeoKnowledgeAsset[] {
         ),
         width: numberValue(record.width),
         height: numberValue(record.height),
+        assetType: normalizeKnowledgeAssetType(
+          record.assetType ?? record.asset_type,
+        ),
+        displayRole: normalizeKnowledgeAssetDisplayRole(
+          record.displayRole ?? record.display_role,
+        ),
       },
     ];
   });
@@ -1539,6 +1651,7 @@ function normalizeMonitoringAnswer(
     : answer
       ? "completed"
       : "processing";
+  if (status === "completed" && !answer.trim()) return undefined;
   const runIndex = Math.max(
     1,
     Math.min(
@@ -1663,9 +1776,10 @@ function normalizeMonitoring(value: unknown): GeoMonitoringResult | undefined {
     source.id,
   );
   if (!runId) return undefined;
-  const answers = asArray(
+  const answerCandidates = asArray(
     source.answers ?? source.records ?? asRecord(source.output).records,
-  ).flatMap((answer, index) => {
+  );
+  const answers = answerCandidates.flatMap((answer, index) => {
     const normalized = normalizeMonitoringAnswer(answer, index);
     return normalized ? [normalized] : [];
   });
@@ -1681,44 +1795,94 @@ function normalizeMonitoring(value: unknown): GeoMonitoringResult | undefined {
   const failedFromAnswers = answers.filter((answer) =>
     ["failed", "stopped", "error"].includes(answer.status),
   ).length;
+  const expectedRecords = Math.max(
+    0,
+    Math.round(
+      numberValue(
+        source.expectedRecords,
+        source.expected_records,
+        source.totalItems,
+        source.total_items,
+      ) ?? platforms.length * 5,
+    ),
+  );
+  const completedRecords = Math.max(
+    0,
+    Math.round(
+      numberValue(
+        source.completedRecords,
+        source.completed_records,
+        source.completedItems,
+        source.completed_items,
+      ) ?? completedFromAnswers,
+    ),
+  );
+  const failedRecords = Math.max(
+    0,
+    Math.round(
+      numberValue(
+        source.failedRecords,
+        source.failed_records,
+        source.failedItems,
+        source.failed_items,
+      ) ?? failedFromAnswers,
+    ),
+  );
+  let status = normalizeMonitoringStatus(source.status ?? source.state);
+  const clientDroppedCount = Math.max(
+    answerCandidates.length - answers.length,
+    expectedRecords - answers.length,
+    0,
+  );
+  const terminal = status === "completed" || status === "partial_review";
+  const adapterPartial =
+    status === "partial_review" ||
+    (status === "completed" && (clientDroppedCount > 0 || failedRecords > 0));
+  const providedQuality = normalizeResultQuality(source.quality);
+  const qualityPartial =
+    adapterPartial || providedQuality?.completeness === "partial";
+  if (status === "completed" && qualityPartial) status = "partial_review";
+  const effectiveDroppedCount = Math.max(
+    clientDroppedCount,
+    providedQuality?.stats?.droppedCount ?? 0,
+  );
+  const quality: GeoResultQuality | undefined = terminal
+    ? {
+        completeness: qualityPartial ? "partial" : "complete",
+        stats: {
+          acceptedCount: answers.length,
+          expectedCount: expectedRecords,
+          droppedCount: effectiveDroppedCount,
+        },
+        ...(providedQuality?.warnings?.length
+          ? { warnings: providedQuality.warnings }
+          : qualityPartial
+            ? {
+                warnings: [
+                  { code: "RESULT_INCOMPLETE" as const, area: "monitoring" },
+                  ...(effectiveDroppedCount > 0
+                    ? [
+                        {
+                          code: "ITEM_DROPPED" as const,
+                          area: "monitoring",
+                        },
+                      ]
+                    : []),
+                ],
+              }
+            : {}),
+        downstreamEligible:
+          !qualityPartial && providedQuality?.downstreamEligible !== false,
+      }
+    : undefined;
 
   return {
     runId,
-    status: normalizeMonitoringStatus(source.status ?? source.state),
+    status,
     platforms,
-    expectedRecords: Math.max(
-      0,
-      Math.round(
-        numberValue(
-          source.expectedRecords,
-          source.expected_records,
-          source.totalItems,
-          source.total_items,
-        ) ?? platforms.length * 5,
-      ),
-    ),
-    completedRecords: Math.max(
-      0,
-      Math.round(
-        numberValue(
-          source.completedRecords,
-          source.completed_records,
-          source.completedItems,
-          source.completed_items,
-        ) ?? completedFromAnswers,
-      ),
-    ),
-    failedRecords: Math.max(
-      0,
-      Math.round(
-        numberValue(
-          source.failedRecords,
-          source.failed_records,
-          source.failedItems,
-          source.failed_items,
-        ) ?? failedFromAnswers,
-      ),
-    ),
+    expectedRecords,
+    completedRecords,
+    failedRecords,
     nextPollAt: timestampValue(source.nextPollAt, source.next_poll_at),
     startedAt: timestampValue(
       source.startedAt,
@@ -1728,6 +1892,7 @@ function normalizeMonitoring(value: unknown): GeoMonitoringResult | undefined {
     completedAt: timestampValue(source.completedAt, source.completed_at),
     partialAccepted:
       source.partialAccepted === true || source.partial_accepted === true,
+    ...(quality ? { quality } : {}),
     answers,
     error: localizedUserFacingError(
       textValue(source.error, source.errorMessage, source.error_message),
@@ -1775,20 +1940,17 @@ function normalizeAssessmentDimension(
 ): GeoAssessmentDimension | undefined {
   const record = asRecord(value);
   if (Object.keys(record).length === 0) return undefined;
+  const score = numberValue(record.score, record.value);
+  const maxScore = numberValue(record.maxScore, record.max_score);
   return {
     id: definition.id,
     label: textValue(record.label, record.name) ?? definition.label,
-    score: Math.max(
-      0,
-      Math.min(
-        definition.maxScore,
-        numberValue(record.score, record.value) ?? 0,
-      ),
-    ),
-    maxScore: Math.max(
-      1,
-      numberValue(record.maxScore, record.max_score) ?? definition.maxScore,
-    ),
+    ...(score !== undefined
+      ? {
+          score: Math.max(0, Math.min(maxScore ?? definition.maxScore, score)),
+        }
+      : {}),
+    ...(maxScore !== undefined ? { maxScore: Math.max(1, maxScore) } : {}),
     summary: textValue(
       record.summary,
       record.diagnosis,
@@ -1881,6 +2043,14 @@ function nullableNumberValue(value: unknown): number | null {
   return numberValue(value) ?? null;
 }
 
+function optionalNullableNumberValue(
+  value: unknown,
+): number | null | undefined {
+  if (value === undefined || value === "") return undefined;
+  if (value === null) return null;
+  return numberValue(value);
+}
+
 function normalizeAssessmentDimensionId(
   value: unknown,
 ): GeoAssessmentDimensionId | undefined {
@@ -1926,27 +2096,22 @@ function normalizeAssessmentPlatformBreakdown(
             record.successful_responses,
           ) ?? 0,
         ),
-        brandMentionRate: nullableNumberValue(
+        brandMentionRate: optionalNullableNumberValue(
           record.brandMentionRate ?? record.brand_mention_rate,
         ),
-        averageRank: nullableNumberValue(
+        averageRank: optionalNullableNumberValue(
           record.averageRank ?? record.average_rank,
         ),
-        factAccuracy: nullableNumberValue(
+        factAccuracy: optionalNullableNumberValue(
           record.factAccuracy ?? record.fact_accuracy,
         ),
-        propositionHitRate: nullableNumberValue(
+        propositionHitRate: optionalNullableNumberValue(
           record.propositionHitRate ?? record.proposition_hit_rate,
         ),
-        sourceCount: Math.max(
-          0,
-          numberValue(
-            record.sourceCount,
-            record.source_count,
-            (numberValue(record.citationCount, record.citation_count) || 0) +
-              (numberValue(record.referenceCount, record.reference_count) || 0),
-          ) ?? 0,
-        ),
+        sourceCount: (() => {
+          const count = numberValue(record.sourceCount, record.source_count);
+          return count === undefined ? undefined : Math.max(0, count);
+        })(),
         sentiment,
         verdict: textValue(record.verdict) ?? "",
         evidenceRefs: asArray(record.evidenceRefs ?? record.evidence_refs)
@@ -2244,6 +2409,7 @@ function normalizeAssessment(value: unknown): GeoAssessmentResult | undefined {
       "",
     ),
     failureCode,
+    quality: normalizeResultQuality(root.quality ?? scorecard.quality),
   };
 }
 
@@ -2504,6 +2670,7 @@ function normalizeOptimizationForecast(
       forecast.failureCode,
       forecast.failure_code,
     ),
+    quality: normalizeResultQuality(root.quality ?? forecast.quality),
   };
 }
 
@@ -2616,11 +2783,14 @@ function normalizeExecutionLog(value: unknown): GeoExecutionLog | undefined {
     source.currentEntryId,
     source.current_entry_id,
   );
-  const currentEntryId = entries.some(
+  const activeStatuses = new Set(["queued", "running", "waiting", "unknown"]);
+  const requestedCurrentEntry = entries.find(
     (entry) => entry.id === requestedCurrentEntryId,
-  )
-    ? requestedCurrentEntryId
-    : entries.at(-1)?.id;
+  );
+  const currentEntryId = activeStatuses.has(requestedCurrentEntry?.status || "")
+    ? requestedCurrentEntry?.id
+    : [...entries].reverse().find((entry) => activeStatuses.has(entry.status))
+        ?.id;
 
   return {
     currentEntryId,
@@ -2628,6 +2798,197 @@ function normalizeExecutionLog(value: unknown): GeoExecutionLog | undefined {
     updatedAt:
       textValue(source.updatedAt, source.updated_at, fetchedAt) ?? fetchedAt,
     entries,
+  };
+}
+
+function normalizeQuestionRecommendation(
+  project: JsonRecord,
+  questionTask: JsonRecord,
+  questions: GeoQuestion[],
+  executionLog: GeoExecutionLog | undefined,
+  fallback?: GeoQuestionRecommendation,
+): GeoQuestionRecommendation {
+  const recommendation = asRecord(
+    project.questionRecommendation ?? project.question_recommendation,
+  );
+  const status = textValue(recommendation.status)?.toLowerCase();
+  const startedAt = timestampValue(
+    recommendation.startedAt,
+    recommendation.started_at,
+  );
+  const terminalAt = timestampValue(
+    recommendation.terminalAt,
+    recommendation.terminal_at,
+  );
+  const rawFailureKind = textValue(
+    recommendation.failureKind,
+    recommendation.failure_kind,
+  );
+  const failureKind = ["provider_unavailable", "result_invalid"].includes(
+    rawFailureKind || "",
+  )
+    ? (rawFailureKind as GeoQuestionRecommendation["failureKind"])
+    : undefined;
+  const quality = normalizeResultQuality(
+    recommendation.quality,
+    fallback?.quality,
+  );
+  const recommendedQuestionCount = questions.filter(
+    (question) => !question.id.startsWith("custom-"),
+  ).length;
+  const legacyQuestionEntry = executionLog?.entries.find(
+    (entry) => entry.id === "question-recommendation",
+  );
+
+  // Any server-projected question is safe to display. Completeness remains
+  // explicit and selection is still controlled per item by `selectable`.
+  if (recommendedQuestionCount > 0) {
+    return {
+      status: "ready",
+      startedAt: startedAt ?? legacyQuestionEntry?.startedAt,
+      terminalAt: terminalAt ?? legacyQuestionEntry?.completedAt,
+      quality: quality ?? {
+        completeness: recommendedQuestionCount === 20 ? "complete" : "partial",
+        stats: {
+          acceptedCount: recommendedQuestionCount,
+          expectedCount: 20,
+          droppedCount: Math.max(0, 20 - recommendedQuestionCount),
+          selectableCount: questions.filter(
+            (question) =>
+              !question.id.startsWith("custom-") && question.selectable,
+          ).length,
+        },
+        downstreamEligible: questions.some(
+          (question) =>
+            !question.id.startsWith("custom-") && question.selectable,
+        ),
+      },
+    };
+  }
+  if (["not_started", "pending", "ready", "failed"].includes(status || "")) {
+    if (status === "ready") {
+      return {
+        status: "failed",
+        startedAt: startedAt ?? legacyQuestionEntry?.startedAt,
+        terminalAt: terminalAt ?? legacyQuestionEntry?.completedAt,
+        failureKind: "result_invalid",
+      };
+    }
+    return {
+      status: status as GeoQuestionRecommendation["status"],
+      startedAt,
+      ...(["ready", "failed"].includes(status || "") ? { terminalAt } : {}),
+      ...(status === "failed"
+        ? { failureKind: failureKind ?? "provider_unavailable" }
+        : {}),
+    };
+  }
+
+  const hasQuestionTask = Object.keys(questionTask).length > 0;
+  if (hasQuestionTask) {
+    const taskStatus = textValue(questionTask.status)?.toLowerCase() ?? "";
+    if (["failed", "error", "cancelled", "canceled"].includes(taskStatus)) {
+      return {
+        status: "failed",
+        startedAt: legacyQuestionEntry?.startedAt,
+        terminalAt: legacyQuestionEntry?.completedAt,
+        failureKind: "provider_unavailable",
+      };
+    }
+    if (
+      ["ready", "completed", "complete", "succeeded", "success"].includes(
+        taskStatus,
+      )
+    ) {
+      return {
+        status: "failed",
+        startedAt: legacyQuestionEntry?.startedAt,
+        terminalAt: legacyQuestionEntry?.completedAt,
+        failureKind: "result_invalid",
+      };
+    }
+    return {
+      status: "pending",
+      startedAt: legacyQuestionEntry?.startedAt,
+    };
+  }
+
+  if (
+    !hasOwnField(
+      project,
+      "questionRecommendation",
+      "question_recommendation",
+      "questionTask",
+      "question_task",
+      "questions",
+    ) &&
+    fallback
+  ) {
+    return fallback;
+  }
+  return { status: "not_started" };
+}
+
+function normalizeResultQuality(
+  value: unknown,
+  fallback?: GeoResultQuality,
+): GeoResultQuality | undefined {
+  const source = asRecord(value);
+  const completeness = textValue(source.completeness);
+  if (completeness !== "complete" && completeness !== "partial") {
+    return fallback;
+  }
+  const statsSource = asRecord(source.stats);
+  const acceptedCount = numberValue(statsSource.acceptedCount);
+  const droppedCount = numberValue(statsSource.droppedCount);
+  const expectedCount = numberValue(statsSource.expectedCount);
+  const selectableCount = numberValue(statsSource.selectableCount);
+  const warnings = asArray(source.warnings).flatMap((item) => {
+    const warning = asRecord(item);
+    const code = textValue(warning.code);
+    if (
+      !code ||
+      ![
+        "RESULT_INCOMPLETE",
+        "ITEM_DROPPED",
+        "EVIDENCE_INCOMPLETE",
+        "AGGREGATE_UNAVAILABLE",
+        "OPTIONAL_ASSET_SKIPPED",
+        "COVERAGE_INCOMPLETE",
+      ].includes(code)
+    ) {
+      return [];
+    }
+    return [
+      {
+        code: code as NonNullable<GeoResultQuality["warnings"]>[number]["code"],
+        area: textValue(warning.area),
+      },
+    ];
+  });
+  return {
+    completeness,
+    ...(acceptedCount !== undefined && droppedCount !== undefined
+      ? {
+          stats: {
+            acceptedCount: Math.max(0, Math.floor(acceptedCount)),
+            droppedCount: Math.max(0, Math.floor(droppedCount)),
+            ...(expectedCount !== undefined
+              ? { expectedCount: Math.max(0, Math.floor(expectedCount)) }
+              : {}),
+            ...(selectableCount !== undefined
+              ? { selectableCount: Math.max(0, Math.floor(selectableCount)) }
+              : {}),
+          },
+        }
+      : {}),
+    ...(warnings.length ? { warnings } : {}),
+    ...(typeof source.downstreamEligible === "boolean"
+      ? { downstreamEligible: source.downstreamEligible }
+      : {}),
+    ...(typeof source.publishable === "boolean"
+      ? { publishable: source.publishable }
+      : {}),
   };
 }
 
@@ -2709,6 +3070,7 @@ function normalizeStatus(
   kbTask: JsonRecord,
   questionTask: JsonRecord,
   questions: GeoQuestion[],
+  questionRecommendation: GeoQuestionRecommendation,
 ): GeoProjectStatus {
   if (
     textValue(
@@ -2717,12 +3079,47 @@ function normalizeStatus(
     )
   )
     return "failed";
+  const projectStatus = textValue(project.status)?.toLowerCase();
+  if (projectStatus) {
+    if (projectStatus === "draft") return "draft";
+    if (["failed", "error", "cancelled", "canceled"].includes(projectStatus))
+      return "failed";
+    if (["uploading"].includes(projectStatus)) return "uploading";
+    if (["recommending", "question_recommendation"].includes(projectStatus))
+      return "recommending";
+    if (
+      [
+        "running",
+        "processing",
+        "analyzing",
+        "in_progress",
+        "knowledge_base",
+      ].includes(projectStatus)
+    )
+      return "analyzing";
+    if (
+      [
+        "ready",
+        "ready_for_questions",
+        "completed",
+        "complete",
+        "succeeded",
+        "success",
+      ].includes(projectStatus)
+    )
+      return "ready";
+    if (["queued", "pending", "created"].includes(projectStatus))
+      return "queued";
+  }
+
+  // Compatibility for older partial responses that did not carry the
+  // authoritative project status. The independent recommendation lifecycle
+  // may fill that gap, but never overrides a later project stage above.
+  if (questionRecommendation.status === "failed") return "failed";
+  if (questionRecommendation.status === "ready") return "ready";
+  if (questionRecommendation.status === "pending") return "recommending";
   const raw =
-    textValue(
-      project.status,
-      questionTask.status,
-      kbTask.status,
-    )?.toLowerCase() ?? "queued";
+    textValue(questionTask.status, kbTask.status)?.toLowerCase() ?? "queued";
   if (raw === "draft") return "draft";
   if (["failed", "error", "cancelled", "canceled"].includes(raw))
     return "failed";
@@ -2937,6 +3334,7 @@ function normalizeServiceActivation(
 function normalizeStage(
   project: JsonRecord,
   questions: GeoQuestion[],
+  questionRecommendation: GeoQuestionRecommendation,
   monitoring?: GeoMonitoringResult,
   assessment?: GeoAssessmentResult,
   optimizationForecast?: GeoOptimizationForecastResult,
@@ -2969,12 +3367,52 @@ function normalizeStage(
   )
     return "current_assessment";
   if (
+    questionRecommendation.status !== "not_started" ||
     questions.length > 0 ||
     raw === "question_recommendation" ||
     raw === "questions"
   )
     return "question_recommendation";
   return "enterprise_analysis";
+}
+
+const KNOWLEDGE_BASE_FRESH_UPLOAD_MESSAGE =
+  "资料已接收，但向分析服务提交资料未完成。请移除本次项目后重新上传，并创建全新任务。";
+const KNOWLEDGE_BASE_CREATE_UNKNOWN_MESSAGE =
+  "任务创建结果暂时无法确认。请移除本次项目后重新上传，并创建全新任务。";
+const KNOWLEDGE_BASE_FRESH_UPLOAD_CODES = new Set([
+  "TASK_PREPARATION_FAILED",
+  "FILE_UPLOAD_CONFIRMATION_UNKNOWN",
+  "FILE_UPLOAD_OUTCOME_UNKNOWN",
+  "FILE_LEASE_PERSIST_FAILED",
+  "FILE_UPLOAD_REJECTED",
+]);
+const KNOWLEDGE_BASE_CREATE_UNKNOWN_CODES = new Set([
+  "CREATE_OUTCOME_UNKNOWN",
+  "CREATE_RECONCILE_CONFLICT",
+  "TASK_PROVIDER_BIND_OUTCOME_UNKNOWN",
+]);
+
+function extractPublicProjectError(value: unknown) {
+  const record = asRecord(value);
+  const rawCode =
+    typeof value === "string"
+      ? value
+      : textValue(record.code, record.errorCode, record.error_code);
+  const code = String(rawCode || "")
+    .trim()
+    .toUpperCase();
+  if (KNOWLEDGE_BASE_CREATE_UNKNOWN_CODES.has(code)) {
+    return KNOWLEDGE_BASE_CREATE_UNKNOWN_MESSAGE;
+  }
+  if (KNOWLEDGE_BASE_FRESH_UPLOAD_CODES.has(code)) {
+    return KNOWLEDGE_BASE_FRESH_UPLOAD_MESSAGE;
+  }
+  const message =
+    typeof value === "string"
+      ? value
+      : textValue(record.message, record.error, record.detail);
+  return localizedUserFacingError(message, undefined, "");
 }
 
 export function normalizeGeoProject(
@@ -3045,6 +3483,13 @@ export function normalizeGeoProject(
   const executionLog = hasOwnField(project, "executionLog", "execution")
     ? normalizedExecutionLog
     : (normalizedExecutionLog ?? fallback?.executionLog);
+  const questionRecommendation = normalizeQuestionRecommendation(
+    project,
+    questionTask,
+    questions,
+    executionLog,
+    fallback?.questionRecommendation,
+  );
   const now = new Date().toISOString();
   const remoteToken =
     textValue(
@@ -3072,7 +3517,13 @@ export function normalizeGeoProject(
       ];
     },
   );
-  const status = normalizeStatus(project, kbTask, questionTask, questions);
+  const status = normalizeStatus(
+    project,
+    kbTask,
+    questionTask,
+    questions,
+    questionRecommendation,
+  );
   const currentExecutionEntry = executionLog?.entries.find(
     (entry) => entry.id === executionLog.currentEntryId,
   );
@@ -3083,7 +3534,9 @@ export function normalizeGeoProject(
         .reverse()
         .find((event) => event.kind === "status")?.message
     : undefined;
-  const error = asRecord(project.error ?? taskForProgress.error);
+  const publicError =
+    extractPublicProjectError(project.error) ||
+    extractPublicProjectError(taskForProgress.error);
   const validationError = textValue(
     project.questionValidationError,
     project.question_validation_error,
@@ -3112,6 +3565,7 @@ export function normalizeGeoProject(
     stage: normalizeStage(
       project,
       questions,
+      questionRecommendation,
       monitoring,
       assessment,
       optimizationForecast,
@@ -3135,7 +3589,10 @@ export function normalizeGeoProject(
         ? (category as GeoProject["knowledgeBaseValidationCategory"])
         : undefined;
     })(),
-    knowledgeBaseSupportRequired: project.knowledgeBaseSupportRequired === true,
+    knowledgeBaseSupportRequired:
+      typeof project.knowledgeBaseSupportRequired === "boolean"
+        ? project.knowledgeBaseSupportRequired
+        : undefined,
     knowledgeBaseFinalization: (() => {
       const finalization = asRecord(
         project.knowledgeBaseFinalization ??
@@ -3191,6 +3648,7 @@ export function normalizeGeoProject(
         ? files
         : (fallback?.files ?? []),
     knowledgeBase,
+    questionRecommendation,
     questions: hasOwnField(project, "questions")
       ? questions
       : questions.length > 0
@@ -3239,7 +3697,7 @@ export function normalizeGeoProject(
     error: localizedUserFacingError(
       textValue(
         validationError,
-        error.message,
+        publicError,
         project.errorMessage,
         typeof project.error === "string" ? project.error : undefined,
       ),
@@ -3272,47 +3730,661 @@ function normalizeRequiredProjectResponse(
   return normalizeGeoProject(payload, fallback);
 }
 
-export async function verifyGeoInvitation(code: string): Promise<void> {
+export type GeoInviteContext = {
+  inviteContextToken: string;
+  businessOwnerName: string;
+};
+
+export async function verifyGeoInvitation(
+  code: string,
+  businessOwnerName: string,
+): Promise<GeoInviteContext> {
+  let normalizedBusinessOwnerName: string;
+  try {
+    normalizedBusinessOwnerName = normalizeBusinessOwnerName(businessOwnerName);
+  } catch {
+    throw new GeoApiError(
+      "请输入有效的商务负责人姓名。",
+      400,
+      "INVALID_BUSINESS_OWNER_NAME",
+    );
+  }
   const payload = asRecord(
     await requestJson("/invite/verify", {
       method: "POST",
-      body: JSON.stringify({ code }),
+      body: JSON.stringify({
+        code,
+        businessOwnerName: normalizedBusinessOwnerName,
+      }),
     }),
   );
-  if (payload.ok !== true) {
+  const inviteContextToken = textValue(payload.inviteContextToken);
+  const responseBusinessOwnerName = textValue(payload.businessOwnerName);
+  if (
+    payload.ok !== true ||
+    !inviteContextToken ||
+    responseBusinessOwnerName !== normalizedBusinessOwnerName
+  ) {
     throw new GeoApiError(
       "邀请码验证响应无效，请稍后重试。",
       502,
       "INVALID_INVITE_RESPONSE",
     );
   }
+  return {
+    inviteContextToken,
+    businessOwnerName: normalizedBusinessOwnerName,
+  };
 }
 
 export async function uploadGeoFile(
   file: File,
-  options: { signal?: AbortSignal } = {},
+  options: {
+    inviteContextToken: string;
+    clientRequestId: string;
+    attachmentIndex: number;
+    reservation?: GeoUploadReservation;
+    onReserved?: (reservation: GeoUploadReservation) => void;
+    signal?: AbortSignal;
+    onProgress?: (
+      progress: Pick<
+        GeoUploadProgress,
+        "phase" | "fileLoadedBytes" | "fileTotalBytes"
+      >,
+    ) => void;
+  },
 ): Promise<GeoUploadedFile> {
-  const initPayload = asRecord(
-    await requestJson("/uploads/init", {
-      method: "POST",
-      signal: options.signal,
-      body: JSON.stringify({
-        filename: file.name,
-        contentType: file.type || "application/octet-stream",
-        sizeBytes: file.size,
-      }),
+  let reservation = options.reservation;
+  let shouldReconcileBeforeTransfer = Boolean(reservation);
+  if (reservation) {
+    validateUploadReservation(file, reservation);
+    emitGeoUploadTelemetry("reservation_resumed", {
+      attachmentIndex: options.attachmentIndex,
+      declaredBytes: file.size,
+      phase: "reserving",
+      loadedBytes: 0,
+      totalBytes: file.size,
+      durationMs: 0,
+      traceId: reservation.traceId,
+    });
+  } else {
+    const reserved = await reserveGeoUpload(file, options);
+    reservation = reserved.reservation;
+    shouldReconcileBeforeTransfer =
+      reserved.replayed || reserved.status === "uploaded";
+    // This callback deliberately runs before a single file byte is sent. The
+    // caller can therefore retain the stable token if transfer or response
+    // confirmation is interrupted.
+    options.onReserved?.(reservation);
+  }
+
+  if (shouldReconcileBeforeTransfer) {
+    const state = await reconcileGeoUpload(reservation, file, options, {
+      statusOnly: reservation.requiresStatusOnly === true,
+    });
+    if (state === "uploaded") {
+      reportGeoUploadConfirmed(file, reservation, options);
+      return reservation;
+    }
+  }
+
+  let lastTransferError: unknown;
+  for (
+    let attempt = 0;
+    attempt <= UPLOAD_TRANSFER_RETRY_DELAYS_MS.length;
+    attempt += 1
+  ) {
+    let lastAttemptLoadedBytes = 0;
+    const attemptStartedAt = Date.now();
+    emitGeoUploadTelemetry("transfer_started", {
+      attachmentIndex: options.attachmentIndex,
+      declaredBytes: file.size,
+      transferAttempt: attempt + 1,
+      phase: "uploading",
+      loadedBytes: 0,
+      totalBytes: file.size,
+      durationMs: 0,
+      traceId: reservation.traceId,
+    });
+    try {
+      await transferGeoUploadOnce(file, reservation.uploadToken, attempt + 1, {
+        attachmentIndex: options.attachmentIndex,
+        signal: options.signal,
+        onProgress: (progress) => {
+          lastAttemptLoadedBytes = progress.fileLoadedBytes;
+          options.onProgress?.(progress);
+        },
+      });
+      reportGeoUploadConfirmed(file, reservation, options);
+      return reservation;
+    } catch (error) {
+      if (options.signal?.aborted) throw requestAbortReason(options.signal);
+      if (!retryableUploadTransportError(error)) throw error;
+      lastTransferError = error;
+      const statusOnly =
+        error instanceof GeoApiError &&
+        error.code === "UPLOAD_ALREADY_COMMITTED";
+      if (statusOnly && !reservation.requiresStatusOnly) {
+        reservation = { ...reservation, requiresStatusOnly: true };
+        options.onReserved?.(reservation);
+      }
+      emitGeoUploadTelemetry("transfer_outcome_unknown", {
+        attachmentIndex: options.attachmentIndex,
+        declaredBytes: file.size,
+        transferAttempt: attempt + 1,
+        phase: "reconciling",
+        loadedBytes: lastAttemptLoadedBytes,
+        totalBytes: file.size,
+        durationMs: Date.now() - attemptStartedAt,
+        status: error instanceof GeoApiError ? error.status : undefined,
+        code: error instanceof GeoApiError ? error.code : "NETWORK_ERROR",
+        traceId: reservation.traceId,
+      });
+      options.onProgress?.({
+        phase: "reconciling",
+        fileLoadedBytes: lastAttemptLoadedBytes,
+        fileTotalBytes: file.size,
+      });
+      const state = await reconcileGeoUpload(reservation, file, options, {
+        statusOnly,
+        transferAttempt: attempt + 1,
+      });
+      if (state === "uploaded") {
+        reportGeoUploadConfirmed(file, reservation, options);
+        return reservation;
+      }
+      if (attempt >= UPLOAD_TRANSFER_RETRY_DELAYS_MS.length) break;
+      const retryDelayMs = UPLOAD_TRANSFER_RETRY_DELAYS_MS[attempt]!;
+      options.onProgress?.({
+        phase: "retrying",
+        fileLoadedBytes: 0,
+        fileTotalBytes: file.size,
+      });
+      emitGeoUploadTelemetry("transfer_retry_scheduled", {
+        attachmentIndex: options.attachmentIndex,
+        declaredBytes: file.size,
+        transferAttempt: attempt + 2,
+        retryDelayMs,
+        phase: "retrying",
+        loadedBytes: 0,
+        totalBytes: file.size,
+        durationMs: Date.now() - attemptStartedAt,
+        traceId: reservation.traceId,
+      });
+      await waitForGeoUploadDelay(retryDelayMs, options.signal);
+    }
+  }
+
+  throw new GeoApiError(
+    "当前文件自动重试 3 次仍未上传完成；文件和上传凭证已保留，请直接继续上传。",
+    lastTransferError instanceof GeoApiError ? lastTransferError.status : 503,
+    "UPLOAD_RETRY_EXHAUSTED",
+    {
+      attempts: UPLOAD_TRANSFER_RETRY_DELAYS_MS.length + 1,
+      causeCode:
+        lastTransferError instanceof GeoApiError
+          ? lastTransferError.code
+          : "NETWORK_ERROR",
+    },
+  );
+}
+
+type GeoUploadReservationResponse = {
+  reservation: GeoUploadReservation;
+  replayed: boolean;
+  status?: string;
+};
+
+type GeoUploadReconcileState = "pending" | "uploaded";
+
+type GeoUploadStatusResponse = {
+  assetStatus: "pending" | "uploaded";
+  transferState: "idle" | "uploading";
+  declaredBytes: number;
+  receivedBytes: number;
+  traceId?: string;
+};
+
+type GeoUploadTelemetryDetail = {
+  attachmentIndex: number;
+  declaredBytes: number;
+  transferAttempt?: number;
+  retryDelayMs?: number;
+  transferState?: string;
+  receivedBytes?: number;
+  phase?: GeoUploadProgress["phase"];
+  loadedBytes?: number;
+  totalBytes?: number;
+  durationMs?: number;
+  milestone?: 25 | 50 | 75 | 100;
+  abortSource?:
+    | "caller_abort"
+    | "stall_watchdog"
+    | "response_watchdog"
+    | "xhr_error"
+    | "xhr_abort"
+    | "xhr_send_error"
+    | "fetch_error"
+    | "http_response";
+  status?: number;
+  code?: string;
+  traceId?: string;
+};
+
+function emitGeoUploadTelemetry(
+  event: string,
+  detail: GeoUploadTelemetryDetail,
+): void {
+  if (
+    typeof window === "undefined" ||
+    typeof window.dispatchEvent !== "function" ||
+    typeof CustomEvent !== "function"
+  ) {
+    return;
+  }
+  // Intentionally excludes filename, fileId, upload token, request id and
+  // customer input. Consumers receive only bounded transfer diagnostics.
+  window.dispatchEvent(
+    new CustomEvent("frontmind:geo-upload-telemetry", {
+      detail: {
+        event,
+        ...detail,
+        navigatorOnline:
+          typeof navigator === "undefined" ? undefined : navigator.onLine,
+        visibilityState:
+          typeof document === "undefined"
+            ? undefined
+            : document.visibilityState,
+      },
     }),
   );
-  const uploadToken = textValue(initPayload.uploadToken);
-  const fileId = textValue(initPayload.fileId);
-  if (!uploadToken || !fileId)
+}
+
+function validateUploadReservation(
+  file: File,
+  reservation: GeoUploadReservation,
+): void {
+  const expectedType = file.type || "application/octet-stream";
+  if (
+    !reservation.id ||
+    !reservation.uploadToken ||
+    reservation.sourceName !== file.name ||
+    reservation.sourceLastModified !== file.lastModified ||
+    reservation.size !== file.size ||
+    reservation.type !== expectedType
+  ) {
+    throw new GeoApiError(
+      "附件上传凭证与当前文件不一致，请重新选择文件。",
+      409,
+      "UPLOAD_RESERVATION_CONFLICT",
+    );
+  }
+}
+
+function retryableUploadTransportError(error: unknown): boolean {
+  if (!(error instanceof GeoApiError)) return error instanceof TypeError;
+  if (
+    error.code === "UPLOAD_IN_PROGRESS" ||
+    error.code === "UPLOAD_ALREADY_COMMITTED"
+  ) {
+    return true;
+  }
+  if (
+    error.code === "UPLOAD_CANCELLED" ||
+    error.status === 401 ||
+    error.status === 403 ||
+    error.status === 409 ||
+    error.status === 413
+  ) {
+    return false;
+  }
+  return (
+    error.code === "UPLOAD_NETWORK_ERROR" ||
+    error.code === "UPLOAD_BROWSER_STALLED" ||
+    error.code === "UPLOAD_SERVER_RESPONSE_TIMEOUT" ||
+    error.code === "UPLOAD_EMPTY_PROXY_RESPONSE" ||
+    error.status === 408 ||
+    error.status === 429 ||
+    (error.status >= 500 && error.status <= 599)
+  );
+}
+
+function uploadReservationFailure(error: unknown): GeoApiError {
+  return new GeoApiError(
+    "上传任务暂时无法保留；文件尚未发送，请直接重试。",
+    error instanceof GeoApiError ? error.status : 503,
+    "UPLOAD_RESERVATION_FAILED",
+    {
+      causeCode: error instanceof GeoApiError ? error.code : "NETWORK_ERROR",
+    },
+  );
+}
+
+function freshUploadResetRequired(error?: GeoApiError): GeoApiError {
+  return new GeoApiError(
+    "旧上传任务已失效或文件回执不一致；请删除当前草稿后重新选择全部资料，发起全新上传。",
+    409,
+    "UPLOAD_FRESH_RESET_REQUIRED",
+    error?.code ? { causeCode: error.code } : undefined,
+  );
+}
+
+function waitForGeoUploadDelay(
+  delayMs: number,
+  signal?: AbortSignal,
+): Promise<void> {
+  if (signal?.aborted) return Promise.reject(requestAbortReason(signal));
+  return new Promise<void>((resolve, reject) => {
+    const finish = () => {
+      signal?.removeEventListener("abort", abort);
+      resolve();
+    };
+    const timer = globalThis.setTimeout(finish, delayMs);
+    const abort = () => {
+      globalThis.clearTimeout(timer);
+      signal?.removeEventListener("abort", abort);
+      reject(requestAbortReason(signal!));
+    };
+    signal?.addEventListener("abort", abort, { once: true });
+  });
+}
+
+async function reserveGeoUpload(
+  file: File,
+  options: {
+    inviteContextToken: string;
+    clientRequestId: string;
+    attachmentIndex: number;
+    signal?: AbortSignal;
+    onProgress?: (
+      progress: Pick<
+        GeoUploadProgress,
+        "phase" | "fileLoadedBytes" | "fileTotalBytes"
+      >,
+    ) => void;
+  },
+): Promise<GeoUploadReservationResponse> {
+  options.onProgress?.({
+    phase: "reserving",
+    fileLoadedBytes: 0,
+    fileTotalBytes: file.size,
+  });
+  let initPayload: JsonRecord | undefined;
+  for (let attempt = 0; attempt < 2; attempt += 1) {
+    try {
+      initPayload = asRecord(
+        await requestJson("/uploads/init", {
+          method: "POST",
+          signal: options.signal,
+          body: JSON.stringify({
+            inviteContextToken: options.inviteContextToken,
+            filename: file.name,
+            contentType: file.type || "application/octet-stream",
+            sizeBytes: file.size,
+            clientRequestId: options.clientRequestId,
+            attachmentIndex: options.attachmentIndex,
+          }),
+        }),
+      );
+      break;
+    } catch (error) {
+      if (options.signal?.aborted) throw requestAbortReason(options.signal);
+      if (!retryableUploadTransportError(error)) throw error;
+      if (attempt > 0) throw uploadReservationFailure(error);
+      emitGeoUploadTelemetry("reservation_retry_scheduled", {
+        attachmentIndex: options.attachmentIndex,
+        declaredBytes: file.size,
+        retryDelayMs: UPLOAD_INIT_RETRY_DELAY_MS,
+        phase: "reserving",
+        loadedBytes: 0,
+        totalBytes: file.size,
+        durationMs: 0,
+        status: error instanceof GeoApiError ? error.status : undefined,
+        code: error instanceof GeoApiError ? error.code : "NETWORK_ERROR",
+      });
+      await waitForGeoUploadDelay(UPLOAD_INIT_RETRY_DELAY_MS, options.signal);
+    }
+  }
+
+  const uploadToken = textValue(initPayload?.uploadToken);
+  const fileId = textValue(initPayload?.fileId);
+  if (!uploadToken || !fileId) {
     throw new GeoApiError(
       "附件上传凭证无效，请重新选择文件。",
       502,
       "INVALID_UPLOAD_TICKET",
     );
+  }
+  const reservation: GeoUploadReservation = {
+    id: fileId,
+    name: textValue(initPayload?.filename) ?? file.name,
+    size: file.size,
+    type: file.type || "application/octet-stream",
+    uploadToken,
+    sourceName: file.name,
+    sourceLastModified: file.lastModified,
+    traceId: textValue(initPayload?.traceId),
+  };
+  emitGeoUploadTelemetry("reservation_acquired", {
+    attachmentIndex: options.attachmentIndex,
+    declaredBytes: file.size,
+    phase: "reserving",
+    loadedBytes: 0,
+    totalBytes: file.size,
+    durationMs: 0,
+    traceId: reservation.traceId,
+  });
+  return {
+    reservation,
+    replayed: initPayload?.replayed === true,
+    status: textValue(initPayload?.status)?.toLowerCase(),
+  };
+}
 
-  const uploadThroughWebsite = async () => {
+async function readGeoUploadStatus(
+  reservation: GeoUploadReservation,
+  file: File,
+  signal?: AbortSignal,
+): Promise<GeoUploadStatusResponse> {
+  const payload = asRecord(
+    await requestJson("/uploads/status", {
+      method: "GET",
+      signal,
+      headers: { "x-geo-upload-token": reservation.uploadToken },
+    }),
+  );
+  const fileId = textValue(payload.fileId);
+  const assetStatus = textValue(payload.assetStatus)?.toLowerCase();
+  const transferState = textValue(payload.transferState)?.toLowerCase();
+  const declaredBytes = numberValue(payload.declaredBytes);
+  const receivedBytes = numberValue(payload.receivedBytes);
+  if (
+    fileId !== reservation.id ||
+    !["pending", "uploaded"].includes(assetStatus ?? "") ||
+    !["idle", "uploading"].includes(transferState ?? "") ||
+    declaredBytes === undefined ||
+    !Number.isInteger(declaredBytes) ||
+    declaredBytes !== file.size ||
+    receivedBytes === undefined ||
+    !Number.isInteger(receivedBytes) ||
+    receivedBytes < 0 ||
+    receivedBytes > file.size
+  ) {
+    throw freshUploadResetRequired();
+  }
+  if (assetStatus === "uploaded" && receivedBytes !== file.size) {
+    throw freshUploadResetRequired();
+  }
+  return {
+    assetStatus: assetStatus as GeoUploadStatusResponse["assetStatus"],
+    transferState: transferState as GeoUploadStatusResponse["transferState"],
+    declaredBytes,
+    receivedBytes,
+    traceId: textValue(payload.traceId),
+  };
+}
+
+async function reconcileGeoUpload(
+  reservation: GeoUploadReservation,
+  file: File,
+  options: {
+    attachmentIndex: number;
+    signal?: AbortSignal;
+    onProgress?: (
+      progress: Pick<
+        GeoUploadProgress,
+        "phase" | "fileLoadedBytes" | "fileTotalBytes"
+      >,
+    ) => void;
+  },
+  settings: {
+    statusOnly?: boolean;
+    transferAttempt?: number;
+  } = {},
+): Promise<GeoUploadReconcileState> {
+  const reconcileStartedAt = Date.now();
+  const deadline = Date.now() + UPLOAD_SERVER_RESPONSE_TIMEOUT_MS;
+  let observedUploading = false;
+  while (true) {
+    let status: GeoUploadStatusResponse;
+    try {
+      status = await readGeoUploadStatus(reservation, file, options.signal);
+    } catch (error) {
+      if (options.signal?.aborted) throw requestAbortReason(options.signal);
+      if (
+        error instanceof GeoApiError &&
+        (error.status === 404 ||
+          error.status === 410 ||
+          /(?:NOT_FOUND|DELETED|EXPIRED)/.test(error.code ?? ""))
+      ) {
+        throw freshUploadResetRequired(error);
+      }
+      if (
+        (observedUploading || settings.statusOnly) &&
+        retryableUploadTransportError(error) &&
+        Date.now() < deadline
+      ) {
+        await waitForGeoUploadDelay(
+          UPLOAD_STATUS_POLL_INTERVAL_MS,
+          options.signal,
+        );
+        continue;
+      }
+      if (!retryableUploadTransportError(error)) throw error;
+      throw new GeoApiError(
+        "上传结果暂时无法核对；文件和上传凭证已保留，请直接继续上传。",
+        error instanceof GeoApiError ? error.status : 503,
+        "UPLOAD_STATUS_UNKNOWN",
+        {
+          causeCode:
+            error instanceof GeoApiError ? error.code : "NETWORK_ERROR",
+        },
+      );
+    }
+    emitGeoUploadTelemetry("status_observed", {
+      attachmentIndex: options.attachmentIndex,
+      declaredBytes: file.size,
+      transferState: status.transferState,
+      receivedBytes: status.receivedBytes,
+      transferAttempt: settings.transferAttempt,
+      phase: "reconciling",
+      loadedBytes: status.receivedBytes,
+      totalBytes: file.size,
+      durationMs: Date.now() - reconcileStartedAt,
+      traceId: status.traceId ?? reservation.traceId,
+    });
+    if (status.assetStatus === "uploaded") return "uploaded";
+    if (status.transferState === "idle" && !settings.statusOnly) {
+      return "pending";
+    }
+
+    observedUploading = status.transferState === "uploading";
+    options.onProgress?.({
+      phase: "reconciling",
+      fileLoadedBytes: status.receivedBytes,
+      fileTotalBytes: file.size,
+    });
+    if (Date.now() >= deadline) {
+      throw new GeoApiError(
+        settings.statusOnly
+          ? "服务器已报告文件提交，但完整回执仍未可核验；文件和凭证已保留，请稍后继续核对。"
+          : "服务器仍在接收当前文件；文件和上传凭证已保留，请稍后直接继续核对。",
+        504,
+        settings.statusOnly
+          ? "UPLOAD_COMMITTED_STATUS_PENDING"
+          : "UPLOAD_RECONCILE_TIMEOUT",
+      );
+    }
+    await waitForGeoUploadDelay(
+      Math.min(UPLOAD_STATUS_POLL_INTERVAL_MS, deadline - Date.now()),
+      options.signal,
+    );
+  }
+}
+
+function reportGeoUploadConfirmed(
+  file: File,
+  reservation: GeoUploadReservation,
+  options: {
+    attachmentIndex: number;
+    onProgress?: (
+      progress: Pick<
+        GeoUploadProgress,
+        "phase" | "fileLoadedBytes" | "fileTotalBytes"
+      >,
+    ) => void;
+  },
+): void {
+  options.onProgress?.({
+    phase: "confirmed",
+    fileLoadedBytes: file.size,
+    fileTotalBytes: file.size,
+  });
+  emitGeoUploadTelemetry("transfer_confirmed", {
+    attachmentIndex: options.attachmentIndex,
+    declaredBytes: file.size,
+    receivedBytes: file.size,
+    phase: "confirmed",
+    loadedBytes: file.size,
+    totalBytes: file.size,
+    durationMs: 0,
+    traceId: reservation.traceId,
+  });
+}
+
+async function transferGeoUploadOnce(
+  file: File,
+  uploadToken: string,
+  transferAttempt: number,
+  options: {
+    attachmentIndex: number;
+    signal?: AbortSignal;
+    onProgress?: (
+      progress: Pick<
+        GeoUploadProgress,
+        "phase" | "fileLoadedBytes" | "fileTotalBytes"
+      >,
+    ) => void;
+  },
+): Promise<void> {
+  if (typeof XMLHttpRequest === "function") {
+    return transferGeoUploadWithXhr(
+      file,
+      uploadToken,
+      transferAttempt,
+      options,
+    );
+  }
+  // Node-side contract tests and non-browser renderers have no XHR. The
+  // interactive Website always takes the XHR branch so byte progress and the
+  // two idle watchdogs are active for customers.
+  options.onProgress?.({
+    phase: "uploading",
+    fileLoadedBytes: 0,
+    fileTotalBytes: file.size,
+  });
+  const startedAt = Date.now();
+  try {
     await requestJson("/uploads/proxy", {
       method: "PUT",
       body: file,
@@ -3322,28 +4394,299 @@ export async function uploadGeoFile(
       headers: {
         "content-type": file.type || "application/octet-stream",
         "x-geo-upload-token": uploadToken,
+        "x-geo-upload-attempt": String(transferAttempt),
       },
     });
-  };
+    emitGeoUploadTelemetry("transfer_response_received", {
+      attachmentIndex: options.attachmentIndex,
+      declaredBytes: file.size,
+      transferAttempt,
+      phase: "confirmed",
+      loadedBytes: file.size,
+      totalBytes: file.size,
+      durationMs: Date.now() - startedAt,
+    });
+  } catch (error) {
+    emitGeoUploadTelemetry("transfer_failed", {
+      attachmentIndex: options.attachmentIndex,
+      declaredBytes: file.size,
+      transferAttempt,
+      phase: "uploading",
+      loadedBytes: 0,
+      totalBytes: file.size,
+      durationMs: Date.now() - startedAt,
+      abortSource: "fetch_error",
+      status: error instanceof GeoApiError ? error.status : undefined,
+      code: error instanceof GeoApiError ? error.code : "NETWORK_ERROR",
+    });
+    throw error;
+  }
+}
 
-  await uploadThroughWebsite();
+function transferGeoUploadWithXhr(
+  file: File,
+  uploadToken: string,
+  transferAttempt: number,
+  options: {
+    attachmentIndex: number;
+    signal?: AbortSignal;
+    onProgress?: (
+      progress: Pick<
+        GeoUploadProgress,
+        "phase" | "fileLoadedBytes" | "fileTotalBytes"
+      >,
+    ) => void;
+  },
+): Promise<void> {
+  if (options.signal?.aborted) {
+    return Promise.reject(requestAbortReason(options.signal));
+  }
 
-  return {
-    id: fileId,
-    name: textValue(initPayload.filename) ?? file.name,
-    size: file.size,
-    type: file.type || "application/octet-stream",
-    uploadToken,
-    sourceName: file.name,
-    sourceLastModified: file.lastModified,
-  };
+  return new Promise<void>((resolve, reject) => {
+    const xhr = new XMLHttpRequest();
+    const startedAt = Date.now();
+    const milestones = [25, 50, 75, 100] as const;
+    let settled = false;
+    let lastLoaded = 0;
+    let reportedMilestones = 0;
+    let watchdogError: GeoApiError | undefined;
+    let stallTimer: ReturnType<typeof globalThis.setTimeout> | undefined;
+    let responseTimer: ReturnType<typeof globalThis.setTimeout> | undefined;
+
+    const clearTimers = () => {
+      if (stallTimer !== undefined) globalThis.clearTimeout(stallTimer);
+      if (responseTimer !== undefined) globalThis.clearTimeout(responseTimer);
+      stallTimer = undefined;
+      responseTimer = undefined;
+    };
+    const cleanup = () => {
+      clearTimers();
+      options.signal?.removeEventListener("abort", abortFromCaller);
+    };
+    const finish = (operation: () => void) => {
+      if (settled) return;
+      settled = true;
+      cleanup();
+      operation();
+    };
+    const failWith = (error: unknown) => finish(() => reject(error));
+    const emitTransferTelemetry = (
+      event: string,
+      detail: Omit<
+        GeoUploadTelemetryDetail,
+        "attachmentIndex" | "declaredBytes" | "transferAttempt" | "durationMs"
+      >,
+    ) => {
+      emitGeoUploadTelemetry(event, {
+        attachmentIndex: options.attachmentIndex,
+        declaredBytes: file.size,
+        transferAttempt,
+        durationMs: Date.now() - startedAt,
+        ...detail,
+      });
+    };
+    const reportTransferMilestones = (loaded: number) => {
+      const percentage =
+        file.size === 0 ? 100 : Math.floor((loaded / file.size) * 100);
+      while (
+        reportedMilestones < milestones.length &&
+        percentage >= milestones[reportedMilestones]!
+      ) {
+        const milestone = milestones[reportedMilestones]!;
+        reportedMilestones += 1;
+        emitTransferTelemetry("transfer_progress", {
+          phase: "uploading",
+          loadedBytes: loaded,
+          totalBytes: file.size,
+          milestone,
+        });
+      }
+    };
+    const armStallWatchdog = () => {
+      if (stallTimer !== undefined) globalThis.clearTimeout(stallTimer);
+      stallTimer = globalThis.setTimeout(() => {
+        watchdogError = new GeoApiError(
+          "文件上传超过 2 分钟没有字节增长，请检查网络后重试。",
+          408,
+          "UPLOAD_BROWSER_STALLED",
+        );
+        xhr.abort();
+      }, UPLOAD_BROWSER_STALL_TIMEOUT_MS);
+    };
+    const beginAwaitingDashboard = () => {
+      if (stallTimer !== undefined) globalThis.clearTimeout(stallTimer);
+      stallTimer = undefined;
+      options.onProgress?.({
+        phase: "awaiting_dashboard",
+        fileLoadedBytes: file.size,
+        fileTotalBytes: file.size,
+      });
+      lastLoaded = file.size;
+      reportTransferMilestones(file.size);
+      emitTransferTelemetry("transfer_body_sent", {
+        phase: "awaiting_dashboard",
+        loadedBytes: file.size,
+        totalBytes: file.size,
+      });
+      if (responseTimer !== undefined) globalThis.clearTimeout(responseTimer);
+      responseTimer = globalThis.setTimeout(() => {
+        watchdogError = new GeoApiError(
+          "文件已传完，但 Dashboard 超过 6 分钟未确认，请稍后重试。",
+          504,
+          "UPLOAD_SERVER_RESPONSE_TIMEOUT",
+        );
+        xhr.abort();
+      }, UPLOAD_SERVER_RESPONSE_TIMEOUT_MS);
+    };
+    const abortFromCaller = () => xhr.abort();
+
+    xhr.open("PUT", `${GEO_API_ROOT}/uploads/proxy`, true);
+    xhr.withCredentials = true;
+    xhr.setRequestHeader(
+      "content-type",
+      file.type || "application/octet-stream",
+    );
+    xhr.setRequestHeader("x-geo-upload-token", uploadToken);
+    xhr.setRequestHeader("x-geo-upload-attempt", String(transferAttempt));
+    xhr.upload.addEventListener("progress", (event) => {
+      const loaded = Math.max(
+        lastLoaded,
+        Math.min(file.size, Number.isFinite(event.loaded) ? event.loaded : 0),
+      );
+      if (loaded > lastLoaded) {
+        lastLoaded = loaded;
+        armStallWatchdog();
+      }
+      reportTransferMilestones(loaded);
+      options.onProgress?.({
+        phase: "uploading",
+        fileLoadedBytes: loaded,
+        fileTotalBytes: file.size,
+      });
+    });
+    xhr.upload.addEventListener("load", beginAwaitingDashboard, {
+      once: true,
+    });
+    xhr.addEventListener("load", () => {
+      if (xhr.status >= 200 && xhr.status < 300) {
+        emitTransferTelemetry("transfer_response_received", {
+          phase: "confirmed",
+          loadedBytes: file.size,
+          totalBytes: file.size,
+          status: xhr.status,
+        });
+        finish(resolve);
+        return;
+      }
+      let body: JsonRecord = {};
+      try {
+        body = asRecord(JSON.parse(xhr.responseText));
+      } catch {
+        // Non-JSON proxy errors are intentionally collapsed below.
+      }
+      const error = asRecord(body.error);
+      const uploadError = new GeoApiError(
+        localizedUserFacingError(
+          boundedApiMessage(error.message, body.message),
+          xhr.status,
+          "文件上传未完成，请稍后重试。",
+        ),
+        xhr.status || 502,
+        xhr.status === 400 && xhr.responseText.trim() === ""
+          ? "UPLOAD_EMPTY_PROXY_RESPONSE"
+          : textValue(error.code, body.code) || "UPLOAD_PROXY_ERROR",
+        body,
+      );
+      emitTransferTelemetry("transfer_failed", {
+        phase: "awaiting_dashboard",
+        loadedBytes: lastLoaded,
+        totalBytes: file.size,
+        abortSource: "http_response",
+        status: uploadError.status,
+        code: uploadError.code,
+      });
+      failWith(uploadError);
+    });
+    xhr.addEventListener("error", () => {
+      emitTransferTelemetry("transfer_failed", {
+        phase: "uploading",
+        loadedBytes: lastLoaded,
+        totalBytes: file.size,
+        abortSource: "xhr_error",
+        code: "UPLOAD_NETWORK_ERROR",
+      });
+      failWith(
+        new GeoApiError(
+          "文件上传连接中断，请检查网络后重试。",
+          503,
+          "UPLOAD_NETWORK_ERROR",
+        ),
+      );
+    });
+    xhr.addEventListener("abort", () => {
+      if (options.signal?.aborted) {
+        emitTransferTelemetry("transfer_aborted", {
+          phase: "uploading",
+          loadedBytes: lastLoaded,
+          totalBytes: file.size,
+          abortSource: "caller_abort",
+        });
+        failWith(requestAbortReason(options.signal));
+        return;
+      }
+      const abortSource =
+        watchdogError?.code === "UPLOAD_BROWSER_STALLED"
+          ? "stall_watchdog"
+          : watchdogError?.code === "UPLOAD_SERVER_RESPONSE_TIMEOUT"
+            ? "response_watchdog"
+            : "xhr_abort";
+      emitTransferTelemetry("transfer_aborted", {
+        phase:
+          watchdogError?.code === "UPLOAD_SERVER_RESPONSE_TIMEOUT"
+            ? "awaiting_dashboard"
+            : "uploading",
+        loadedBytes: lastLoaded,
+        totalBytes: file.size,
+        abortSource,
+        status: watchdogError?.status,
+        code: watchdogError?.code ?? "UPLOAD_CANCELLED",
+      });
+      failWith(
+        watchdogError ??
+          new GeoApiError("文件上传已取消。", 499, "UPLOAD_CANCELLED"),
+      );
+    });
+    options.signal?.addEventListener("abort", abortFromCaller, { once: true });
+    options.onProgress?.({
+      phase: "uploading",
+      fileLoadedBytes: 0,
+      fileTotalBytes: file.size,
+    });
+    armStallWatchdog();
+    try {
+      xhr.send(file);
+    } catch (error) {
+      emitTransferTelemetry("transfer_failed", {
+        phase: "uploading",
+        loadedBytes: lastLoaded,
+        totalBytes: file.size,
+        abortSource: "xhr_send_error",
+        code: "XHR_SEND_ERROR",
+      });
+      failWith(error);
+    }
+  });
 }
 
 function validateUploadCheckpoint(
   files: File[],
   uploadedFiles: GeoUploadedFile[],
+  uploadReservations: GeoUploadReservation[],
 ): void {
-  if (uploadedFiles.length > files.length) {
+  if (
+    uploadedFiles.length > files.length ||
+    uploadReservations.length > files.length
+  ) {
     throw new GeoApiError(
       "附件上传进度与当前文件不一致，请重新选择文件。",
       400,
@@ -3369,40 +4712,153 @@ function validateUploadCheckpoint(
       );
     }
   });
+  uploadReservations.forEach((reservation, index) => {
+    const file = files[index];
+    if (!file) {
+      throw new GeoApiError(
+        "附件上传凭证与当前文件不一致，请重新选择文件。",
+        400,
+        "INVALID_UPLOAD_CHECKPOINT",
+      );
+    }
+    validateUploadReservation(file, reservation);
+    const uploaded = uploadedFiles[index];
+    if (
+      uploaded &&
+      (uploaded.id !== reservation.id ||
+        uploaded.uploadToken !== reservation.uploadToken)
+    ) {
+      throw new GeoApiError(
+        "附件上传进度与当前文件不一致，请重新选择文件。",
+        400,
+        "INVALID_UPLOAD_CHECKPOINT",
+      );
+    }
+  });
 }
 
 export async function createGeoProject(
   input: string,
   files: File[],
   options: {
+    inviteContextToken: string;
     requestId?: string;
     uploadedFiles?: GeoUploadedFile[];
+    uploadReservations?: GeoUploadReservation[];
     onUploadsReady?: (files: GeoUploadedFile[]) => void;
+    onUploadReservationsReady?: (reservations: GeoUploadReservation[]) => void;
+    onUploadProgress?: (progress: GeoUploadProgress) => void;
     signal?: AbortSignal;
-  } = {},
+  },
 ): Promise<GeoProject> {
+  const clientRequestId = options.requestId ?? crypto.randomUUID();
   const uploadedFiles: GeoUploadedFile[] = options.uploadedFiles
     ? [...options.uploadedFiles]
     : [];
-  validateUploadCheckpoint(files, uploadedFiles);
-  for (const file of files.slice(uploadedFiles.length)) {
-    uploadedFiles.push(await uploadGeoFile(file, { signal: options.signal }));
+  const uploadReservations: GeoUploadReservation[] = options.uploadReservations
+    ? [...options.uploadReservations]
+    : [];
+  uploadedFiles.forEach((uploaded, index) => {
+    uploadReservations[index] ??= uploaded;
+  });
+  validateUploadCheckpoint(files, uploadedFiles, uploadReservations);
+  const batchTotalBytes = files.reduce((total, file) => total + file.size, 0);
+  let confirmedBytes = uploadedFiles.reduce(
+    (total, file) => total + file.size,
+    0,
+  );
+  for (
+    let attachmentIndex = uploadedFiles.length;
+    attachmentIndex < files.length;
+    attachmentIndex += 1
+  ) {
+    const file = files[attachmentIndex]!;
+    uploadedFiles.push(
+      await uploadGeoFile(file, {
+        inviteContextToken: options.inviteContextToken,
+        clientRequestId,
+        attachmentIndex,
+        reservation: uploadReservations[attachmentIndex],
+        signal: options.signal,
+        onReserved: (reservation) => {
+          uploadReservations[attachmentIndex] = reservation;
+          options.onUploadReservationsReady?.([...uploadReservations]);
+        },
+        onProgress: (progress) => {
+          const boundedLoaded = Math.max(
+            0,
+            Math.min(file.size, progress.fileLoadedBytes),
+          );
+          options.onUploadProgress?.({
+            ...progress,
+            fileIndex: attachmentIndex + 1,
+            fileCount: files.length,
+            filename: file.name,
+            fileLoadedBytes: boundedLoaded,
+            fileTotalBytes: file.size,
+            batchLoadedBytes: Math.min(
+              batchTotalBytes,
+              confirmedBytes + boundedLoaded,
+            ),
+            batchTotalBytes,
+            confirmedFiles:
+              progress.phase === "confirmed"
+                ? attachmentIndex + 1
+                : uploadedFiles.length,
+          });
+        },
+      }),
+    );
+    confirmedBytes += file.size;
     options.onUploadsReady?.([...uploadedFiles]);
   }
 
-  const payload = await requestJson("/projects", {
-    method: "POST",
-    signal: options.signal,
-    body: JSON.stringify({
-      input: input.trim(),
-      clientRequestId: options.requestId ?? crypto.randomUUID(),
-      attachments: uploadedFiles.map((file) => ({
-        fileId: file.id,
-        filename: file.name,
-        uploadToken: file.uploadToken,
-      })),
-    }),
+  const projectRequestBody = JSON.stringify({
+    inviteContextToken: options.inviteContextToken,
+    input: input.trim(),
+    clientRequestId,
+    attachments: uploadedFiles.map((file) => ({
+      fileId: file.id,
+      filename: file.name,
+      uploadToken: file.uploadToken,
+    })),
   });
+  let payload: unknown;
+  try {
+    payload = await withRequestControl(
+      {
+        signal: options.signal,
+        timeoutMs: GEO_PROJECT_CREATE_TIMEOUT_MS,
+      },
+      async (sharedSignal) => {
+        for (let attempt = 0; attempt < 2; attempt += 1) {
+          try {
+            return await requestJson("/projects", {
+              method: "POST",
+              signal: sharedSignal,
+              timeoutMs: GEO_PROJECT_CREATE_TIMEOUT_MS,
+              body: projectRequestBody,
+            });
+          } catch (error) {
+            if (
+              attempt === 0 &&
+              !sharedSignal.aborted &&
+              retryableProjectStartConfirmation(error)
+            ) {
+              continue;
+            }
+            throw error;
+          }
+        }
+        throw new Error("unreachable project creation retry state");
+      },
+    );
+  } catch (error) {
+    if (!options.signal?.aborted && retryableProjectStartConfirmation(error)) {
+      throw projectStartConfirmationUnknown(error);
+    }
+    throw error;
+  }
 
   return normalizeRequiredProjectResponse(payload, {
     input: input.trim(),
@@ -3412,6 +4868,8 @@ export async function createGeoProject(
         uploadToken: _uploadToken,
         sourceName: _sourceName,
         sourceLastModified: _sourceLastModified,
+        traceId: _traceId,
+        requiresStatusOnly: _requiresStatusOnly,
         ...file
       }) => file,
     ),
@@ -4246,41 +5704,19 @@ export async function downloadGeoArchive(
 }
 
 export async function deleteGeoProject(project: GeoProject): Promise<void> {
-  for (let attempt = 0; attempt < 120; attempt += 1) {
-    try {
-      const payload = asRecord(
-        await requestJson(
-          `/projects/${encodeURIComponent(project.remoteToken)}`,
-          { method: "DELETE" },
-        ),
-      );
-      if (payload.ok === true) return;
-      if (payload.status === "deleting") {
-        const retryAfterMs = Math.max(
-          250,
-          Math.min(2_000, numberValue(payload.retryAfterMs) ?? 1_000),
-        );
-        await new Promise((resolve) =>
-          globalThis.setTimeout(resolve, retryAfterMs),
-        );
-        continue;
-      }
-      throw new GeoApiError(
-        "项目删除响应无效，请稍后重试。",
-        502,
-        "PROJECT_DELETE_INVALID_RESPONSE",
-      );
-    } catch (error) {
-      // DELETE is idempotent from the user's perspective. A missing project or
-      // a resource already removed under a retired API Key is the desired end
-      // state, so the device copy can be removed after the existing confirmation.
-      if (error instanceof GeoApiError && error.status === 404) return;
-      throw error;
-    }
-  }
-  throw new GeoApiError(
-    "项目仍在终止并清理远端任务，请稍后重试。",
-    504,
-    "PROJECT_DELETE_TIMEOUT",
+  const payload = asRecord(
+    await requestJson(`/projects/${encodeURIComponent(project.remoteToken)}`, {
+      method: "DELETE",
+    }),
   );
+  if (
+    payload.ok !== true ||
+    payload.retention !== "provider_records_retained"
+  ) {
+    throw new GeoApiError(
+      "项目本地移除确认响应无效，请稍后重试。",
+      502,
+      "PROJECT_DELETE_INVALID_RESPONSE",
+    );
+  }
 }

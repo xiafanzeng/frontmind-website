@@ -5,6 +5,8 @@ import JSZip from "jszip";
 import sharp from "sharp";
 import { z } from "zod";
 
+export const WEBSITE_KB_ARCHIVE_ROOT = "frontmind_website_knowledge_base";
+
 const MAX_ARCHIVE_BYTES = 100 * 1024 * 1024;
 const MAX_ENTRY_COUNT = 2500;
 const MAX_DECLARED_UNCOMPRESSED_BYTES = 300 * 1024 * 1024;
@@ -540,19 +542,6 @@ const KnowledgeBaseCompletenessCountsInputSchema = z
         message: "at least one leaf must be applicable",
       });
     }
-    if (
-      counts.verifiedFirstParty +
-        counts.verifiedAuthoritative +
-        counts.supportedThirdParty ===
-      0
-    ) {
-      context.addIssue({
-        code: "custom",
-        path: ["verifiedFirstParty"],
-        message:
-          "at least one leaf must have evidence-backed first-party, authoritative, or supported-third-party status",
-      });
-    }
   });
 
 const KnowledgeBaseAcquisitionInputSchema = z
@@ -1038,7 +1027,7 @@ async function parseKnowledgeBaseArchiveInternal(
   }
 
   const zip = await JSZip.loadAsync(input, {
-    checkCRC32: false,
+    checkCRC32: true,
     createFolders: false,
   });
   const entries = Object.values(zip.files);
@@ -1164,6 +1153,17 @@ async function parseKnowledgeBaseArchiveInternal(
   const packageManifest = packageContract?.manifest;
   const completeness = contract.completeness;
   const branchDefinitions = contract.branches;
+  if (
+    options.validationProfile !== "website-lead-v1" &&
+    completeness.counts.verifiedFirstParty +
+      completeness.counts.verifiedAuthoritative +
+      completeness.counts.supportedThirdParty ===
+      0
+  ) {
+    throw new Error(
+      "at least one leaf must have evidence-backed first-party, authoritative, or supported-third-party status",
+    );
+  }
 
   const requiredMarkdownFiles =
     contract.kind === "canonical"
@@ -4084,9 +4084,11 @@ function markdownWithStructuredDocumentTitle(
 
 function archiveCompanyName(commonRoot: string, readme: string) {
   const rootCompanyName =
-    commonRoot.match(
-      /^(.+?)(?:[\s_-]*(?:knowledge[\s_-]*base|企业知识库|知识库))$/i,
-    )?.[1] || "";
+    commonRoot === WEBSITE_KB_ARCHIVE_ROOT
+      ? ""
+      : commonRoot.match(
+          /^(.+?)(?:[\s_-]*(?:knowledge[\s_-]*base|企业知识库|知识库))$/i,
+        )?.[1] || "";
   const candidates = [
     rootCompanyName,
     titleFromMarkdown(readme).replace(

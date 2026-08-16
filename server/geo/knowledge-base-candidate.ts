@@ -1,4 +1,5 @@
 import { isIP } from "node:net";
+import { createHash } from "node:crypto";
 import path from "node:path";
 import JSZip from "jszip";
 import { z } from "zod";
@@ -15,7 +16,6 @@ const WEBSITE_V2_MAX_SOURCE_RECORDS = 30;
 const WEBSITE_V2_MAX_PUBLIC_PAGE_ATTEMPTS = 16;
 const WEBSITE_V2_MAX_WEB_QUERIES = 4;
 const WEBSITE_V2_MAX_OFFICIAL_DOCUMENTS = 4;
-const WEBSITE_V2_MAX_USER_UPLOADS = 10;
 const WEBSITE_V2_MAX_CUSTOMER_CHARACTERS = 40_000;
 const UNSAFE_EXTRA_EXTENSIONS = new Set([
   ".app",
@@ -125,20 +125,35 @@ const CandidateAssetSchema = z
     sourceAssetUrl: z.string().trim().max(4_000).optional(),
     sourceDocumentName: z.string().trim().min(1).max(512).optional(),
     caption: z.string().trim().min(1).max(500),
+    bytes: z.number().int().positive().max(MAX_SINGLE_ASSET_BYTES).optional(),
+    sha256: z
+      .string()
+      .regex(/^[a-f0-9]{64}$/i)
+      .optional(),
+    mimeType: z
+      .enum([
+        "image/avif",
+        "image/gif",
+        "image/jpeg",
+        "image/png",
+        "image/svg+xml",
+        "image/webp",
+      ])
+      .optional(),
+  })
+  .passthrough();
+
+const CandidateCompanySchema = z
+  .object({
+    name: z.string().trim().min(1).max(200),
+    officialWebsite: z.string().trim().max(4_000).optional().nullable(),
+    industryCluster: z.enum(["C1", "C2", "C3", "C4", "C5", "C6"]).optional(),
   })
   .passthrough();
 
 const CandidateRunBaseSchema = z
   .object({
-    company: z
-      .object({
-        name: z.string().trim().min(1).max(200),
-        officialWebsite: z.string().trim().max(4_000).optional().nullable(),
-        industryCluster: z
-          .enum(["C1", "C2", "C3", "C4", "C5", "C6"])
-          .optional(),
-      })
-      .passthrough(),
+    company: CandidateCompanySchema,
     assets: z.array(CandidateAssetSchema).max(1).optional().default([]),
   })
   .passthrough();
@@ -199,6 +214,39 @@ export type CandidateSource = z.infer<typeof CandidateSourceSchema> & {
 export type CandidateAsset = z.infer<typeof CandidateAssetSchema>;
 export type CandidateRun = z.infer<typeof CandidateRunSchema>;
 
+export type ParsedCandidateAsset = {
+  path: string;
+  type: "brand_identity";
+  sourceKind: "official_web" | "official_document" | "user_upload";
+  sourcePageUrl?: string;
+  sourceAssetUrl?: string;
+  sourceDocumentName?: string;
+  caption: string;
+  sha256?: string;
+  mimeType?:
+    | "image/avif"
+    | "image/gif"
+    | "image/jpeg"
+    | "image/png"
+    | "image/svg+xml"
+    | "image/webp";
+  bytes: Buffer;
+  archivePath: string;
+};
+
+export const CANDIDATE_QUALITY_WARNING_CODES = [
+  "UPLOAD_COVERAGE_INCOMPLETE",
+  "RUN_METADATA_INCOMPLETE",
+  "SOURCE_METADATA_DROPPED",
+  "H3_COVERAGE_INCOMPLETE",
+  "CONTENT_COVERAGE_INCOMPLETE",
+  "RESEARCH_BUDGET_DRIFT",
+  "OPTIONAL_ASSET_SKIPPED",
+] as const;
+
+export type CandidateQualityWarningCode =
+  (typeof CANDIDATE_QUALITY_WARNING_CODES)[number];
+
 export type ParsedCandidate = {
   profile: typeof WEBSITE_KB_CANDIDATE_PROFILE;
   factsMarkdown: string;
@@ -207,8 +255,9 @@ export type ParsedCandidate = {
   customerSections: Map<string, string>;
   run?: CandidateRun;
   sources: CandidateSource[];
-  assets: Array<CandidateAsset & { bytes: Buffer; archivePath: string }>;
+  assets: ParsedCandidateAsset[];
   diagnostics: string[];
+  qualityWarnings: CandidateQualityWarningCode[];
   metrics: {
     citedSourceCount: number;
     factCharacters: number;
@@ -225,6 +274,194 @@ export class KnowledgeBaseCandidateError extends Error {
     super(message);
     this.name = "KnowledgeBaseCandidateError";
   }
+}
+
+function addQualityWarning(
+  warnings: CandidateQualityWarningCode[],
+  code: CandidateQualityWarningCode,
+) {
+  if (!warnings.includes(code)) warnings.push(code);
+}
+
+function asCandidateRecord(
+  value: unknown,
+): Record<string, unknown> | undefined {
+  return value && typeof value === "object" && !Array.isArray(value)
+    ? (value as Record<string, unknown>)
+    : undefined;
+}
+
+function normalizedCandidateRun(
+  rawRun: unknown,
+  diagnostics: string[],
+  qualityWarnings: CandidateQualityWarningCode[],
+): CandidateRun | undefined {
+  const record = asCandidateRecord(rawRun);
+  const schemaVersion = record?.schemaVersion;
+  if (!record || (schemaVersion !== 1 && schemaVersion !== 2)) {
+    addQualityWarning(qualityWarnings, "RUN_METADATA_INCOMPLETE");
+    diagnostics.push("02_run.json did not match a supported schema marker");
+    return undefined;
+  }
+
+  const rawCompany = asCandidateRecord(record.company);
+  const companyName = z
+    .string()
+    .trim()
+    .min(1)
+    .max(200)
+    .safeParse(rawCompany?.name);
+  const normalizedCompany: CandidateRun["company"] = {
+    name: companyName.success ? companyName.data : "待核验企业",
+    officialWebsite: null,
+  };
+  if (!rawCompany || !companyName.success) {
+    addQualityWarning(qualityWarnings, "RUN_METADATA_INCOMPLETE");
+    diagnostics.push("02_run.json company metadata was unusable");
+  }
+  if (rawCompany?.officialWebsite != null) {
+    const officialWebsite =
+      typeof rawCompany.officialWebsite === "string"
+        ? publicHttpUrl(rawCompany.officialWebsite)
+        : undefined;
+    if (officialWebsite) {
+      normalizedCompany.officialWebsite = officialWebsite;
+    } else {
+      addQualityWarning(qualityWarnings, "SOURCE_METADATA_DROPPED");
+    }
+  }
+  const industryCluster = z
+    .enum(["C1", "C2", "C3", "C4", "C5", "C6"])
+    .safeParse(rawCompany?.industryCluster);
+  if (industryCluster.success) {
+    normalizedCompany.industryCluster = industryCluster.data;
+  } else if (rawCompany?.industryCluster !== undefined) {
+    addQualityWarning(qualityWarnings, "RUN_METADATA_INCOMPLETE");
+  }
+
+  const rawSources = Array.isArray(record.sources) ? record.sources : [];
+  if (!Array.isArray(record.sources) && record.sources !== undefined) {
+    addQualityWarning(qualityWarnings, "RUN_METADATA_INCOMPLETE");
+  }
+  const sourceLimit = schemaVersion === 2 ? WEBSITE_V2_MAX_SOURCE_RECORDS : 500;
+  if (rawSources.length > sourceLimit) {
+    addQualityWarning(qualityWarnings, "RESEARCH_BUDGET_DRIFT");
+  }
+  const sources: CandidateSource[] = [];
+  for (const rawSource of rawSources.slice(0, sourceLimit)) {
+    const parsed = CandidateSourceSchema.safeParse(rawSource);
+    if (!parsed.success) {
+      addQualityWarning(qualityWarnings, "SOURCE_METADATA_DROPPED");
+      continue;
+    }
+    const source = { ...parsed.data } as CandidateSource;
+    if (source.kind === "user_upload" && !source.attachmentName) {
+      addQualityWarning(qualityWarnings, "SOURCE_METADATA_DROPPED");
+      continue;
+    }
+    if (source.kind !== "user_upload" && !source.url) {
+      addQualityWarning(qualityWarnings, "SOURCE_METADATA_DROPPED");
+      continue;
+    }
+    if (source.url) {
+      const normalizedUrl = publicHttpUrl(source.url);
+      if (!normalizedUrl) {
+        addQualityWarning(qualityWarnings, "SOURCE_METADATA_DROPPED");
+        continue;
+      }
+      source.url = normalizedUrl;
+      source.normalizedUrl = normalizedUrl;
+    }
+    sources.push(source);
+  }
+
+  const rawQueries = Array.isArray(record.queries) ? record.queries : [];
+  const queryLimit = schemaVersion === 2 ? WEBSITE_V2_MAX_WEB_QUERIES : 100;
+  if (rawQueries.length > queryLimit) {
+    addQualityWarning(qualityWarnings, "RESEARCH_BUDGET_DRIFT");
+  }
+  const queries = rawQueries.slice(0, queryLimit).flatMap((query) => {
+    const parsed = z.string().trim().min(1).max(500).safeParse(query);
+    if (!parsed.success) {
+      addQualityWarning(qualityWarnings, "RUN_METADATA_INCOMPLETE");
+      return [];
+    }
+    return [parsed.data];
+  });
+
+  const rawAssets = Array.isArray(record.assets) ? record.assets : [];
+  if (rawAssets.length > 1) {
+    addQualityWarning(qualityWarnings, "OPTIONAL_ASSET_SKIPPED");
+  }
+  const assets: CandidateAsset[] = [];
+  for (const rawAsset of rawAssets.slice(0, 16)) {
+    const parsed = CandidateAssetSchema.safeParse(rawAsset);
+    if (!parsed.success) {
+      addQualityWarning(qualityWarnings, "OPTIONAL_ASSET_SKIPPED");
+      continue;
+    }
+    const asset = { ...parsed.data };
+    for (const property of ["sourcePageUrl", "sourceAssetUrl"] as const) {
+      const value = asset[property];
+      if (!value) continue;
+      const normalizedUrl = publicHttpUrl(value);
+      if (normalizedUrl) {
+        asset[property] = normalizedUrl;
+      } else {
+        delete asset[property];
+        addQualityWarning(qualityWarnings, "SOURCE_METADATA_DROPPED");
+        addQualityWarning(qualityWarnings, "OPTIONAL_ASSET_SKIPPED");
+      }
+    }
+    assets.push(asset);
+    break;
+  }
+
+  if (schemaVersion === 1) {
+    return {
+      schemaVersion,
+      company: normalizedCompany,
+      sources,
+      queries,
+      assets,
+    };
+  }
+
+  const rawExceptions = Array.isArray(record.contentFloorExceptions)
+    ? record.contentFloorExceptions
+    : [];
+  const contentFloorExceptions = rawExceptions
+    .slice(0, CUSTOMER_SECTIONS.length)
+    .flatMap((exception) => {
+      const parsed = ContentFloorExceptionSchema.safeParse(exception);
+      if (!parsed.success) {
+        addQualityWarning(qualityWarnings, "CONTENT_COVERAGE_INCOMPLETE");
+        return [];
+      }
+      return [parsed.data];
+    });
+  const stopReason = [
+    "coverage_complete",
+    "source_exhausted",
+    "budget_reached",
+  ].includes(String(record.stopReason || ""))
+    ? (record.stopReason as
+        | "coverage_complete"
+        | "source_exhausted"
+        | "budget_reached")
+    : "source_exhausted";
+  if (stopReason !== record.stopReason) {
+    addQualityWarning(qualityWarnings, "RUN_METADATA_INCOMPLETE");
+  }
+  return {
+    schemaVersion,
+    company: normalizedCompany,
+    sources,
+    queries,
+    assets,
+    contentFloorExceptions,
+    stopReason,
+  };
 }
 
 function declaredEntrySize(entry: JSZip.JSZipObject) {
@@ -400,14 +637,6 @@ function effectiveCharacters(value: string) {
   return Array.from(effectiveCharacterText(value)).length;
 }
 
-const MEANINGFUL_REASON_CHARACTER = new RegExp("[\\p{L}\\p{N}_]", "u");
-
-function meaningfulReasonCharacterCount(value: string) {
-  return Array.from(effectiveCharacterText(value)).filter((character) =>
-    MEANINGFUL_REASON_CHARACTER.test(character),
-  ).length;
-}
-
 function publicHttpUrl(value: string | undefined) {
   if (!value) return undefined;
   try {
@@ -491,14 +720,9 @@ function sourcesFromMarkdown(markdown: string) {
       normalizedUrl,
     });
   }
-  for (const match of Array.from(markdown.matchAll(/\[上传文件：([^\]]+)]/g))) {
-    sources.push({
-      title: match[1]!.trim(),
-      kind: "user_upload",
-      status: "read",
-      attachmentName: match[1]!.trim(),
-    });
-  }
+  // Upload evidence is accepted only from a successfully parsed 02_run.json
+  // user_upload/read record. A Markdown marker is presentation text, not a
+  // trustworthy statement that the provider actually read the attachment.
   return sources;
 }
 
@@ -604,133 +828,44 @@ function normalizedRunUrl(value: string | undefined) {
   return publicHttpUrl(value)?.replace(/\/$/, "");
 }
 
-/**
- * Enforces the v7 Website light-research contract. Legacy schema-v1
- * candidates remain recoverable so an already-running v6 task can still be
- * finalized by the new deterministic finalizer.
- */
+/** Inspects bounded quality signals without turning presentation/coverage
+ * drift into an archive-level failure. ZIP and identity safety is enforced by
+ * the parser before this inspector runs. */
 export function validateWebsiteV2Candidate(candidate: ParsedCandidate) {
-  if (candidate.run?.schemaVersion !== 2) return;
+  const warn = (code: CandidateQualityWarningCode) =>
+    addQualityWarning(candidate.qualityWarnings, code);
+  if (candidate.run?.schemaVersion !== 2) {
+    warn("RUN_METADATA_INCOMPLETE");
+  }
   const run = candidate.run;
   const sources = candidate.sources;
-  if (sources.length > WEBSITE_V2_MAX_SOURCE_RECORDS) {
-    throw new KnowledgeBaseCandidateError(
-      `Website v2 candidate exceeds ${WEBSITE_V2_MAX_SOURCE_RECORDS} source records`,
-      "content",
-    );
-  }
-
-  const invalidSource = sources.find((source) => {
-    if (source.kind === "user_upload") return !source.attachmentName;
-    return source.url !== undefined && !publicHttpUrl(source.url);
-  });
-  if (invalidSource) {
-    throw new KnowledgeBaseCandidateError(
-      "Website v2 candidate contains an invalid source location",
-      "content",
-    );
-  }
   if (
     sources.some(
       (source) => source.kind === "user_upload" && source.status !== "read",
     )
   ) {
-    throw new KnowledgeBaseCandidateError(
-      "Website v2 candidate must mark every user upload as read",
-      "content",
-    );
-  }
-
-  const publicPageUrls = new Set(
-    sources
-      .filter(
-        (source) =>
-          source.kind !== "official_document" && source.kind !== "user_upload",
-      )
-      .map((source) => normalizedRunUrl(source.url))
-      .filter((value): value is string => Boolean(value)),
-  );
-  const logoAcquisition = (
-    run as CandidateRun & {
-      logoAcquisition?: { attemptedPageUrls?: unknown };
-    }
-  ).logoAcquisition;
-  if (Array.isArray(logoAcquisition?.attemptedPageUrls)) {
-    for (const attempted of logoAcquisition.attemptedPageUrls) {
-      if (typeof attempted !== "string" || !publicHttpUrl(attempted)) {
-        throw new KnowledgeBaseCandidateError(
-          "Website v2 candidate contains an invalid Logo page attempt",
-          "content",
-        );
-      }
-      publicPageUrls.add(normalizedRunUrl(attempted)!);
-    }
-  }
-  if (publicPageUrls.size > WEBSITE_V2_MAX_PUBLIC_PAGE_ATTEMPTS) {
-    throw new KnowledgeBaseCandidateError(
-      `Website v2 candidate exceeds ${WEBSITE_V2_MAX_PUBLIC_PAGE_ATTEMPTS} distinct public-page attempts`,
-      "content",
-    );
-  }
-  if (run.queries.length > WEBSITE_V2_MAX_WEB_QUERIES) {
-    throw new KnowledgeBaseCandidateError(
-      `Website v2 candidate exceeds ${WEBSITE_V2_MAX_WEB_QUERIES} web queries`,
-      "content",
-    );
+    warn("UPLOAD_COVERAGE_INCOMPLETE");
   }
   if (
+    sources.length > WEBSITE_V2_MAX_SOURCE_RECORDS ||
+    (run?.queries.length || 0) > WEBSITE_V2_MAX_WEB_QUERIES ||
+    new Set(
+      sources
+        .filter(
+          (source) =>
+            source.kind !== "official_document" &&
+            source.kind !== "user_upload",
+        )
+        .map((source) => normalizedRunUrl(source.url))
+        .filter(Boolean),
+    ).size > WEBSITE_V2_MAX_PUBLIC_PAGE_ATTEMPTS ||
     sources.filter((source) => source.kind === "official_document").length >
-    WEBSITE_V2_MAX_OFFICIAL_DOCUMENTS
+      WEBSITE_V2_MAX_OFFICIAL_DOCUMENTS
   ) {
-    throw new KnowledgeBaseCandidateError(
-      `Website v2 candidate exceeds ${WEBSITE_V2_MAX_OFFICIAL_DOCUMENTS} official documents`,
-      "content",
-    );
+    warn("RESEARCH_BUDGET_DRIFT");
   }
-  const uploadNames = new Set(
-    sources
-      .filter((source) => source.kind === "user_upload")
-      .map((source) =>
-        source.attachmentName?.normalize("NFKC").trim().toLowerCase(),
-      )
-      .filter((value): value is string => Boolean(value)),
-  );
-  if (uploadNames.size > WEBSITE_V2_MAX_USER_UPLOADS) {
-    throw new KnowledgeBaseCandidateError(
-      `Website v2 candidate exceeds ${WEBSITE_V2_MAX_USER_UPLOADS} user uploads`,
-      "content",
-    );
-  }
-  if (
-    run.sources.filter((source) => source.kind === "user_upload").length >
-    WEBSITE_V2_MAX_USER_UPLOADS
-  ) {
-    throw new KnowledgeBaseCandidateError(
-      `Website v2 candidate exceeds ${WEBSITE_V2_MAX_USER_UPLOADS} user-upload records`,
-      "content",
-    );
-  }
-
-  let totalHeadings = 0;
-  let totalCharacters = 0;
-  const exceptions = new Map(
-    run.contentFloorExceptions.map((exception) => [
-      exception.section,
-      exception,
-    ]),
-  );
-  if (exceptions.size !== run.contentFloorExceptions.length) {
-    throw new KnowledgeBaseCandidateError(
-      "Website v2 candidate contains duplicate content-floor exceptions",
-      "content",
-    );
-  }
-  const sourceUrls = new Set(
-    sources
-      .filter((source) => source.kind !== "user_upload")
-      .map((source) => normalizedRunUrl(source.url))
-      .filter((value): value is string => Boolean(value)),
-  );
+  let totalHeadingsForInspection = 0;
+  let totalCharactersForInspection = 0;
   for (const section of CUSTOMER_SECTIONS) {
     const markdown = candidate.customerSections.get(section) || "";
     const headings = thirdLevelHeadings(markdown);
@@ -742,64 +877,59 @@ export function validateWebsiteV2Candidate(candidate: ParsedCandidate) {
       new Set(headings.map((title) => title.toLowerCase())).size !==
         headings.length
     ) {
-      throw new KnowledgeBaseCandidateError(
-        `Website v2 section ${section} must contain ${minimumHeadings}–${maximumHeadings} unique H3 topics`,
-        "content",
-      );
+      warn("H3_COVERAGE_INCOMPLETE");
     }
-    totalHeadings += headings.length;
+    totalHeadingsForInspection += headings.length;
     const characters = effectiveCharacters(markdown);
-    totalCharacters += characters;
-    const floor = WEBSITE_V2_SECTION_CONTENT_FLOORS[section];
-    const exception = exceptions.get(section);
-    if (characters >= floor) {
-      if (exception) {
-        throw new KnowledgeBaseCandidateError(
-          `Website v2 content-floor exception is unnecessary for ${section}`,
-          "content",
-        );
-      }
-      continue;
-    }
-    if (!exception || !/\[待核验]/.test(markdown)) {
-      throw new KnowledgeBaseCandidateError(
-        `Website v2 section ${section} is below its ${floor}-character floor without a valid gap`,
-        "content",
-      );
-    }
-    if (meaningfulReasonCharacterCount(exception.reason) < 12) {
-      throw new KnowledgeBaseCandidateError(
-        `Website v2 content-floor exception for ${section} must give a concrete reason of at least 12 characters`,
-        "content",
-      );
-    }
-    const attempted = new Set(
-      exception.attemptedSourceUrls
-        .map((url) => normalizedRunUrl(url))
-        .filter((value): value is string => Boolean(value)),
-    );
-    if (
-      attempted.size < 3 ||
-      Array.from(attempted).some((url) => !sourceUrls.has(url))
-    ) {
-      throw new KnowledgeBaseCandidateError(
-        `Website v2 content-floor exception for ${section} must cite three recorded public-source attempts`,
-        "content",
-      );
+    totalCharactersForInspection += characters;
+    if (characters < WEBSITE_V2_SECTION_CONTENT_FLOORS[section]) {
+      warn("CONTENT_COVERAGE_INCOMPLETE");
     }
   }
-  if (totalHeadings < 9 || totalHeadings > 19) {
-    throw new KnowledgeBaseCandidateError(
-      "Website v2 customer draft must contain 9–19 H3 topics in total",
-      "content",
-    );
+  if (totalHeadingsForInspection < 9 || totalHeadingsForInspection > 19) {
+    warn("H3_COVERAGE_INCOMPLETE");
   }
-  if (totalCharacters > WEBSITE_V2_MAX_CUSTOMER_CHARACTERS) {
-    throw new KnowledgeBaseCandidateError(
-      `Website v2 customer draft exceeds ${WEBSITE_V2_MAX_CUSTOMER_CHARACTERS} visible characters`,
-      "content",
-    );
+  if (totalCharactersForInspection > WEBSITE_V2_MAX_CUSTOMER_CHARACTERS) {
+    warn("CONTENT_COVERAGE_INCOMPLETE");
   }
+  if (
+    candidate.diagnostics.some((diagnostic) =>
+      /Ignored (?:image|logo|non-logo)/.test(diagnostic),
+    )
+  ) {
+    warn("OPTIONAL_ASSET_SKIPPED");
+  }
+  return candidate.qualityWarnings;
+}
+
+export function inspectAcceptedUploadCoverage(
+  candidate: ParsedCandidate,
+  acceptedUploadFilenames: readonly string[],
+  acceptedUploadCount = acceptedUploadFilenames.length,
+) {
+  const expected = new Set(
+    acceptedUploadFilenames.map((filename) =>
+      filename.normalize("NFKC").trim().toLowerCase(),
+    ),
+  );
+  const recorded = new Set(
+    (candidate.run?.sources || [])
+      .filter(
+        (source) => source.kind === "user_upload" && source.status === "read",
+      )
+      .map((source) =>
+        source.attachmentName?.normalize("NFKC").trim().toLowerCase(),
+      )
+      .filter((filename): filename is string => Boolean(filename)),
+  );
+  if (
+    expected.size !== acceptedUploadCount ||
+    recorded.size !== expected.size ||
+    Array.from(expected).some((filename) => !recorded.has(filename))
+  ) {
+    addQualityWarning(candidate.qualityWarnings, "UPLOAD_COVERAGE_INCOMPLETE");
+  }
+  return candidate;
 }
 
 export async function parseKnowledgeBaseCandidate(
@@ -814,7 +944,7 @@ export async function parseKnowledgeBaseCandidate(
   let zip: JSZip;
   try {
     zip = await JSZip.loadAsync(input, {
-      checkCRC32: false,
+      checkCRC32: true,
       createFolders: false,
     });
   } catch (error) {
@@ -943,6 +1073,7 @@ export async function parseKnowledgeBaseCandidate(
     );
   }
   const diagnostics: string[] = [];
+  const qualityWarnings: CandidateQualityWarningCode[] = [];
   let rawFactsMarkdown = "";
   let rawCustomerMarkdown = "";
   if (factsEntry) {
@@ -1026,27 +1157,23 @@ export async function parseKnowledgeBaseCandidate(
     try {
       const runBytes = await readLimited(runEntry, MAX_SINGLE_TEXT_BYTES);
       const rawRun = JSON.parse(decodeUtf8(runBytes, "02_run.json"));
-      const parsed = CandidateRunSchema.safeParse(rawRun);
-      if (parsed.success) run = parsed.data;
-      else if (
-        rawRun &&
-        typeof rawRun === "object" &&
-        (rawRun as { schemaVersion?: unknown }).schemaVersion === 2
-      ) {
-        throw new KnowledgeBaseCandidateError(
-          `Website v2 02_run.json violates the candidate contract: ${parsed.error.issues
-            .slice(0, 3)
-            .map((issue) => issue.path.join("."))
-            .join(", ")}`,
-          "content",
-        );
-      } else {
-        diagnostics.push("02_run.json did not match candidate schema");
-      }
+      run = normalizedCandidateRun(rawRun, diagnostics, qualityWarnings);
     } catch (error) {
-      if (error instanceof KnowledgeBaseCandidateError) throw error;
+      // The run ledger is bounded metadata, not core customer content. Keep
+      // byte-budget and ZIP safety failures hard, but treat an unreadable or
+      // malformed ledger exactly like a missing one.
+      if (
+        error instanceof KnowledgeBaseCandidateError &&
+        error.category === "unsafe"
+      ) {
+        throw error;
+      }
       diagnostics.push("02_run.json could not be parsed and was ignored");
+      addQualityWarning(qualityWarnings, "RUN_METADATA_INCOMPLETE");
     }
+  } else {
+    diagnostics.push("02_run.json was not present");
+    addQualityWarning(qualityWarnings, "RUN_METADATA_INCOMPLETE");
   }
   const runSources = (run?.sources || []).map((source) => ({
     ...source,
@@ -1089,7 +1216,41 @@ export async function parseKnowledgeBaseCandidate(
       continue;
     }
     const bytes = await readLimited(file.entry, MAX_SINGLE_ASSET_BYTES);
-    assets.push({ ...metadata, bytes, archivePath: file.path });
+    if (metadata.bytes !== undefined && metadata.bytes !== bytes.byteLength) {
+      throw new KnowledgeBaseCandidateError(
+        `Candidate asset byte declaration does not match: ${file.path}`,
+        "unsafe",
+      );
+    }
+    if (
+      metadata.sha256 &&
+      metadata.sha256.toLowerCase() !==
+        createHash("sha256").update(bytes).digest("hex")
+    ) {
+      throw new KnowledgeBaseCandidateError(
+        `Candidate asset digest declaration does not match: ${file.path}`,
+        "unsafe",
+      );
+    }
+    assets.push({
+      path: metadata.path,
+      type: metadata.type,
+      sourceKind: metadata.sourceKind,
+      ...(metadata.sourcePageUrl
+        ? { sourcePageUrl: metadata.sourcePageUrl }
+        : {}),
+      ...(metadata.sourceAssetUrl
+        ? { sourceAssetUrl: metadata.sourceAssetUrl }
+        : {}),
+      ...(metadata.sourceDocumentName
+        ? { sourceDocumentName: metadata.sourceDocumentName }
+        : {}),
+      caption: metadata.caption,
+      ...(metadata.sha256 ? { sha256: metadata.sha256 } : {}),
+      ...(metadata.mimeType ? { mimeType: metadata.mimeType } : {}),
+      bytes,
+      archivePath: file.path,
+    });
   }
 
   const citedSourceCount = new Set(
@@ -1122,6 +1283,7 @@ export async function parseKnowledgeBaseCandidate(
     sources,
     assets,
     diagnostics,
+    qualityWarnings,
     metrics: {
       citedSourceCount,
       factCharacters: effectiveCharacters(factsMarkdown),

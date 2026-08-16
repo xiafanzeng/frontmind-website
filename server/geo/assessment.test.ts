@@ -5,12 +5,14 @@ import {
   AssessmentRawTaskOutputSchema,
   AssessmentTaskOutputValidationError,
   assertAssessmentOutputScope,
+  buildAssessmentDisplayOnlyProjection,
   buildAssessmentPrompt,
   buildAssessmentTaskInput,
   buildGeoCurrentStateEvaluatorSkillArchive,
   calculateQuestionBaselineAssessment,
   clampRawIndicator,
   inspectAssessmentTaskOutput as inspectAssessmentTaskOutputV2,
+  isCompleteAssessment,
   parseAssessmentTaskOutput as parseAssessmentTaskOutputV2,
   resolveAssessmentTaskOutput,
   type AssessmentRawTaskOutput,
@@ -497,7 +499,7 @@ describe("GEO current-state assessment task output", () => {
     ).toThrowError(expect.objectContaining({ code: "SCHEMA_MISMATCH" }));
   });
 
-  it("canonicalizes non-core v2 transport fields without inventing core assessment content", () => {
+  it("does not invent a missing v2 source count", () => {
     const raw = structuredClone(validV2RawOutput()) as Record<string, unknown>;
     delete raw.limitations;
     const platformBreakdown = raw.platformBreakdown as Array<
@@ -508,13 +510,10 @@ describe("GEO current-state assessment task output", () => {
     const inspection = inspectAssessmentTaskOutput({
       output: [{ type: "output_text", text: JSON.stringify(raw) }],
     });
-    expect(inspection.success).toBe(true);
-    if (inspection.success) {
-      expect(inspection.data.limitations).toEqual([]);
-      expect(
-        inspection.data.platformBreakdown.map((item) => item.sourceCount),
-      ).toEqual([0, 0]);
-    }
+    expect(inspection).toMatchObject({
+      success: false,
+      error: { code: "SCHEMA_MISMATCH" },
+    });
 
     delete raw.summary;
     expect(
@@ -525,6 +524,55 @@ describe("GEO current-state assessment task output", () => {
       success: false,
       error: { code: "SCHEMA_MISMATCH" },
     });
+  });
+
+  it("keeps scope-safe narrative and actions as a display-only partial", () => {
+    const raw = structuredClone(validV2RawOutput()) as Record<string, unknown>;
+    delete raw.dimensions;
+    (raw.priorityActions as unknown[]).push({ action: 42 });
+
+    expect(isCompleteAssessment(raw)).toBe(false);
+    const projection = buildAssessmentDisplayOnlyProjection(
+      typedAssessmentTask(raw),
+      {
+        question: validV2RawOutput().question,
+        platforms: ["deepseek", "doubao"],
+        successfulResponses: 9,
+        failedResponses: 1,
+        sourceCountByPlatform: new Map([
+          ["deepseek", 2],
+          ["doubao", 1],
+        ]),
+      },
+    );
+
+    expect(projection).toMatchObject({
+      completeness: "partial",
+      executiveSummary: expect.stringContaining("基础认知"),
+      platformBreakdown: [
+        expect.objectContaining({ platform: "deepseek", sourceCount: 2 }),
+        expect.objectContaining({ platform: "doubao", sourceCount: 1 }),
+      ],
+    });
+    expect(projection?.knowledgeVsAnswers).toHaveLength(4);
+    expect(projection?.priorityActions).toHaveLength(2);
+  });
+
+  it("rejects display-only assessment content when the question scope differs", () => {
+    const raw = structuredClone(validV2RawOutput()) as Record<string, unknown>;
+    delete raw.dimensions;
+
+    expect(
+      buildAssessmentDisplayOnlyProjection(typedAssessmentTask(raw), {
+        question: {
+          ...validV2RawOutput().question,
+          id: "another-question",
+        },
+        platforms: ["deepseek", "doubao"],
+        successfulResponses: 9,
+        failedResponses: 1,
+      }),
+    ).toBeUndefined();
   });
 
   it("does not resolve assessment result files", async () => {
@@ -1376,7 +1424,7 @@ describe("assessment prompt", () => {
     expect(prompt).toContain("最多 25 个仅含标题的候选主题");
     expect(prompt).toContain("排序最前的 10 个唯一重点主题");
     expect(prompt).toContain("不要分析其余候选主题");
-    expect(prompt).toContain("证据引用字段可留空或省略");
+    expect(prompt).toContain("无安全引用时写 []，不得省略或编造");
     expect(prompt).toContain("目标 20 分钟内返回");
     expect(prompt).not.toContain("geo-knowledge-answer-verifier");
     expect(prompt).not.toContain("bsas-baseline-methodology");

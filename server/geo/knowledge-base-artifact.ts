@@ -16,6 +16,15 @@ export interface KnowledgeArchiveDescriptor {
   sha256: string;
 }
 
+export class KnowledgeArchiveSelectionError extends Error {
+  readonly category = "structure" as const;
+
+  constructor(message: string) {
+    super(message);
+    this.name = "KnowledgeArchiveSelectionError";
+  }
+}
+
 function isExactString(value: unknown, maximum: number): value is string {
   return (
     typeof value === "string" &&
@@ -91,6 +100,46 @@ export function rankedKnowledgeArchiveDescriptors(
     )
     .slice(0, MAX_KNOWLEDGE_ARCHIVE_CANDIDATES_TO_INSPECT)
     .map(({ descriptor }) => descriptor);
+}
+
+/**
+ * Selects one provider result without guessing. An exact, contract-named
+ * artifact always wins, but it must itself be unique. We only fall back when
+ * the stronger class is absent, and never use a generic ZIP to rescue an
+ * invalid explicit candidate later in the pipeline.
+ */
+export function selectUniqueKnowledgeArchiveDescriptor(
+  artifacts: unknown,
+): KnowledgeArchiveDescriptor | undefined {
+  const descriptors = collectKnowledgeArchiveDescriptors(artifacts);
+  const exact = descriptors.filter(
+    (descriptor) =>
+      descriptor.filename.toLowerCase() ===
+      WEBSITE_KNOWLEDGE_CANDIDATE_FILENAME,
+  );
+  if (exact.length > 1) {
+    throw new KnowledgeArchiveSelectionError(
+      "上游任务返回了多个同名候选 ZIP，无法唯一确认正式候选文件",
+    );
+  }
+  if (exact.length === 1) return exact[0];
+
+  const candidateLike = descriptors.filter(
+    (descriptor) => descriptorRank(descriptor) === 1,
+  );
+  if (candidateLike.length > 1) {
+    throw new KnowledgeArchiveSelectionError(
+      "上游任务返回了多个候选型 ZIP，无法唯一确认正式候选文件",
+    );
+  }
+  if (candidateLike.length === 1) return candidateLike[0];
+
+  if (descriptors.length > 1) {
+    throw new KnowledgeArchiveSelectionError(
+      "上游任务返回了多个普通 ZIP，无法安全猜测正式候选文件",
+    );
+  }
+  return descriptors[0];
 }
 
 export function isExplicitKnowledgeCandidateDescriptor(

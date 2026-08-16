@@ -11,6 +11,7 @@ import {
   assertAssessmentOutputScope,
   buildGeoCurrentStateEvaluatorSkillArchive,
 } from "../../geo/assessment";
+import { normalizePresalesStructuredResult } from "../../geo/structured-result-normalization";
 
 const schemaPath = path.resolve(
   process.cwd(),
@@ -93,6 +94,8 @@ function canonicalIneligibleOutput() {
         factAccuracy: null,
         propositionHitRate: null,
         sourceCount: 5,
+        citationCount: null,
+        referenceCount: null,
         sentiment: "unknown",
         verdict: "The evidence is insufficient for a platform verdict.",
         evidenceRefs: ["deepseek/run-01"],
@@ -187,7 +190,12 @@ function validationErrors(validate: ValidateFunction) {
 }
 
 function validateProductionContract(output: unknown) {
-  const result = AssessmentRawTaskOutputSchema.safeParse(output);
+  const result = AssessmentRawTaskOutputSchema.safeParse(
+    normalizePresalesStructuredResult(
+      "website.current-state-assessment",
+      output,
+    ),
+  );
   if (!result.success) {
     return {
       success: false,
@@ -364,22 +372,13 @@ describe("geo-current-state-evaluator model output contract", () => {
       expected: true,
     },
     {
-      name: "omitted optional evidence fields",
+      name: "required transport evidence fields may be empty",
       output: changedOutput(canonicalIneligibleOutput, (output) => {
-        delete (
-          output.dimensions.semanticVisibility.aiSearchVisibility as {
-            evidenceRefs?: string[];
-          }
-        ).evidenceRefs;
-        delete (output.platformBreakdown[0] as { evidenceRefs?: string[] })
-          .evidenceRefs;
-        delete (
-          output.knowledgeVsAnswers[0] as {
-            kbEvidenceRefs?: string[];
-          }
-        ).kbEvidenceRefs;
-        delete (output.priorityActions[0] as { evidenceRefs?: string[] })
-          .evidenceRefs;
+        output.dimensions.semanticVisibility.aiSearchVisibility.evidenceRefs =
+          [];
+        output.platformBreakdown[0].evidenceRefs = [];
+        output.knowledgeVsAnswers[0].kbEvidenceRefs = [];
+        output.priorityActions[0].evidenceRefs = [];
       }),
       expected: true,
     },
@@ -440,6 +439,23 @@ describe("geo-current-state-evaluator model output contract", () => {
     );
     expect(production.success, production.errors).toBe(true);
     expect(modelValid).not.toBe(production.success);
+  });
+
+  it("requires explicit null legacy source fields in new v2 Skill output while retaining production compatibility", () => {
+    const output = canonicalIneligibleOutput();
+    Object.assign(output.platformBreakdown[0], {
+      citationCount: 1,
+      referenceCount: 1,
+    });
+
+    const modelValid = validate(output);
+    const production = validateProductionContract(output);
+
+    expect(modelValid).toBe(false);
+    expect(validationErrors(validate)).toContain(
+      "/platformBreakdown/0/citationCount",
+    );
+    expect(production.success, production.errors).toBe(true);
   });
 
   it("documents duplicate platform names as a production-only cross-field invariant", () => {

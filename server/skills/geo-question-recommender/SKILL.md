@@ -20,7 +20,8 @@ Run this Skill only under the server-enforced `website.question-recommendation` 
 7. Generate the five `product_scenario` items as enterprise product-and-service Q&A, using each `qaIntent` exactly once: `offering_definition`, `feature_mechanism`, `scenario_fit`, `delivery_usage`, and `support_boundary`.
 8. Ground current-enterprise facts, offerings, scenarios, and reputation intents in the knowledge-base paths. Do not invent a certification, price, performance claim, ranking, product, function, scenario, customer outcome, or comparison result. A neutral comparison question may use a real competitor brand established by trustworthy public knowledge or public-web research even when that brand is absent from the ZIP.
 9. Include the current company or brand in all five `competitor_comparison` questions through `enterpriseAnchor`. Every item must also declare a different `competitorAnchor` containing an explicit real competitor company or brand. Prefer ZIP evidence; otherwise use trustworthy public knowledge or research without stopping the task. Reproduce both declared anchors exactly in every visible question. Do not use a generic product or solution comparison in this category.
-10. Validate the complete object against `references/output-schema.json`, then run the anti-placeholder and diversity checks below. Return exactly one business object through the task Structured Output contract, with no ordinary assistant text, result file, commentary, Markdown, or trailing output.
+10. Fill the exact transport shape in `references/output-schema.json`: every item has all eleven keys. Always write `questionEnglish: null`; use `null` for an inapplicable `enterpriseAnchor`, `offeringAnchor`, `competitorAnchor`, or `qaIntent` instead of omitting the key.
+11. Serialize the completed object, parse that serialization once, validate it against `references/output-schema.json`, then run the anti-placeholder and diversity checks below. Return exactly that one business object through the task Structured Output contract, with no ordinary assistant text, result file, commentary, Markdown, or trailing output.
 
 ## Five-question intent matrices
 
@@ -103,3 +104,4 @@ Before returning:
 9. Confirm that no question contains `，` or `,` and that every question expresses only one core intent in a direct sentence.
 10. Confirm that all five competitor-comparison questions contain their exact declared `enterpriseAnchor` and an exact `competitorAnchor` identifying a different brand. Reject every generic product or solution comparison.
 11. Confirm that the final object contains `questions` and never contains a top-level `status`, `code`, `reason`, or evidence-audit-only response. Missing D08 evidence is not a permitted reason to omit the twenty questions.
+12. Confirm every question contains exactly the eleven transport keys, `questionEnglish` is `null`, and every inapplicable nullable anchor or intent is present as `null` rather than omitted.

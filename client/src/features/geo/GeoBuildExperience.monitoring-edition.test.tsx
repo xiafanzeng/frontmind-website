@@ -34,6 +34,7 @@ function renderSetup(
   project: GeoProject,
   onChangeEdition = vi.fn(),
   onCheckout = vi.fn(),
+  paymentPending = false,
 ) {
   render(
     <MonitoringSetup
@@ -42,7 +43,7 @@ function renderSetup(
       onTogglePlatform={vi.fn()}
       onBack={vi.fn()}
       onCheckout={onCheckout}
-      paymentPending={false}
+      paymentPending={paymentPending}
       locked={false}
     />,
   );
@@ -65,7 +66,7 @@ describe("GEO monitoring edition setup", () => {
     expect(screen.queryByText("Is Example Company trustworthy?")).toBeNull();
   });
 
-  it("shows only ChatGPT and the free answer total overseas without exposing the translation", () => {
+  it("shows only ChatGPT and the answer total overseas without exposing the translation", () => {
     renderSetup({
       ...baseProject,
       monitoringEdition: "overseas",
@@ -88,7 +89,9 @@ describe("GEO monitoring edition setup", () => {
       screen.getByText("可选择国内版或海外版进行监控及后续服务"),
     ).toBeTruthy();
     expect(screen.queryByText(/¥|支付/)).toBeNull();
-    expect(screen.getByText("免费获取")).toBeTruthy();
+    expect(screen.getByText("本次监控")).toBeTruthy();
+    expect(screen.getByText("1 个平台 · 5 次回答")).toBeTruthy();
+    expect(screen.queryByText("免费获取")).toBeNull();
     expect(
       (
         screen.getByRole("button", {
@@ -125,7 +128,7 @@ describe("GEO monitoring edition setup", () => {
     expect(onChangeEdition).toHaveBeenCalledWith("overseas");
   });
 
-  it("confirms the free scope without exposing any monitoring payment action", () => {
+  it("confirms the monitoring scope without exposing any payment action", () => {
     const onConfirm = vi.fn();
     render(
       <MonitoringConfirmDialog
@@ -144,8 +147,63 @@ describe("GEO monitoring edition setup", () => {
     expect(screen.getByText("国内版")).toBeTruthy();
     expect(screen.getByText("豆包、Kimi")).toBeTruthy();
     expect(screen.getByText("10 次")).toBeTruthy();
-    expect(screen.queryByText(/¥|支付方式|确认并支付/)).toBeNull();
+    expect(
+      screen.getByText(
+        "确认当前问题、监控版本和平台范围后，即可获取并留存本次回答。",
+      ),
+    ).toBeTruthy();
+    expect(screen.queryByText(/免费|付款订单|支付方式|确认并支付/)).toBeNull();
     fireEvent.click(screen.getByRole("button", { name: /确认并获取监控答案/ }));
     expect(onConfirm).toHaveBeenCalledOnce();
+  });
+
+  it("describes legacy monitoring continuation without order internals", () => {
+    render(
+      <MonitoringConfirmDialog
+        open
+        project={baseProject}
+        legacyPending={{
+          kind: "monitoring",
+          projectId: baseProject.id,
+          projectToken: baseProject.remoteToken,
+          questionId: "question-01",
+          monitoringEdition: "domestic",
+          platformIds: ["doubao"],
+          checkout: {
+            authorization: "legacy-monitoring-authorization",
+            orderId: "legacy-monitoring-order",
+            amountFen: 0,
+            unitPriceFen: 0,
+            answersPerPlatform: 5,
+            expiresAt: "2026-08-07T01:00:00.000Z",
+            action: "https://zpayz.cn/submit.php",
+            method: "POST",
+            fields: {},
+          },
+          status: "pending",
+        }}
+        starting={false}
+        error=""
+        onOpenChange={vi.fn()}
+        onConfirm={vi.fn()}
+      />,
+    );
+
+    expect(
+      screen.getByText(
+        "检测到此前未完成的监控确认，系统会先核对当前状态后继续。",
+      ),
+    ).toBeTruthy();
+    expect(screen.queryByText(/免费|付款订单|权威核对|旧状态/)).toBeNull();
+  });
+
+  it("uses a customer-facing continuation hint for an existing monitoring record", () => {
+    renderSetup(baseProject, vi.fn(), vi.fn(), true);
+
+    expect(
+      screen
+        .getByRole("button", { name: "获取监控答案" })
+        .getAttribute("title"),
+    ).toBe("核对此前监控状态并继续");
   });
 });

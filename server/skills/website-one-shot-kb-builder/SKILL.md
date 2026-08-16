@@ -184,5 +184,7 @@ reported error and rerun it. Never hand-compress the working directory.
 
 Return exactly one file named `website-lead-candidate-v1.zip`. Do not attach a
 Skill ZIP, working directory, cache, source-page export, log, or second archive.
+Alongside that one attachment, the final response text must be exactly
+`已完成，候选 ZIP 已附上。`; do not print a Provider file ID, path, or URL.
 Do not create final directories, completeness files, package manifests, status
 counts, hashes, evidence-document links, or a schema-v4 archive.

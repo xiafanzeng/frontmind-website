@@ -117,12 +117,21 @@ describe("GeoServiceOnboarding contract-code dialog", () => {
     },
   ])(
     "blocks contract-code submission when $label",
-    ({ serviceActivation, message }) => {
+    async ({ serviceActivation, message }) => {
       const onSubmitProfile = vi.fn<SubmitProfile>();
       renderOnboarding(onSubmitProfile, serviceActivation);
 
       expect(screen.getByText(message)).toBeTruthy();
-      expect(screen.getByRole("link", { name: "联系支持处理" })).toBeTruthy();
+      const supportButton = screen.getByRole("button", {
+        name: "联系支持处理",
+      });
+      expect(supportButton).toBeTruthy();
+      expect(document.querySelector('a[href^="mailto:"]')).toBeNull();
+      fireEvent.click(supportButton);
+      expect(await screen.findByRole("dialog")).toBeTruthy();
+      expect(
+        screen.getByAltText("FrontMind 管理员企业微信二维码"),
+      ).toBeTruthy();
       expect(
         screen.queryByRole("button", { name: /提交资料并联系管理员/ }),
       ).toBeNull();
@@ -130,6 +139,29 @@ describe("GeoServiceOnboarding contract-code dialog", () => {
       expect(onSubmitProfile).not.toHaveBeenCalled();
     },
   );
+
+  it("opens the administrator QR dialog for a terminal activation failure", async () => {
+    renderOnboarding(
+      vi.fn(async () => undefined),
+      {
+        ...activation,
+        status: "failed",
+        orderId: "FM202607240001",
+        paidAt: "2026-07-24T10:00:00.000Z",
+        provisioningRetryable: false,
+        knowledgeImport: {
+          status: "failed",
+          retryable: false,
+          message: "资料需要人工核验",
+        },
+      },
+    );
+
+    expect(document.querySelector('a[href^="mailto:"]')).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: "联系技术支持" }));
+    expect(await screen.findByRole("dialog")).toBeTruthy();
+    expect(screen.getByAltText("FrontMind 管理员企业微信二维码")).toBeTruthy();
+  });
 
   it("opens the administrator QR dialog without exposing or prefilling the default code", async () => {
     renderOnboarding(vi.fn(async () => undefined));

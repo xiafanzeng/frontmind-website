@@ -84,11 +84,40 @@ const serviceProject: GeoProject = {
   stage: "service_activation",
   assessment: {
     status: "ready",
-    dimensions: [],
+    totalScore: 50,
+    quality: {
+      completeness: "complete",
+      downstreamEligible: true,
+    },
+    dimensions: [
+      ["semantic_visibility", "语义可见度"],
+      ["semantic_coherence", "语义一致性"],
+      ["semantic_richness", "语义丰富度"],
+      ["semantic_authority", "语义权威度"],
+      ["competitive_advantage", "竞争优势"],
+    ].map(([id, label]) => ({
+      id: id as
+        | "semantic_visibility"
+        | "semantic_coherence"
+        | "semantic_richness"
+        | "semantic_authority"
+        | "competitive_advantage",
+      label,
+      score: 10,
+      maxScore: 20,
+    })),
     comparisons: [],
   },
   optimizationForecast: {
     status: "ready",
+    currentScore: 50,
+    targetLow: 60,
+    targetExpected: 65,
+    targetHigh: 70,
+    quality: {
+      completeness: "complete",
+      downstreamEligible: true,
+    },
     dimensions: [],
     assumptions: [],
     roadmap: [],
@@ -645,7 +674,7 @@ describe("service payment dialog", () => {
   });
 });
 
-describe("free monitoring confirmation and service-only payment boundaries", () => {
+describe("monitoring confirmation and service-only payment boundaries", () => {
   it("starts free overseas monitoring without creating a checkout", async () => {
     const overseasProject: GeoProject = {
       ...project,
@@ -728,7 +757,7 @@ describe("free monitoring confirmation and service-only payment boundaries", () 
     );
   });
 
-  it("migrates a cached monitoring checkout through the free confirmation path", async () => {
+  it("migrates a cached monitoring checkout through the confirmation path", async () => {
     const initial = pendingPayment();
     storageMocks.listGeoProjects.mockResolvedValue([project]);
     apiMocks.startGeoMonitoring.mockResolvedValue({
@@ -780,8 +809,14 @@ describe("free monitoring confirmation and service-only payment boundaries", () 
     fireEvent.click(
       await screen.findByRole("button", { name: "获取监控答案" }),
     );
-    expect(screen.getByText(/检测到切换前的监控订单/)).toBeTruthy();
-    expect(screen.queryByText(/¥|支付方式|更换支付渠道/)).toBeNull();
+    expect(
+      screen.getByText(
+        "检测到此前未完成的监控确认，系统会先核对当前状态后继续。",
+      ),
+    ).toBeTruthy();
+    expect(
+      screen.queryByText(/免费|付款订单|¥|支付方式|更换支付渠道/),
+    ).toBeNull();
     expect(apiMocks.getGeoPaymentStatus).not.toHaveBeenCalled();
     expect(apiMocks.startGeoLegacyPaidMonitoring).not.toHaveBeenCalled();
     expect(apiMocks.startGeoMonitoring).not.toHaveBeenCalled();

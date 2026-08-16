@@ -91,5 +91,46 @@ describe("execution log dialog", () => {
     expect(screen.queryByText("下一次状态同步预计于")).toBeNull();
     expect(screen.queryByText("73%", { exact: false })).toBeNull();
     expect(screen.queryByRole("log")).toBeNull();
+    expect(screen.getByText("历史环节")).not.toBeNull();
+    expect(screen.queryByText("当前环节")).toBeNull();
+  });
+
+  it("never grows a terminal runtime when the server terminal time is missing", () => {
+    const fixture = createGeoStylePreviewProject();
+    render(
+      <ExecutionLogDialog
+        open
+        project={{
+          ...fixture,
+          preview: undefined,
+          remoteToken: "signed-project-token",
+          executionLog: {
+            currentEntryId: "question-recommendation",
+            fetchedAt: "2026-08-08T15:59:00.000Z",
+            updatedAt: "2026-08-08T15:59:00.000Z",
+            entries: [
+              {
+                id: "question-recommendation",
+                stage: "question_recommendation",
+                title: "GEO 问题推荐",
+                status: "failed",
+                startedAt: "2026-08-08T12:00:00.000Z",
+                events: [],
+              },
+            ],
+          },
+        }}
+        refreshing={false}
+        onOpenChange={vi.fn()}
+        onRefresh={vi.fn()}
+      />,
+    );
+
+    expect(
+      within(screen.getByLabelText("FrontMind Agent 执行计时")).getByText(
+        "--:--:--",
+      ),
+    ).not.toBeNull();
+    expect(screen.getByText("历史环节")).not.toBeNull();
   });
 });

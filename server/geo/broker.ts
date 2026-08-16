@@ -2,6 +2,8 @@ import {
   GEO_UPSTREAM_PROMPT_MAX_CODE_POINTS,
   geoPromptCodePointLength,
 } from "./prompt-delivery";
+import { normalizeBusinessOwnerName } from "../../shared/business-owner-name";
+import type { Readable } from "node:stream";
 
 export const PRESALES_CONTRACT_VERSION = 2 as const;
 
@@ -10,6 +12,7 @@ export const PRESALES_CAPABILITIES = [
   "typed-results",
   "local-artifacts",
   "safe-events",
+  "project-business-owner",
 ] as const;
 
 export const PRESALES_CONTRACTS = {
@@ -122,6 +125,14 @@ export type BrokerLocalAsset = {
   filename: string;
   status: "pending" | "uploaded";
   uploadTicket?: string;
+  bytes?: number;
+  sha256?: string;
+  replayed?: boolean;
+};
+
+export type BrokerUploadOptions = {
+  signal?: AbortSignal;
+  sizeBytes?: number;
 };
 
 export type BrokerArtifact = {
@@ -158,6 +169,8 @@ export type BrokerTask = {
   localTaskId: string;
   operationId: string;
   status: BrokerTaskStatus;
+  providerStartedAt?: string;
+  terminalAt?: string;
   safeEvents: BrokerSafeEvent[];
   result?: BrokerTaskResult;
   error?: {
@@ -165,6 +178,14 @@ export type BrokerTask = {
     retryable: boolean;
   };
 };
+
+function isIsoTimestamp(value: unknown): value is string {
+  if (typeof value !== "string" || !value.trim()) return false;
+  return (
+    /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{1,3})?Z$/.test(value) &&
+    Number.isFinite(Date.parse(value))
+  );
+}
 
 function assertBrokerTask(value: BrokerTask): BrokerTask {
   const statuses: readonly BrokerTaskStatus[] = [
@@ -184,6 +205,9 @@ function assertBrokerTask(value: BrokerTask): BrokerTask {
     !value.operationId.trim() ||
     !statuses.includes(value.status) ||
     !Array.isArray(value.safeEvents) ||
+    (value.providerStartedAt !== undefined &&
+      !isIsoTimestamp(value.providerStartedAt)) ||
+    (value.terminalAt !== undefined && !isIsoTimestamp(value.terminalAt)) ||
     (value.status === "succeeded" && value.result === undefined) ||
     (value.status !== "succeeded" && value.result !== undefined) ||
     (value.result !== undefined &&
@@ -328,19 +352,12 @@ export type BrokerProjectTaskDeletion =
     };
 
 type BrokerCreateFileInput = {
+  projectId?: string;
   filename: string;
   mimeType?: string;
   sizeBytes: number;
-} & (
-  | {
-      projectId: string;
-      idempotencyKey: string;
-    }
-  | {
-      projectId?: undefined;
-      idempotencyKey?: string;
-    }
-);
+  idempotencyKey: string;
+};
 
 export interface GeoPresalesBroker {
   getStatus(options?: { freshMonitorCredential?: boolean }): Promise<{
@@ -354,11 +371,16 @@ export interface GeoPresalesBroker {
     contractHashes: Record<string, string>;
   }>;
   createAsset(input: BrokerCreateFileInput): Promise<BrokerLocalAsset>;
+  getAsset(
+    localAssetId: string,
+    options?: { signal?: AbortSignal },
+  ): Promise<BrokerLocalAsset>;
   uploadAsset(
     localAssetId: string,
-    body: Buffer,
+    body: Buffer | Readable,
     contentType: string,
     uploadTicket?: string,
+    options?: BrokerUploadOptions,
   ): Promise<unknown>;
   createTask(input: {
     projectId: string;
@@ -366,6 +388,7 @@ export interface GeoPresalesBroker {
     localAssets: Array<{ localAssetId: string; filename: string }>;
     idempotencyKey: string;
     contract: PresalesContract;
+    businessOwnerName?: string;
   }): Promise<BrokerTask>;
   getTask(taskId: string): Promise<BrokerTask>;
   getTaskResult(taskId: string): Promise<BrokerTask>;
@@ -412,6 +435,7 @@ type BrokerConfig = {
 const INTERNAL_SERVICE_HOSTNAME_RE =
   /^(?=.{1,253}$)[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?(?:\.[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?)*$/;
 const PRESALES_PATH = "/api/internal/presales/v2";
+const CREATE_TASK_TIMEOUT_MS = 60_000;
 
 function normalizedHostname(url: URL) {
   return url.hostname
@@ -539,11 +563,12 @@ export class HttpGeoPresalesBroker implements GeoPresalesBroker {
   }
 
   async createAsset(input: BrokerCreateFileInput) {
-    const asset = await this.requestJson<BrokerLocalAsset>("/assets", {
+    const response = await this.request("/assets", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(input),
     });
+    const asset = await this.readJsonResponse<BrokerLocalAsset>(response);
     if (
       !asset ||
       typeof asset.localAssetId !== "string" ||
@@ -557,26 +582,84 @@ export class HttpGeoPresalesBroker implements GeoPresalesBroker {
         "LOCAL_ASSET_INVALID",
       );
     }
-    return asset;
+    return { ...asset, replayed: response.status === 200 };
+  }
+
+  async getAsset(localAssetId: string, options: { signal?: AbortSignal } = {}) {
+    const asset = await this.requestJson<
+      Omit<BrokerLocalAsset, "bytes" | "sha256"> & {
+        bytes?: number | null;
+        sha256?: string | null;
+      }
+    >(`/assets/${encodeURIComponent(localAssetId)}`, {
+      signal: options.signal,
+    });
+    if (
+      !asset ||
+      asset.localAssetId !== localAssetId ||
+      typeof asset.filename !== "string" ||
+      !asset.filename.trim() ||
+      !["pending", "uploaded"].includes(asset.status) ||
+      (asset.bytes !== undefined &&
+        asset.bytes !== null &&
+        (!Number.isSafeInteger(asset.bytes) || asset.bytes < 0)) ||
+      (asset.sha256 !== undefined &&
+        asset.sha256 !== null &&
+        !/^[a-f0-9]{64}$/i.test(asset.sha256)) ||
+      (asset.status === "uploaded" &&
+        (typeof asset.bytes !== "number" || typeof asset.sha256 !== "string"))
+    ) {
+      throw new GeoBrokerError(
+        "FrontMind 本地资产状态响应结构无效",
+        502,
+        "LOCAL_ASSET_INVALID",
+      );
+    }
+    const { bytes, sha256, ...identity } = asset;
+    return {
+      ...identity,
+      ...(typeof bytes === "number" ? { bytes } : {}),
+      ...(typeof sha256 === "string" ? { sha256 } : {}),
+    };
   }
 
   async uploadAsset(
     localAssetId: string,
-    body: Buffer,
+    body: Buffer | Readable,
     contentType: string,
     uploadTicket?: string,
+    options: BrokerUploadOptions = {},
   ) {
-    return this.requestJson(
-      `/assets/${encodeURIComponent(localAssetId)}/content`,
-      {
+    const streaming = !Buffer.isBuffer(body);
+    const sizeBytes = streaming ? options.sizeBytes : body.byteLength;
+    if (!Number.isSafeInteger(sizeBytes) || Number(sizeBytes) < 0) {
+      throw new GeoBrokerError(
+        "FrontMind 上传内容大小无效",
+        500,
+        "LOCAL_ASSET_UPLOAD_SIZE_INVALID",
+      );
+    }
+    // A caller-owned signal is mandatory for a streamed browser upload. It
+    // carries the Website's data-idle and post-body confirmation budgets; do
+    // not replace it with the generic 120-second broker request timeout.
+    const streamSignal = streaming
+      ? (options.signal ?? new AbortController().signal)
+      : options.signal;
+    const requestInit = {
       method: "PUT",
       headers: {
         "Content-Type": "application/octet-stream",
+        "Content-Length": String(sizeBytes),
         "x-original-content-type": contentType || "application/octet-stream",
         ...(uploadTicket ? { "x-frontmind-upload-ticket": uploadTicket } : {}),
       },
-      body,
-      },
+      body: body as unknown as BodyInit,
+      ...(streaming ? { duplex: "half" as const } : {}),
+      ...(streamSignal ? { signal: streamSignal } : {}),
+    } satisfies RequestInit & { duplex?: "half" };
+    return this.requestJson(
+      `/assets/${encodeURIComponent(localAssetId)}/content`,
+      requestInit,
     );
   }
 
@@ -586,6 +669,7 @@ export class HttpGeoPresalesBroker implements GeoPresalesBroker {
     localAssets: Array<{ localAssetId: string; filename: string }>;
     idempotencyKey: string;
     contract: PresalesContract;
+    businessOwnerName?: string;
   }) {
     const promptCodePoints = geoPromptCodePointLength(input.prompt);
     if (promptCodePoints > GEO_UPSTREAM_PROMPT_MAX_CODE_POINTS) {
@@ -611,15 +695,48 @@ export class HttpGeoPresalesBroker implements GeoPresalesBroker {
         "PRESALES_CONTRACT_MISMATCH",
       );
     }
+    let businessOwnerName: string | undefined;
+    if (input.businessOwnerName !== undefined) {
+      try {
+        businessOwnerName = normalizeBusinessOwnerName(input.businessOwnerName);
+      } catch {
+        throw new GeoBrokerError(
+          "Website 商务负责人姓名无效",
+          500,
+          "PROJECT_BUSINESS_OWNER_INVALID",
+        );
+      }
+    }
+    const initialProjectTask =
+      input.contract.name === PRESALES_CONTRACTS.knowledgeBaseCandidate.name;
+    if (
+      (initialProjectTask && businessOwnerName === undefined) ||
+      (!initialProjectTask && businessOwnerName !== undefined)
+    ) {
+      throw new GeoBrokerError(
+        "Website 商务负责人任务边界无效",
+        500,
+        "PROJECT_BUSINESS_OWNER_CONTRACT_INVALID",
+      );
+    }
     const task = await this.requestJson<BrokerTask>("/tasks", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
+      signal: AbortSignal.timeout(CREATE_TASK_TIMEOUT_MS),
       body: JSON.stringify({
         projectId: input.projectId,
         prompt: input.prompt,
-        localAssetIds: input.localAssets,
+        // This is the single Website -> Dashboard task-attachment boundary.
+        // Callers can hold richer local attachment records (for example the
+        // materialized archive's `temporary` lifecycle flag), but the strict
+        // Dashboard contract only accepts these two public fields.
+        localAssetIds: input.localAssets.map((asset) => ({
+          localAssetId: asset.localAssetId,
+          filename: asset.filename,
+        })),
         idempotencyKey: input.idempotencyKey,
         contract: input.contract,
+        ...(businessOwnerName ? { businessOwnerName } : {}),
       }),
     });
     return assertBrokerTask(task);
@@ -711,9 +828,7 @@ export class HttpGeoPresalesBroker implements GeoPresalesBroker {
   }
 
   async downloadAsset(localAssetId: string) {
-    return this.request(
-      `/assets/${encodeURIComponent(localAssetId)}/content`,
-    );
+    return this.request(`/assets/${encodeURIComponent(localAssetId)}/content`);
   }
 
   async promoteArtifact(input: {
@@ -791,6 +906,13 @@ export class HttpGeoPresalesBroker implements GeoPresalesBroker {
     responseOptions: { rejectAccepted?: boolean } = {},
   ) {
     const response = await this.request(pathname, init);
+    return this.readJsonResponse<T>(response, responseOptions);
+  }
+
+  private async readJsonResponse<T>(
+    response: Response,
+    responseOptions: { rejectAccepted?: boolean } = {},
+  ) {
     if (responseOptions.rejectAccepted && response.status === 202) {
       if (response.body) await response.body.cancel().catch(() => undefined);
       throw new GeoBrokerError(
@@ -832,7 +954,7 @@ export class HttpGeoPresalesBroker implements GeoPresalesBroker {
           "x-frontmind-service-token": this.serviceToken,
           ...(init.headers || {}),
         },
-        signal: AbortSignal.timeout(120_000),
+        signal: init.signal ?? AbortSignal.timeout(120_000),
       });
     } catch (error) {
       throw new GeoBrokerError(

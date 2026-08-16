@@ -21,6 +21,7 @@ import {
   QuestionRecommendation,
   resolvePaymentCheckoutAction,
   ServiceActivation,
+  startFreshKnowledgeBaseUpload,
   StageNavigation,
 } from "./GeoBuildExperience";
 import { KnowledgeCompletenessDetails } from "./KnowledgeCompletenessDialog";
@@ -180,7 +181,7 @@ describe("GEO style preview rendering", () => {
     );
 
     expect(html).toContain(
-      "步骤 2：问题推荐，筛选优化问题，订单范围已锁定，只读查看",
+      "步骤 2：问题推荐，筛选优化问题，问题范围已锁定，只读查看",
     );
     const questionStep = html.match(
       /<button(?=[^>]*aria-label="步骤 2：问题推荐)[^>]*>/,
@@ -263,7 +264,7 @@ describe("GEO style preview rendering", () => {
     expect(html).toContain("/geo-builder/channels/tencent-news.png");
   });
 
-  it("shows partial recommendations without presenting them as an unfinished error", () => {
+  it("does not render partial recommendations as selectable categories", () => {
     const fixture = createGeoStylePreviewProject();
     const project = {
       ...fixture,
@@ -279,10 +280,102 @@ describe("GEO style preview rendering", () => {
       />,
     );
 
-    expect(html).toContain("已优先展示本次生成的 3 道问题");
-    expect(html).toContain("仍会正常展示，符合条件的问题可继续选择");
-    expect(html).toContain("本分类本次暂无可展示问题");
-    expect(html).not.toContain("推荐结果正在完成");
+    expect(html).toContain("尚未启动问题推荐");
+    expect(html).not.toContain("已优先展示本次生成的 3 道问题");
+    expect(html).not.toContain("本分类本次暂无可展示问题");
+  });
+
+  it("renders semantic category conflicts in a separate locked pending-classification section", () => {
+    const fixture = createGeoStylePreviewProject();
+    const html = renderToStaticMarkup(
+      <QuestionRecommendation
+        project={{
+          ...fixture,
+          questions: [
+            {
+              id: "reputation-01",
+              category: "reputation",
+              classificationState: "unclassified",
+              question: "FrontMind 与云杉科技相比有什么区别？",
+              rationale: "分类语义冲突但正文可以安全展示。",
+              selectable: false,
+            },
+          ],
+          questionRecommendation: {
+            status: "ready",
+            quality: {
+              completeness: "partial",
+              stats: {
+                acceptedCount: 1,
+                expectedCount: 20,
+                droppedCount: 0,
+                selectableCount: 0,
+              },
+              downstreamEligible: false,
+            },
+          },
+        }}
+        selectionLocked={false}
+        onSelect={vi.fn()}
+        onCreateCustom={vi.fn()}
+        onContact={vi.fn()}
+      />,
+    );
+
+    expect(html).toContain('data-category="unclassified"');
+    expect(html).toContain("待分类");
+    expect(html).toContain("其中 1 道已放入待分类并锁定");
+    expect(html).toMatch(/<button[^>]*type="button"[^>]*disabled="">/);
+    expect(html.match(/FrontMind 与云杉科技相比有什么区别？/g)).toHaveLength(1);
+  });
+
+  it("renders only progress skeletons while recommendation is pending", () => {
+    const fixture = createGeoStylePreviewProject();
+    const html = renderToStaticMarkup(
+      <QuestionRecommendation
+        project={{
+          ...fixture,
+          preview: undefined,
+          status: "recommending",
+          questions: [],
+          questionRecommendation: {
+            status: "pending",
+            startedAt: "2026-08-15T13:00:00.000Z",
+          },
+        }}
+        selectionLocked={false}
+        onSelect={vi.fn()}
+        onCreateCustom={vi.fn()}
+        onContact={vi.fn()}
+      />,
+    );
+
+    expect(html).toContain("正在生成 GEO 问题");
+    expect(html).not.toContain("Agent 正在生成并校验 GEO 问题");
+    expect(html).not.toContain("服务端结构校验");
+    expect(html).toContain("geo-question-skeleton");
+    expect(html).not.toContain("0 题");
+    expect(html).not.toContain("本分类本次暂无可展示问题");
+    expect(html).not.toContain("题目数量或分类未达到");
+  });
+
+  it("describes a locked question scope without payment or mismatch internals", () => {
+    const html = renderToStaticMarkup(
+      <QuestionRecommendation
+        project={createGeoStylePreviewProject()}
+        selectionLocked
+        onSelect={vi.fn()}
+        onCreateCustom={vi.fn()}
+        onContact={vi.fn()}
+      />,
+    );
+
+    expect(html).toContain(
+      "监控范围已经确认，当前页面仅供查看，不能更换问题。",
+    );
+    expect(html).toContain("本次问题范围已锁定，避免监控与评估结果错配。");
+    expect(html).not.toContain("付款订单");
+    expect(html).not.toContain("支付错配");
   });
 
   it("does not invent crawl scope or evidence claims when the archive omits them", () => {
@@ -447,7 +540,7 @@ describe("GEO style preview rendering", () => {
     expect(html).not.toContain('src="/api/assets/leaf"');
   });
 
-  it("places a single brand logo in the 01 branch slot without creating an image panel", () => {
+  it("places a single brand logo in the knowledge-base hero", () => {
     const fixture = createGeoStylePreviewProject();
     const project = {
       ...fixture,
@@ -475,10 +568,32 @@ describe("GEO style preview rendering", () => {
       />,
     );
 
-    expect(html).toContain("geo-branch-index has-logo");
+    expect(html).toContain('class="geo-kb-brand-card"');
+    expect(html).toContain('aria-label="企业官方 Logo"');
+    expect(html).toContain('class="geo-branch-index">01');
     expect(html).toContain('src="/api/assets/logo"');
     expect(html).not.toContain("geo-section-media");
     expect(html.match(/src="\/api\/assets\/logo"/g)).toHaveLength(1);
+  });
+
+  it("keeps a bounded hero placeholder when no official logo is available", () => {
+    const fixture = createGeoStylePreviewProject();
+    const project = {
+      ...fixture,
+      knowledgeBase: { ...fixture.knowledgeBase!, assets: [] },
+    };
+    const html = renderToStaticMarkup(
+      <EnterpriseAnalysis
+        project={project}
+        onDownload={vi.fn()}
+        onContact={vi.fn()}
+        onStart={vi.fn()}
+        starting={false}
+      />,
+    );
+
+    expect(html).toContain('class="geo-kb-brand-card"');
+    expect(html).toContain("暂无官方 Logo");
   });
 
   it.each(["structure", "media", "content", "unsafe"] as const)(
@@ -521,6 +636,7 @@ describe("GEO style preview rendering", () => {
         errorCode: "KB_FINALIZER_CONTRACT_VIOLATION" as const,
       },
       error: "企业知识库最终整理未通过校验，请联系技术支持。",
+      knowledgeBaseSupportRequired: true,
     };
     const html = renderToStaticMarkup(
       <EnterpriseAnalysis
@@ -536,6 +652,41 @@ describe("GEO style preview rendering", () => {
     expect(html).toContain("联系技术支持");
     expect(html).not.toContain("重试最终整理");
     expect(html).not.toContain("重新生成知识库");
+  });
+
+  it("uses the fresh-upload CTA for a preparation failure and removes only the local project", async () => {
+    const project = {
+      ...createGeoStylePreviewProject(),
+      status: "failed" as const,
+      knowledgeBase: undefined,
+      knowledgeBaseSupportRequired: false,
+      error:
+        "资料已接收，但向分析服务提交资料未完成。请移除本次项目后重新上传，并创建全新任务。",
+    };
+    const html = renderToStaticMarkup(
+      <EnterpriseAnalysis
+        project={project}
+        onDownload={vi.fn()}
+        onContact={vi.fn()}
+        onFreshStart={vi.fn()}
+        onStart={vi.fn()}
+        starting={false}
+      />,
+    );
+    expect(html).toContain("移除本次项目并重新上传");
+    expect(html).not.toContain("联系技术支持");
+
+    const removeProjectFromDevice = vi.fn(async () => undefined);
+    const openNewProjectBuilder = vi.fn();
+    const remoteDelete = vi.fn();
+    await startFreshKnowledgeBaseUpload({
+      project,
+      removeProjectFromDevice,
+      openNewProjectBuilder,
+    });
+    expect(removeProjectFromDevice).toHaveBeenCalledOnce();
+    expect(openNewProjectBuilder).toHaveBeenCalledOnce();
+    expect(remoteDelete).not.toHaveBeenCalled();
   });
 
   it("shows delayed status as non-terminal support guidance", () => {
@@ -1009,6 +1160,45 @@ describe("GEO style preview rendering", () => {
     expect(html).not.toContain("五维语义资产现状");
   });
 
+  it("renders a partial assessment without a score or service unlock", () => {
+    const fixture = createGeoStylePreviewProject();
+    const project = {
+      ...fixture,
+      preview: undefined,
+      assessment: {
+        ...fixture.assessment!,
+        quality: {
+          completeness: "partial" as const,
+          downstreamEligible: false,
+        },
+        totalScore: undefined,
+        grade: undefined,
+        executiveSummary: "已保留通过逐项校验的现状观察与优先动作。",
+      },
+    };
+    const overview = renderToStaticMarkup(
+      <AssessmentOverview project={project} assessmentReady={false} />,
+    );
+    const comparison = renderToStaticMarkup(
+      <KnowledgeComparison project={project} />,
+    );
+    const current = renderToStaticMarkup(
+      <CurrentAssessment
+        project={project}
+        onContact={vi.fn()}
+        onStartService={vi.fn()}
+      />,
+    );
+
+    expect(overview).toContain("已展示通过校验的评估内容");
+    expect(overview).toContain("已保留通过逐项校验的现状观察与优先动作");
+    expect(overview).toContain("聚合分值暂不可用");
+    expect(overview).not.toContain("当前等级");
+    expect(overview).not.toContain("/ 100");
+    expect(comparison).toContain("知识事实与平台回答逐项核验");
+    expect(current).not.toContain("进入下一步：启动服务");
+  });
+
   it("replaces internal assessment tokens and run identifiers in customer copy", () => {
     const fixture = createGeoStylePreviewProject();
     const comparison = fixture.assessment!.comparisons[0]!;
@@ -1157,6 +1347,35 @@ describe("GEO style preview rendering", () => {
     expect(html).not.toContain("<button");
     expect(html).not.toContain("重新生成");
     expect(html).not.toContain("刷新评估");
+  });
+
+  it("renders partial forecast narratives and roadmap without target ranges", () => {
+    const fixture = createGeoStylePreviewProject();
+    const project = {
+      ...fixture,
+      optimizationForecast: {
+        ...fixture.optimizationForecast!,
+        quality: {
+          completeness: "partial" as const,
+          downstreamEligible: false,
+        },
+        currentScore: undefined,
+        targetLow: undefined,
+        targetExpected: undefined,
+        targetHigh: undefined,
+        executiveSummary: "已保留通过逐项校验的优化叙事与路线片段。",
+      },
+    };
+    const html = renderToStaticMarkup(
+      <OptimizationForecastView project={project} onContact={vi.fn()} />,
+    );
+
+    expect(html).toContain("已展示通过校验的优化路线内容");
+    expect(html).toContain("已保留通过逐项校验的优化叙事与路线片段");
+    expect(html).toContain("目标分值暂不可用");
+    expect(html).toContain("已验证的分阶段路线");
+    expect(html).not.toContain("条件目标区间");
+    expect(html).not.toContain("本题可测项表现");
   });
 
   it("keeps customer-facing Schema terminology when it describes website markup", () => {

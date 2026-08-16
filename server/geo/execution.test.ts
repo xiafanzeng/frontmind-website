@@ -13,7 +13,12 @@ function task(
     status,
     safeEvents: events,
     ...(status === "succeeded"
-      ? { result: { structuredResult: { secret: "never-render" }, artifacts: [] } }
+      ? {
+          result: {
+            structuredResult: { secret: "never-render" },
+            artifacts: [],
+          },
+        }
       : {}),
   };
 }
@@ -61,16 +66,67 @@ describe("GEO v2 safe execution log", () => {
       },
       now: new Date("2026-07-23T02:03:10.000Z"),
     });
-    expect(log.entries.find((entry) => entry.id === "current-assessment")?.events)
-      .toEqual(
-        expect.arrayContaining([
-          expect.objectContaining({
-            kind: "result_summary",
-            message: expect.stringContaining("已完成 7 项知识事实"),
-          }),
-        ]),
-      );
+    expect(
+      log.entries.find((entry) => entry.id === "current-assessment")?.events,
+    ).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          kind: "result_summary",
+          message: expect.stringContaining("已完成 7 项知识事实"),
+        }),
+      ]),
+    );
     expect(JSON.stringify(log)).not.toContain("never-render");
+  });
+
+  it("uses provider lifecycle timestamps and clears currentEntryId at terminal", () => {
+    const questionTask = {
+      ...task("succeeded"),
+      providerStartedAt: "2026-08-15T13:00:00.000Z",
+      terminalAt: "2026-08-15T13:12:00.000Z",
+    };
+    const log = buildGeoExecutionLog({
+      knowledgeBaseTask: task("succeeded"),
+      questionTask,
+      validated: { questionCount: 20 },
+    });
+
+    expect(log.currentEntryId).toBeUndefined();
+    expect(
+      log.entries.find((entry) => entry.id === "question-recommendation"),
+    ).toMatchObject({
+      status: "completed",
+      startedAt: "2026-08-15T13:00:00.000Z",
+      completedAt: "2026-08-15T13:12:00.000Z",
+    });
+  });
+
+  it("projects a completed task with an invalid question result as failed history", () => {
+    const log = buildGeoExecutionLog({
+      knowledgeBaseTask: task("succeeded"),
+      questionTask: {
+        ...task("succeeded"),
+        terminalAt: "2026-08-15T13:12:00.000Z",
+      },
+      validated: { questionResultInvalid: true },
+    });
+    const entry = log.entries.find(
+      (candidate) => candidate.id === "question-recommendation",
+    );
+
+    expect(entry).toMatchObject({
+      status: "failed",
+      completedAt: "2026-08-15T13:12:00.000Z",
+    });
+    expect(entry?.events).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          kind: "error",
+          message: "问题推荐结果未通过完整性校验。",
+        }),
+      ]),
+    );
+    expect(log.currentEntryId).toBeUndefined();
   });
 
   it("separates upstream success from local schema failure", () => {
@@ -82,11 +138,16 @@ describe("GEO v2 safe execution log", () => {
         assessmentFailureCode: "SCHEMA_MISMATCH",
       },
     });
-    const entry = log.entries.find((candidate) => candidate.id === "current-assessment");
+    const entry = log.entries.find(
+      (candidate) => candidate.id === "current-assessment",
+    );
     expect(entry?.status).toBe("failed");
     expect(entry?.events).toEqual(
       expect.arrayContaining([
-        expect.objectContaining({ kind: "error", message: expect.stringContaining("SCHEMA_MISMATCH") }),
+        expect.objectContaining({
+          kind: "error",
+          message: expect.stringContaining("SCHEMA_MISMATCH"),
+        }),
       ]),
     );
   });

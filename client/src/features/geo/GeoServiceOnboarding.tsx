@@ -13,6 +13,7 @@ import {
   Mail,
   MapPin,
   Phone,
+  QrCode,
   RefreshCw,
   ShieldCheck,
   UserRound,
@@ -26,10 +27,7 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
-import {
-  FRONTMIND_CONTACT_EMAILS,
-  FRONTMIND_WECHAT_QR_PATH,
-} from "@/lib/frontmind-contact";
+import { FRONTMIND_WECHAT_QR_PATH } from "@/lib/frontmind-contact";
 
 import type {
   GeoServiceActivation,
@@ -157,55 +155,6 @@ function agentLoginUrl(value?: string) {
 
 function formatMoney(amountFen: number) {
   return `¥${(amountFen / 100).toLocaleString("zh-CN")}`;
-}
-
-function buildProvisioningSupportHref({
-  companyName,
-  reference,
-  message,
-}: {
-  companyName: string;
-  reference: string;
-  message?: string;
-}) {
-  const subject = `FrontMind 已付款服务开通支持｜${companyName.replace(/[\r\n]+/g, " ").trim() || "待确认企业"}`;
-  const body = [
-    "您好，FrontMind 团队：",
-    "",
-    "本订单已付款，但服务开通尚未完成，请协助处理。",
-    `企业：${companyName.replace(/[\r\n]+/g, " ").trim() || "待确认企业"}`,
-    `订单/开通编号：${reference.replace(/[\r\n]+/g, " ").trim() || "编号待确认"}`,
-    message
-      ? `后台提示：${message.replace(/[\r\n]+/g, " ").trim()}`
-      : "后台提示：未返回具体原因",
-    "",
-    "谢谢。",
-  ].join("\n");
-  return `mailto:${FRONTMIND_CONTACT_EMAILS[0]}?subject=${encodeURIComponent(subject)}&body=${encodeURIComponent(body)}`;
-}
-
-function buildContractStatusSupportHref({
-  activation,
-  companyName,
-  reference,
-}: {
-  activation: GeoServiceActivation;
-  companyName: string;
-  reference: string;
-}) {
-  const subject = `FrontMind 签约状态支持｜${companyName.replace(/[\r\n]+/g, " ").trim() || "待确认企业"}`;
-  const body = [
-    "您好，FrontMind 团队：",
-    "",
-    activation.paidAt
-      ? "本订单已付款，但签约状态尚未正确同步，请协助核对。"
-      : "本次签约申请未能继续，请协助核对并恢复流程。",
-    `企业：${companyName.replace(/[\r\n]+/g, " ").trim() || "待确认企业"}`,
-    `申请/订单编号：${reference.replace(/[\r\n]+/g, " ").trim() || "编号待确认"}`,
-    "",
-    "谢谢。",
-  ].join("\n");
-  return `mailto:${FRONTMIND_CONTACT_EMAILS[0]}?subject=${encodeURIComponent(subject)}&body=${encodeURIComponent(body)}`;
 }
 
 function isChineseCreditCode(value: string) {
@@ -413,6 +362,7 @@ export function GeoServiceOnboarding({
   const [formError, setFormError] = useState("");
   const [profileSubmitting, setProfileSubmitting] = useState(false);
   const [contractDialogOpen, setContractDialogOpen] = useState(false);
+  const [supportDialogOpen, setSupportDialogOpen] = useState(false);
   const [contractCode, setContractCode] = useState("");
   const [contractCodeError, setContractCodeError] = useState("");
   const [pendingProfile, setPendingProfile] =
@@ -439,28 +389,6 @@ export function GeoServiceOnboarding({
   };
 
   const currentIndex = STEP_ORDER.indexOf(actualStep);
-  const provisioningSupportHref = buildProvisioningSupportHref({
-    companyName,
-    reference:
-      activation.orderId ||
-      activation.provisioningReference ||
-      activation.manualOrderReference ||
-      activation.contractWorkflowReference ||
-      "",
-    message:
-      activation.error ||
-      activation.provisioningMessage ||
-      activation.knowledgeImport?.message,
-  });
-  const contractStatusSupportHref = buildContractStatusSupportHref({
-    activation,
-    companyName,
-    reference:
-      activation.orderId ||
-      activation.manualOrderReference ||
-      activation.contractWorkflowReference ||
-      "",
-  });
   const activeWorkspaceUrl = agentLoginUrl(
     activation.workspaceUrl || activation.accountSetupUrl,
   );
@@ -687,10 +615,13 @@ export function GeoServiceOnboarding({
                     : "当前申请不能继续提交合同码。请联系支持并提供申请编号，我们会协助核对并恢复流程。"}
               </p>
               <div className="geo-onboarding-actions">
-                <a href={contractStatusSupportHref}>
-                  <Mail size={15} />
+                <button
+                  type="button"
+                  onClick={() => setSupportDialogOpen(true)}
+                >
+                  <QrCode size={15} />
                   联系支持处理
-                </a>
+                </button>
               </div>
             </div>
           </div>
@@ -1273,10 +1204,13 @@ export function GeoServiceOnboarding({
               )}
               <div className="geo-onboarding-actions">
                 {effectiveStatus === "failed" && !failedRetryAvailable ? (
-                  <a href={provisioningSupportHref}>
-                    <Mail size={15} />
+                  <button
+                    type="button"
+                    onClick={() => setSupportDialogOpen(true)}
+                  >
+                    <QrCode size={15} />
                     联系技术支持
-                  </a>
+                  </button>
                 ) : (
                   <button
                     type="button"
@@ -1398,6 +1332,39 @@ export function GeoServiceOnboarding({
               </button>
             </DialogFooter>
           </form>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog open={supportDialogOpen} onOpenChange={setSupportDialogOpen}>
+        <DialogContent
+          className="geo-contract-code-dialog"
+          overlayClassName="geo-dialog-overlay"
+        >
+          <DialogHeader>
+            <DialogTitle>联系 FrontMind 管理员</DialogTitle>
+            <DialogDescription>
+              请使用企业微信扫码添加管理员，并备注企业名称，我们会协助核对当前签约或开通状态。
+            </DialogDescription>
+          </DialogHeader>
+
+          <a
+            className="geo-contract-code-qr"
+            href={FRONTMIND_WECHAT_QR_PATH}
+            target="_blank"
+            rel="noopener noreferrer"
+            aria-label="打开 FrontMind 管理员企业微信二维码"
+          >
+            <img
+              src={FRONTMIND_WECHAT_QR_PATH}
+              alt="FrontMind 管理员企业微信二维码"
+            />
+          </a>
+
+          <DialogFooter className="geo-contract-code-actions">
+            <button type="button" onClick={() => setSupportDialogOpen(false)}>
+              我知道了
+            </button>
+          </DialogFooter>
         </DialogContent>
       </Dialog>
     </section>

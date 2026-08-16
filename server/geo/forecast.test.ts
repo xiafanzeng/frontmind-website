@@ -6,11 +6,13 @@ import {
 } from "./assessment";
 import {
   buildGeoOptimizationOutcomeForecastTemplate,
+  buildForecastDisplayOnlyProjection,
   FORECAST_SKILL_ARCHIVE_FILENAME,
   FORECAST_OUTPUT_RESULT_FILENAME,
   FORECAST_OUTPUT_TEMPLATE_FILENAME,
   ForecastTaskOutputValidationError,
   ForecastRawTaskOutputSchema,
+  isCompleteForecast,
   buildGeoOptimizationOutcomeForecasterSkillArchive,
   buildOptimizationOutcomeForecastPrompt,
   buildOptimizationOutcomeForecastTaskInput,
@@ -441,6 +443,63 @@ describe("GEO optimization forecast schema and parser", () => {
     expect(parsed.roadmap.every((phase) => phase.actions.length <= 3)).toBe(
       true,
     );
+  });
+
+  it("keeps safe narratives and roadmap fragments as a display-only partial", () => {
+    const raw = structuredClone(rawV2Forecast()) as Record<string, unknown>;
+    delete raw.dimensions;
+    (raw.roadmap as unknown[]).push({ phase: 5, title: "无效阶段" });
+
+    expect(isCompleteForecast(raw)).toBe(false);
+    const projection = buildForecastDisplayOnlyProjection({
+      localTaskId: "forecast-1",
+      operationId: "operation:forecast-1",
+      status: "succeeded",
+      safeEvents: [],
+      result: { structuredResult: raw, artifacts: [] },
+    });
+
+    expect(projection).toMatchObject({
+      completeness: "partial",
+      horizonWeeks: 4,
+      executiveSummary: expect.stringContaining("基础认知"),
+    });
+    expect(projection?.roadmap.map((phase) => phase.phase)).toEqual([
+      1, 2, 3, 4,
+    ]);
+    expect(Object.keys(projection?.dimensionNarratives ?? {})).toHaveLength(5);
+  });
+
+  it("rejects display-only forecast content when guardrails or scenario scope differ", () => {
+    const invalidGuardrails = structuredClone(rawV2Forecast()) as Record<
+      string,
+      unknown
+    >;
+    delete invalidGuardrails.dimensions;
+    invalidGuardrails.claimGuardrails = {
+      isGuarantee: true,
+      planningAssumptionOnly: true,
+      requiresSameScopeRemeasurement: true,
+    };
+    expect(
+      buildForecastDisplayOnlyProjection({
+        result: { structuredResult: invalidGuardrails, artifacts: [] },
+      }),
+    ).toBeUndefined();
+
+    const incompleteScenario = structuredClone(rawV2Forecast()) as Record<
+      string,
+      unknown
+    >;
+    delete incompleteScenario.dimensions;
+    (incompleteScenario.scenario as { actionIds: string[] }).actionIds = [
+      "GEO_A3_qa_assets",
+    ];
+    expect(
+      buildForecastDisplayOnlyProjection({
+        result: { structuredResult: incompleteScenario, artifacts: [] },
+      }),
+    ).toBeUndefined();
   });
 
   it("keeps business-facing Schema wording out of structural validation", () => {

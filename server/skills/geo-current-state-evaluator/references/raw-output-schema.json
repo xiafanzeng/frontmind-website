@@ -254,6 +254,7 @@
         "measurementStatus",
         "confidence",
         "calculationBasis",
+        "evidenceRefs",
         "limitations"
       ],
       "properties": {
@@ -383,8 +384,11 @@
         "factAccuracy",
         "propositionHitRate",
         "sourceCount",
+        "citationCount",
+        "referenceCount",
         "sentiment",
-        "verdict"
+        "verdict",
+        "evidenceRefs"
       ],
       "properties": {
         "platform": { "type": "string", "minLength": 1, "maxLength": 80 },
@@ -423,6 +427,8 @@
           "minimum": 0,
           "maximum": 10000
         },
+        "citationCount": { "type": "null" },
+        "referenceCount": { "type": "null" },
         "sentiment": {
           "enum": ["positive", "neutral", "negative", "mixed", "unknown"]
         },
@@ -447,6 +453,7 @@
         "answerExcerpt",
         "kbClaimId",
         "kbClaimText",
+        "kbEvidenceRefs",
         "explanation",
         "recommendedAction",
         "confidence"
@@ -578,7 +585,13 @@
     "priorityAction": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["priority", "dimension", "action", "expectedImpact"],
+      "required": [
+        "priority",
+        "dimension",
+        "action",
+        "expectedImpact",
+        "evidenceRefs"
+      ],
       "properties": {
         "priority": { "type": "integer", "minimum": 1, "maximum": 20 },
         "dimension": {

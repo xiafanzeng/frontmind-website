@@ -69,6 +69,7 @@ type ValidatedExecutionResults = {
   knowledgeBaseSummary?: string;
   knowledgeBaseArchiveName?: string;
   questionCount?: number;
+  questionResultInvalid?: boolean;
   assessmentSummary?: string;
   assessmentReady?: boolean;
   assessmentFailureCode?: string;
@@ -127,6 +128,7 @@ export function buildGeoExecutionLog(
           Number(input.validated?.questionCount) > 0
             ? `已完成 ${input.validated?.questionCount} 道 GEO 优化问题的生成与结构校验。`
             : undefined,
+        resultInvalid: input.validated?.questionResultInvalid === true,
         fallbackStartedAt: input.submittedAt?.question,
       }),
     );
@@ -196,9 +198,13 @@ export function buildGeoExecutionLog(
     });
   }
 
-  // The router creates these units strictly in pipeline order, so the last
-  // created unit is authoritative even if an older snapshot is ambiguous.
-  const currentEntry = entries.at(-1);
+  // Only a genuinely nonterminal unit is current. Completed and failed units
+  // remain selectable history, but must never keep the customer clock live.
+  const currentEntry = [...entries]
+    .reverse()
+    .find((entry) =>
+      ["queued", "running", "waiting", "unknown"].includes(entry.status),
+    );
 
   const fetchedAt = (input.now ?? new Date()).toISOString();
   return {
@@ -221,6 +227,7 @@ type TaskEntryInput = {
     | "optimization-forecast";
   resultSummary?: string;
   validationFailureCode?: string;
+  resultInvalid?: boolean;
   artifactName?: string;
   fallbackStartedAt?: string;
   includeCrawlProgress?: boolean;
@@ -233,12 +240,16 @@ function taskEntry(input: TaskEntryInput): GeoExecutionLogEntry {
     upstreamStatus === "completed"
       ? safeValidationFailureCode(input.validationFailureCode)
       : undefined;
-  const status = validationFailureCode ? "failed" : upstreamStatus;
+  const resultInvalid =
+    upstreamStatus === "completed" && input.resultInvalid === true;
+  const status =
+    validationFailureCode || resultInvalid ? "failed" : upstreamStatus;
   const safeEventTimes = input.task.safeEvents
     .map((event) => timestampValue(event.createdAt, event.timestamp))
     .filter((value): value is string => Boolean(value));
   const startedAt =
-    safeEventTimes.length > 0 ? safeEventTimes[0] : input.fallbackStartedAt;
+    timestampValue(input.task.providerStartedAt) ??
+    (safeEventTimes.length > 0 ? safeEventTimes[0] : input.fallbackStartedAt);
   const crawlProgress = input.includeCrawlProgress
     ? parseTrustedGeoCrawlProgress(input.task)
     : undefined;
@@ -248,7 +259,7 @@ function taskEntry(input: TaskEntryInput): GeoExecutionLogEntry {
   ]);
   const completedAt =
     upstreamStatus === "completed" || upstreamStatus === "failed"
-      ? updatedAt
+      ? (timestampValue(input.task.terminalAt) ?? updatedAt)
       : undefined;
   const terminalAt =
     status === "completed" || status === "failed"
@@ -269,7 +280,9 @@ function taskEntry(input: TaskEntryInput): GeoExecutionLogEntry {
           ? limitText(taskView.error)
           : validationFailureCode
             ? `${input.title}上游任务已完成。`
-            : taskStatusMessage(input.title, upstreamStatus),
+            : resultInvalid
+              ? `${input.title}上游任务已完成。`
+              : taskStatusMessage(input.title, upstreamStatus),
       ...(eventTime ? { createdAt: eventTime } : {}),
     },
   ];
@@ -287,6 +300,14 @@ function taskEntry(input: TaskEntryInput): GeoExecutionLogEntry {
       id: `${input.id}-validation-failed`,
       kind: "error",
       message: `服务端结果校验未通过（支持码：${validationFailureCode}）。`,
+      ...(terminalAt ? { createdAt: terminalAt } : {}),
+    });
+  }
+  if (resultInvalid) {
+    events.push({
+      id: `${input.id}-result-invalid`,
+      kind: "error",
+      message: `${input.title}结果未通过完整性校验。`,
       ...(terminalAt ? { createdAt: terminalAt } : {}),
     });
   }
