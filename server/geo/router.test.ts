@@ -5304,6 +5304,8 @@ describe("GEO API", () => {
   });
 
   it("binds free overseas monitoring to ChatGPT and the translated English prompt", async () => {
+    broker.monitorQuestionTranslationQuestionEnglish =
+      "Which business problems does Acme 服务模块 1 primarily solve?";
     const ready = await createReadyProject();
     const sourceQuestion = "Acme 的服务模块 1 主要解决哪些业务问题？";
     const started = await jsonRequest(
@@ -5338,8 +5340,7 @@ describe("GEO API", () => {
     expect(translationPrompt).toContain(sourceQuestion);
     expect(broker.taskAttachments.at(-1)).toEqual([]);
     expect(broker.monitorRuns.get("monitor-1")).toMatchObject({
-      question:
-        "Which business problems does Acme Service Module 1 primarily solve?",
+      question: "Which business problems does Acme 服务模块 1 primarily solve?",
       platforms: ["chatgpt"],
     });
     expect(paymentCalls).toHaveLength(0);
@@ -5437,7 +5438,11 @@ describe("GEO API", () => {
 
     expect(started.response.status).toBe(502);
     expect(started.body).toMatchObject({
-      error: { code: "QUESTION_TRANSLATION_FAILED" },
+      error: {
+        code: "QUESTION_TRANSLATION_FAILED",
+        message:
+          "海外监控问题准备未完成，尚未向 ChatGPT 监控接口提交；订单与项目进度已保留，可重试或重置后重新发起。",
+      },
     });
     expect(broker.monitorQuestionTranslationTaskCount).toBe(1);
     expect(broker.monitorCreates).toBe(0);

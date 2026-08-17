@@ -7,25 +7,13 @@ import {
   type TrustedTaskJsonCandidateInspection,
 } from "./trusted-task-json-output";
 import { normalizePresalesStructuredResult } from "./structured-result-normalization";
-
-const EnglishMonitorQuestionSchema = z
-  .string()
-  .trim()
-  .min(4)
-  .max(240)
-  .refine(
-    (value) =>
-      /^[\x20-\x7e]+$/.test(value) &&
-      /[A-Za-z]/.test(value) &&
-      value.endsWith("?"),
-    "questionEnglish must be an English question",
-  );
+import { GeoQuestionEnglishSchema } from "./schemas";
 
 const MonitorQuestionTranslationSchema = z
   .object({
     schemaVersion: z.literal(1),
     sourceQuestionSha256: z.string().regex(/^[a-f0-9]{64}$/),
-    questionEnglish: EnglishMonitorQuestionSchema,
+    questionEnglish: GeoQuestionEnglishSchema,
   })
   .strict();
 

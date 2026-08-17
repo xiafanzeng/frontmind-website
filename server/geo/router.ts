@@ -9948,7 +9948,7 @@ async function resolveMonitorQuestionForEdition(
     );
   const failed = () =>
     new GeoHttpError(
-      "付款已确认，监控启动暂未完成；订单与处理进度已保留",
+      "海外监控问题准备未完成，尚未向 ChatGPT 监控接口提交；订单与项目进度已保留，可重试或重置后重新发起。",
       502,
       "QUESTION_TRANSLATION_FAILED",
     );

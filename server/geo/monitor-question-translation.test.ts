@@ -48,6 +48,28 @@ describe("overseas monitor question translation", () => {
         }),
         sourceQuestion,
       ),
+    ).toBe("SiliconCloud 平台 stable?");
+    expect(
+      parseGeoMonitorQuestionTranslationTaskOutput(
+        assistantTask({
+          ...output,
+          questionEnglish:
+            "Is the after-sales service for 孚锐利's overseas projects good?",
+        }),
+        sourceQuestion,
+      ),
+    ).toBe("Is the after-sales service for 孚锐利's overseas projects good?");
+    expect(
+      parseGeoMonitorQuestionTranslationTaskOutput(
+        assistantTask({ ...output, questionEnglish: "孚锐利可靠吗?" }),
+        sourceQuestion,
+      ),
+    ).toBeUndefined();
+    expect(
+      parseGeoMonitorQuestionTranslationTaskOutput(
+        assistantTask({ ...output, questionEnglish: "Is 孚锐利 reliable" }),
+        sourceQuestion,
+      ),
     ).toBeUndefined();
   });
 
@@ -106,7 +128,11 @@ describe("overseas monitor question translation", () => {
     ).toBe("Is SiliconFlow reliable?");
     expect(
       parseGeoMonitorQuestionTranslationTaskOutput(
-        { output: [{ type: "output_text", text: JSON.stringify(productionPayload) }] },
+        {
+          output: [
+            { type: "output_text", text: JSON.stringify(productionPayload) },
+          ],
+        },
         productionSourceQuestion,
       ),
     ).toBeUndefined();
@@ -234,9 +260,7 @@ describe("overseas monitor question translation", () => {
           async downloadFile() {
             return new Response("{}", {
               headers: {
-                "content-length": String(
-                  TRUSTED_TASK_JSON_MAX_TOTAL_BYTES + 1,
-                ),
+                "content-length": String(TRUSTED_TASK_JSON_MAX_TOTAL_BYTES + 1),
               },
             });
           },

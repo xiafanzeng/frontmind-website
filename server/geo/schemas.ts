@@ -25,6 +25,18 @@ export const PRODUCT_QA_INTENTS = [
 
 export const ProductQaIntentSchema = z.enum(PRODUCT_QA_INTENTS);
 
+export const GeoQuestionEnglishSchema = z
+  .string()
+  .trim()
+  .min(4)
+  .max(240)
+  .refine((value) => /[A-Za-z]/.test(value), {
+    message: "questionEnglish must contain English text",
+  })
+  .refine((value) => value.endsWith("?"), {
+    message: "questionEnglish must end with a question mark",
+  });
+
 export const GeoQuestionSchema = z
   .object({
     id: z.string().min(4).max(80),
@@ -39,18 +51,7 @@ export const GeoQuestionSchema = z
       .refine((value) => value.endsWith("？"), {
         message: "question must end with a Chinese question mark",
       }),
-    questionEnglish: z
-      .string()
-      .trim()
-      .min(4)
-      .max(240)
-      .refine((value) => /[A-Za-z]/.test(value), {
-        message: "questionEnglish must contain English text",
-      })
-      .refine((value) => value.endsWith("?"), {
-        message: "questionEnglish must end with a question mark",
-      })
-      .optional(),
+    questionEnglish: GeoQuestionEnglishSchema.optional(),
     rationale: z.string().min(8).max(240),
     enterpriseAnchor: z.string().trim().min(2).max(120).optional(),
     offeringAnchor: z.string().trim().min(2).max(120).optional(),
