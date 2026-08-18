@@ -376,6 +376,7 @@ type ProjectTokenValue = {
       | "website-kb-finalizer-v2"
       | "website-kb-finalizer-v3"
       | "website-kb-finalizer-v4"
+      | "website-kb-finalizer-v5"
       | typeof WEBSITE_KB_FINALIZER_VERSION;
     candidate: {
       taskId: string;
@@ -834,6 +835,7 @@ export function createGeoRouter(options: GeoRouterOptions = {}): Router {
         "website-kb-finalizer-v2",
         "website-kb-finalizer-v3",
         "website-kb-finalizer-v4",
+        "website-kb-finalizer-v5",
         WEBSITE_KB_FINALIZER_VERSION,
       ].includes(existingArtifact.finalizerVersion)
     ) {

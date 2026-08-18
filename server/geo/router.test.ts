@@ -3404,7 +3404,7 @@ describe("GEO API", () => {
     expect(completedValue).toMatchObject({
       knowledgeBaseSkillVersion: 7,
       knowledgeBaseArtifact: {
-        finalizerVersion: "website-kb-finalizer-v5",
+        finalizerVersion: "website-kb-finalizer-v6",
         candidate: {
           quality: {
             state: "partial",
@@ -3838,7 +3838,7 @@ describe("GEO API", () => {
       const value = codec.open<any>(completed.projectToken, "project").value;
       expect(value).toMatchObject({
         knowledgeBaseArtifact: {
-          finalizerVersion: "website-kb-finalizer-v5",
+          finalizerVersion: "website-kb-finalizer-v6",
           candidate: {
             taskId: "kb-1",
             artifactId: "candidate-v2",
@@ -3886,10 +3886,12 @@ describe("GEO API", () => {
       expect(finalBytes).not.toEqual(v2Broker.archive);
 
       const uploadCount = v2Broker.uploads.size;
+      const uploadAttemptCount = v2Broker.uploadAttempts.length;
       for (const legacyFinalizerVersion of [
         "website-kb-finalizer-v2",
         "website-kb-finalizer-v3",
         "website-kb-finalizer-v4",
+        "website-kb-finalizer-v5",
       ] as const) {
         const legacyToken = codec.seal(
           "project",
@@ -3917,6 +3919,7 @@ describe("GEO API", () => {
           finalizerVersion: legacyFinalizerVersion,
         });
         expect(v2Broker.uploads.size).toBe(uploadCount);
+        expect(v2Broker.uploadAttempts).toHaveLength(uploadAttemptCount);
       }
     } finally {
       await new Promise<void>((resolve, reject) =>
@@ -4282,7 +4285,7 @@ describe("GEO API", () => {
         error: "企业知识库最终整理未通过校验，请联系技术支持。",
         knowledgeBaseFinalization: {
           finalizationState: "failed_internal",
-          finalizerVersion: "website-kb-finalizer-v5",
+          finalizerVersion: "website-kb-finalizer-v6",
           candidateSha256: expect.stringMatching(/^[a-f0-9]{64}$/),
           errorCode: "KB_FINALIZER_CONTRACT_VIOLATION",
         },

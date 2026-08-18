@@ -1040,7 +1040,7 @@ describe("website knowledge-base finalizer", () => {
       evaluatedAt: "2026-07-30T01:00:00.000Z",
     });
 
-    expect(WEBSITE_KB_FINALIZER_VERSION).toBe("website-kb-finalizer-v5");
+    expect(WEBSITE_KB_FINALIZER_VERSION).toBe("website-kb-finalizer-v6");
     expect(first.sha256).toBe(second.sha256);
     expect(first.packageManifestSha256).toBe(
       first.manifest.packageManifestSha256,
@@ -1084,6 +1084,48 @@ describe("website knowledge-base finalizer", () => {
       candidateContractVersion: 2,
       profile: "website-lead-v1",
     });
+    const expectedInventories = [
+      "09_media_assets/asset_inventory.md",
+      "10_reference_assets/reference_asset_inventory.md",
+    ];
+    for (const inventoryPath of expectedInventories) {
+      expect(
+        physicalFiles.filter(
+          (entry) => entry.name === finalArchivePath(inventoryPath),
+        ),
+      ).toHaveLength(1);
+      expect(
+        manifest.documents.filter(
+          (document: any) => document.path === inventoryPath,
+        ),
+      ).toEqual([
+        expect.objectContaining({
+          kind: "index",
+          customerVisible: false,
+        }),
+      ]);
+      expect(manifest.allPaths).toContain(inventoryPath);
+    }
+    expect(manifest.counts.totalFiles).toBe(physicalFiles.length);
+    expect(
+      manifest.documents
+        .filter((document: any) => document.customerVisible)
+        .some((document: any) => expectedInventories.includes(document.path)),
+    ).toBe(false);
+    expect(
+      await zip
+        .file(finalArchivePath("09_media_assets/asset_inventory.md"))!
+        .async("string"),
+    ).toContain("本归档未包含可用于展示的第一方图片");
+    expect(
+      await zip
+        .file(
+          finalArchivePath(
+            "10_reference_assets/reference_asset_inventory.md",
+          ),
+        )!
+        .async("string"),
+    ).toContain("本归档未打包第三方参考素材");
     expect(
       manifest.documents.every(
         (document: { path: string }) =>
@@ -1193,7 +1235,7 @@ describe("website knowledge-base finalizer", () => {
     expect(productOverview).not.toContain("产品与服务主题1");
   });
 
-  it("publishes readable schema-v1 Markdown as a v5 partial without rewriting an old artifact", async () => {
+  it("publishes readable schema-v1 Markdown as a v6 partial without rewriting an old artifact", async () => {
     const legacyCandidate = await parseKnowledgeBaseCandidate(
       await candidateZip(),
     );
@@ -1562,5 +1604,11 @@ describe("website knowledge-base finalizer", () => {
       displayRole: "badge",
     });
     expect(zip.file(finalArchivePath(manifest.assets[0].path))).not.toBeNull();
+    const assetInventory = await zip
+      .file(finalArchivePath("09_media_assets/asset_inventory.md"))!
+      .async("string");
+    expect(assetInventory).toContain(manifest.assets[0].id);
+    expect(assetInventory).toContain(manifest.assets[0].path);
+    expect(assetInventory).toContain("轻量示例企业 Logo");
   });
 });

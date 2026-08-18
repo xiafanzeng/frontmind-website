@@ -21,7 +21,7 @@ import {
   type ParsedCandidate,
 } from "./knowledge-base-candidate";
 
-export const WEBSITE_KB_FINALIZER_VERSION = "website-kb-finalizer-v5";
+export const WEBSITE_KB_FINALIZER_VERSION = "website-kb-finalizer-v6";
 export { WEBSITE_KB_ARCHIVE_ROOT } from "./archive";
 const ZIP_DATE = new Date("1980-01-01T00:00:00.000Z");
 
@@ -1127,6 +1127,91 @@ function sourceIndexMarkdown(companyName: string, sources: SourceRecord[]) {
   ].join("\n");
 }
 
+function markdownTableCell(value: string) {
+  return value.replace(/[\r\n]+/g, " ").replace(/\|/g, "\\|").trim();
+}
+
+function firstPartyAssetInventoryMarkdown(
+  companyName: string,
+  assets: PackageAsset[],
+) {
+  const rows = [...assets]
+    .sort((left, right) => left.path.localeCompare(right.path))
+    .map((asset) =>
+      [
+        asset.id,
+        asset.path,
+        asset.mimeType,
+        `${asset.width}×${asset.height}`,
+        String(asset.bytes),
+        asset.displayRole,
+        asset.documentIds.join("、"),
+        asset.caption,
+      ]
+        .map(markdownTableCell)
+        .join(" | "),
+    )
+    .map((row) => `| ${row} |`);
+  return [
+    `# ${companyName} 第一方图片清单`,
+    "",
+    `归档内第一方图片：${assets.length} 张。`,
+    ...(rows.length
+      ? [
+          "",
+          "| 资产 ID | 归档路径 | MIME | 尺寸 | 字节 | 展示角色 | 关联文档 | 说明 |",
+          "| --- | --- | --- | --- | ---: | --- | --- | --- |",
+          ...rows,
+        ]
+      : ["", "本归档未包含可用于展示的第一方图片。"]),
+  ].join("\n");
+}
+
+function referenceAssetInventoryMarkdown(companyName: string) {
+  return [
+    `# ${companyName} 第三方参考素材清单`,
+    "",
+    "本归档未打包第三方参考素材；已打包图片均登记在第一方图片清单中。",
+  ].join("\n");
+}
+
+function registerAssetInventories(
+  companyName: string,
+  assets: PackageAsset[],
+  documents: PackageDocument[],
+  markdownByPath: Map<string, string>,
+) {
+  const inventories: Array<{
+    id: string;
+    path: string;
+    title: string;
+    markdown: string;
+  }> = [
+    {
+      id: "doc-asset-inventory",
+      path: "09_media_assets/asset_inventory.md",
+      title: "第一方图片清单",
+      markdown: firstPartyAssetInventoryMarkdown(companyName, assets),
+    },
+    {
+      id: "doc-reference-asset-inventory",
+      path: "10_reference_assets/reference_asset_inventory.md",
+      title: "第三方参考素材清单",
+      markdown: referenceAssetInventoryMarkdown(companyName),
+    },
+  ];
+  for (const inventory of inventories) {
+    documents.push({
+      id: inventory.id,
+      path: inventory.path,
+      kind: "index",
+      title: inventory.title,
+      customerVisible: false,
+    });
+    markdownByPath.set(inventory.path, inventory.markdown);
+  }
+}
+
 function checkedSourceCountForDisplay(
   display: (typeof DISPLAY_BRANCHES)[number],
   documents: PackageDocument[],
@@ -1162,7 +1247,7 @@ export async function finalizeKnowledgeBaseCandidate(input: {
   companyName: string;
   evaluatedAt: string;
 }): Promise<FinalizedKnowledgeBase> {
-  // v5 treats 02_run.json as bounded metadata. The readable Markdown is the
+  // v6 treats 02_run.json as bounded metadata. The readable Markdown is the
   // primary candidate payload, so an absent or partially invalid run ledger
   // produces a partial package instead of discarding useful content.
   validateWebsiteV2Candidate(input.candidate);
@@ -1575,6 +1660,12 @@ export async function finalizeKnowledgeBaseCandidate(input: {
     markdownByPath,
     sourceRecords,
     evidenceBySourceId,
+  );
+  registerAssetInventories(
+    input.companyName,
+    assetResult.finalized.map((entry) => entry.asset),
+    documents,
+    markdownByPath,
   );
   const assessment = assessKnowledgeBaseCandidate(input.candidate);
   const traceableRunAssets = (input.candidate.run?.assets || []).filter(
