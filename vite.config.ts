@@ -291,6 +291,16 @@ export default defineConfig(({ command, mode }) => {
     },
     resolve: {
       alias: {
+        "@/features/geo/preview-loader": path.resolve(
+          import.meta.dirname,
+          "client",
+          "src",
+          "features",
+          "geo",
+          isProductionBuild
+            ? "preview-loader.production.ts"
+            : "preview-loader.ts",
+        ),
         "@": path.resolve(import.meta.dirname, "client", "src"),
         "@shared": path.resolve(import.meta.dirname, "shared"),
         "@assets": path.resolve(import.meta.dirname, "attached_assets"),

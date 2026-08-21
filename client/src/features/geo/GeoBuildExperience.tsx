@@ -126,6 +126,7 @@ import {
   isGeoStylePreviewEnabled,
   isGeoStylePreviewProject,
 } from "./preview-mode";
+import { loadGeoStylePreview } from "@/features/geo/preview-loader";
 import { MonitoringMarkdown } from "./MonitoringMarkdown";
 import {
   buildMonitoringInsights,
@@ -1969,7 +1970,7 @@ function GeoBuildExperienceZh() {
   useEffect(() => {
     if (!import.meta.env.DEV || !stylePreviewEnabled) return;
     let cancelled = false;
-    void import("./preview")
+    void loadGeoStylePreview()
       .then(({ createGeoStylePreviewProject }) => {
         if (cancelled) return;
         const previewMode = geoStylePreviewMode() ?? "assessment";
@@ -7183,7 +7184,7 @@ export function MonitoringSetup({
     setRegionsError("");
     setRegionsLoading(true);
     if (isGeoStylePreviewProject(project)) {
-      void import("./preview")
+      void loadGeoStylePreview()
         .then(({ geoStylePreviewRegions }) => {
           if (cancelled) return;
           setRegions(geoStylePreviewRegions(monitoringEdition).regions);
