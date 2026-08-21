@@ -80,4 +80,41 @@ describe("GEO assessment and onboarding responsive contracts", () => {
       /@media \(prefers-reduced-motion: reduce\)[\s\S]*?\.is-spinning,[\s\S]*?animation:\s*none !important/s,
     );
   });
+
+  it("stacks monitoring answers and releases reference scrolling at 839px", () => {
+    expect(stylesheet).toMatch(
+      /\.geo-answer-detail-grid\s*\{[^}]*grid-template-columns:\s*minmax\(0,\s*1\.55fr\) minmax\(320px,\s*0\.95fr\)/s,
+    );
+    expect(stylesheet).toMatch(
+      /@media \(max-width: 839px\)[\s\S]*?\.geo-answer-detail-grid\s*\{[^}]*grid-template-columns:\s*1fr/s,
+    );
+    expect(stylesheet).toMatch(
+      /@media \(max-width: 839px\)[\s\S]*?\.geo-answer-reference-panel > ol\s*\{[^}]*max-height:\s*none[^}]*overflow:\s*visible/s,
+    );
+    expect(stylesheet).toMatch(
+      /\.geo-monitor-region-content\s*\{[^}]*z-index:\s*120[^}]*max-height:/s,
+    );
+    expect(stylesheet).toMatch(
+      /\.geo-insight-analysis-grid\s*\{[^}]*grid-template-columns:\s*repeat\(2,/s,
+    );
+    expect(stylesheet).toMatch(
+      /@media \(max-width: 839px\)[\s\S]*?\.geo-insight-analysis-grid,[\s\S]*?grid-template-columns:\s*1fr/s,
+    );
+  });
+
+  it("stacks the screenshot dialog above the workbench", () => {
+    expect(stylesheet).toMatch(
+      /\.geo-monitor-screenshot-overlay\s*\{[^}]*z-index:\s*130\s*!important/s,
+    );
+    expect(stylesheet).toMatch(
+      /\.geo-monitor-screenshot-dialog\s*\{[^}]*z-index:\s*131\s*!important/s,
+    );
+  });
+
+  it("does not keep styles for the removed single-answer brand panel", () => {
+    expect(stylesheet).not.toMatch(/\.geo-answer-auxiliary\b/);
+    expect(stylesheet).not.toMatch(/\.geo-answer-brand-analysis\b/);
+    expect(stylesheet).not.toMatch(/\.geo-answer-brand-metrics\b/);
+    expect(stylesheet).not.toMatch(/\.geo-answer-evaluations\b/);
+  });
 });

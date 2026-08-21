@@ -124,6 +124,130 @@ describe("monitor result adapter", () => {
     ).toBe(question);
   });
 
+  it("accepts the full Dashboard monitor question boundary", () => {
+    const question = `${"问".repeat(1999)}？`;
+    const payload = completedRun();
+    payload.question = question;
+
+    expect(normalizeMonitorRun(payload, { question }).question).toBe(question);
+  });
+
+  it("maps the Dashboard v1.19 raw shape into the Website monitoring model", () => {
+    const payload = cleanCompletedRun() as ReturnType<
+      typeof cleanCompletedRun
+    > & {
+      screenshot?: 0 | 1;
+      region?: { scope: "domestic"; code: string; label: string };
+    };
+    payload.screenshot = 1;
+    payload.region = {
+      scope: "domestic",
+      code: "110000",
+      label: "北京市",
+    };
+    payload.records[0] = {
+      ...payload.records[0],
+      citationList: [
+        {
+          index: 0,
+          title: "正文引用",
+          url: "https://source.example/cited",
+          site: "示例财经",
+          publishTime: "2026-08-20",
+        },
+        {
+          index: 1,
+          title: "相同 URL 的另一个引用位",
+          url: "https://source.example/cited",
+        },
+      ],
+      referenceList: [
+        {
+          index: 0,
+          title: "完整参考",
+          url: "https://source.example/reference",
+          source: "权威媒体",
+          summary: "完整来源摘要",
+          publishTime: "2026-08-19",
+        },
+      ],
+      sourceBreakdownAvailable: false,
+      searchKeywords: ["医药流通企业", "医药流通企业"],
+      recommendedQuestions: ["医院配送能力如何评估？"],
+      mentionPosition: 2,
+      mentionContext: "华润医药拥有全国性网络。",
+      sentiment: "positive",
+      categoryRanking: { categoryName: "医药流通", rank: 2 },
+      keywordEvaluations: [
+        {
+          keyword: "渠道覆盖",
+          nature: "positive",
+          context: "全国网络覆盖较广。",
+        },
+      ],
+      screenshot: {
+        available: true,
+        url: "https://dashboard.internal/private-screenshot",
+      },
+    } as (typeof payload.records)[number];
+
+    const run = normalizeMonitorRun(payload);
+    expect(run).toMatchObject({
+      region: { edition: "domestic", code: "110000", label: "北京市" },
+      screenshotEnabled: true,
+    });
+    expect(run.records?.[0]).toMatchObject({
+      citations: [
+        expect.objectContaining({ index: 0, site: "示例财经" }),
+        expect.objectContaining({ index: 1 }),
+      ],
+      references: [
+        expect.objectContaining({
+          index: 0,
+          site: "权威媒体",
+          summary: "完整来源摘要",
+          publishTime: "2026-08-19",
+        }),
+      ],
+      sourceBreakdownAvailable: true,
+      searchKeywords: ["医药流通企业"],
+      recommendedQuestions: ["医院配送能力如何评估？"],
+      mentionPosition: 2,
+      sentiment: "positive",
+      categoryRanking: { categoryName: "医药流通", rank: 2 },
+      screenshotAvailable: true,
+    });
+    expect(JSON.stringify(toPublicMonitorView(run))).not.toContain(
+      "private-screenshot",
+    );
+  });
+
+  it("preserves split-source field presence and explicit null brand metrics", () => {
+    const payload = cleanCompletedRun();
+    payload.records[0] = {
+      ...payload.records[0],
+      citationList: [],
+      referenceList: [],
+      mentionPosition: null,
+      sentiment: null,
+      categoryRanking: null,
+    } as (typeof payload.records)[number];
+
+    const record = normalizeMonitorRun(payload).records?.[0];
+    expect(record).toMatchObject({
+      citations: [],
+      references: [],
+      sourceBreakdownAvailable: true,
+      mentionPosition: null,
+      sentiment: null,
+      categoryRanking: null,
+    });
+    const legacy = normalizeMonitorRun(cleanCompletedRun()).records?.[0];
+    expect(legacy).not.toHaveProperty("citations");
+    expect(legacy).not.toHaveProperty("references");
+    expect(legacy).not.toHaveProperty("sourceBreakdownAvailable");
+  });
+
   it("treats an explicit canonical source list as authoritative even when empty", () => {
     const payload = completedRun();
     payload.records[0] = {

@@ -1,4 +1,4 @@
-import type { ReactNode } from "react";
+import type { ComponentProps, ReactNode } from "react";
 import ReactMarkdown, { type Components } from "react-markdown";
 import remarkGfm from "remark-gfm";
 
@@ -49,7 +49,7 @@ export function safePublicMarkdownUrl(value?: string): string | undefined {
 }
 
 const SAFE_MARKDOWN_COMPONENTS: Components = {
-  a({ href, children, title }) {
+  a({ href, children, title, className }) {
     const safeHref = safePublicMarkdownUrl(href);
     if (!safeHref) return <span>{children}</span>;
     return (
@@ -58,6 +58,7 @@ const SAFE_MARKDOWN_COMPONENTS: Components = {
         target="_blank"
         rel="noopener noreferrer"
         title={title}
+        className={className === "geo-citation-marker" ? className : undefined}
       >
         {children}
       </a>
@@ -95,10 +96,14 @@ export function SafeMarkdown({
   markdown,
   className = "geo-safe-markdown",
   empty,
+  remarkPlugins,
 }: {
   markdown?: string;
   className?: string;
   empty?: ReactNode;
+  remarkPlugins?: NonNullable<
+    ComponentProps<typeof ReactMarkdown>["remarkPlugins"]
+  >;
 }) {
   const content = markdown?.trim();
   if (!content) {
@@ -108,7 +113,7 @@ export function SafeMarkdown({
   return (
     <div className={className}>
       <ReactMarkdown
-        remarkPlugins={[remarkGfm]}
+        remarkPlugins={[remarkGfm, ...(remarkPlugins ?? [])]}
         components={SAFE_MARKDOWN_COMPONENTS}
         skipHtml
         urlTransform={(url) => safePublicMarkdownUrl(url) ?? ""}

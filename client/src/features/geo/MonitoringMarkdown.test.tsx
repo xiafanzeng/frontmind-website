@@ -3,6 +3,87 @@ import { describe, expect, it } from "vitest";
 import { MonitoringMarkdown } from "./MonitoringMarkdown";
 
 describe("MonitoringMarkdown", () => {
+  it("links only canonical citation markers with one safe URL mapping", () => {
+    const html = renderToStaticMarkup(
+      <MonitoringMarkdown
+        markdown="首条结论〔来源 0〕，同一来源再次出现〔来源 0〕。"
+        citations={[
+          {
+            index: 0,
+            title: "来源零",
+            url: "https://www.frontmind.cn/research/citation-zero#section",
+          },
+          {
+            index: 0,
+            title: "来源零重复",
+            url: "https://www.frontmind.cn/research/citation-zero",
+          },
+        ]}
+      />,
+    );
+
+    expect(html.match(/class="geo-citation-marker"/g)).toHaveLength(2);
+    expect(html).toContain(
+      'href="https://www.frontmind.cn/research/citation-zero"',
+    );
+    expect(html).toContain('title="引用来源 0"');
+    expect(html).toContain(">[0]</a>");
+  });
+
+  it("keeps unknown, unsafe, missing, and conflicting citation markers literal", () => {
+    const html = renderToStaticMarkup(
+      <MonitoringMarkdown
+        markdown="未知〔来源 9〕；冲突〔来源 2〕；缺失〔来源 3〕；不安全〔来源 4〕。"
+        citations={[
+          {
+            index: 2,
+            title: "冲突一",
+            url: "https://www.frontmind.cn/research/one",
+          },
+          {
+            index: 2,
+            title: "冲突二",
+            url: "https://www.frontmind.cn/research/two",
+          },
+          { index: 3, title: "没有地址" },
+          { index: 4, title: "不安全", url: "http://127.0.0.1/private" },
+        ]}
+      />,
+    );
+
+    expect(html).not.toContain("geo-citation-marker");
+    expect(html).toContain("〔来源 9〕");
+    expect(html).toContain("〔来源 2〕");
+    expect(html).toContain("〔来源 3〕");
+    expect(html).toContain("〔来源 4〕");
+  });
+
+  it("does not rewrite ordinary footnotes, code, or text inside an existing link", () => {
+    const html = renderToStaticMarkup(
+      <MonitoringMarkdown
+        markdown={`普通脚注[1]。
+
+\`〔来源 1〕\`
+
+[链接内〔来源 1〕](https://www.frontmind.cn/research)
+
+正文〔来源 1〕`}
+        citations={[
+          {
+            index: 1,
+            title: "唯一来源",
+            url: "https://www.frontmind.cn/research/source-one",
+          },
+        ]}
+      />,
+    );
+
+    expect(html.match(/class="geo-citation-marker"/g)).toHaveLength(1);
+    expect(html).toContain("普通脚注[1]");
+    expect(html).toContain("<code>〔来源 1〕</code>");
+    expect(html).toContain("链接内〔来源 1〕");
+  });
+
   it("renders answer structure instead of exposing Markdown syntax", () => {
     const html = renderToStaticMarkup(
       <MonitoringMarkdown

@@ -10,6 +10,7 @@ import {
   deleteGeoProject,
   downloadGeoArchive,
   getGeoPaymentStatus,
+  getGeoMonitoringRegions,
   getGeoServiceProvisioningStatus,
   getGeoServicePaymentStatus,
   normalizeGeoProject,
@@ -1511,6 +1512,112 @@ describe("normalizeGeoProject", () => {
       },
       downstreamEligible: true,
     });
+  });
+
+  it("preserves v1.19 source separation and missing-versus-null brand fields", () => {
+    const project = normalizeGeoProject({
+      project: {
+        id: "monitor-v119-project",
+        monitoring: {
+          runId: "monitor-v119-run",
+          status: "completed",
+          platforms: ["deepseek"],
+          expectedRecords: 2,
+          completedRecords: 2,
+          failedRecords: 0,
+          region: {
+            edition: "domestic",
+            code: "110000",
+            label: "北京市",
+          },
+          screenshotEnabled: true,
+          records: [
+            {
+              recordId: "v119-full",
+              platform: "deepseek",
+              runIndex: 1,
+              status: "completed",
+              answerText: "正文〔来源 0〕",
+              sources: [],
+              citationList: [
+                {
+                  index: 0,
+                  title: "来源一",
+                  url: "https://www.frontmind.cn/source/one",
+                  site: "FrontMind",
+                  publishTime: "2026-08-21",
+                },
+                {
+                  index: 1,
+                  title: "同址但不同索引",
+                  url: "https://www.frontmind.cn/source/one",
+                },
+              ],
+              referenceList: [
+                {
+                  index: 0,
+                  title: "来源一",
+                  url: "https://www.frontmind.cn/source/one",
+                  summary: "参考摘要",
+                },
+              ],
+              searchKeywords: ["医药流通", "医药流通"],
+              recommendedQuestions: ["下一步如何核验？"],
+              mentionPosition: null,
+              sentiment: null,
+              categoryRanking: null,
+              keywordEvaluations: [],
+              screenshotAvailable: true,
+              screenshotUrl: "https://upstream.example.cn/private.png",
+              media: [],
+            },
+            {
+              recordId: "v119-legacy",
+              platform: "deepseek",
+              runIndex: 2,
+              status: "completed",
+              answerText: "旧结果正文",
+              sources: [
+                { title: "旧来源", url: "https://www.frontmind.cn/old" },
+              ],
+              media: [],
+            },
+          ],
+        },
+      },
+    });
+
+    const [full, legacy] = project.monitoring!.answers;
+    expect(project.monitoring).toMatchObject({
+      region: { edition: "domestic", code: "110000", label: "北京市" },
+      screenshotEnabled: true,
+    });
+    expect(full.sourceBreakdownAvailable).toBe(true);
+    expect(full.citations).toHaveLength(2);
+    expect(full.references).toEqual([
+      expect.objectContaining({
+        index: 0,
+        summary: "参考摘要",
+      }),
+    ]);
+    expect(full.searchKeywords).toEqual(["医药流通"]);
+    expect(full.mentionPosition).toBeNull();
+    expect(full.sentiment).toBeNull();
+    expect(full.categoryRanking).toBeNull();
+    expect(full.screenshotAvailable).toBe(true);
+    expect(full.screenshotUrl).toBeUndefined();
+    expect(legacy.sourceBreakdownAvailable).toBe(false);
+    expect(legacy.citations).toEqual([]);
+    expect(legacy.references).toEqual([]);
+    expect(
+      Object.prototype.hasOwnProperty.call(legacy, "mentionPosition"),
+    ).toBe(false);
+    expect(Object.prototype.hasOwnProperty.call(legacy, "sentiment")).toBe(
+      false,
+    );
+    expect(
+      Object.prototype.hasOwnProperty.call(legacy, "categoryRanking"),
+    ).toBe(false);
   });
 
   it("relocks a completed monitor payload when the client drops an empty answer", () => {
@@ -3611,6 +3718,35 @@ describe("monitoring and assessment API", () => {
     selectedQuestionId: "reputation-01",
     selectedPlatformIds: ["doubao", "kimi"],
   };
+
+  it("loads the edition-specific region catalog while treating codes as opaque", async () => {
+    const fetchMock = vi.fn<typeof fetch>().mockResolvedValueOnce(
+      new Response(
+        JSON.stringify({
+          catalog: {
+            edition: "overseas",
+            regions: [
+              { code: "edge:hk-01", label: "香港节点" },
+              { code: "edge:hk-01", label: "重复节点" },
+            ],
+          },
+        }),
+        { status: 200, headers: { "content-type": "application/json" } },
+      ),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    await expect(getGeoMonitoringRegions(project, "overseas")).resolves.toEqual(
+      {
+        edition: "overseas",
+        regions: [{ code: "edge:hk-01", label: "香港节点" }],
+      },
+    );
+    expect(fetchMock.mock.calls[0][0]).toBe(
+      "/api/geo/projects/signed-project-token/monitoring/regions?edition=overseas",
+    );
+    expect(fetchMock.mock.calls[0][1]).toMatchObject({ method: "GET" });
+  });
 
   it("accepts the compatibility receipt that retains all provider records", async () => {
     const fetchMock = vi.fn<typeof fetch>().mockResolvedValueOnce(
@@ -6209,6 +6345,57 @@ describe("monitoring and assessment API", () => {
       monitoringEdition: "domestic",
     });
     expect(updated.monitoring?.runId).toBe("run-1");
+  });
+
+  it("adds one selected region and the screenshot opt-in to the monitoring scope", async () => {
+    const fetchMock = vi.fn<typeof fetch>().mockResolvedValueOnce(
+      new Response(
+        JSON.stringify({
+          projectToken: "region-monitor-token",
+          project: {
+            id: "project-1",
+            monitoringRegion: {
+              edition: "domestic",
+              code: "110000",
+              label: "北京市",
+            },
+            monitoringScreenshotEnabled: true,
+            monitoring: {
+              runId: "run-region",
+              status: "submitted",
+              platforms: ["doubao"],
+            },
+          },
+        }),
+        { status: 201, headers: { "content-type": "application/json" } },
+      ),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    const updated = await startGeoMonitoring(project, {
+      clientRequestId: "25252525-2525-4252-8252-252525252525",
+      questionId: "reputation-01",
+      platformIds: ["doubao"],
+      monitoringEdition: "domestic",
+      regionCode: "110000",
+      screenshotEnabled: true,
+    });
+
+    expect(JSON.parse(String(fetchMock.mock.calls[0][1]?.body))).toEqual({
+      schemaVersion: 2,
+      clientRequestId: "25252525-2525-4252-8252-252525252525",
+      questionId: "reputation-01",
+      platformIds: ["doubao"],
+      monitoringEdition: "domestic",
+      regionCode: "110000",
+      screenshotEnabled: true,
+    });
+    expect(updated.monitoringRegion).toEqual({
+      edition: "domestic",
+      code: "110000",
+      label: "北京市",
+    });
+    expect(updated.monitoringScreenshotEnabled).toBe(true);
   });
 
   it("reuses the server-issued recovery project token without calling payments", async () => {

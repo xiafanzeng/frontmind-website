@@ -4,6 +4,7 @@ import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { MonitoringConfirmDialog, MonitoringSetup } from "./GeoBuildExperience";
+import { createGeoStylePreviewProject } from "./preview";
 import type { GeoProject } from "./types";
 
 const baseProject: GeoProject = {
@@ -128,6 +129,37 @@ describe("GEO monitoring edition setup", () => {
     expect(onChangeEdition).toHaveBeenCalledWith("overseas");
   });
 
+  it("shows compact domestic sampling controls with screenshots disabled in preview", () => {
+    const onToggleScreenshot = vi.fn();
+    render(
+      <MonitoringSetup
+        project={createGeoStylePreviewProject("monitoring-setup")}
+        onChangeEdition={vi.fn()}
+        onChangeRegion={vi.fn()}
+        onToggleScreenshot={onToggleScreenshot}
+        onTogglePlatform={vi.fn()}
+        onBack={vi.fn()}
+        onCheckout={vi.fn()}
+        paymentPending={false}
+        locked={false}
+      />,
+    );
+
+    expect(screen.getByText("采集城市/地区")).toBeTruthy();
+    expect(
+      screen.queryByText("接口当前提供省级区域，以实时可用列表为准"),
+    ).toBeNull();
+    expect(
+      screen.queryByText("截图按需打开；部分平台或节点可能不返回截图"),
+    ).toBeNull();
+    const screenshotSwitch = screen.getByRole("switch", {
+      name: "采集并展示原始页面截图",
+    }) as HTMLButtonElement;
+    expect(screenshotSwitch.getAttribute("data-state")).toBe("unchecked");
+    fireEvent.click(screenshotSwitch);
+    expect(onToggleScreenshot).toHaveBeenCalledWith(true);
+  });
+
   it("confirms the monitoring scope without exposing any payment action", () => {
     const onConfirm = vi.fn();
     render(
@@ -146,6 +178,9 @@ describe("GEO monitoring edition setup", () => {
 
     expect(screen.getByText("国内版")).toBeTruthy();
     expect(screen.getByText("豆包、Kimi")).toBeTruthy();
+    expect(screen.getByText("示例企业")).toBeTruthy();
+    expect(screen.getByText("默认随机地点")).toBeTruthy();
+    expect(screen.getByText("关闭")).toBeTruthy();
     expect(screen.getByText("10 次")).toBeTruthy();
     expect(
       screen.getByText(

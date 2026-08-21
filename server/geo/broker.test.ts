@@ -571,6 +571,102 @@ describe("HttpGeoPresalesBroker", () => {
     });
   });
 
+  it("forwards the server-owned monitor keyword, screenshot and one region", async () => {
+    const fetchMock = vi.fn(
+      async () =>
+        new Response(
+          JSON.stringify({
+            runId: "monitor-run-2",
+            status: "submitted",
+            question: "国内医药流通企业应该如何选择？",
+            platforms: ["deepseek"],
+            repeatPerPlatform: 5,
+            expectedItems: 5,
+            completedItems: 0,
+            failedItems: 0,
+            screenshot: 1,
+            region: { scope: "domestic", code: "110000", label: "北京市" },
+          }),
+          { status: 201, headers: { "content-type": "application/json" } },
+        ),
+    );
+    const broker = new HttpGeoPresalesBroker({
+      baseUrl: "https://agent.example/api/internal/presales/v2",
+      serviceToken: "private-token",
+      fetchImpl: fetchMock as typeof fetch,
+    });
+
+    await broker.createMonitorRun({
+      projectId: "project-monitor-2",
+      question: "国内医药流通企业应该如何选择？",
+      platforms: ["deepseek"],
+      idempotencyKey: "geo-monitor:enriched-request-hash",
+      monitorKeyword: "华润医药",
+      screenshot: 1,
+      region: { scope: "domestic", code: "110000" },
+    });
+
+    const [url, init] = fetchMock.mock.calls[0];
+    expect(String(url)).toBe(
+      "https://agent.example/api/internal/presales/v2/monitor-runs",
+    );
+    expect(JSON.parse(String(init?.body))).toMatchObject({
+      monitorKeyword: "华润医药",
+      screenshot: 1,
+      region: { scope: "domestic", code: "110000" },
+    });
+  });
+
+  it("reads Dashboard region catalogs through the monitor-runs scope route", async () => {
+    const fetchMock = vi.fn(
+      async () =>
+        new Response(
+          JSON.stringify({
+            scope: "domestic",
+            regions: [{ code: "110000", label: "北京市" }],
+          }),
+          { status: 200, headers: { "content-type": "application/json" } },
+        ),
+    );
+    const broker = new HttpGeoPresalesBroker({
+      baseUrl: "https://agent.example/api/internal/presales/v2",
+      serviceToken: "private-token",
+      fetchImpl: fetchMock as typeof fetch,
+    });
+
+    await expect(broker.getMonitorRegions("domestic")).resolves.toEqual({
+      edition: "domestic",
+      regions: [{ code: "110000", label: "北京市" }],
+    });
+    expect(String(fetchMock.mock.calls[0][0])).toBe(
+      "https://agent.example/api/internal/presales/v2/monitor-runs/regions?scope=domestic",
+    );
+  });
+
+  it("downloads a monitor screenshot from the Dashboard record endpoint", async () => {
+    const fetchMock = vi.fn(
+      async () =>
+        new Response(new Uint8Array([1, 2, 3]), {
+          status: 200,
+          headers: { "content-type": "image/png" },
+        }),
+    );
+    const broker = new HttpGeoPresalesBroker({
+      baseUrl: "https://agent.example/api/internal/presales/v2",
+      serviceToken: "private-token",
+      fetchImpl: fetchMock as typeof fetch,
+    });
+
+    const response = await broker.downloadMonitorScreenshot(
+      "monitor run/1",
+      "record/1",
+    );
+    expect(response.headers.get("content-type")).toBe("image/png");
+    expect(String(fetchMock.mock.calls[0][0])).toBe(
+      "https://agent.example/api/internal/presales/v2/monitor-runs/monitor%20run%2F1/records/record%2F1/screenshot",
+    );
+  });
+
   it("physically deletes the project-scoped local monitor record", async () => {
     const fetchMock = vi.fn(async () => new Response(null, { status: 204 }));
     const broker = new HttpGeoPresalesBroker({
@@ -650,7 +746,12 @@ describe("HttpGeoPresalesBroker", () => {
     });
   });
 
-  it.each(["MONITOR_SUBMISSION_REJECTED", "MONITOR_SUBMISSION_UNKNOWN"])(
+  it.each([
+    "MONITOR_SUBMISSION_REJECTED",
+    "MONITOR_SUBMISSION_UNKNOWN",
+    "REGION_UNAVAILABLE",
+    "REGION_CATALOG_UNAVAILABLE",
+  ])(
     "preserves the allowlisted Dashboard monitor error code %s",
     async (code) => {
       const broker = new HttpGeoPresalesBroker({

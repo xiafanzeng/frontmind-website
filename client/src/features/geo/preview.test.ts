@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   createGeoStylePreviewProject,
+  geoStylePreviewRegions,
   GEO_STYLE_PREVIEW_ID,
   isGeoStylePreviewProject,
 } from "./preview";
@@ -198,5 +199,68 @@ describe("GEO anonymous synthetic preview", () => {
       /香港中文大学|港中深|cuhk|北京敦锋|FrontMind超前智能|陆宏远/i,
     );
     expect(serialized).not.toContain(".cuhk.edu.cn");
+  });
+});
+
+describe("GEO monitoring style previews", () => {
+  it("keeps setup free of a run and exposes complete domestic and overseas fixtures", () => {
+    const project = createGeoStylePreviewProject("monitoring-setup");
+
+    expect(project.title).toBe("华润医药");
+    expect(project.monitoring).toBeUndefined();
+    expect(project.monitoringScreenshotEnabled).toBe(false);
+    expect(project.monitoringRegion).toBeUndefined();
+    expect(geoStylePreviewRegions("domestic").regions).toHaveLength(31);
+    expect(geoStylePreviewRegions("domestic").regions).toContainEqual({
+      code: "110000",
+      label: "北京市",
+    });
+    expect(geoStylePreviewRegions("overseas").regions).toEqual([
+      { code: "138", label: "美国" },
+      { code: "169", label: "日本" },
+      { code: "223", label: "香港" },
+      { code: "224", label: "新加坡" },
+    ]);
+  });
+
+  it("builds a DeepSeek 4-success and 1-failure monitoring result", () => {
+    const project = createGeoStylePreviewProject("monitoring");
+    const monitoring = project.monitoring;
+
+    expect(project.title).toBe("华润医药");
+    expect(project.selectedPlatformIds).toEqual(["deepseek"]);
+    expect(project.monitoringRegion).toEqual({
+      edition: "domestic",
+      code: "110000",
+      label: "北京市",
+    });
+    expect(monitoring).toMatchObject({
+      status: "partial_review",
+      expectedRecords: 5,
+      completedRecords: 4,
+      failedRecords: 1,
+      screenshotEnabled: true,
+    });
+    expect(monitoring).not.toHaveProperty("partialAccepted");
+    expect(monitoring?.answers).toHaveLength(5);
+    expect(
+      monitoring?.answers.filter((answer) => answer.status === "completed"),
+    ).toHaveLength(4);
+    expect(monitoring?.answers.at(4)).toMatchObject({
+      runIndex: 5,
+      status: "failed",
+    });
+    expect(monitoring?.answers[0].references).toHaveLength(8);
+    expect(monitoring?.answers[0].citations).toHaveLength(3);
+    expect(monitoring?.answers[0].answer).toContain("〔来源 0〕");
+    expect(monitoring?.answers[0].screenshotUrl).toMatch(
+      /^data:image\/svg\+xml/,
+    );
+    expect(monitoring?.answers[2].answer).toContain("〔来源 9〕");
+    expect(monitoring?.answers[3]).toMatchObject({
+      mentionPosition: null,
+      sentiment: null,
+      categoryRanking: null,
+    });
   });
 });

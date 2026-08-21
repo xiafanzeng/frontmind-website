@@ -1,12 +1,14 @@
 import {
   type GeoMonitoringAnswer,
+  type GeoMonitoringEdition,
+  type GeoMonitoringRegionCatalog,
   type GeoPlatformId,
   type GeoProject,
   type GeoQuestion,
   type GeoQuestionCategory,
 } from "./types";
 import { PREVIEW_MONITOR_EVIDENCE } from "./preview-monitor-evidence";
-import { GEO_STYLE_PREVIEW_ID } from "./preview-mode";
+import { GEO_STYLE_PREVIEW_ID, type GeoStylePreviewMode } from "./preview-mode";
 
 export {
   GEO_STYLE_PREVIEW_ID,
@@ -165,24 +167,286 @@ function previewAnswers(): GeoMonitoringAnswer[] {
   );
 }
 
+const PREVIEW_DOMESTIC_REGIONS = [
+  ["110000", "北京市"],
+  ["120000", "天津市"],
+  ["130000", "河北省"],
+  ["140000", "山西省"],
+  ["150000", "内蒙古自治区"],
+  ["210000", "辽宁省"],
+  ["220000", "吉林省"],
+  ["230000", "黑龙江省"],
+  ["310000", "上海市"],
+  ["320000", "江苏省"],
+  ["330000", "浙江省"],
+  ["340000", "安徽省"],
+  ["350000", "福建省"],
+  ["360000", "江西省"],
+  ["370000", "山东省"],
+  ["410000", "河南省"],
+  ["420000", "湖北省"],
+  ["430000", "湖南省"],
+  ["440000", "广东省"],
+  ["450000", "广西壮族自治区"],
+  ["460000", "海南省"],
+  ["500000", "重庆市"],
+  ["510000", "四川省"],
+  ["520000", "贵州省"],
+  ["530000", "云南省"],
+  ["540000", "西藏自治区"],
+  ["610000", "陕西省"],
+  ["620000", "甘肃省"],
+  ["630000", "青海省"],
+  ["640000", "宁夏回族自治区"],
+  ["650000", "新疆维吾尔自治区"],
+] as const;
+
+const PREVIEW_OVERSEAS_REGIONS = [
+  ["138", "美国"],
+  ["169", "日本"],
+  ["223", "香港"],
+  ["224", "新加坡"],
+] as const;
+
+export function geoStylePreviewRegions(
+  edition: GeoMonitoringEdition,
+): GeoMonitoringRegionCatalog {
+  const source =
+    edition === "overseas"
+      ? PREVIEW_OVERSEAS_REGIONS
+      : PREVIEW_DOMESTIC_REGIONS;
+  return {
+    edition,
+    regions: source.map(([code, label]) => ({ code, label })),
+  };
+}
+
+function medicalPreviewScreenshotUrl() {
+  const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="1440" height="900" viewBox="0 0 1440 900">
+  <rect width="1440" height="900" fill="#f7f5f8"/><rect x="44" y="38" width="1352" height="824" rx="18" fill="#fff" stroke="#ddd7e2"/>
+  <rect x="44" y="38" width="1352" height="62" rx="18" fill="#3d1560"/><text x="78" y="78" fill="#fff" font-family="Arial, sans-serif" font-size="22" font-weight="700">DeepSeek Web · 回答页面留档</text>
+  <text x="80" y="148" fill="#7c6b82" font-family="Arial, sans-serif" font-size="16">国内医药流通企业应该如何选择？</text><text x="80" y="205" fill="#302735" font-family="Arial, sans-serif" font-size="28" font-weight="700">国内医药流通企业选择建议</text>
+  <rect x="80" y="238" width="840" height="16" rx="8" fill="#e7e1ea"/><rect x="80" y="274" width="1210" height="12" rx="6" fill="#eeeaf0"/><rect x="80" y="302" width="1160" height="12" rx="6" fill="#eeeaf0"/><rect x="80" y="330" width="1190" height="12" rx="6" fill="#eeeaf0"/>
+  <rect x="80" y="382" width="1240" height="136" rx="12" fill="#f6f1f8" stroke="#ddd5e1"/><text x="108" y="426" fill="#5d3370" font-family="Arial, sans-serif" font-size="18" font-weight="700">华润医药</text><text x="108" y="462" fill="#665b6b" font-family="Arial, sans-serif" font-size="16">综合商业能力、全国与区域网络、医院及零售终端覆盖</text>
+  <rect x="80" y="568" width="690" height="12" rx="6" fill="#eeeaf0"/><rect x="80" y="596" width="1210" height="12" rx="6" fill="#eeeaf0"/><rect x="80" y="624" width="1080" height="12" rx="6" fill="#eeeaf0"/><text x="80" y="806" fill="#938799" font-family="Arial, sans-serif" font-size="14">本地开发预览素材 · 不代表平台真实页面</text></svg>`;
+  return `data:image/svg+xml;charset=utf-8,${encodeURIComponent(svg)}`;
+}
+
+function medicalMonitoringPreviewAnswers(): GeoMonitoringAnswer[] {
+  const references = [
+    {
+      index: 0,
+      title: "2023年中国医药流通行业经营模式分析",
+      url: "https://finance.sina.com.cn/roll/2023-06-15/doc-imyxkakp6610988.shtml",
+      site: "新浪财经",
+      domain: "finance.sina.com.cn",
+      publishTime: "2023-06-15",
+      summary: "梳理医药流通行业的渠道覆盖、供应链和零售终端能力。",
+    },
+    {
+      index: 1,
+      title: "中国医药产业研究报告",
+      url: "https://m.21jingji.com/article/20210204/herald/1703066b5556862e72ad121bdc831257.html",
+      site: "21财经",
+      domain: "21jingji.com",
+      publishTime: "2021-02-04",
+      summary: "分析医药产业链与流通服务的经营质量和区域特征。",
+    },
+    {
+      index: 2,
+      title: "关于促进药品流通行业高质量发展的指导意见",
+      url: "https://dcj.mofcom.gov.cn/article/zcfb/zcgnmy/202110/20211003212444.shtml",
+      site: "商务部",
+      domain: "mofcom.gov.cn",
+      publishTime: "2021-10-21",
+      summary: "明确药品流通行业数字化、集约化与供应链服务方向。",
+    },
+    {
+      index: 3,
+      title: "药品经营质量管理规范",
+      url: "https://www.nmpa.gov.cn/xxgk/fgwj/bmgzh/20230601161640192.html",
+      site: "国家药品监督管理局",
+      domain: "nmpa.gov.cn",
+      publishTime: "2023-06-01",
+      summary: "提供药品采购、储存、运输和质量管理的合规核验依据。",
+    },
+    {
+      index: 4,
+      title: "全国药品流通行业运行统计分析报告",
+      url: "https://www.mofcom.gov.cn/article/zwgk/gkbnjg/202406/20240603517116.shtml",
+      site: "商务部",
+      domain: "mofcom.gov.cn",
+      publishTime: "2024-06-20",
+      summary: "呈现行业规模、集中度、终端结构和配送网络变化。",
+    },
+    {
+      index: 5,
+      title: "医药冷链物流运作规范",
+      url: "https://openstd.samr.gov.cn/bzgk/gb/newGbInfo?hcno=63F90CE6A6380C442A0A0D5E8775FBC4",
+      site: "全国标准信息公共服务平台",
+      domain: "openstd.samr.gov.cn",
+      summary: "用于核对冷链运输、温控记录和异常处置能力。",
+    },
+    {
+      index: 6,
+      title: "华润医药商业集团业务介绍",
+      url: "https://www.crpcg.com.cn/",
+      site: "华润医药商业集团",
+      domain: "crpcg.com.cn",
+      summary: "企业公开页面披露的业务范围与渠道服务信息。",
+    },
+    {
+      index: 7,
+      title: "药品供应保障与配送服务政策资料",
+      url: "https://www.nhc.gov.cn/yaozs/s7655/list.shtml",
+      site: "国家卫生健康委员会",
+      domain: "nhc.gov.cn",
+      summary: "用于核验供应保障、配送协同与医疗机构服务要求。",
+    },
+  ];
+  const sentiments = ["positive", "neutral", "negative", null] as const;
+  const positions = [1, 2, 3, null] as const;
+  return Array.from({ length: 5 }, (_, index): GeoMonitoringAnswer => {
+    const runIndex = index + 1;
+    if (runIndex === 5) {
+      return {
+        id: "preview-monitor-deepseek-5",
+        platformId: "deepseek",
+        runIndex,
+        status: "failed",
+        answer: "",
+        media: [],
+        sources: [],
+        citations: [],
+        references: [],
+        capturedAt: "2026-08-21T13:15:00.000Z",
+        error: "本轮采样未返回可用回答，请结合其余四次结果查看。",
+      };
+    }
+    const mentionPosition = positions[index];
+    const sentiment = sentiments[index];
+    const citations =
+      runIndex === 1
+        ? references.slice(0, 3)
+        : runIndex === 2
+          ? [references[0], references[3]]
+          : runIndex === 3
+            ? [
+                references[0],
+                { ...references[0], title: "医药流通经营模式分析（同址）" },
+                references[4],
+              ]
+            : [];
+    return {
+      id: `preview-monitor-deepseek-${runIndex}`,
+      platformId: "deepseek",
+      runIndex,
+      status: "completed",
+      answer: [
+        "### 国内医药流通企业选择建议",
+        "",
+        "选择医药流通企业时，应同时核对全国与区域网络、医院和零售终端覆盖、冷链及特殊药品配送能力，以及供应链响应效率。〔来源 0〕",
+        "",
+        mentionPosition === null
+          ? "本轮回答未直接提及华润医药，建议继续核查企业在目标省份的真实仓配与合规能力。"
+          : `华润医药在本轮第 ${mentionPosition} 位被提及，优势集中在综合医药商业能力、渠道覆盖与大型客户服务；采购时仍需结合目标品类、账期和本地履约数据复核。〔来源 ${runIndex === 2 ? 3 : runIndex === 3 ? 4 : 1}〕`,
+        "",
+        runIndex === 3
+          ? "本轮还返回了一个无法匹配的角标〔来源 9〕，页面应保留原文字而不生成错误链接。"
+          : "最终不宜只按报价选择，应把资质、集采品种、配送时效、召回机制和数据接口能力放入同一张评分表。〔来源 0〕",
+      ].join("\n"),
+      media: [],
+      sources: references,
+      citations,
+      references,
+      sourceBreakdownAvailable: true,
+      searchKeywords: [
+        "国内医药流通企业 选择标准",
+        "医药商业公司 渠道覆盖 冷链配送",
+        runIndex === 3 ? "医药流通企业 账期 风险" : "医药配送 合规能力",
+      ],
+      recommendedQuestions: [
+        "如何核验医药流通企业的区域配送能力？",
+        "医院配送与零售连锁采购应分别看哪些指标？",
+      ],
+      mentionPosition,
+      mentionContext:
+        mentionPosition === null
+          ? null
+          : "华润医药具备综合医药商业能力、较广渠道覆盖和大型客户服务经验。",
+      sentiment,
+      categoryRanking:
+        mentionPosition === null
+          ? null
+          : { categoryName: "综合医药流通企业", rank: mentionPosition },
+      keywordEvaluations:
+        mentionPosition === null
+          ? [
+              {
+                keyword: "横向证据不足",
+                nature: "neutral",
+                context: "本轮未直接提及华润医药，无法形成品牌定向判断。",
+              },
+            ]
+          : [
+              {
+                keyword: "渠道覆盖广",
+                nature: "positive",
+                context: "综合医药商业能力与渠道覆盖是本轮主要优势。",
+              },
+              {
+                keyword: "供应链稳定",
+                nature: runIndex === 3 ? "negative" : "positive",
+                context:
+                  runIndex === 3
+                    ? "本轮对跨区域供应稳定性给出了谨慎的负面判断。"
+                    : "大型客户服务与供应链响应被列为正向能力。",
+              },
+            ],
+      screenshotAvailable: runIndex === 1,
+      ...(runIndex === 1
+        ? { screenshotUrl: medicalPreviewScreenshotUrl() }
+        : {}),
+      capturedAt: `2026-08-21T${String(8 + runIndex).padStart(2, "0")}:15:00.000Z`,
+    };
+  });
+}
+
 /**
  * Development-only, anonymous synthetic project used to exercise every result
  * renderer without embedding customer names, domains, documents, or answers.
  */
-export function createGeoStylePreviewProject(): GeoProject {
-  const questions = previewQuestions();
-  const answers = previewAnswers();
-  const selectedQuestionId = "preview-reputation-1";
+export function createGeoStylePreviewProject(
+  mode: GeoStylePreviewMode = "assessment",
+): GeoProject {
+  const monitoringPreview = mode !== "assessment";
+  const medicalQuestion: GeoQuestion = {
+    id: "preview-medical-distribution",
+    category: "product_scenario",
+    question: "国内医药流通企业应该如何选择？",
+    rationale: "用于核验医药流通企业的渠道、配送、合规与供应链能力。",
+    evidenceRefs: ["医药流通行业资料.md"],
+    selectable: true,
+  };
+  const questions = monitoringPreview
+    ? [medicalQuestion, ...previewQuestions()]
+    : previewQuestions();
+  const answers = monitoringPreview
+    ? medicalMonitoringPreviewAnswers()
+    : previewAnswers();
+  const selectedQuestionId = monitoringPreview
+    ? medicalQuestion.id
+    : "preview-reputation-1";
 
   return {
     id: GEO_STYLE_PREVIEW_ID,
     preview: true,
     remoteToken: "preview-only-do-not-submit",
-    title: "验收企业",
+    title: monitoringPreview ? "华润医药" : "验收企业",
     input: "https://company.example.invalid",
     createdAt: "2026-07-02T08:00:00.000Z",
     updatedAt: "2026-07-03T10:18:00.000Z",
-    stage: "current_assessment",
+    stage: mode === "assessment" ? "current_assessment" : "monitoring",
     status: "ready",
     progress: 100,
     progressLabel: "监控采样已结束 · 20 条有效回答进入现状评估",
@@ -195,7 +459,7 @@ export function createGeoStylePreviewProject(): GeoProject {
       },
     ],
     knowledgeBase: {
-      companyName: "验收企业",
+      companyName: monitoringPreview ? "华润医药" : "验收企业",
       summary:
         "验收企业是一家用于本地界面验收的匿名合成企业，知识库覆盖企业主体、方案能力、服务边界、实施流程与可信证据。",
       generatedAt: "2026-07-02T08:35:00.000Z",
@@ -345,19 +609,41 @@ export function createGeoStylePreviewProject(): GeoProject {
     },
     questions,
     selectedQuestionId,
-    selectedPlatformIds: [...MONITOR_PLATFORM_IDS],
-    monitoring: {
-      runId: "preview-monitor-run",
-      status: "completed",
-      platforms: [...MONITOR_PLATFORM_IDS],
-      expectedRecords: 30,
-      completedRecords: 20,
-      failedRecords: 10,
-      startedAt: "2026-07-02T08:50:00.000Z",
-      completedAt: "2026-07-02T13:30:00.000Z",
-      partialAccepted: true,
-      answers,
-    },
+    monitoringEdition: "domestic",
+    monitoringRegion:
+      mode === "monitoring"
+        ? { edition: "domestic", code: "110000", label: "北京市" }
+        : undefined,
+    monitoringScreenshotEnabled: mode === "monitoring",
+    selectedPlatformIds: monitoringPreview
+      ? ["deepseek"]
+      : [...MONITOR_PLATFORM_IDS],
+    monitoring:
+      mode === "monitoring-setup"
+        ? undefined
+        : {
+            runId: "preview-monitor-run",
+            status: monitoringPreview ? "partial_review" : "completed",
+            platforms: monitoringPreview
+              ? ["deepseek"]
+              : [...MONITOR_PLATFORM_IDS],
+            expectedRecords: monitoringPreview ? 5 : 30,
+            completedRecords: monitoringPreview ? 4 : 20,
+            failedRecords: monitoringPreview ? 1 : 10,
+            startedAt: "2026-07-02T08:50:00.000Z",
+            completedAt: "2026-07-02T13:30:00.000Z",
+            ...(monitoringPreview
+              ? {
+                  region: {
+                    edition: "domestic" as const,
+                    code: "110000",
+                    label: "北京市",
+                  },
+                  screenshotEnabled: true,
+                }
+              : { partialAccepted: true }),
+            answers,
+          },
     assessment: {
       status: "ready",
       totalScore: 64,

@@ -110,6 +110,8 @@ export class GeoBrokerError extends Error {
 const FORWARDED_ERROR_CODES = new Set([
   "MONITOR_SUBMISSION_REJECTED",
   "MONITOR_SUBMISSION_UNKNOWN",
+  "REGION_UNAVAILABLE",
+  "REGION_CATALOG_UNAVAILABLE",
   "TASK_RESULT_PENDING",
   "TASK_SUBMISSION_UNKNOWN",
   "TASK_REPAIR_EXHAUSTED",
@@ -283,10 +285,36 @@ export function geoMonitoringPriceFen(
 }
 
 export type BrokerMonitorSource = {
+  index?: number;
   title?: string;
   url?: string;
+  site?: string;
   domain?: string;
+  summary?: string;
+  publishTime?: string;
   [key: string]: unknown;
+};
+
+export type BrokerMonitorRawRegion = {
+  scope: GeoMonitoringEdition;
+  code: string;
+  label: string;
+};
+
+export type BrokerMonitorRegion = {
+  edition: GeoMonitoringEdition;
+  code: string;
+  label: string;
+};
+
+export type BrokerMonitorRegionCatalog = {
+  edition: GeoMonitoringEdition;
+  regions: Array<{ code: string; label: string }>;
+};
+
+type BrokerMonitorRegionCatalogResponse = {
+  scope: GeoMonitoringEdition;
+  regions: Array<{ code: string; label: string }>;
 };
 
 export type BrokerMonitorMedia = {
@@ -304,8 +332,33 @@ export type BrokerMonitorRecord = {
   answerText?: string;
   media: BrokerMonitorMedia[];
   sources: BrokerMonitorSource[];
+  citations?: BrokerMonitorSource[];
+  references?: BrokerMonitorSource[];
+  sourceBreakdownAvailable?: boolean;
+  searchKeywords?: string[];
+  recommendedQuestions?: string[];
+  mentionPosition?: number | null;
+  mentionContext?: string | null;
+  sentiment?: "positive" | "neutral" | "negative" | null;
+  categoryRanking?: { categoryName: string; rank: number } | null;
+  keywordEvaluations?: Array<{
+    keyword: string;
+    nature: "positive" | "neutral" | "negative";
+    context?: string;
+  }>;
+  screenshotAvailable?: boolean;
+  screenshotUrl?: string;
   error?: string;
   completedAt?: string;
+};
+
+export type BrokerMonitorRawRecord = Omit<
+  BrokerMonitorRecord,
+  "sourceBreakdownAvailable" | "screenshotAvailable" | "screenshotUrl"
+> & {
+  citationList?: BrokerMonitorSource[];
+  referenceList?: BrokerMonitorSource[];
+  screenshot?: { available: boolean; url?: string };
 };
 
 export type BrokerMonitorRun = {
@@ -327,8 +380,20 @@ export type BrokerMonitorRun = {
   failedItems: number;
   submittedAt?: string;
   nextPollAt?: string;
+  region?: BrokerMonitorRegion;
+  screenshotEnabled?: boolean;
   records?: BrokerMonitorRecord[];
   error?: string;
+};
+
+export type BrokerMonitorRawRun = Omit<
+  BrokerMonitorRun,
+  "region" | "screenshotEnabled" | "records"
+> & {
+  monitorKeyword?: string;
+  screenshot?: 0 | 1;
+  region?: BrokerMonitorRawRegion;
+  records?: BrokerMonitorRawRecord[];
 };
 
 export type BrokerProjectTaskDeletion =
@@ -416,9 +481,16 @@ export interface GeoPresalesBroker {
     question: string;
     platforms: GeoMonitorPlatformId[];
     idempotencyKey: string;
-  }): Promise<BrokerMonitorRun>;
-  getMonitorRun(runId: string): Promise<BrokerMonitorRun>;
-  getMonitorResult(runId: string): Promise<BrokerMonitorRun>;
+    monitorKeyword?: string;
+    screenshot?: 0 | 1;
+    region?: { scope: GeoMonitoringEdition; code: string };
+  }): Promise<BrokerMonitorRawRun>;
+  getMonitorRegions(
+    edition: GeoMonitoringEdition,
+  ): Promise<BrokerMonitorRegionCatalog>;
+  getMonitorRun(runId: string): Promise<BrokerMonitorRawRun>;
+  getMonitorResult(runId: string): Promise<BrokerMonitorRawRun>;
+  downloadMonitorScreenshot(runId: string, recordId: string): Promise<Response>;
   deleteMonitorRun(
     projectId: string,
     runId: string,
@@ -857,8 +929,11 @@ export class HttpGeoPresalesBroker implements GeoPresalesBroker {
     question: string;
     platforms: GeoMonitorPlatformId[];
     idempotencyKey: string;
+    monitorKeyword?: string;
+    screenshot?: 0 | 1;
+    region?: { scope: GeoMonitoringEdition; code: string };
   }) {
-    return this.requestJson<BrokerMonitorRun>("/monitor-runs", {
+    return this.requestJson<BrokerMonitorRawRun>("/monitor-runs", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
@@ -866,21 +941,42 @@ export class HttpGeoPresalesBroker implements GeoPresalesBroker {
         question: input.question,
         platforms: input.platforms,
         idempotencyKey: input.idempotencyKey,
+        ...(input.monitorKeyword
+          ? { monitorKeyword: input.monitorKeyword }
+          : {}),
+        ...(input.screenshot ? { screenshot: input.screenshot } : {}),
+        ...(input.region ? { region: input.region } : {}),
       }),
     });
   }
 
+  async getMonitorRegions(edition: GeoMonitoringEdition) {
+    const response = await this.requestJson<BrokerMonitorRegionCatalogResponse>(
+      `/monitor-runs/regions?scope=${encodeURIComponent(edition)}`,
+    );
+    return {
+      edition: response.scope,
+      regions: response.regions,
+    };
+  }
+
   async getMonitorRun(runId: string) {
-    return this.requestJson<BrokerMonitorRun>(
+    return this.requestJson<BrokerMonitorRawRun>(
       `/monitor-runs/${encodeURIComponent(runId)}`,
     );
   }
 
   async getMonitorResult(runId: string) {
-    return this.requestJson<BrokerMonitorRun>(
+    return this.requestJson<BrokerMonitorRawRun>(
       `/monitor-runs/${encodeURIComponent(runId)}/result`,
       {},
       { rejectAccepted: true },
+    );
+  }
+
+  async downloadMonitorScreenshot(runId: string, recordId: string) {
+    return this.request(
+      `/monitor-runs/${encodeURIComponent(runId)}/records/${encodeURIComponent(recordId)}/screenshot`,
     );
   }
 

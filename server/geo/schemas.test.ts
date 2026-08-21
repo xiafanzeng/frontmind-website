@@ -366,6 +366,28 @@ describe("StartMonitoringRequestSchema", () => {
       }),
     ).toThrow(/ChatGPT only/);
   });
+
+  it("accepts one bounded opaque region code and the screenshot preference", () => {
+    const request = {
+      schemaVersion: 2 as const,
+      clientRequestId: "23232323-2323-4232-8232-232323232323",
+      questionId: "product-scenario-01",
+      monitoringEdition: "domestic" as const,
+      platformIds: ["deepseek"],
+      regionCode: "opaque:cn/east-1",
+      screenshotEnabled: true,
+    };
+    expect(StartMonitoringRequestSchema.parse(request)).toEqual(request);
+    expect(() =>
+      StartMonitoringRequestSchema.parse({ ...request, regionCode: " " }),
+    ).toThrow();
+    expect(() =>
+      StartMonitoringRequestSchema.parse({
+        ...request,
+        regionCode: "x".repeat(65),
+      }),
+    ).toThrow();
+  });
 });
 
 describe("CreatePaymentRequestSchema", () => {

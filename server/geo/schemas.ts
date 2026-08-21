@@ -851,6 +851,8 @@ const StartMonitoringRequestV1Schema = GeoPaymentScopeSchema.safeExtend({
 export const StartMonitoringRequestV2Schema = GeoPaymentScopeSchema.safeExtend({
   schemaVersion: z.literal(2),
   clientRequestId: z.string().uuid(),
+  regionCode: z.string().trim().min(1).max(64).optional(),
+  screenshotEnabled: z.boolean().optional(),
   // Unlike the cached v1 contract, v2 never guesses a market.  The edition is
   // part of the durable free-monitoring scope and therefore must be explicit.
   monitoringEdition: z.enum(GEO_MONITORING_EDITIONS),

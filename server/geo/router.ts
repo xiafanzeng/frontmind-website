@@ -242,6 +242,13 @@ const UPLOAD_DATA_IDLE_MS = 120_000;
 const UPLOAD_CONFIRMATION_MS = 6 * 60 * 1000;
 const MAX_ARCHIVE_COPY_BYTES = 150 * 1024 * 1024;
 const MAX_VALIDATED_ARCHIVE_BYTES = MAX_KNOWLEDGE_ARCHIVE_CANDIDATE_BYTES;
+const MAX_MONITOR_SCREENSHOT_BYTES = 8 * 1024 * 1024;
+const MONITOR_SCREENSHOT_CONTENT_TYPES = new Set([
+  "image/png",
+  "image/jpeg",
+  "image/webp",
+  "image/gif",
+]);
 const MAX_ASSESSMENT_INPUT_BYTES = 12 * 1024 * 1024;
 const MAX_FORECAST_INPUT_BYTES = 12 * 1024 * 1024;
 const MAX_OPTIMIZATION_FORECAST_ATTEMPTS = 5;
@@ -411,6 +418,12 @@ type ProjectTokenValue = {
   customQuestion?: GeoQuestion;
   monitorRunId?: string;
   monitoringEdition?: GeoMonitoringEdition;
+  monitorRegion?: {
+    edition: GeoMonitoringEdition;
+    code: string;
+    label: string;
+  };
+  monitorScreenshotEnabled?: boolean;
   monitorQuestionId?: string;
   monitorPlatformIds?: GeoMonitorPlatformId[];
   monitorOrderId?: string;
@@ -423,6 +436,9 @@ type ProjectTokenValue = {
     clientRequestId: string;
     scopeHash: string;
     createdAt: string;
+    monitoringEdition?: GeoMonitoringEdition;
+    regionCode?: string;
+    screenshotEnabled?: boolean;
   };
   assessmentTaskId?: string;
   assessmentSubmittedAt?: string;
@@ -4875,6 +4891,191 @@ export function createGeoRouter(options: GeoRouterOptions = {}): Router {
       );
     }),
   );
+
+  router.get(
+    "/projects/:projectToken/monitoring/regions",
+    requireConfiguration,
+    requireSession,
+    asyncHandler(async (req, res) => {
+      openOwnedProject(req, res);
+      const edition =
+        req.query.edition === "overseas"
+          ? ("overseas" as const)
+          : req.query.edition === "domestic"
+            ? ("domestic" as const)
+            : undefined;
+      if (!edition) {
+        throw new GeoHttpError(
+          "请选择国内版或海外版后再加载监控地区",
+          400,
+          "REGION_EDITION_REQUIRED",
+        );
+      }
+      let catalog: Awaited<ReturnType<typeof broker.getMonitorRegions>>;
+      try {
+        catalog = await broker.getMonitorRegions(edition);
+      } catch (error) {
+        throw new GeoHttpError(
+          "监控地区列表暂不可用，请稍后重试",
+          503,
+          error instanceof GeoBrokerError
+            ? error.code
+            : "REGION_CATALOG_UNAVAILABLE",
+        );
+      }
+      if (catalog.edition !== edition || !Array.isArray(catalog.regions)) {
+        throw new GeoHttpError(
+          "监控地区列表与当前版本不匹配",
+          502,
+          "REGION_CATALOG_INVALID",
+        );
+      }
+      const seen = new Set<string>();
+      const regions = catalog.regions.flatMap((region) => {
+        const code = typeof region.code === "string" ? region.code.trim() : "";
+        const label =
+          typeof region.label === "string" ? region.label.trim() : "";
+        if (
+          !code ||
+          !label ||
+          code.length > 64 ||
+          label.length > 100 ||
+          seen.has(code)
+        ) {
+          return [];
+        }
+        seen.add(code);
+        return [{ code, label }];
+      });
+      res.setHeader("Cache-Control", "no-store");
+      res.json({ catalog: { edition, regions } });
+    }),
+  );
+
+  router.get(
+    "/projects/:projectToken/monitoring/records/:recordId/screenshot",
+    requireConfiguration,
+    requireSession,
+    requireSessionRate("monitor-screenshot", 60),
+    asyncHandler(async (req, res, next) => {
+      const value = openOwnedProject(req, res);
+      if (!value.monitorRunId || !value.monitorScreenshotEnabled) {
+        throw new GeoHttpError(
+          "当前监控任务没有可查看的页面截图",
+          404,
+          "MONITOR_SCREENSHOT_NOT_FOUND",
+        );
+      }
+      const recordId = String(req.params.recordId || "");
+      const run = await getResolvedMonitorRun(
+        broker,
+        value.monitorRunId,
+        monitorRunExpectation(value),
+      );
+      const record = run.records?.find(
+        (candidate) => candidate.recordId === recordId,
+      );
+      if (!record?.screenshotAvailable) {
+        throw new GeoHttpError(
+          "当前回答没有可查看的页面截图",
+          404,
+          "MONITOR_SCREENSHOT_NOT_FOUND",
+        );
+      }
+
+      let upstream: Awaited<
+        ReturnType<typeof broker.downloadMonitorScreenshot>
+      >;
+      try {
+        upstream = await broker.downloadMonitorScreenshot(
+          value.monitorRunId,
+          recordId,
+        );
+      } catch (error) {
+        if (
+          error instanceof GeoBrokerError &&
+          [404, 410].includes(error.status)
+        ) {
+          throw new GeoHttpError(
+            "页面截图已失效，请返回监控结果继续查看文字内容",
+            404,
+            "MONITOR_SCREENSHOT_EXPIRED",
+          );
+        }
+        throw new GeoHttpError(
+          "页面截图暂时无法读取，请稍后重试",
+          502,
+          "MONITOR_SCREENSHOT_UNAVAILABLE",
+        );
+      }
+
+      try {
+        assertResponseLengthWithinLimit(upstream, MAX_MONITOR_SCREENSHOT_BYTES);
+      } catch (error) {
+        if (upstream.body) {
+          await upstream.body.cancel().catch(() => undefined);
+        }
+        if (error instanceof GeoByteLimitError) {
+          throw new GeoHttpError(
+            "页面截图超过可查看的大小上限",
+            413,
+            "MONITOR_SCREENSHOT_TOO_LARGE",
+          );
+        }
+        throw error;
+      }
+      const contentType = (upstream.headers.get("content-type") || "")
+        .split(";", 1)[0]
+        .trim()
+        .toLowerCase();
+      if (!MONITOR_SCREENSHOT_CONTENT_TYPES.has(contentType)) {
+        if (upstream.body) {
+          await upstream.body.cancel().catch(() => undefined);
+        }
+        throw new GeoHttpError(
+          "页面截图格式无法识别",
+          502,
+          "MONITOR_SCREENSHOT_INVALID_RESPONSE",
+        );
+      }
+      if (!upstream.body) {
+        throw new GeoHttpError(
+          "页面截图暂时无法读取，请稍后重试",
+          502,
+          "MONITOR_SCREENSHOT_INVALID_RESPONSE",
+        );
+      }
+
+      res.status(200);
+      res.setHeader("Content-Type", contentType);
+      res.setHeader("Cache-Control", "private, no-store");
+      res.setHeader("X-Content-Type-Options", "nosniff");
+      const length = upstream.headers.get("content-length");
+      if (
+        length &&
+        /^\d+$/.test(length) &&
+        Number(length) <= MAX_MONITOR_SCREENSHOT_BYTES
+      ) {
+        res.setHeader("Content-Length", length);
+      }
+      const stream = Readable.fromWeb(upstream.body as never);
+      const limiter = createByteLimitTransform(MAX_MONITOR_SCREENSHOT_BYTES);
+      const handleStreamError = (error: Error) => {
+        if (res.headersSent) res.destroy(error);
+        else next(error);
+      };
+      stream.once("error", handleStreamError);
+      limiter.once("error", handleStreamError);
+      req.once("close", () => {
+        if (!res.writableEnded) {
+          stream.destroy();
+          limiter.destroy();
+        }
+      });
+      stream.pipe(limiter).pipe(res);
+    }),
+  );
+
   router.post(
     "/projects/:projectToken/monitoring",
     requireConfiguration,
@@ -4885,6 +5086,8 @@ export function createGeoRouter(options: GeoRouterOptions = {}): Router {
       if ("schemaVersion" in input && input.schemaVersion === 2) {
         const requestedPlatforms = input.platformIds as GeoMonitorPlatformId[];
         const sortedPlatforms = [...requestedPlatforms].sort();
+        const requestedRegionCode = input.regionCode?.trim();
+        const requestedScreenshotEnabled = input.screenshotEnabled === true;
         const scopeHash = crypto
           .createHash("sha256")
           .update(
@@ -4894,6 +5097,12 @@ export function createGeoRouter(options: GeoRouterOptions = {}): Router {
               questionId: input.questionId,
               monitoringEdition: input.monitoringEdition,
               platformIds: sortedPlatforms,
+              ...(requestedRegionCode
+                ? { regionCode: requestedRegionCode }
+                : {}),
+              ...(requestedScreenshotEnabled
+                ? { screenshotEnabled: true }
+                : {}),
             }),
           )
           .digest("hex");
@@ -4904,6 +5113,9 @@ export function createGeoRouter(options: GeoRouterOptions = {}): Router {
             value.monitorQuestionId !== input.questionId ||
             normalizedGeoMonitoringEdition(value.monitoringEdition) !==
               input.monitoringEdition ||
+            (value.monitorRegion?.code ?? undefined) !== requestedRegionCode ||
+            Boolean(value.monitorScreenshotEnabled) !==
+              requestedScreenshotEnabled ||
             !sameStringSet(value.monitorPlatformIds || [], requestedPlatforms)
           ) {
             throw new GeoHttpError(
@@ -4941,6 +5153,8 @@ export function createGeoRouter(options: GeoRouterOptions = {}): Router {
           });
           return;
         }
+
+        let resolvedRegion: ProjectTokenValue["monitorRegion"];
 
         const now = Date.now();
         pruneExpiringMap(freeMonitoringStarts, now, 20_000);
@@ -5060,7 +5274,18 @@ export function createGeoRouter(options: GeoRouterOptions = {}): Router {
                 clientRequestId: durableReservation.clientRequestId,
                 scopeHash: durableReservation.scopeHash,
                 createdAt: durableReservation.createdAt,
+                monitoringEdition: input.monitoringEdition,
+                ...(requestedRegionCode
+                  ? { regionCode: requestedRegionCode }
+                  : {}),
+                ...(requestedScreenshotEnabled
+                  ? { screenshotEnabled: true }
+                  : {}),
               },
+              ...(resolvedRegion ? { monitorRegion: resolvedRegion } : {}),
+              ...(requestedScreenshotEnabled
+                ? { monitorScreenshotEnabled: true }
+                : {}),
             },
             PROJECT_TTL_MS,
           );
@@ -5277,6 +5502,12 @@ export function createGeoRouter(options: GeoRouterOptions = {}): Router {
                   monitoringEdition: input.monitoringEdition,
                   question: monitorQuestion,
                   platforms: sortedPlatforms,
+                  ...(requestedRegionCode
+                    ? { regionCode: requestedRegionCode }
+                    : {}),
+                  ...(requestedScreenshotEnabled
+                    ? { screenshotEnabled: true }
+                    : {}),
                 }),
               )
               .digest("hex")}`
@@ -5313,6 +5544,16 @@ export function createGeoRouter(options: GeoRouterOptions = {}): Router {
                   question: monitorQuestion,
                   platforms: requestedPlatforms,
                   idempotencyKey: durableSubmissionKey,
+                  monitorKeyword: value.companyName,
+                  ...(requestedScreenshotEnabled ? { screenshot: 1 } : {}),
+                  ...(requestedRegionCode
+                    ? {
+                        region: {
+                          scope: input.monitoringEdition,
+                          code: requestedRegionCode,
+                        },
+                      }
+                    : {}),
                 })
                 .then((candidate) =>
                   normalizeMonitorRun(candidate, {
@@ -5332,6 +5573,23 @@ export function createGeoRouter(options: GeoRouterOptions = {}): Router {
               ) {
                 sendProcessing();
                 return;
+              }
+              if (
+                error instanceof GeoBrokerError &&
+                error.code === "REGION_UNAVAILABLE"
+              ) {
+                clearLocalFreeStart();
+                await monitorFreeReservationStore.releaseConfirmedRejected({
+                  projectId: value.projectId,
+                  scopeHash,
+                  idempotencyKey,
+                  submissionKey: durableSubmissionKey,
+                });
+                throw new GeoHttpError(
+                  "所选监控地区已不可用，请刷新列表后重新选择",
+                  422,
+                  "REGION_UNAVAILABLE",
+                );
               }
               if (
                 error instanceof GeoBrokerError &&
@@ -5361,6 +5619,21 @@ export function createGeoRouter(options: GeoRouterOptions = {}): Router {
               throw error;
             }
           }
+        }
+        if (requestedRegionCode) {
+          if (
+            !run.region ||
+            run.region.edition !== input.monitoringEdition ||
+            run.region.code !== requestedRegionCode
+          ) {
+            throw new GeoMonitorContractError("监控地区快照与提交范围不匹配");
+          }
+          resolvedRegion = run.region;
+        } else if (run.region) {
+          throw new GeoMonitorContractError("监控服务返回了未请求的地区快照");
+        }
+        if (Boolean(run.screenshotEnabled) !== requestedScreenshotEnabled) {
+          throw new GeoMonitorContractError("监控截图设置与提交范围不匹配");
         }
         const durableSubmissionKey =
           durableReservation.submissionKey || submissionKey;
@@ -5434,6 +5707,10 @@ export function createGeoRouter(options: GeoRouterOptions = {}): Router {
           monitoringEdition: input.monitoringEdition,
           monitorQuestionId: question.id,
           monitorPlatformIds: requestedPlatforms,
+          ...(resolvedRegion ? { monitorRegion: resolvedRegion } : {}),
+          ...(requestedScreenshotEnabled
+            ? { monitorScreenshotEnabled: true }
+            : {}),
           ...(fulfillingOrder
             ? {
                 monitorOrderId: fulfillingOrder.orderId,
@@ -8687,7 +8964,26 @@ async function buildProjectView(
             ? "question_recommendation"
             : "enterprise_analysis";
   const publicMonitoring = monitorRun
-    ? toPublicMonitorView(monitorRun)
+    ? (() => {
+        const view = toPublicMonitorView(monitorRun);
+        return {
+          ...view,
+          ...(value.monitorRegion ? { region: value.monitorRegion } : {}),
+          screenshotEnabled: Boolean(value.monitorScreenshotEnabled),
+          records: view.records?.map((record) => ({
+            ...record,
+            ...(value.monitorScreenshotEnabled && record.screenshotAvailable
+              ? {
+                  screenshotUrl: `/api/geo/projects/${encodeURIComponent(
+                    projectToken,
+                  )}/monitoring/records/${encodeURIComponent(
+                    record.recordId,
+                  )}/screenshot`,
+                }
+              : {}),
+          })),
+        };
+      })()
     : undefined;
   const publicAssessment = assessmentTask
     ? await toPublicAssessmentView(
@@ -8838,6 +9134,8 @@ async function buildProjectView(
     createdAt: value.knowledgeBaseSubmittedAt,
     companyName: value.companyName,
     monitoringEdition: normalizedGeoMonitoringEdition(value.monitoringEdition),
+    monitoringRegion: value.monitorRegion,
+    monitoringScreenshotEnabled: Boolean(value.monitorScreenshotEnabled),
     stage,
     status,
     // Raw task output may contain structured JSON, tool records, or model

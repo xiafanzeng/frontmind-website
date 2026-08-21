@@ -1781,7 +1781,7 @@ describe("GEO style preview rendering", () => {
   it("renders all 26 canonical sources in the single source box", () => {
     const sources = Array.from({ length: 26 }, (_, index) => ({
       title: `可追溯来源 ${index + 1}`,
-      url: `https://references.example.invalid/${index + 1}`,
+      url: `https://references.frontmind.cn/${index + 1}`,
     }));
     const html = renderMonitoringAnswerSources({
       sources,
@@ -1798,7 +1798,7 @@ describe("GEO style preview rendering", () => {
     expect(html).toContain("可追溯来源");
     expect(html).toContain("可追溯来源 1");
     expect(html).toContain("可追溯来源 26");
-    expect(html).toContain('href="https://references.example.invalid/26"');
+    expect(html).toContain('href="https://references.frontmind.cn/26"');
     expect(html).toContain("以下为本次回答关联的可追溯来源，供进一步核验。");
     expect(html).not.toContain("答案实际引用");
     expect(html).not.toContain("不应展示的实际引用");

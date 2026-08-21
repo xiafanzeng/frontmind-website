@@ -22,6 +22,7 @@ import {
   Globe2,
   Handshake,
   Image as ImageIcon,
+  MapPin,
   Landmark,
   Layers3,
   Link2,
@@ -72,6 +73,14 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
+import { Switch } from "@/components/ui/switch";
+import {
   authoritativeGeoCustomQuestionValidationTerminal,
   clearPendingGeoCustomQuestionValidation,
   confirmGeoServiceBankTransfer,
@@ -82,6 +91,7 @@ import {
   downloadGeoArchive,
   expiredGeoCustomQuestionValidation,
   getGeoProject,
+  getGeoMonitoringRegions,
   getGeoServiceContractStatus,
   getGeoServicePaymentStatus,
   getGeoServiceProvisioningStatus,
@@ -112,10 +122,15 @@ import {
 } from "./draft";
 import {
   GEO_STYLE_PREVIEW_ID,
+  geoStylePreviewMode,
   isGeoStylePreviewEnabled,
   isGeoStylePreviewProject,
 } from "./preview-mode";
 import { MonitoringMarkdown } from "./MonitoringMarkdown";
+import {
+  buildMonitoringInsights,
+  type MonitoringInsightRow,
+} from "./monitoring-insights";
 import { FRONTMIND_SERVICE_PROVIDER } from "./service-payment-details";
 import { SafeMarkdown, safePublicMarkdownUrl } from "./SafeMarkdown";
 import {
@@ -155,6 +170,7 @@ import {
   type GeoExecutionLogEntry,
   type GeoMonitoringAnswer,
   type GeoMonitoringEdition,
+  type GeoMonitoringRegion,
   type GeoPlatformId,
   type GeoProject,
   type GeoQuestion,
@@ -234,6 +250,8 @@ function matchingMonitoringRecoveryClientRequestId(
     questionId: string;
     monitoringEdition: GeoMonitoringEdition;
     platformIds: GeoPlatformId[];
+    regionCode?: string;
+    screenshotEnabled?: boolean;
   },
 ) {
   const recovery = project.monitoringRecovery;
@@ -242,6 +260,8 @@ function matchingMonitoringRecoveryClientRequestId(
     recovery.schemaVersion !== 2 ||
     recovery.questionId !== input.questionId ||
     recovery.monitoringEdition !== input.monitoringEdition ||
+    recovery.regionCode !== input.regionCode ||
+    Boolean(recovery.screenshotEnabled) !== Boolean(input.screenshotEnabled) ||
     recovery.platformIds.length !== input.platformIds.length ||
     [...recovery.platformIds]
       .sort()
@@ -1952,10 +1972,13 @@ function GeoBuildExperienceZh() {
     void import("./preview")
       .then(({ createGeoStylePreviewProject }) => {
         if (cancelled) return;
-        const previewProject = createGeoStylePreviewProject();
+        const previewMode = geoStylePreviewMode() ?? "assessment";
+        const previewProject = createGeoStylePreviewProject(previewMode);
         setProjects([previewProject]);
         setActiveProjectId(GEO_STYLE_PREVIEW_ID);
-        setActiveStage("current_assessment");
+        setActiveStage(
+          previewMode === "assessment" ? "current_assessment" : "monitoring",
+        );
         setWorkbenchOpen(true);
         setProjectsHydrated(true);
       })
@@ -2805,7 +2828,42 @@ function GeoBuildExperienceZh() {
     commitProject({
       ...activeProject,
       monitoringEdition: edition,
+      monitoringRegion: undefined,
       selectedPlatformIds: edition === "overseas" ? ["chatgpt"] : [],
+      updatedAt: new Date().toISOString(),
+    });
+  };
+
+  const changeMonitoringRegion = (region?: GeoMonitoringRegion) => {
+    if (
+      !activeProject ||
+      activePendingPayment ||
+      activeProject.monitoring?.runId
+    ) {
+      return;
+    }
+    const edition = resolveGeoMonitoringEdition(
+      activeProject.monitoringEdition,
+    );
+    if (region && region.edition !== edition) return;
+    commitProject({
+      ...activeProject,
+      monitoringRegion: region,
+      updatedAt: new Date().toISOString(),
+    });
+  };
+
+  const toggleMonitoringScreenshot = (enabled: boolean) => {
+    if (
+      !activeProject ||
+      activePendingPayment ||
+      activeProject.monitoring?.runId
+    ) {
+      return;
+    }
+    commitProject({
+      ...activeProject,
+      monitoringScreenshotEnabled: enabled,
       updatedAt: new Date().toISOString(),
     });
   };
@@ -2855,6 +2913,8 @@ function GeoBuildExperienceZh() {
         questionId: activeProject.selectedQuestionId,
         monitoringEdition,
         platformIds: activeProject.selectedPlatformIds,
+        regionCode: activeProject.monitoringRegion?.code,
+        screenshotEnabled: activeProject.monitoringScreenshotEnabled,
       },
     );
     setMonitoringClientRequestId(
@@ -2891,6 +2951,10 @@ function GeoBuildExperienceZh() {
         questionId,
         monitoringEdition,
         platformIds,
+        regionCode: legacyPayment ? undefined : project.monitoringRegion?.code,
+        screenshotEnabled: legacyPayment
+          ? false
+          : project.monitoringScreenshotEnabled,
       }) ??
       crypto.randomUUID();
     setMonitoringClientRequestId(clientRequestId);
@@ -2902,6 +2966,12 @@ function GeoBuildExperienceZh() {
         questionId,
         platformIds,
         monitoringEdition,
+        ...(legacyPayment || !project.monitoringRegion
+          ? {}
+          : { regionCode: project.monitoringRegion.code }),
+        ...(legacyPayment || !project.monitoringScreenshotEnabled
+          ? {}
+          : { screenshotEnabled: true }),
         ...(legacyPayment
           ? {
               legacyPaymentAuthorization: legacyPayment.checkout.authorization,
@@ -4542,6 +4612,8 @@ function GeoBuildExperienceZh() {
                   <QuestionMonitoring
                     project={activeProject}
                     onChangeEdition={changeMonitoringEdition}
+                    onChangeRegion={changeMonitoringRegion}
+                    onToggleScreenshot={toggleMonitoringScreenshot}
                     onTogglePlatform={togglePlatform}
                     onBack={() => setActiveStage("question_recommendation")}
                     onCheckout={openPaymentDialog}
@@ -6341,6 +6413,30 @@ export function MonitoringConfirmDialog({
               <dd>{platformNames || `${platformIds.length} 个平台`}</dd>
             </div>
             <div>
+              <dt>本品词</dt>
+              <dd>
+                {project?.knowledgeBase?.companyName ||
+                  project?.title ||
+                  "项目公司名"}
+              </dd>
+            </div>
+            <div>
+              <dt>监控地区</dt>
+              <dd>
+                {legacyPending
+                  ? "默认随机地点"
+                  : project?.monitoringRegion?.label || "默认随机地点"}
+              </dd>
+            </div>
+            <div>
+              <dt>页面截图</dt>
+              <dd>
+                {!legacyPending && project?.monitoringScreenshotEnabled
+                  ? "开启"
+                  : "关闭"}
+              </dd>
+            </div>
+            <div>
               <dt>预计回答</dt>
               <dd>{platformIds.length * 5} 次</dd>
             </div>
@@ -6965,6 +7061,8 @@ export function PaymentDialog({
 type QuestionMonitoringProps = {
   project: GeoProject;
   onChangeEdition: (edition: GeoMonitoringEdition) => void;
+  onChangeRegion: (region?: GeoMonitoringRegion) => void;
+  onToggleScreenshot: (enabled: boolean) => void;
   onTogglePlatform: (platformId: GeoPlatformId) => void;
   onBack: () => void;
   onCheckout: () => void;
@@ -6978,6 +7076,8 @@ type QuestionMonitoringProps = {
 function QuestionMonitoring({
   project,
   onChangeEdition,
+  onChangeRegion = () => undefined,
+  onToggleScreenshot = () => undefined,
   onTogglePlatform,
   onBack,
   onCheckout,
@@ -6994,6 +7094,8 @@ function QuestionMonitoring({
       <MonitoringSetup
         project={project}
         onChangeEdition={onChangeEdition}
+        onChangeRegion={onChangeRegion}
+        onToggleScreenshot={onToggleScreenshot}
         onTogglePlatform={onTogglePlatform}
         onBack={onBack}
         onCheckout={onCheckout}
@@ -7016,6 +7118,8 @@ function QuestionMonitoring({
 export function MonitoringSetup({
   project,
   onChangeEdition,
+  onChangeRegion = () => undefined,
+  onToggleScreenshot = () => undefined,
   onTogglePlatform,
   onBack,
   onCheckout,
@@ -7024,6 +7128,8 @@ export function MonitoringSetup({
 }: {
   project: GeoProject;
   onChangeEdition: (edition: GeoMonitoringEdition) => void;
+  onChangeRegion?: (region?: GeoMonitoringRegion) => void;
+  onToggleScreenshot?: (enabled: boolean) => void;
   onTogglePlatform: (platformId: GeoPlatformId) => void;
   onBack: () => void;
   onCheckout: () => void;
@@ -7047,6 +7153,75 @@ export function MonitoringSetup({
     monitoringEdition,
     selectedPlatformIds,
   );
+  const [regions, setRegions] = useState<
+    Array<{ code: string; label: string }>
+  >([]);
+  const [regionsLoading, setRegionsLoading] = useState(false);
+  const [regionsError, setRegionsError] = useState("");
+  const [regionReload, setRegionReload] = useState(0);
+  const duplicateRegionLabels = useMemo(() => {
+    const counts = new Map<string, number>();
+    for (const region of regions) {
+      counts.set(region.label, (counts.get(region.label) ?? 0) + 1);
+    }
+    return new Set(
+      Array.from(counts.entries())
+        .filter(([, count]) => count > 1)
+        .map(([label]) => label),
+    );
+  }, [regions]);
+
+  useEffect(() => {
+    let cancelled = false;
+    if (locked) {
+      setRegions(project.monitoringRegion ? [project.monitoringRegion] : []);
+      setRegionsLoading(false);
+      setRegionsError("");
+      return;
+    }
+    setRegions([]);
+    setRegionsError("");
+    setRegionsLoading(true);
+    if (isGeoStylePreviewProject(project)) {
+      void import("./preview")
+        .then(({ geoStylePreviewRegions }) => {
+          if (cancelled) return;
+          setRegions(geoStylePreviewRegions(monitoringEdition).regions);
+        })
+        .catch(() => {
+          if (cancelled) return;
+          setRegionsError("预览地区列表加载失败；仍可使用默认随机地点。");
+        })
+        .finally(() => {
+          if (!cancelled) setRegionsLoading(false);
+        });
+      return () => {
+        cancelled = true;
+      };
+    }
+    void getGeoMonitoringRegions(project, monitoringEdition)
+      .then((catalog) => {
+        if (cancelled) return;
+        setRegions(catalog.regions);
+      })
+      .catch(() => {
+        if (cancelled) return;
+        setRegions([]);
+        setRegionsError("实时地区列表暂不可用；仍可使用默认随机地点。");
+      })
+      .finally(() => {
+        if (!cancelled) setRegionsLoading(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [
+    locked,
+    monitoringEdition,
+    project.id,
+    project.remoteToken,
+    regionReload,
+  ]);
 
   return (
     <div className="geo-monitor-view">
@@ -7088,6 +7263,85 @@ export function MonitoringSetup({
               {monitoringEditionLabel(edition)}
             </button>
           ))}
+        </div>
+      </section>
+
+      <section className="geo-monitor-sampling-settings" aria-label="采样设置">
+        <div className="geo-monitor-setting-card">
+          <span className="geo-monitor-setting-icon">
+            <MapPin size={17} />
+          </span>
+          <div className="geo-monitor-setting-copy">
+            <strong>
+              {monitoringEdition === "overseas"
+                ? "采集国家/地区"
+                : "采集城市/地区"}
+            </strong>
+          </div>
+          <Select
+            value={project.monitoringRegion?.code ?? "__provider_default__"}
+            onValueChange={(code) => {
+              if (code === "__provider_default__") {
+                onChangeRegion(undefined);
+                return;
+              }
+              const region = regions.find(
+                (candidate) => candidate.code === code,
+              );
+              if (!region) return;
+              onChangeRegion({ edition: monitoringEdition, ...region });
+            }}
+            disabled={paymentPending || locked}
+          >
+            <SelectTrigger className="geo-monitor-region-trigger">
+              <SelectValue
+                placeholder={regionsLoading ? "正在加载地区…" : "选择监控地区"}
+              />
+            </SelectTrigger>
+            <SelectContent className="geo-monitor-region-content" align="end">
+              <SelectItem value="__provider_default__">
+                默认随机地点（推荐）
+              </SelectItem>
+              {regions.map((region) => (
+                <SelectItem key={region.code} value={region.code}>
+                  {duplicateRegionLabels.has(region.label)
+                    ? `${region.label}（${region.code}）`
+                    : region.label}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+          {regionsLoading && (
+            <small className="geo-monitor-region-status" role="status">
+              正在加载实时地区列表…
+            </small>
+          )}
+          {regionsError && (
+            <div className="geo-monitor-region-error" role="status">
+              <small>{regionsError}</small>
+              <button
+                type="button"
+                onClick={() => setRegionReload((value) => value + 1)}
+              >
+                重新加载
+              </button>
+            </div>
+          )}
+        </div>
+
+        <div className="geo-monitor-setting-card">
+          <span className="geo-monitor-setting-icon">
+            <ImageIcon size={17} />
+          </span>
+          <div className="geo-monitor-setting-copy">
+            <strong>采集并展示原始页面截图</strong>
+          </div>
+          <Switch
+            checked={project.monitoringScreenshotEnabled === true}
+            onCheckedChange={onToggleScreenshot}
+            disabled={paymentPending || locked}
+            aria-label="采集并展示原始页面截图"
+          />
         </div>
       </section>
 
@@ -7440,6 +7694,17 @@ export function MonitoringResults({
         (category) => category.id === selectedQuestion.category,
       )?.title
     : undefined;
+  const monitoringRegion = monitoring.region ?? project.monitoringRegion;
+  const monitoringScreenshotEnabled =
+    monitoring.screenshotEnabled ??
+    project.monitoringScreenshotEnabled ??
+    false;
+  const completedAnswerCount = monitoring.answers.filter(
+    (answer) =>
+      answer.status === "completed" &&
+      answer.answer.trim().length > 0 &&
+      !answer.error,
+  ).length;
 
   return (
     <div className="geo-monitor-view geo-monitor-results">
@@ -7520,6 +7785,16 @@ export function MonitoringResults({
             {platformIds.length} 个平台分别获取 5 次回答，共 {expectedRecords}{" "}
             个采样槽位
           </p>
+          <div className="geo-monitor-query-scope">
+            <span>
+              <MapPin size={12} />
+              {monitoringRegion?.label || "默认随机地点"}
+            </span>
+            <span>
+              <ImageIcon size={12} />
+              页面截图{monitoringScreenshotEnabled ? "已开启" : "未开启"}
+            </span>
+          </div>
         </div>
         {selectedQuestionCategory && (
           <small className="geo-monitor-query-category">
@@ -7599,7 +7874,7 @@ export function MonitoringResults({
             <h3>按平台与轮次查看采集结果</h3>
           </div>
           <small>
-            {monitoring.completedRecords} 条有效回答
+            {completedAnswerCount} 条有效回答
             {monitoring.failedRecords > 0
               ? ` · ${monitoring.failedRecords} 次未返回`
               : ""}
@@ -7613,6 +7888,7 @@ export function MonitoringResults({
         <MonitoringAnswerList
           platformIds={platformIds}
           answers={monitoring.answers}
+          screenshotEnabled={monitoringScreenshotEnabled}
         />
       )}
     </div>
@@ -9307,10 +9583,15 @@ export function ServiceActivation({
 function MonitoringAnswerList({
   platformIds,
   answers,
+  screenshotEnabled,
 }: {
   platformIds: GeoPlatformId[];
   answers: GeoMonitoringAnswer[];
+  screenshotEnabled: boolean;
 }) {
+  const [activeRuns, setActiveRuns] = useState<
+    Partial<Record<GeoPlatformId, number>>
+  >({});
   return (
     <div className="geo-answer-platforms">
       {platformIds.map((platformId) => {
@@ -9318,62 +9599,531 @@ function MonitoringAnswerList({
         const platformAnswers = answers
           .filter((answer) => answer.platformId === platformId)
           .sort((left, right) => left.runIndex - right.runIndex);
+        const activeRun = activeRuns[platformId] ?? 1;
+        const activeAnswer = platformAnswers.find(
+          (answer) => answer.runIndex === activeRun,
+        );
+        const completed = platformAnswers.filter(
+          (answer) =>
+            answer.status === "completed" &&
+            answer.answer.trim().length > 0 &&
+            !answer.error,
+        ).length;
+        const platformName = platform?.name ?? platformId;
         return (
           <section key={platformId}>
-            <header>
-              <span
-                className="geo-platform-icon"
-                style={
-                  {
-                    "--platform-accent": platform?.accent ?? "#3d1560",
-                  } as CSSProperties
-                }
+            <header className="geo-answer-platform-header">
+              <div className="geo-answer-platform-heading">
+                <span
+                  className="geo-platform-icon"
+                  style={
+                    {
+                      "--platform-accent": platform?.accent ?? "#3d1560",
+                    } as CSSProperties
+                  }
+                >
+                  <PlatformLogo
+                    src={platform?.logo ?? ""}
+                    name={platformName}
+                  />
+                </span>
+                <div>
+                  <h3>{platformName}</h3>
+                  <p>{completed}/5 条有效回答</p>
+                </div>
+              </div>
+              <div
+                className="geo-answer-slot-switcher"
+                aria-label={`${platformName}回答轮次`}
               >
-                <PlatformLogo
-                  src={platform?.logo ?? ""}
-                  name={platform?.name ?? platformId}
-                />
-              </span>
-              <div>
-                <h3>{platform?.name ?? platformId}</h3>
-                <p>{platformAnswers.length}/5 个采样槽位已返回</p>
+                <button
+                  type="button"
+                  aria-label={`查看${platformName}上一次回答`}
+                  disabled={activeRun === 1}
+                  onClick={() =>
+                    setActiveRuns((current) => ({
+                      ...current,
+                      [platformId]: Math.max(1, activeRun - 1),
+                    }))
+                  }
+                >
+                  <ChevronLeft size={18} />
+                </button>
+                <strong aria-live="polite">第 {activeRun} / 5 次</strong>
+                <button
+                  type="button"
+                  aria-label={`查看${platformName}下一次回答`}
+                  disabled={activeRun === 5}
+                  onClick={() =>
+                    setActiveRuns((current) => ({
+                      ...current,
+                      [platformId]: Math.min(5, activeRun + 1),
+                    }))
+                  }
+                >
+                  <ChevronRight size={18} />
+                </button>
               </div>
             </header>
-            <div className="geo-answer-list">
-              {platformAnswers.length > 0 ? (
-                platformAnswers.map((answer) => (
-                  <details key={answer.id} open={answer.runIndex === 1}>
-                    <summary>
-                      <span>第 {answer.runIndex} 次回答</span>
-                      <strong>
-                        {answer.status === "completed"
-                          ? "回答已采集"
-                          : answer.error || "本轮未完成"}
-                      </strong>
-                      <small>
-                        可追溯来源 {answer.sources.length} 条 ·{" "}
-                        {formatDate(answer.capturedAt)}
-                      </small>
-                    </summary>
-                    <div className="geo-answer-body">
-                      <MonitoringMarkdown
-                        markdown={answer.answer || answer.error}
+            <div className="geo-answer-current" data-active-run={activeRun}>
+              {activeAnswer?.status === "completed" && activeAnswer.answer ? (
+                <>
+                  <header className="geo-answer-round-meta">
+                    <span className="state-completed">回答已采集</span>
+                    <small>
+                      {activeAnswer.citations.length} 条正文引用 ·{" "}
+                      {activeAnswer.references.length ||
+                        activeAnswer.sources.length}{" "}
+                      条参考来源
+                    </small>
+                    {activeAnswer.capturedAt && (
+                      <time dateTime={activeAnswer.capturedAt}>
+                        {formatDate(activeAnswer.capturedAt)}
+                      </time>
+                    )}
+                  </header>
+                  <div className="geo-answer-detail-grid">
+                    <div className="geo-answer-main-column">
+                      <AnswerScreenshotEntry
+                        answer={activeAnswer}
+                        platformName={platformName}
+                        screenshotEnabled={screenshotEnabled}
                       />
-                      <AnswerMedia media={answer.media} />
-                      <AnswerSources answer={answer} />
+                      <MonitoringMarkdown
+                        markdown={activeAnswer.answer}
+                        citations={activeAnswer.citations}
+                      />
+                      <AnswerMedia media={activeAnswer.media} />
                     </div>
-                  </details>
-                ))
+                    <ReferenceColumn answer={activeAnswer} />
+                  </div>
+                </>
               ) : (
-                <p className="geo-platform-answer-empty">
-                  该平台尚未返回真实回答。
-                </p>
+                <div
+                  className={`geo-answer-slot-state state-${activeAnswer?.status ?? "waiting"}`}
+                  role={activeAnswer?.error ? "alert" : "status"}
+                >
+                  <CircleAlert size={19} />
+                  <div>
+                    <strong>
+                      {activeAnswer?.status === "failed" ||
+                      activeAnswer?.status === "error"
+                        ? "本轮采样未完成"
+                        : activeAnswer?.status === "stopped"
+                          ? "本轮采样已停止"
+                          : activeAnswer?.status === "processing"
+                            ? "本轮回答正在采集"
+                            : "本轮回答尚未返回"}
+                    </strong>
+                    <p>
+                      {activeAnswer?.error ||
+                        "可继续查看其他轮次；本槽位返回后会在此显示正文和来源。"}
+                    </p>
+                  </div>
+                </div>
               )}
             </div>
+            <PlatformInsights answers={platformAnswers} />
           </section>
         );
       })}
     </div>
+  );
+}
+
+const SENTIMENT_LABELS = {
+  positive: "正面",
+  neutral: "中性",
+  negative: "负面",
+  unknown: "未知",
+} as const;
+
+const EVALUATION_LABELS = {
+  positive: "正面词",
+  neutral: "中性词",
+  negative: "负面词",
+} as const;
+
+function AnswerScreenshotEntry({
+  answer,
+  platformName,
+  screenshotEnabled,
+}: {
+  answer: GeoMonitoringAnswer;
+  platformName: string;
+  screenshotEnabled: boolean;
+}) {
+  const [screenshotOpen, setScreenshotOpen] = useState(false);
+  const [screenshotFailed, setScreenshotFailed] = useState(false);
+  if (!screenshotEnabled) return null;
+
+  const screenshotReady =
+    answer.screenshotAvailable === true && Boolean(answer.screenshotUrl);
+  if (!screenshotReady) {
+    return (
+      <p className="geo-answer-screenshot-unavailable">
+        本轮平台未返回可查看的页面截图。
+      </p>
+    );
+  }
+
+  return (
+    <section className="geo-answer-screenshot-entry">
+      <div>
+        <strong>回答页面截图</strong>
+        <small>截图仅在打开时加载，便于核对原始页面。</small>
+      </div>
+      <button type="button" onClick={() => setScreenshotOpen(true)}>
+        <ImageIcon size={15} /> 查看页面截图
+      </button>
+      <Dialog
+        open={screenshotOpen}
+        onOpenChange={(open) => {
+          setScreenshotOpen(open);
+          setScreenshotFailed(false);
+        }}
+      >
+        <DialogContent
+          className="geo-monitor-screenshot-dialog"
+          overlayClassName="geo-monitor-screenshot-overlay"
+        >
+          <DialogHeader>
+            <DialogTitle>
+              {platformName} · 第 {answer.runIndex} 次回答页面截图
+            </DialogTitle>
+            <DialogDescription>
+              用于核对采样当时的页面内容；截图可能因上游保留期限而失效。
+            </DialogDescription>
+          </DialogHeader>
+          {screenshotFailed ? (
+            <div className="geo-monitor-screenshot-error" role="alert">
+              <CircleAlert size={20} />
+              <p>截图可能已失效，关闭后可重新尝试。</p>
+            </div>
+          ) : (
+            <img
+              src={answer.screenshotUrl}
+              alt={`${platformName}第 ${answer.runIndex} 次回答页面截图`}
+              referrerPolicy="no-referrer"
+              onError={() => setScreenshotFailed(true)}
+            />
+          )}
+        </DialogContent>
+      </Dialog>
+    </section>
+  );
+}
+
+function ReferenceColumn({ answer }: { answer: GeoMonitoringAnswer }) {
+  if (!answer.sourceBreakdownAvailable) {
+    return (
+      <aside className="geo-answer-reference-panel is-legacy">
+        <AnswerSources answer={answer} />
+      </aside>
+    );
+  }
+  const citationUrls = new Set(
+    answer.citations
+      .map((source) => safePublicMarkdownUrl(source.url))
+      .filter((url): url is string => Boolean(url)),
+  );
+  const citationIndexCounts = new Map<number, number>();
+  const referenceIndexCounts = new Map<number, number>();
+  for (const source of answer.citations) {
+    if (source.index === undefined) continue;
+    citationIndexCounts.set(
+      source.index,
+      (citationIndexCounts.get(source.index) ?? 0) + 1,
+    );
+  }
+  for (const source of answer.references) {
+    if (source.index === undefined) continue;
+    referenceIndexCounts.set(
+      source.index,
+      (referenceIndexCounts.get(source.index) ?? 0) + 1,
+    );
+  }
+
+  return (
+    <aside className="geo-answer-reference-panel" aria-label="完整参考来源">
+      <header>
+        <div>
+          <span>引用来源</span>
+          <h4>完整参考来源</h4>
+        </div>
+        <strong>{answer.references.length} 条</strong>
+      </header>
+      {answer.references.length > 0 ? (
+        <ol>
+          {answer.references.map((source, index) => {
+            const safeUrl = safePublicMarkdownUrl(source.url);
+            const citedByUrl = Boolean(safeUrl && citationUrls.has(safeUrl));
+            const citedByUniqueIndex =
+              !safeUrl &&
+              source.index !== undefined &&
+              citationIndexCounts.get(source.index) === 1 &&
+              referenceIndexCounts.get(source.index) === 1;
+            const cited = citedByUrl || citedByUniqueIndex;
+            return (
+              <li
+                key={`${source.index ?? "source"}-${source.url ?? source.title}-${index}`}
+              >
+                <div className="geo-answer-reference-index">
+                  {source.index ?? index + 1}
+                </div>
+                <div>
+                  <div className="geo-answer-reference-title">
+                    {safeUrl ? (
+                      <a
+                        href={safeUrl}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                      >
+                        {source.title} <ExternalLink size={11} />
+                      </a>
+                    ) : (
+                      <strong>{source.title}</strong>
+                    )}
+                    {cited && <span>正文引用</span>}
+                  </div>
+                  <small>
+                    {[source.site || source.domain, source.publishTime]
+                      .filter(Boolean)
+                      .join(" · ") || "来源信息未注明"}
+                  </small>
+                  {source.summary && <p>{source.summary}</p>}
+                  {safeUrl && <code>{new URL(safeUrl).hostname}</code>}
+                </div>
+              </li>
+            );
+          })}
+        </ol>
+      ) : (
+        <p className="geo-answer-reference-empty">
+          平台返回了引用分层，但本轮参考来源为空。
+        </p>
+      )}
+    </aside>
+  );
+}
+
+function InsightRankList({
+  rows,
+  empty,
+}: {
+  rows: MonitoringInsightRow[];
+  empty: string;
+}) {
+  if (rows.length === 0) return <p className="geo-insight-empty">{empty}</p>;
+  const renderRows = (items: MonitoringInsightRow[], offset = 0) => (
+    <ol start={offset + 1}>
+      {items.map((row) => (
+        <li key={row.key}>
+          <span>{offset + items.indexOf(row) + 1}</span>
+          <div>
+            {row.url ? (
+              <a href={row.url} target="_blank" rel="noopener noreferrer">
+                {row.label}
+              </a>
+            ) : (
+              <strong>{row.label}</strong>
+            )}
+            {row.channel && <small>{row.channel}</small>}
+          </div>
+          <b>{row.count} 次</b>
+          <em>{row.percentage}%</em>
+        </li>
+      ))}
+    </ol>
+  );
+  return (
+    <>
+      {renderRows(rows.slice(0, 5))}
+      {rows.length > 5 && (
+        <details className="geo-insight-more">
+          <summary>查看其余 {rows.length - 5} 项</summary>
+          {renderRows(rows.slice(5), 5)}
+        </details>
+      )}
+    </>
+  );
+}
+
+function PlatformInsights({ answers }: { answers: GeoMonitoringAnswer[] }) {
+  const insights = useMemo(() => buildMonitoringInsights(answers), [answers]);
+  const sentiment = insights.sentiment;
+  const positiveEnd = sentiment.percentages.positive * 3.6;
+  const neutralEnd = positiveEnd + sentiment.percentages.neutral * 3.6;
+  const negativeEnd = neutralEnd + sentiment.percentages.negative * 3.6;
+  const hasCitationInsights =
+    insights.channels.length > 0 || insights.articles.length > 0;
+  const hasEvaluationInsights = Object.values(insights.evaluations.groups).some(
+    (rows) => rows.length > 0,
+  );
+  const hasBrandInsights = insights.brand.mentionCoverage > 0;
+  if (
+    insights.completedCount === 0 ||
+    (!hasCitationInsights &&
+      sentiment.coverage === 0 &&
+      !hasEvaluationInsights &&
+      !hasBrandInsights)
+  ) {
+    return null;
+  }
+
+  return (
+    <section className="geo-platform-insights" aria-label="引用与本品分析">
+      <header>
+        <div>
+          <span>平台洞察</span>
+          <h3>引用与本品分析</h3>
+        </div>
+        <small>描述性统计 · {insights.completedCount}/5 条有效回答</small>
+      </header>
+      {hasCitationInsights && (
+        <div className="geo-insight-citation-grid">
+          {insights.channels.length > 0 && (
+            <article className="geo-insight-card">
+              <header>
+                <h4>渠道引用</h4>
+                <small>{insights.citationCoverage} 条回答有引用分层</small>
+              </header>
+              <InsightRankList rows={insights.channels} empty="暂无渠道引用" />
+            </article>
+          )}
+          {insights.articles.length > 0 && (
+            <article className="geo-insight-card">
+              <header>
+                <h4>内容引用</h4>
+                <small>同一回答内按文章去重</small>
+              </header>
+              <InsightRankList rows={insights.articles} empty="暂无内容引用" />
+            </article>
+          )}
+        </div>
+      )}
+
+      {(sentiment.coverage > 0 || hasEvaluationInsights) && (
+        <div className="geo-insight-analysis-grid">
+          {sentiment.coverage > 0 && (
+            <article className="geo-insight-card geo-insight-sentiment">
+              <header>
+                <h4>情感倾向</h4>
+                <small>覆盖 {sentiment.coverage} 条回答</small>
+              </header>
+              <div>
+                <div
+                  className="geo-insight-sentiment-ring"
+                  style={{
+                    background: `conic-gradient(#18a878 0 ${positiveEnd}deg, #91a1b7 ${positiveEnd}deg ${neutralEnd}deg, #f13f5b ${neutralEnd}deg ${negativeEnd}deg, #d8d2dc ${negativeEnd}deg 360deg)`,
+                  }}
+                  aria-label={`正面 ${sentiment.counts.positive} 次，中性 ${sentiment.counts.neutral} 次，负面 ${sentiment.counts.negative} 次，未知 ${sentiment.counts.unknown} 次`}
+                >
+                  <span>
+                    <strong>{sentiment.coverage}</strong>
+                    <small>总次数</small>
+                  </span>
+                </div>
+                <ul>
+                  {(
+                    Object.keys(SENTIMENT_LABELS) as Array<
+                      keyof typeof SENTIMENT_LABELS
+                    >
+                  ).map((key) => (
+                    <li key={key} className={`nature-${key}`}>
+                      <span />
+                      <strong>{SENTIMENT_LABELS[key]}</strong>
+                      <b>{sentiment.counts[key]} 次</b>
+                      <em>{sentiment.percentages[key]}%</em>
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            </article>
+          )}
+
+          {hasEvaluationInsights && (
+            <article className="geo-insight-card geo-insight-evaluations">
+              <header>
+                <h4>评价词</h4>
+                <small>覆盖 {insights.evaluations.coverage} 条回答</small>
+              </header>
+              <div>
+                {(
+                  Object.keys(EVALUATION_LABELS) as Array<
+                    keyof typeof EVALUATION_LABELS
+                  >
+                ).map((nature) => {
+                  const rows = insights.evaluations.groups[nature];
+                  if (rows.length === 0) return null;
+                  return (
+                    <section key={nature} className={`nature-${nature}`}>
+                      <h5>{EVALUATION_LABELS[nature]}</h5>
+                      {rows.slice(0, 5).map((row) => (
+                        <article key={row.key}>
+                          <div>
+                            <strong>{row.label}</strong>
+                            <span>{row.count} 次</span>
+                          </div>
+                          {row.context && <p>{row.context}</p>}
+                        </article>
+                      ))}
+                      {rows.length > 5 && (
+                        <details>
+                          <summary>查看其余 {rows.length - 5} 个词</summary>
+                          {rows.slice(5).map((row) => (
+                            <article key={row.key}>
+                              <div>
+                                <strong>{row.label}</strong>
+                                <span>{row.count} 次</span>
+                              </div>
+                              {row.context && <p>{row.context}</p>}
+                            </article>
+                          ))}
+                        </details>
+                      )}
+                    </section>
+                  );
+                })}
+              </div>
+            </article>
+          )}
+        </div>
+      )}
+
+      {hasBrandInsights && (
+        <article className="geo-insight-card geo-insight-brand">
+          <header>
+            <h4>本品表现</h4>
+            <small>每项指标使用自身有值回答作为分母</small>
+          </header>
+          <div className="geo-insight-brand-metrics">
+            {insights.brand.mentionCoverage > 0 && (
+              <span>
+                <small>提及率</small>
+                <strong>{insights.brand.mentionRate}%</strong>
+                <em>
+                  {insights.brand.mentionedCount}/
+                  {insights.brand.mentionCoverage} 条回答
+                </em>
+              </span>
+            )}
+            {insights.brand.averagePosition !== undefined && (
+              <span>
+                <small>平均提及位置</small>
+                <strong>第 {insights.brand.averagePosition} 个</strong>
+              </span>
+            )}
+            {insights.brand.bestPosition !== undefined && (
+              <span>
+                <small>最佳提及位置</small>
+                <strong>第 {insights.brand.bestPosition} 个</strong>
+              </span>
+            )}
+          </div>
+        </article>
+      )}
+    </section>
   );
 }
 
@@ -9474,7 +10224,7 @@ function SourceColumn({
 }) {
   return (
     <details className="geo-answer-source-group">
-      <summary>
+      <summary aria-label={`可追溯来源 ${sources.length} 条`}>
         <span className="geo-answer-source-title">
           <Link2 size={13} /> 可追溯来源
         </span>
@@ -9490,9 +10240,9 @@ function SourceColumn({
           <ul>
             {sources.map((source, index) => (
               <li key={`${source.title}-${index}`}>
-                {source.url ? (
+                {safePublicMarkdownUrl(source.url) ? (
                   <a
-                    href={source.url}
+                    href={safePublicMarkdownUrl(source.url)}
                     target="_blank"
                     rel="noopener noreferrer"
                   >

@@ -21,6 +21,8 @@ import type {
   GeoKnowledgeSource,
   GeoMonitoringAnswer,
   GeoMonitoringEdition,
+  GeoMonitoringRegion,
+  GeoMonitoringRegionCatalog,
   GeoMonitoringResult,
   GeoMonitoringStatus,
   GeoOptimizationForecastResult,
@@ -1534,7 +1536,34 @@ function normalizeAnswerSource(value: unknown): GeoAnswerSource | undefined {
     record.domain,
     url,
   );
-  return title ? { title, url } : undefined;
+  if (!title) return undefined;
+  const rawIndex = numberValue(record.index);
+  const index =
+    rawIndex !== undefined &&
+    Number.isSafeInteger(rawIndex) &&
+    rawIndex >= 0 &&
+    rawIndex <= 1_000_000_000
+      ? rawIndex
+      : undefined;
+  const publishTime = textValue(
+    record.publishTime,
+    record.publish_time,
+    record.publishedAt,
+    record.published_at,
+  );
+  return {
+    title,
+    ...(url ? { url } : {}),
+    ...(index !== undefined ? { index } : {}),
+    ...(textValue(record.site, record.source)
+      ? { site: textValue(record.site, record.source) }
+      : {}),
+    ...(textValue(record.domain) ? { domain: textValue(record.domain) } : {}),
+    ...(textValue(record.summary)
+      ? { summary: textValue(record.summary) }
+      : {}),
+    ...(publishTime ? { publishTime } : {}),
+  };
 }
 
 function normalizeAnswerSources(value: unknown): GeoAnswerSource[] {
@@ -1550,6 +1579,84 @@ function normalizeAnswerSources(value: unknown): GeoAnswerSource[] {
     if (!byIdentity.has(identity)) byIdentity.set(identity, source);
   }
   return Array.from(byIdentity.values()).slice(0, 200);
+}
+
+function normalizeSplitAnswerSources(value: unknown, limit: number) {
+  const seen = new Set<string>();
+  const sources: GeoAnswerSource[] = [];
+  for (const item of asArray(value)) {
+    const source = normalizeAnswerSource(item);
+    if (!source) continue;
+    const identity = JSON.stringify([
+      source.index ?? null,
+      source.title,
+      source.url ?? null,
+      source.site ?? null,
+      source.domain ?? null,
+      source.summary ?? null,
+      source.publishTime ?? null,
+    ]);
+    if (seen.has(identity)) continue;
+    seen.add(identity);
+    sources.push(source);
+    if (sources.length >= limit) break;
+  }
+  return sources;
+}
+
+function normalizeMonitorTextList(value: unknown, limit: number) {
+  const seen = new Set<string>();
+  const result: string[] = [];
+  for (const item of asArray(value)) {
+    const text = typeof item === "string" ? item.trim() : "";
+    if (!text || text.length > 500 || seen.has(text)) continue;
+    seen.add(text);
+    result.push(text);
+    if (result.length >= limit) break;
+  }
+  return result;
+}
+
+function normalizeKeywordEvaluations(value: unknown) {
+  const result: NonNullable<GeoMonitoringAnswer["keywordEvaluations"]> = [];
+  for (const item of asArray(value).slice(0, 100)) {
+    const record = asRecord(item);
+    const keyword = textValue(record.keyword)?.slice(0, 200);
+    const nature = textValue(record.nature)?.toLowerCase();
+    if (
+      !keyword ||
+      !nature ||
+      !["positive", "neutral", "negative"].includes(nature)
+    ) {
+      continue;
+    }
+    const context = textValue(record.context)?.slice(0, 2_000);
+    result.push({
+      keyword,
+      nature: nature as "positive" | "neutral" | "negative",
+      ...(context ? { context } : {}),
+    });
+  }
+  return result;
+}
+
+function normalizeMonitoringRegion(
+  value: unknown,
+): GeoMonitoringRegion | undefined {
+  const record = asRecord(value);
+  const edition = textValue(record.edition, record.scope);
+  const code = textValue(record.code, record.regionCode, record.region_code);
+  const label = textValue(record.label, record.name, record.province);
+  if (
+    !code ||
+    !label ||
+    code.length > 64 ||
+    label.length > 100 ||
+    !["domestic", "overseas"].includes(edition || "")
+  ) {
+    return undefined;
+  }
+  return { edition: edition as GeoMonitoringEdition, code, label };
 }
 
 function normalizeMonitoringStatus(value: unknown): GeoMonitoringStatus {
@@ -1663,17 +1770,93 @@ function normalizeMonitoringAnswer(
     ),
   );
 
-  const legacyCitations = normalizeAnswerSources(
+  const legacyCitations = normalizeSplitAnswerSources(
     record.citations ?? record.citationList ?? record.citation_list,
+    100,
   );
-  const legacyReferences = normalizeAnswerSources(
+  const legacyReferences = normalizeSplitAnswerSources(
     record.references ?? record.referenceList ?? record.reference_list,
+    200,
   );
   const sources = normalizeAnswerSources(
     record.sources ??
       record.sourceList ??
       record.source_list ?? [...legacyCitations, ...legacyReferences],
   );
+  const sourceBreakdownAvailable =
+    hasOwnField(
+      record,
+      "citationList",
+      "citation_list",
+      "referenceList",
+      "reference_list",
+    ) ||
+    ((record.sourceBreakdownAvailable === true ||
+      record.source_breakdown_available === true) &&
+      hasOwnField(record, "citations", "references"));
+  const hasMentionPosition = hasOwnField(
+    record,
+    "mentionPosition",
+    "mention_position",
+  );
+  const rawMentionPosition = Object.prototype.hasOwnProperty.call(
+    record,
+    "mentionPosition",
+  )
+    ? record.mentionPosition
+    : record.mention_position;
+  const mentionPositionValue = numberValue(rawMentionPosition);
+  const mentionPosition =
+    rawMentionPosition === null
+      ? null
+      : mentionPositionValue !== undefined &&
+          Number.isSafeInteger(mentionPositionValue) &&
+          mentionPositionValue > 0
+        ? mentionPositionValue
+        : undefined;
+  const hasSentiment = hasOwnField(record, "sentiment");
+  const rawSentiment = record.sentiment;
+  const sentimentValue = textValue(rawSentiment)?.toLowerCase();
+  const sentiment =
+    rawSentiment === null
+      ? null
+      : ["positive", "neutral", "negative"].includes(sentimentValue || "")
+        ? (sentimentValue as "positive" | "neutral" | "negative")
+        : undefined;
+  const hasCategoryRanking = hasOwnField(
+    record,
+    "categoryRanking",
+    "category_ranking",
+  );
+  const rawCategoryValue = Object.prototype.hasOwnProperty.call(
+    record,
+    "categoryRanking",
+  )
+    ? record.categoryRanking
+    : record.category_ranking;
+  const rawCategoryRanking = asRecord(rawCategoryValue);
+  const categoryName = textValue(
+    rawCategoryRanking.categoryName,
+    rawCategoryRanking.category_name,
+  );
+  const categoryRankValue = numberValue(rawCategoryRanking.rank);
+  const categoryRanking =
+    rawCategoryValue === null
+      ? null
+      : categoryName &&
+          categoryRankValue !== undefined &&
+          Number.isSafeInteger(categoryRankValue) &&
+          categoryRankValue > 0
+        ? { categoryName, rank: categoryRankValue }
+        : undefined;
+  const screenshotCandidate = textValue(
+    record.screenshotUrl,
+    record.screenshot_url,
+  );
+  const screenshotUrl =
+    screenshotCandidate?.startsWith("/api/geo/") === true
+      ? screenshotCandidate
+      : undefined;
 
   return {
     id:
@@ -1693,6 +1876,56 @@ function normalizeMonitoringAnswer(
     sources,
     citations: legacyCitations,
     references: legacyReferences,
+    sourceBreakdownAvailable,
+    ...(hasOwnField(record, "searchKeywords", "search_keywords")
+      ? {
+          searchKeywords: normalizeMonitorTextList(
+            record.searchKeywords ?? record.search_keywords,
+            50,
+          ),
+        }
+      : {}),
+    ...(hasOwnField(record, "recommendedQuestions", "recommended_questions")
+      ? {
+          recommendedQuestions: normalizeMonitorTextList(
+            record.recommendedQuestions ?? record.recommended_questions,
+            20,
+          ),
+        }
+      : {}),
+    ...(hasMentionPosition && mentionPosition !== undefined
+      ? { mentionPosition }
+      : {}),
+    ...(hasOwnField(record, "mentionContext", "mention_context")
+      ? {
+          mentionContext:
+            (Object.prototype.hasOwnProperty.call(record, "mentionContext")
+              ? record.mentionContext
+              : record.mention_context) === null
+              ? null
+              : textValue(record.mentionContext, record.mention_context)?.slice(
+                  0,
+                  2_000,
+                ),
+        }
+      : {}),
+    ...(hasSentiment && sentiment !== undefined ? { sentiment } : {}),
+    ...(hasCategoryRanking && categoryRanking !== undefined
+      ? { categoryRanking }
+      : {}),
+    ...(hasOwnField(record, "keywordEvaluations", "keyword_evaluations")
+      ? {
+          keywordEvaluations: normalizeKeywordEvaluations(
+            record.keywordEvaluations ?? record.keyword_evaluations,
+          ),
+        }
+      : {}),
+    ...(record.screenshotAvailable === true ||
+    record.screenshot_available === true ||
+    Boolean(screenshotUrl)
+      ? { screenshotAvailable: true }
+      : {}),
+    ...(screenshotUrl ? { screenshotUrl } : {}),
     capturedAt: timestampValue(
       record.capturedAt,
       record.captured_at,
@@ -1892,6 +2125,9 @@ function normalizeMonitoring(value: unknown): GeoMonitoringResult | undefined {
     completedAt: timestampValue(source.completedAt, source.completed_at),
     partialAccepted:
       source.partialAccepted === true || source.partial_accepted === true,
+    region: normalizeMonitoringRegion(source.region),
+    screenshotEnabled:
+      source.screenshotEnabled === true || source.screenshot_enabled === true,
     ...(quality ? { quality } : {}),
     answers,
     error: localizedUserFacingError(
@@ -3670,6 +3906,25 @@ export function normalizeGeoProject(
           project.monitoringEdition ?? project.monitoring_edition,
         )
       : resolveGeoMonitoringEdition(fallback?.monitoringEdition),
+    monitoringRegion: hasOwnField(
+      project,
+      "monitoringRegion",
+      "monitoring_region",
+    )
+      ? normalizeMonitoringRegion(
+          project.monitoringRegion ?? project.monitoring_region,
+        )
+      : (monitoring?.region ?? fallback?.monitoringRegion),
+    monitoringScreenshotEnabled: hasOwnField(
+      project,
+      "monitoringScreenshotEnabled",
+      "monitoring_screenshot_enabled",
+    )
+      ? project.monitoringScreenshotEnabled === true ||
+        project.monitoring_screenshot_enabled === true
+      : (monitoring?.screenshotEnabled ??
+        fallback?.monitoringScreenshotEnabled ??
+        false),
     selectedPlatformIds: (() => {
       const normalized = normalizePlatformIds(
         project.selectedPlatformIds ?? project.selected_platform_ids,
@@ -5558,6 +5813,44 @@ export async function getGeoServiceProvisioningStatus(
   return normalizeRequiredProjectResponse(payload, project);
 }
 
+export async function getGeoMonitoringRegions(
+  project: GeoProject,
+  edition: GeoMonitoringEdition,
+): Promise<GeoMonitoringRegionCatalog> {
+  const payload = await requestJson(
+    `/projects/${encodeURIComponent(project.remoteToken)}/monitoring/regions?edition=${encodeURIComponent(edition)}`,
+    { method: "GET", timeoutMs: 15_000 },
+  );
+  const root = asRecord(payload);
+  const catalog = asRecord(root.catalog ?? root.data ?? payload);
+  const returnedEdition = textValue(catalog.edition, catalog.scope);
+  if (returnedEdition !== edition) {
+    throw new GeoApiError(
+      "监控地区列表与当前版本不匹配。",
+      502,
+      "REGION_SCOPE_MISMATCH",
+    );
+  }
+  const seen = new Set<string>();
+  const regions = asArray(catalog.regions ?? catalog.items).flatMap((item) => {
+    const record = asRecord(item);
+    const code = textValue(record.code, record.regionCode, record.region_code);
+    const label = textValue(record.label, record.name, record.province);
+    if (
+      !code ||
+      !label ||
+      code.length > 64 ||
+      label.length > 100 ||
+      seen.has(code)
+    ) {
+      return [];
+    }
+    seen.add(code);
+    return [{ code, label }];
+  });
+  return { edition, regions: regions.slice(0, 100) };
+}
+
 export async function startGeoMonitoring(
   project: GeoProject,
   input: {
@@ -5565,6 +5858,8 @@ export async function startGeoMonitoring(
     questionId: string;
     platformIds: GeoPlatformId[];
     monitoringEdition: GeoMonitoringEdition;
+    regionCode?: string;
+    screenshotEnabled?: boolean;
     legacyPaymentAuthorization?: string;
     onProcessing?: (project: GeoProject) => void;
   },
@@ -5577,6 +5872,8 @@ export async function startGeoMonitoring(
     questionId: input.questionId,
     platformIds: input.platformIds,
     monitoringEdition: input.monitoringEdition,
+    ...(input.regionCode ? { regionCode: input.regionCode } : {}),
+    ...(input.screenshotEnabled ? { screenshotEnabled: true } : {}),
     ...(input.legacyPaymentAuthorization
       ? { legacyPaymentAuthorization: input.legacyPaymentAuthorization }
       : {}),
@@ -5606,6 +5903,8 @@ export async function startGeoMonitoring(
           clientRequestId: input.clientRequestId,
           questionId: input.questionId,
           monitoringEdition: input.monitoringEdition,
+          ...(input.regionCode ? { regionCode: input.regionCode } : {}),
+          ...(input.screenshotEnabled ? { screenshotEnabled: true } : {}),
           platformIds: [...input.platformIds],
         },
       };

@@ -22,6 +22,17 @@ export type GeoQuestionCategory =
 
 export type GeoMonitoringEdition = "domestic" | "overseas";
 
+export type GeoMonitoringRegion = {
+  edition: GeoMonitoringEdition;
+  code: string;
+  label: string;
+};
+
+export type GeoMonitoringRegionCatalog = {
+  edition: GeoMonitoringEdition;
+  regions: Array<{ code: string; label: string }>;
+};
+
 export function resolveGeoMonitoringEdition(
   value: unknown,
 ): GeoMonitoringEdition {
@@ -128,6 +139,17 @@ export type GeoExecutionLog = {
 export type GeoAnswerSource = {
   title: string;
   url?: string;
+  index?: number;
+  site?: string;
+  domain?: string;
+  summary?: string;
+  publishTime?: string;
+};
+
+export type GeoKeywordEvaluation = {
+  keyword: string;
+  nature: "positive" | "neutral" | "negative";
+  context?: string;
 };
 
 export type GeoAnswerMedia = {
@@ -145,12 +167,22 @@ export type GeoMonitoringAnswer = {
   status: "completed" | "failed" | "stopped" | "error" | "processing";
   answer: string;
   media: GeoAnswerMedia[];
-  /** Canonical source list. New monitor responses expose only this field. */
+  /** Compatibility union used by historical monitor responses and downstream views. */
   sources: GeoAnswerSource[];
-  /** @deprecated Compatibility for locally stored pre-v2 projects. */
+  /** Sources actually cited by the answer when the provider exposes a split list. */
   citations: GeoAnswerSource[];
-  /** @deprecated Compatibility for locally stored pre-v2 projects. */
+  /** Full retrieval/reference list when the provider exposes a split list. */
   references: GeoAnswerSource[];
+  sourceBreakdownAvailable?: boolean;
+  searchKeywords?: string[];
+  recommendedQuestions?: string[];
+  mentionPosition?: number | null;
+  mentionContext?: string | null;
+  sentiment?: "positive" | "neutral" | "negative" | null;
+  categoryRanking?: { categoryName: string; rank: number } | null;
+  keywordEvaluations?: GeoKeywordEvaluation[];
+  screenshotAvailable?: boolean;
+  screenshotUrl?: string;
   capturedAt?: string;
   error?: string;
 };
@@ -166,6 +198,8 @@ export type GeoMonitoringResult = {
   startedAt?: string;
   completedAt?: string;
   partialAccepted?: boolean;
+  region?: GeoMonitoringRegion;
+  screenshotEnabled?: boolean;
   quality?: GeoResultQuality;
   answers: GeoMonitoringAnswer[];
   error?: string;
@@ -642,6 +676,9 @@ export type GeoProject = {
   selectedQuestionId?: string;
   /** Missing on historical projects and therefore resolved as `domestic`. */
   monitoringEdition?: GeoMonitoringEdition;
+  /** Missing means the provider-selected default node was used. */
+  monitoringRegion?: GeoMonitoringRegion;
+  monitoringScreenshotEnabled?: boolean;
   selectedPlatformIds: GeoPlatformId[];
   /** Local-only durable handoff for a server-issued free-monitor reservation. */
   monitoringRecovery?: {
@@ -649,6 +686,8 @@ export type GeoProject = {
     clientRequestId: string;
     questionId: string;
     monitoringEdition: GeoMonitoringEdition;
+    regionCode?: string;
+    screenshotEnabled?: boolean;
     platformIds: GeoPlatformId[];
   };
   monitoring?: GeoMonitoringResult;

@@ -39,9 +39,12 @@ const SourceSchema = z.union([
       title: z.string().trim().max(1000).optional(),
       name: z.string().trim().max(1000).optional(),
       source: z.string().trim().max(1000).optional(),
+      site: z.string().trim().max(1000).optional(),
       url: z.string().trim().max(4096).optional(),
       domain: z.string().trim().max(255).optional(),
       summary: z.string().trim().max(2000).optional(),
+      publishTime: z.string().trim().max(80).optional(),
+      index: z.number().int().min(0).max(1_000_000_000).optional(),
     })
     .passthrough(),
 ]);
@@ -64,8 +67,49 @@ const RecordSchema = z
     // Optional on purpose: an explicitly supplied empty canonical collection
     // must not fall back to stale legacy citation/reference fields.
     sources: z.array(z.unknown()).max(200).optional(),
-    citations: z.array(z.unknown()).max(100).default([]),
-    references: z.array(z.unknown()).max(200).default([]),
+    citations: z.array(z.unknown()).max(100).optional(),
+    references: z.array(z.unknown()).max(200).optional(),
+    citationList: z.array(z.unknown()).max(100).optional(),
+    referenceList: z.array(z.unknown()).max(200).optional(),
+    searchKeywords: z
+      .array(z.string().trim().min(1).max(500))
+      .max(50)
+      .optional(),
+    recommendedQuestions: z
+      .array(z.string().trim().min(1).max(500))
+      .max(20)
+      .optional(),
+    mentionPosition: z.number().int().positive().nullable().optional(),
+    mentionContext: z.string().trim().max(2000).nullable().optional(),
+    sentiment: z
+      .enum(["positive", "neutral", "negative"])
+      .nullable()
+      .optional(),
+    categoryRanking: z
+      .object({
+        categoryName: z.string().trim().min(1).max(500),
+        rank: z.number().int().positive().max(1_000_000),
+      })
+      .nullable()
+      .optional(),
+    keywordEvaluations: z
+      .array(
+        z.object({
+          keyword: z.string().trim().min(1).max(200),
+          nature: z.enum(["positive", "neutral", "negative"]),
+          context: z.string().trim().max(2000).optional(),
+        }),
+      )
+      .max(100)
+      .optional(),
+    screenshot: z
+      .object({
+        available: z.boolean(),
+        // Dashboard may expose its own guarded URL. Website deliberately
+        // ignores it and builds a project-scoped same-origin URL instead.
+        url: z.string().trim().max(4096).optional(),
+      })
+      .optional(),
     error: z.string().max(2000).optional(),
     completedAt: z.string().max(80).optional(),
   })
@@ -74,7 +118,7 @@ const RunSchema = z
   .object({
     runId: z.string().trim().min(8).max(255),
     status: StatusSchema,
-    question: z.string().trim().min(4).max(240),
+    question: z.string().trim().min(4).max(2000),
     platforms: z.array(PlatformSchema).min(1).max(6),
     repeatPerPlatform: z.literal(5),
     expectedItems: z.number().int().positive().max(30),
@@ -82,6 +126,16 @@ const RunSchema = z
     failedItems: z.number().int().nonnegative().max(30),
     submittedAt: z.string().max(80).optional(),
     nextPollAt: z.string().max(80).optional(),
+    monitorKeyword: z.string().trim().min(1).max(2000).optional(),
+    screenshot: z.union([z.literal(0), z.literal(1)]).optional(),
+    region: z
+      .object({
+        scope: z.enum(["domestic", "overseas"]),
+        code: z.string().trim().min(1).max(64),
+        label: z.string().trim().min(1).max(100),
+      })
+      .optional(),
+    screenshotEnabled: z.boolean().optional(),
     records: z.array(z.unknown()).max(30).optional(),
     error: z.string().max(2000).optional(),
   })
@@ -102,8 +156,8 @@ function asRecord(value: unknown): Record<string, unknown> {
 
 /**
  * Treat the Agent response as untrusted. Only customer-safe final text,
- * allowlisted media links and one canonical source collection survive this
- * adapter; page screenshots and model reasoning remain impossible to return.
+ * allowlisted media links and public monitoring fields survive this adapter;
+ * raw screenshot URLs and model reasoning remain impossible to return.
  */
 export function normalizeMonitorRun(
   payload: unknown,
@@ -181,23 +235,57 @@ export function normalizeMonitorRun(
           if (!normalized) droppedOptionalItems += 1;
           return normalized ? [normalized] : [];
         });
+        const normalizeSourceCollection = (
+          values: unknown[],
+          mode: "canonical" | "preserve",
+        ) => {
+          const valid = values.flatMap((item) => {
+            const parsed = SourceSchema.safeParse(item);
+            if (!parsed.success) {
+              droppedOptionalItems += 1;
+              return [];
+            }
+            const normalized = normalizeSource(parsed.data);
+            if (!normalized.title && !normalized.url && !normalized.domain) {
+              droppedOptionalItems += 1;
+              return [];
+            }
+            return [normalized];
+          });
+          if (mode === "canonical") return normalizeMonitorSources(valid);
+          const seen = new Set<string>();
+          return valid.filter((source) => {
+            const identity = JSON.stringify([
+              source.index,
+              source.title,
+              source.url,
+              source.site,
+              source.domain,
+              source.summary,
+              source.publishTime,
+            ]);
+            if (seen.has(identity)) return false;
+            seen.add(identity);
+            return true;
+          });
+        };
+        const rawCitations = record.citationList ?? record.citations ?? [];
+        const rawReferences = record.referenceList ?? record.references ?? [];
         const rawSources =
           record.sources !== undefined
             ? record.sources
-            : [...record.citations, ...record.references];
-        const validSources = rawSources.flatMap((item) => {
-          const parsed = SourceSchema.safeParse(item);
-          if (!parsed.success) {
-            droppedOptionalItems += 1;
-            return [];
-          }
-          const normalized = normalizeSource(parsed.data);
-          if (!normalized.title && !normalized.url && !normalized.domain) {
-            droppedOptionalItems += 1;
-            return [];
-          }
-          return [parsed.data];
-        });
+            : [...rawCitations, ...rawReferences];
+        const citationList = normalizeSourceCollection(
+          rawCitations,
+          "preserve",
+        );
+        const referenceList = normalizeSourceCollection(
+          rawReferences,
+          "preserve",
+        );
+        const sourceBreakdownAvailable =
+          Object.prototype.hasOwnProperty.call(record, "citationList") ||
+          Object.prototype.hasOwnProperty.call(record, "referenceList");
         return [
           {
             recordId: record.recordId,
@@ -206,7 +294,42 @@ export function normalizeMonitorRun(
             status: record.status,
             answerText: record.answerText,
             media,
-            sources: normalizeMonitorSources(validSources),
+            sources: normalizeSourceCollection(rawSources, "canonical"),
+            ...(sourceBreakdownAvailable
+              ? {
+                  citations: citationList,
+                  references: referenceList,
+                  sourceBreakdownAvailable: true,
+                }
+              : {}),
+            ...(record.searchKeywords
+              ? { searchKeywords: Array.from(new Set(record.searchKeywords)) }
+              : {}),
+            ...(record.recommendedQuestions
+              ? {
+                  recommendedQuestions: Array.from(
+                    new Set(record.recommendedQuestions),
+                  ),
+                }
+              : {}),
+            ...(Object.prototype.hasOwnProperty.call(record, "mentionPosition")
+              ? { mentionPosition: record.mentionPosition }
+              : {}),
+            ...(Object.prototype.hasOwnProperty.call(record, "mentionContext")
+              ? { mentionContext: record.mentionContext }
+              : {}),
+            ...(Object.prototype.hasOwnProperty.call(record, "sentiment")
+              ? { sentiment: record.sentiment }
+              : {}),
+            ...(Object.prototype.hasOwnProperty.call(record, "categoryRanking")
+              ? { categoryRanking: record.categoryRanking }
+              : {}),
+            ...(record.keywordEvaluations
+              ? { keywordEvaluations: record.keywordEvaluations }
+              : {}),
+            ...(record.screenshot?.available === true
+              ? { screenshotAvailable: true }
+              : {}),
             error: record.error,
             completedAt: record.completedAt,
           },
@@ -303,6 +426,16 @@ export function normalizeMonitorRun(
     failedItems: observedFailed,
     submittedAt: run.submittedAt,
     nextPollAt: run.nextPollAt,
+    ...(run.region
+      ? {
+          region: {
+            edition: run.region.scope,
+            code: run.region.code,
+            label: run.region.label,
+          },
+        }
+      : {}),
+    screenshotEnabled: run.screenshot === 1,
     records,
     error: run.error,
     ...(quality ? { quality } : {}),
@@ -343,10 +476,13 @@ function safePublicMediaUrl(value?: string) {
 }
 
 function normalizeSource(source: z.infer<typeof SourceSchema>): {
+  index?: number;
   title?: string;
   url?: string;
+  site?: string;
   domain?: string;
   summary?: string;
+  publishTime?: string;
 } {
   if (typeof source === "string") {
     const url = safeHttpUrl(source);
@@ -357,10 +493,13 @@ function normalizeSource(source: z.infer<typeof SourceSchema>): {
   const normalizedUrl = safeHttpUrl(source.url);
   if (source.url && !normalizedUrl) return {};
   return {
-    title: source.title || source.name || source.source,
+    index: source.index,
+    title: source.title || source.name,
     url: normalizedUrl,
+    site: source.site || source.source,
     domain: source.domain,
     summary: source.summary,
+    publishTime: source.publishTime,
   };
 }
 
@@ -439,7 +578,15 @@ export function normalizeMonitorSources(
 ) {
   const byIdentity = new Map<
     string,
-    { title?: string; url?: string; domain?: string; summary?: string }
+    {
+      index?: number;
+      title?: string;
+      url?: string;
+      site?: string;
+      domain?: string;
+      summary?: string;
+      publishTime?: string;
+    }
   >();
   for (const value of values) {
     const source = normalizeSource(value);
@@ -466,10 +613,13 @@ export function normalizeMonitorSources(
       const preferred = sourceScore > existingScore ? source : existing;
       const secondary = preferred === source ? existing : source;
       byIdentity.set(identity, {
+        index: preferred.index ?? secondary.index,
         title: preferred.title || secondary.title,
         url: preferred.url || secondary.url,
+        site: preferred.site || secondary.site,
         domain: preferred.domain || secondary.domain,
         summary: preferred.summary || secondary.summary,
+        publishTime: preferred.publishTime || secondary.publishTime,
       });
     }
     if (byIdentity.size >= 200) break;
@@ -517,6 +667,8 @@ export function toPublicMonitorView(run: BrokerMonitorRun) {
     failedRecords: run.failedItems,
     startedAt: run.submittedAt,
     nextPollAt: run.nextPollAt,
+    ...(run.region ? { region: run.region } : {}),
+    ...(run.screenshotEnabled ? { screenshotEnabled: true } : {}),
     records: run.records,
     error: run.error,
     ...(quality ? { quality } : {}),

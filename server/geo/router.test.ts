@@ -17,6 +17,7 @@ import {
   expectedContractHashes,
   type BrokerArtifact,
   type BrokerLocalAsset,
+  type BrokerMonitorRawRun,
   type BrokerMonitorRun,
   type BrokerTask,
   type BrokerUploadOptions,
@@ -275,11 +276,32 @@ class MockBroker implements GeoPresalesBroker {
   skillUploadError?: Error;
   regularUploadError?: Error;
   taskAttachments: Array<Array<{ file_id: string; filename: string }>> = [];
-  monitorRuns = new Map<string, BrokerMonitorRun>();
-  monitorResults = new Map<string, BrokerMonitorRun>();
+  monitorRuns = new Map<string, BrokerMonitorRawRun>();
+  monitorResults = new Map<string, BrokerMonitorRawRun>();
   monitorCreates = 0;
-  monitorCreateStatus: BrokerMonitorRun["status"] = "submitted";
+  monitorCreateStatus: BrokerMonitorRawRun["status"] = "submitted";
   monitorCreateError?: Error;
+  monitorCreateInputs: Array<
+    Parameters<GeoPresalesBroker["createMonitorRun"]>[0]
+  > = [];
+  monitorRegionReads: GeoMonitoringEdition[] = [];
+  monitorRegions: Record<
+    GeoMonitoringEdition,
+    Array<{ code: string; label: string }>
+  > = {
+    domestic: [
+      { code: "110000", label: "北京市" },
+      { code: "opaque:cn-east", label: "华东节点" },
+    ],
+    overseas: [
+      { code: "US", label: "美国" },
+      { code: "JP", label: "日本" },
+    ],
+  };
+  monitorScreenshotDownloads: Array<{ runId: string; recordId: string }> = [];
+  monitorScreenshotBytes = fixturePng(19);
+  monitorScreenshotContentType = "image/png";
+  monitorScreenshotError?: Error;
   monitorResultReads = 0;
   monitorResultError?: Error;
   taskResultErrors = new Map<string, Error>();
@@ -986,12 +1008,28 @@ class MockBroker implements GeoPresalesBroker {
     question: string;
     platforms: GeoMonitorPlatformId[];
     idempotencyKey: string;
+    monitorKeyword?: string;
+    screenshot?: 0 | 1;
+    region?: { scope: GeoMonitoringEdition; code: string };
   }) {
     if (this.monitorCreateError) throw this.monitorCreateError;
     const existing = this.monitorRuns.get(input.idempotencyKey);
     if (existing) return existing;
+    this.monitorCreateInputs.push(input);
+    const selectedRegion = input.region
+      ? this.monitorRegions[input.region.scope].find(
+          (region) => region.code === input.region?.code,
+        )
+      : undefined;
+    if (input.region && !selectedRegion) {
+      throw new GeoBrokerError(
+        "region is no longer available",
+        422,
+        "REGION_UNAVAILABLE",
+      );
+    }
     this.monitorCreates += 1;
-    const run: BrokerMonitorRun = {
+    const run: BrokerMonitorRawRun = {
       runId: `monitor-${this.monitorCreates}`,
       status: this.monitorCreateStatus,
       question: input.question,
@@ -1001,10 +1039,26 @@ class MockBroker implements GeoPresalesBroker {
       completedItems: 0,
       failedItems: 0,
       nextPollAt: new Date(Date.now() + 300_000).toISOString(),
+      ...(input.monitorKeyword ? { monitorKeyword: input.monitorKeyword } : {}),
+      screenshot: input.screenshot ?? 0,
+      ...(input.region && selectedRegion
+        ? {
+            region: {
+              scope: input.region.scope,
+              code: selectedRegion.code,
+              label: selectedRegion.label,
+            },
+          }
+        : {}),
     };
     this.monitorRuns.set(input.idempotencyKey, run);
     this.monitorRuns.set(run.runId, run);
     return run;
+  }
+
+  async getMonitorRegions(edition: GeoMonitoringEdition) {
+    this.monitorRegionReads.push(edition);
+    return { edition, regions: this.monitorRegions[edition] };
   }
 
   async getMonitorRun(runId: string) {
@@ -1017,6 +1071,18 @@ class MockBroker implements GeoPresalesBroker {
     this.monitorResultReads += 1;
     if (this.monitorResultError) throw this.monitorResultError;
     return this.monitorResults.get(runId) ?? this.getMonitorRun(runId);
+  }
+
+  async downloadMonitorScreenshot(runId: string, recordId: string) {
+    this.monitorScreenshotDownloads.push({ runId, recordId });
+    if (this.monitorScreenshotError) throw this.monitorScreenshotError;
+    return new Response(this.monitorScreenshotBytes, {
+      status: 200,
+      headers: {
+        "content-type": this.monitorScreenshotContentType,
+        "content-length": String(this.monitorScreenshotBytes.length),
+      },
+    });
   }
 
   async deleteMonitorRun(_projectId: string, runId: string) {
@@ -7833,6 +7899,174 @@ describe("GEO API", () => {
       expect(await response.text()).toBe("");
     }
     expect(paymentCallbackCalls).toBe(0);
+  });
+
+  it("lists edition-scoped monitoring regions through the owned project route", async () => {
+    const ready = await createReadyProject();
+
+    const response = await jsonRequest(
+      `/projects/${encodeURIComponent(ready.projectToken)}/monitoring/regions?edition=domestic`,
+      ready.cookie,
+    );
+
+    expect(response.response.status).toBe(200);
+    expect(response.response.headers.get("cache-control")).toBe("no-store");
+    expect(response.body).toEqual({
+      catalog: {
+        edition: "domestic",
+        regions: broker.monitorRegions.domestic,
+      },
+    });
+    expect(broker.monitorRegionReads).toEqual(["domestic"]);
+  });
+
+  it("submits region and screenshot once and trusts the Dashboard region snapshot", async () => {
+    const ready = await createReadyProject();
+    const body = {
+      schemaVersion: 2,
+      clientRequestId: "76767676-7676-4767-8767-767676767676",
+      questionId: "product-scenario-01",
+      monitoringEdition: "domestic",
+      regionCode: "110000",
+      screenshotEnabled: true,
+      platformIds: ["deepseek"],
+    };
+
+    const started = await jsonRequest(
+      `/projects/${encodeURIComponent(ready.projectToken)}/monitoring`,
+      ready.cookie,
+      { method: "POST", body },
+    );
+
+    expect(started.response.status).toBe(201);
+    expect(broker.monitorRegionReads).toEqual([]);
+    expect(broker.monitorCreateInputs).toHaveLength(1);
+    expect(broker.monitorCreateInputs[0]).toMatchObject({
+      monitorKeyword: "Acme",
+      screenshot: 1,
+      region: { scope: "domestic", code: "110000" },
+    });
+    expect(started.body).toMatchObject({
+      project: {
+        monitoringRegion: {
+          edition: "domestic",
+          code: "110000",
+          label: "北京市",
+        },
+        monitoringScreenshotEnabled: true,
+        monitoring: {
+          region: {
+            edition: "domestic",
+            code: "110000",
+            label: "北京市",
+          },
+          screenshotEnabled: true,
+        },
+      },
+    });
+
+    const changedRegion = await jsonRequest(
+      `/projects/${encodeURIComponent(started.body.projectToken)}/monitoring`,
+      ready.cookie,
+      {
+        method: "POST",
+        body: {
+          ...body,
+          clientRequestId: "75757575-7575-4757-8757-757575757575",
+          regionCode: "opaque:cn-east",
+        },
+      },
+    );
+    expect(changedRegion.response.status).toBe(409);
+    expect(changedRegion.body).toMatchObject({
+      error: { code: "MONITOR_SCOPE_CONFLICT" },
+    });
+    expect(broker.monitorCreateInputs).toHaveLength(1);
+  });
+
+  it("returns REGION_UNAVAILABLE without a second Website catalog lookup", async () => {
+    const ready = await createReadyProject();
+    const response = await jsonRequest(
+      `/projects/${encodeURIComponent(ready.projectToken)}/monitoring`,
+      ready.cookie,
+      {
+        method: "POST",
+        body: {
+          schemaVersion: 2,
+          clientRequestId: "74747474-7474-4747-8747-747474747474",
+          questionId: "product-scenario-01",
+          monitoringEdition: "domestic",
+          regionCode: "removed-node",
+          platformIds: ["deepseek"],
+        },
+      },
+    );
+
+    expect(response.response.status).toBe(422);
+    expect(response.body).toMatchObject({
+      error: { code: "REGION_UNAVAILABLE" },
+    });
+    expect(broker.monitorRegionReads).toEqual([]);
+    expect(broker.monitorCreateInputs).toHaveLength(1);
+  });
+
+  it("streams an owned monitor screenshot through the Website same-origin route", async () => {
+    const ready = await createReadyProject();
+    const started = await jsonRequest(
+      `/projects/${encodeURIComponent(ready.projectToken)}/monitoring`,
+      ready.cookie,
+      {
+        method: "POST",
+        body: {
+          schemaVersion: 2,
+          clientRequestId: "73737373-7373-4737-8737-737373737373",
+          questionId: "product-scenario-01",
+          monitoringEdition: "domestic",
+          screenshotEnabled: true,
+          platformIds: ["deepseek"],
+        },
+      },
+    );
+    expect(started.response.status).toBe(201);
+    broker.monitorRuns.set("monitor-1", {
+      runId: "monitor-1",
+      status: "polling",
+      question: "Acme 服务模块 1 主要解决哪些业务问题？",
+      platforms: ["deepseek"],
+      repeatPerPlatform: 5,
+      expectedItems: 5,
+      completedItems: 1,
+      failedItems: 0,
+      screenshot: 1,
+      records: [
+        {
+          recordId: "record-1",
+          platform: "deepseek",
+          runIndex: 1,
+          status: "completed",
+          answerText: "回答正文",
+          media: [],
+          sources: [],
+          screenshot: { available: true, url: "/private/dashboard/url" },
+        },
+      ],
+    });
+
+    const response = await fetch(
+      `${baseUrl}/projects/${encodeURIComponent(started.body.projectToken)}/monitoring/records/record-1/screenshot`,
+      { headers: { cookie: ready.cookie } },
+    );
+
+    expect(response.status).toBe(200);
+    expect(response.headers.get("content-type")).toBe("image/png");
+    expect(response.headers.get("cache-control")).toBe("private, no-store");
+    expect(response.headers.get("x-content-type-options")).toBe("nosniff");
+    expect(Buffer.from(await response.arrayBuffer())).toEqual(
+      broker.monitorScreenshotBytes,
+    );
+    expect(broker.monitorScreenshotDownloads).toEqual([
+      { runId: "monitor-1", recordId: "record-1" },
+    ]);
   });
 
   it("submits one free 5-per-platform text search run and replays idempotently", async () => {
