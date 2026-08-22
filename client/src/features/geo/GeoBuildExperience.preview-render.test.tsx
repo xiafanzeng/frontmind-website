@@ -242,26 +242,23 @@ describe("GEO style preview rendering", () => {
     );
   });
 
-  it("groups the five media platforms in a separate authority-source box", () => {
+  it("groups questions into product-opinion and industry-ranking choices", () => {
     const html = renderToStaticMarkup(
       <QuestionRecommendation
         project={createGeoStylePreviewProject()}
         selectionLocked={false}
         onSelect={vi.fn()}
-        onCreateCustom={vi.fn()}
-        onContact={vi.fn()}
+        onContinue={vi.fn()}
       />,
     );
 
-    expect(html).toContain('class="geo-authority-sources"');
-    expect(html).toContain("权威信源");
-    expect(html).toContain("搜狐");
-    expect(html).toContain("新浪");
-    expect(html).toContain("今日头条");
-    expect(html).toContain("网易");
-    expect(html).toContain("腾讯新闻");
-    expect(html).toContain("/geo-builder/channels/sohu.png");
-    expect(html).toContain("/geo-builder/channels/tencent-news.png");
+    expect(html).toContain("产品与舆情");
+    expect(html).toContain("行业排名与品牌优胜");
+    expect(html).toContain("国内版 ¥1,500/月");
+    expect(html).toContain("海外版 ¥4,000/月");
+    expect(html).toContain("根据企业实际情况定制");
+    expect(html).not.toContain("自定义优化问题");
+    expect(html).not.toContain("全域营销权限");
   });
 
   it("does not render partial recommendations as selectable categories", () => {
@@ -275,8 +272,7 @@ describe("GEO style preview rendering", () => {
         project={project}
         selectionLocked={false}
         onSelect={vi.fn()}
-        onCreateCustom={vi.fn()}
-        onContact={vi.fn()}
+        onContinue={vi.fn()}
       />,
     );
 
@@ -285,7 +281,7 @@ describe("GEO style preview rendering", () => {
     expect(html).not.toContain("本分类本次暂无可展示问题");
   });
 
-  it("renders semantic category conflicts in a separate locked pending-classification section", () => {
+  it("keeps unclassified questions out of both selectable groups", () => {
     const fixture = createGeoStylePreviewProject();
     const html = renderToStaticMarkup(
       <QuestionRecommendation
@@ -317,16 +313,13 @@ describe("GEO style preview rendering", () => {
         }}
         selectionLocked={false}
         onSelect={vi.fn()}
-        onCreateCustom={vi.fn()}
-        onContact={vi.fn()}
+        onContinue={vi.fn()}
       />,
     );
 
-    expect(html).toContain('data-category="unclassified"');
-    expect(html).toContain("待分类");
-    expect(html).toContain("其中 1 道已放入待分类并锁定");
-    expect(html).toMatch(/<button[^>]*type="button"[^>]*disabled="">/);
-    expect(html.match(/FrontMind 与云杉科技相比有什么区别？/g)).toHaveLength(1);
+    expect(html).not.toContain('data-category="unclassified"');
+    expect(html).toContain("另有 1 道分类未确认的问题，本次不用于选择");
+    expect(html).not.toContain("FrontMind 与云杉科技相比有什么区别？");
   });
 
   it("renders only progress skeletons while recommendation is pending", () => {
@@ -345,8 +338,7 @@ describe("GEO style preview rendering", () => {
         }}
         selectionLocked={false}
         onSelect={vi.fn()}
-        onCreateCustom={vi.fn()}
-        onContact={vi.fn()}
+        onContinue={vi.fn()}
       />,
     );
 
@@ -365,8 +357,7 @@ describe("GEO style preview rendering", () => {
         project={createGeoStylePreviewProject()}
         selectionLocked
         onSelect={vi.fn()}
-        onCreateCustom={vi.fn()}
-        onContact={vi.fn()}
+        onContinue={vi.fn()}
       />,
     );
 

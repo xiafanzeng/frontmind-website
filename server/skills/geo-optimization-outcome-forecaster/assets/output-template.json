@@ -212,6 +212,7 @@
       }
     }
   },
+  "brandMentionRateTarget": null,
   "roadmap": [
     {
       "phase": 1,

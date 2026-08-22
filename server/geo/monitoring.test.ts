@@ -1,5 +1,7 @@
 import { describe, expect, it } from "vitest";
+import type { BrokerMonitorRun } from "./broker";
 import {
+  monitorBrandMentionRate,
   normalizeMonitorRun,
   normalizeMonitorSources,
   toPublicMonitorView,
@@ -53,6 +55,66 @@ function cleanCompletedRun() {
 }
 
 describe("monitor result adapter", () => {
+  it("uses only completed non-error answers with an explicit mention field", () => {
+    const run = {
+      runId: "ranking-run",
+      status: "completed",
+      question: "行业推荐有哪些？",
+      platforms: ["doubao"],
+      repeatPerPlatform: 5,
+      expectedItems: 5,
+      completedItems: 5,
+      failedItems: 0,
+      records: [
+        {
+          recordId: "one",
+          platform: "doubao",
+          runIndex: 1,
+          status: "completed",
+          answerText: "提及",
+          media: [],
+          sources: [],
+          mentionPosition: 1,
+        },
+        {
+          recordId: "two",
+          platform: "doubao",
+          runIndex: 2,
+          status: "completed",
+          answerText: "明确未提及",
+          media: [],
+          sources: [],
+          mentionPosition: null,
+        },
+        {
+          recordId: "three",
+          platform: "doubao",
+          runIndex: 3,
+          status: "completed",
+          answerText: "带错误的结构化结果",
+          media: [],
+          sources: [],
+          mentionPosition: 2,
+          error: "结构化结果不可用",
+        },
+        {
+          recordId: "four",
+          platform: "doubao",
+          runIndex: 4,
+          status: "completed",
+          answerText: "字段缺失",
+          media: [],
+          sources: [],
+        },
+      ],
+    } satisfies BrokerMonitorRun;
+
+    expect(monitorBrandMentionRate(run)).toEqual({
+      current: 0.5,
+      observedAnswers: 2,
+    });
+  });
+
   it("keeps final text, safe media and one canonical source collection", () => {
     const run = normalizeMonitorRun(completedRun(), {
       runId: "monitor-run-001",

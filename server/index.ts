@@ -9,10 +9,7 @@ import {
   assertVisitorStatsStoreReady,
   handleVisitorStatsRequest,
 } from "./visitorStats";
-import {
-  createGeoCustomQuestionRecoveryWorker,
-  createGeoRouter,
-} from "./geo/router";
+import { createGeoRouter } from "./geo/router";
 import { createGeoPresalesBrokerFromEnv } from "./geo/broker";
 import {
   createGeoPaymentReceiptStore,
@@ -25,16 +22,13 @@ import {
 } from "./geo/health";
 import { installBaseSecurityHeaders } from "./security";
 import {
-  loadGeoCustomQuestionClassifierSkill,
   loadGeoQuestionRecommenderSkill,
   loadWebsiteKnowledgeBaseSkill,
   resolveWebsiteKnowledgeBaseWriterVersion,
-  CUSTOM_QUESTION_CLASSIFIER_SKILL_VERSION,
 } from "./geo/skills";
 import { loadGeoCurrentStateEvaluatorSkill } from "./geo/assessment";
 import { loadGeoOptimizationOutcomeForecasterSkill } from "./geo/forecast";
 import { assertGeoPaymentConfigurationFromEnv } from "./geo/payment";
-import { createGeoCustomQuestionValidationStore } from "./geo/custom-question-validation-store";
 import { createGeoMonitorFreeReservationStore } from "./geo/monitor-free-reservation-store";
 import { collectWebsiteRuntimeReadiness } from "./runtime-readiness";
 import { assertGeoRuntimeConfigurationFromEnv } from "./geo/runtime-config";
@@ -57,10 +51,6 @@ function geoRuntimeSkills() {
       version: websiteKnowledgeBaseWriterVersion,
     },
     { name: "geo-question-recommender", version: 1 },
-    {
-      name: "geo-custom-question-classifier",
-      version: CUSTOM_QUESTION_CLASSIFIER_SKILL_VERSION,
-    },
     { name: "geo-current-state-evaluator", version: 3 },
     { name: "geo-optimization-outcome-forecaster", version: 1 },
   ] as const;
@@ -71,7 +61,6 @@ async function getGeoRuntimeSkillReadiness() {
   const contents = await Promise.all([
     loadWebsiteKnowledgeBaseSkill(runtimeSkills[0].version),
     loadGeoQuestionRecommenderSkill(),
-    loadGeoCustomQuestionClassifierSkill(),
     loadGeoCurrentStateEvaluatorSkill(),
     loadGeoOptimizationOutcomeForecasterSkill(),
   ]);
@@ -96,13 +85,7 @@ async function startServer() {
   const geoBroker = createGeoPresalesBrokerFromEnv();
   const projectOrderRegistry = createGeoProjectOrderRegistry();
   const paymentReceiptStore = createGeoPaymentReceiptStore();
-  const customQuestionValidationStore =
-    createGeoCustomQuestionValidationStore();
   const monitorFreeReservationStore = createGeoMonitorFreeReservationStore();
-  const customQuestionRecoveryWorker = createGeoCustomQuestionRecoveryWorker({
-    broker: geoBroker,
-    store: customQuestionValidationStore,
-  });
   const getGeoDependencyReadiness = createGeoDependencyHealthChecker({
     broker: geoBroker,
     projectOrderRegistry,
@@ -122,7 +105,6 @@ async function startServer() {
       assertConfiguration: () => {
         assertGeoRuntimeConfigurationFromEnv(process.env);
       },
-      validationStore: customQuestionValidationStore,
       monitorFreeReservationStore,
     });
   // Recover only crash-left project locks before any route can acquire one.
@@ -196,13 +178,10 @@ async function startServer() {
     createGeoRouter({
       broker: geoBroker,
       projectOrderRegistry,
-      customQuestionValidationStore,
       monitorFreeReservationStore,
     }),
   );
 
-  customQuestionRecoveryWorker.start();
-  server.on("close", () => customQuestionRecoveryWorker.stop());
   const sweepMonitorFreeReservations = () => {
     void monitorFreeReservationStore.collectGarbage().catch((error) => {
       console.error("[Monitor free reservation sweeper] failed", {

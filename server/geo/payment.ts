@@ -12,6 +12,10 @@ import {
   type GeoPaymentReceiptStore,
 } from "./provisioning";
 import { GeoTokenCodec, GeoTokenError, GeoTokenExpiredError } from "./tokens";
+import {
+  GEO_SERVICE_MONTHLY_PRICE_FEN,
+  geoServiceMonthlyPriceFen as sharedGeoServiceMonthlyPriceFen,
+} from "../../shared/geo-pricing";
 
 const ZPAY_SUBMIT_URL = "https://zpayz.cn/submit.php";
 const ZPAY_ORDER_QUERY_URL = "https://zpayz.cn/api.php";
@@ -32,21 +36,16 @@ export type GeoServiceCategory =
   | "product_scenario"
   | "competitor_comparison";
 
-export const GEO_SERVICE_MONTHLY_PRICE_FEN: Record<GeoServiceCategory, number> =
-  {
-    reputation: 200_000,
-    product_scenario: 150_000,
-    competitor_comparison: 200_000,
-  };
+export { GEO_SERVICE_MONTHLY_PRICE_FEN };
 
 export function geoServiceMonthlyPriceFen(
   category: GeoServiceCategory,
   edition?: GeoMonitoringEdition,
 ) {
-  const basePrice = GEO_SERVICE_MONTHLY_PRICE_FEN[category];
-  return normalizedGeoMonitoringEdition(edition) === "overseas"
-    ? basePrice * 2
-    : basePrice;
+  return sharedGeoServiceMonthlyPriceFen(
+    category,
+    normalizedGeoMonitoringEdition(edition),
+  );
 }
 
 export type GeoPaymentVerificationInput = {

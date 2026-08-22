@@ -30,12 +30,7 @@ import {
   GeoAdminNotificationConfigurationError,
   type GeoAdminNotification,
 } from "./admin-notifications";
-import {
-  createGeoCustomQuestionRecoveryWorker,
-  createGeoRouter,
-  GEO_LEGACY_CUSTOM_QUESTION_COMPATIBILITY_WAIT_MS,
-  KnowledgeBaseArchiveValidationError,
-} from "./router";
+import { createGeoRouter, KnowledgeBaseArchiveValidationError } from "./router";
 
 import {
   geoCustomQuestionHash,
@@ -747,6 +742,12 @@ class MockBroker implements GeoPresalesBroker {
     const isForecastTask = input.prompt.includes(
       "geo-optimization-outcome-forecaster.skill.zip",
     );
+    const isIndustryPerspectiveTask = attachments.some((attachment) =>
+      attachment.filename.includes("industry-ranking"),
+    );
+    const industryQuestion = validQuestionSet().questions.find(
+      (question) => question.id === "industry-ranking-01",
+    )!;
     const id = isMonitorQuestionTranslationTask
       ? `monitor-question-translation-${++this.monitorQuestionTranslationTaskCount}`
       : isCustomQuestionClassifierTask
@@ -809,7 +810,15 @@ class MockBroker implements GeoPresalesBroker {
                   {
                     role: "assistant",
                     content: [
-                      { text: JSON.stringify(validAssessmentOutput()) },
+                      {
+                        text: JSON.stringify(
+                          validAssessmentOutput(
+                            isIndustryPerspectiveTask
+                              ? industryQuestion
+                              : undefined,
+                          ),
+                        ),
+                      },
                     ],
                   },
                 ],
@@ -822,7 +831,11 @@ class MockBroker implements GeoPresalesBroker {
                     {
                       role: "assistant",
                       content: [
-                        { text: JSON.stringify(validForecastOutput()) },
+                        {
+                          text: JSON.stringify(
+                            validForecastOutput(isIndustryPerspectiveTask),
+                          ),
+                        },
                       ],
                     },
                   ],
@@ -5002,9 +5015,9 @@ describe("GEO API", () => {
       `/projects/${encodeURIComponent(ready.projectToken)}`,
       ready.cookie,
     );
-    expect(fencedRead.response.status).toBe(200);
+    expect(fencedRead.response.status).toBe(410);
     expect(fencedRead.body).toMatchObject({
-      project: { id: expect.any(String) },
+      error: { code: "PROJECT_DELETED" },
     });
 
     const repeatedDelete = await jsonRequest(
@@ -5551,2281 +5564,6 @@ describe("GEO API", () => {
     expect(broker.repairCalls).toHaveLength(0);
   });
 
-  it("persists an existing recommended question as a no-active terminal receipt that old clients may ACK", async () => {
-    const ready = await createReadyProject();
-    const pathname = `/projects/${encodeURIComponent(
-      ready.projectToken,
-    )}/questions/custom`;
-    const direct = await jsonRequest(pathname, ready.cookie, {
-      method: "POST",
-      body: {
-        question: "Acme 的服务模块 1 主要解决哪些业务问题？",
-        clientRequestId: CUSTOM_QUESTION_CLIENT_REQUEST_ID,
-      },
-    });
-
-    expect(direct.response.status).toBe(200);
-    expect(direct.body).toMatchObject({
-      question: {
-        id: "product-scenario-01",
-        question: "Acme 的服务模块 1 主要解决哪些业务问题？",
-      },
-      validation: {
-        schemaVersion: 1,
-        clientRequestId: CUSTOM_QUESTION_CLIENT_REQUEST_ID,
-        state: "completed",
-        acknowledgement: "not_required",
-        completionMode: "existing_recommended_question",
-      },
-    });
-    expect(broker.customQuestionClassifierTaskCount).toBe(0);
-
-    const statusPath = `${pathname}/${CUSTOM_QUESTION_CLIENT_REQUEST_ID}`;
-    const recovered = await jsonRequest(statusPath, ready.cookie);
-    expect(recovered.response.status).toBe(200);
-    expect(recovered.body).toMatchObject({
-      question: direct.body.question,
-      validation: {
-        clientRequestId: CUSTOM_QUESTION_CLIENT_REQUEST_ID,
-        state: "completed",
-        acknowledgement: "not_required",
-        completionMode: "existing_recommended_question",
-      },
-    });
-
-    // A response-lost POST replays the same receipt without creating a task.
-    const replayed = await jsonRequest(pathname, ready.cookie, {
-      method: "POST",
-      body: {
-        question: "Acme 的服务模块 1 主要解决哪些业务问题？",
-        clientRequestId: CUSTOM_QUESTION_CLIENT_REQUEST_ID,
-      },
-    });
-    expect(replayed.response.status).toBe(200);
-    expect(replayed.body).toMatchObject({
-      question: direct.body.question,
-      validation: {
-        acknowledgement: "not_required",
-        completionMode: "existing_recommended_question",
-      },
-    });
-
-    // A cached pre-marker bundle still sends ACK. Both the first ACK and a
-    // lost-response retry are idempotent successes.
-    const acknowledgementPath = `${statusPath}/ack`;
-    const acknowledged = await jsonRequest(acknowledgementPath, ready.cookie, {
-      method: "POST",
-      body: {},
-    });
-    expect(acknowledged.response.status).toBe(200);
-    const replayedAcknowledgement = await jsonRequest(
-      acknowledgementPath,
-      ready.cookie,
-      { method: "POST", body: {} },
-    );
-    expect(replayedAcknowledgement.response.status).toBe(200);
-    expect(replayedAcknowledgement.body).toEqual(acknowledged.body);
-    expect(broker.customQuestionClassifierTaskCount).toBe(0);
-
-    const active = await jsonRequest(`${pathname}/active`, ready.cookie);
-    expect(active.response.status).toBe(404);
-    expect(active.body).toMatchObject({
-      error: { code: "CUSTOM_QUESTION_VALIDATION_NOT_FOUND" },
-    });
-  });
-
-  it("does not let a direct-completion receipt overwrite a different active validation", async () => {
-    const ready = await createReadyProject();
-    broker.customQuestionClassifierPendingPolls = 99;
-    const pathname = `/projects/${encodeURIComponent(
-      ready.projectToken,
-    )}/questions/custom`;
-    const active = await jsonRequest(pathname, ready.cookie, {
-      method: "POST",
-      body: {
-        question: "Acme 在高校科研场景中能解决什么问题？",
-        clientRequestId: CUSTOM_QUESTION_CLIENT_REQUEST_ID,
-      },
-    });
-    expect(active.response.status).toBe(202);
-
-    const receiptRequestId = "abababab-abab-4bab-8bab-abababababab";
-    const conflictingReceipt = await jsonRequest(pathname, ready.cookie, {
-      method: "POST",
-      body: {
-        question: "Acme 的服务模块 1 主要解决哪些业务问题？",
-        clientRequestId: receiptRequestId,
-      },
-    });
-    expect(conflictingReceipt.response.status).toBe(409);
-    expect(conflictingReceipt.body).toMatchObject({
-      error: { code: "CUSTOM_QUESTION_ACTIVE_RESERVATION_CONFLICT" },
-      activeOperation: {
-        clientRequestId: CUSTOM_QUESTION_CLIENT_REQUEST_ID,
-      },
-    });
-
-    const stillActive = await jsonRequest(`${pathname}/active`, ready.cookie);
-    expect(stillActive.response.status).toBe(202);
-    expect(stillActive.body).toMatchObject({
-      validation: { clientRequestId: CUSTOM_QUESTION_CLIENT_REQUEST_ID },
-    });
-    const missingReceipt = await jsonRequest(
-      `${pathname}/${receiptRequestId}`,
-      ready.cookie,
-    );
-    expect(missingReceipt.response.status).toBe(404);
-    expect(broker.customQuestionClassifierTaskCount).toBe(1);
-  });
-
-  it("binds a validated custom question to free monitoring and assessment", async () => {
-    const ready = await createReadyProject();
-    broker.customQuestionClassifierOutput = {
-      ...broker.customQuestionClassifierOutput,
-      questionEnglish:
-        "What problems can Acme solve in university research scenarios?",
-    };
-    const custom = await jsonRequest(
-      "/projects/" +
-        encodeURIComponent(ready.projectToken) +
-        "/questions/custom",
-      ready.cookie,
-      {
-        method: "POST",
-        body: {
-          question: "  Acme 在高校科研场景中能解决什么问题? ",
-          clientRequestId: CUSTOM_QUESTION_CLIENT_REQUEST_ID,
-        },
-      },
-    );
-    expect(custom.response.status).toBe(201);
-    const customPayload = custom.body as Record<string, any>;
-    expect(customPayload.question).toMatchObject({
-      id: expect.stringMatching(/^custom-[a-f0-9]{20}$/),
-      category: "product_scenario",
-      question: "Acme 在高校科研场景中能解决什么问题？",
-      selectable: true,
-      evidenceRefs: ["evidence/S001.md"],
-    });
-    expect(customPayload.question).not.toHaveProperty("questionEnglish");
-    expect(customPayload.project.questions).toHaveLength(21);
-    expect(
-      customPayload.project.questions.some(
-        (question: Record<string, unknown>) => "questionEnglish" in question,
-      ),
-    ).toBe(false);
-
-    const questionId = customPayload.question.id as string;
-    const started = await jsonRequest(
-      "/projects/" +
-        encodeURIComponent(customPayload.projectToken) +
-        "/monitoring",
-      ready.cookie,
-      {
-        method: "POST",
-        body: {
-          schemaVersion: 2,
-          clientRequestId: "86868686-8686-4686-8686-868686868686",
-          questionId,
-          monitoringEdition: "domestic",
-          platformIds: ["doubao"],
-        },
-      },
-    );
-    expect(started.response.status).toBe(201);
-    expect(paymentCalls).toHaveLength(0);
-    expect(paymentCheckoutCalls).toHaveLength(0);
-    expect(broker.monitorRuns.get("monitor-1")?.question).toBe(
-      "Acme 在高校科研场景中能解决什么问题？",
-    );
-
-    const run = broker.monitorRuns.get("monitor-1")!;
-    broker.monitorRuns.set("monitor-1", {
-      ...run,
-      status: "completed",
-      completedItems: 5,
-      records: Array.from({ length: 5 }, (_, index) =>
-        monitorRecord(index + 1, `自定义问题回答 ${index + 1}`),
-      ),
-    });
-    broker.completeAssessmentImmediately = true;
-    const startedPayload = started.body as Record<string, any>;
-    const assessed = await jsonRequest(
-      "/projects/" +
-        encodeURIComponent(startedPayload.projectToken) +
-        "/assessment",
-      ready.cookie,
-      { method: "POST", body: {} },
-    );
-    expect(assessed.response.status).toBe(201);
-    expect(broker.prompts.at(-1)).not.toContain(
-      "Acme 在高校科研场景中能解决什么问题？",
-    );
-    const taskInputAttachment = broker.taskAttachments
-      .at(-1)!
-      .find((attachment) => attachment.filename.endsWith("-task-input.json"))!;
-    expect(
-      JSON.parse(
-        broker.taskInputUploads
-          .get(taskInputAttachment.file_id)!
-          .toString("utf8"),
-      ).data.question.text,
-    ).toBe("Acme 在高校科研场景中能解决什么问题？");
-  });
-
-  it("returns an async reservation and resumes the same upstream validation task", async () => {
-    const ready = await createReadyProject();
-    broker.customQuestionClassifierPendingPolls = 2;
-
-    const custom = await jsonRequest(
-      `/projects/${encodeURIComponent(ready.projectToken)}/questions/custom`,
-      ready.cookie,
-      {
-        method: "POST",
-        body: {
-          question: "Acme 在高校科研场景中能解决什么问题？",
-          clientRequestId: CUSTOM_QUESTION_CLIENT_REQUEST_ID,
-        },
-      },
-    );
-
-    expect(custom.response.status).toBe(202);
-    expect(custom.body).toMatchObject({
-      validation: {
-        clientRequestId: CUSTOM_QUESTION_CLIENT_REQUEST_ID,
-        state: "submitted",
-        acknowledgement: "required",
-        completionMode: "reservation",
-      },
-    });
-    expect(broker.customQuestionClassifierTaskCount).toBe(1);
-
-    const statusPath = `/projects/${encodeURIComponent(
-      ready.projectToken,
-    )}/questions/custom/${CUSTOM_QUESTION_CLIENT_REQUEST_ID}`;
-    const stillRunning = await jsonRequest(statusPath, ready.cookie);
-    expect(stillRunning.response.status).toBe(202);
-    expect(stillRunning.body).toMatchObject({
-      validation: { state: "submitted" },
-    });
-
-    const completed = await jsonRequest(statusPath, ready.cookie);
-    expect(completed.response.status).toBe(200);
-    expect(completed.body).toMatchObject({
-      question: {
-        question: "Acme 在高校科研场景中能解决什么问题？",
-      },
-      validation: { state: "completed" },
-    });
-    expect(broker.customQuestionClassifierPolls).toBe(2);
-    expect(broker.customQuestionClassifierTaskCount).toBe(1);
-
-    const replayed = await jsonRequest(
-      `/projects/${encodeURIComponent(ready.projectToken)}/questions/custom`,
-      ready.cookie,
-      {
-        method: "POST",
-        body: {
-          question: "Acme 在高校科研场景中能解决什么问题？",
-          clientRequestId: CUSTOM_QUESTION_CLIENT_REQUEST_ID,
-        },
-      },
-    );
-    expect(replayed.response.status).toBe(201);
-    expect(replayed.body).toMatchObject({
-      question: completed.body.question,
-      validation: { state: "completed" },
-    });
-    expect(broker.customQuestionClassifierTaskCount).toBe(1);
-  });
-
-  it("returns an async enterprise rejection without reloading unrelated task results on every status poll", async () => {
-    const ready = await createReadyProject();
-    broker.customQuestionClassifierPendingPolls = 2;
-    broker.customQuestionClassifierOutput = {
-      decision: "reject",
-      category: "unrelated",
-      enterpriseRelated: false,
-      reasonCode: "enterprise_unrelated",
-      reason: "知识库未提供将 FrontMind 与 Acme 关联的事实证据。",
-      enterpriseAnchor: null,
-      offeringAnchor: null,
-      evidenceRefs: [],
-    };
-    const pathname = `/projects/${encodeURIComponent(
-      ready.projectToken,
-    )}/questions/custom`;
-    const started = await jsonRequest(pathname, ready.cookie, {
-      method: "POST",
-      body: {
-        question: "FrontMind是什么企业？",
-        clientRequestId: CUSTOM_QUESTION_CLIENT_REQUEST_ID,
-      },
-    });
-    expect(started.response.status).toBe(202);
-
-    // A status observation must depend on the frozen reservation and its
-    // classifier task, not re-fetch the already completed KB/question tasks.
-    // This reproduces the production 502 that interrupted the browser before
-    // the background worker persisted the authoritative rejection.
-    broker.taskResultErrors.set(
-      "kb-1",
-      new GeoBrokerError("Too Many Requests", 429, "AGENT_RATE_LIMITED"),
-    );
-    broker.taskResultErrors.set(
-      "question-1",
-      new GeoBrokerError("Too Many Requests", 429, "AGENT_RATE_LIMITED"),
-    );
-
-    const statusPath = `${pathname}/${CUSTOM_QUESTION_CLIENT_REQUEST_ID}`;
-    const stillRunning = await jsonRequest(statusPath, ready.cookie);
-    expect(stillRunning.response.status).toBe(202);
-    expect(stillRunning.body).toMatchObject({
-      validation: { state: "submitted" },
-    });
-
-    const rejected = await jsonRequest(statusPath, ready.cookie);
-    expect(rejected.response.status).toBe(422);
-    expect(rejected.body).toMatchObject({
-      error: {
-        code: "CUSTOM_QUESTION_ENTERPRISE_UNRELATED",
-        message:
-          "该问题与「Acme」没有明确关系，请重新输入与当前企业相关的非行业排名类问题。",
-      },
-      validation: {
-        clientRequestId: CUSTOM_QUESTION_CLIENT_REQUEST_ID,
-        state: "rejected",
-        error: { retryable: false },
-      },
-    });
-    expect(broker.customQuestionClassifierTaskCount).toBe(1);
-  });
-
-  it("keeps a terminal validation discoverable until owner ACK and makes a lost-response ACK retry idempotent", async () => {
-    const ready = await createReadyProject();
-    broker.customQuestionClassifierPendingPolls = 1;
-    const pathname = `/projects/${encodeURIComponent(
-      ready.projectToken,
-    )}/questions/custom`;
-    const started = await jsonRequest(pathname, ready.cookie, {
-      method: "POST",
-      body: {
-        question: "Acme 在高校科研场景中能解决什么问题？",
-        clientRequestId: CUSTOM_QUESTION_CLIENT_REQUEST_ID,
-      },
-    });
-    expect(started.response.status).toBe(202);
-
-    const prematureAck = await jsonRequest(
-      `${pathname}/${CUSTOM_QUESTION_CLIENT_REQUEST_ID}/ack`,
-      ready.cookie,
-      { method: "POST", body: {} },
-    );
-    expect(prematureAck.response.status).toBe(409);
-    expect(prematureAck.body).toMatchObject({
-      error: { code: "CUSTOM_QUESTION_VALIDATION_NOT_TERMINAL" },
-    });
-
-    const completed = await jsonRequest(
-      `${pathname}/${CUSTOM_QUESTION_CLIENT_REQUEST_ID}`,
-      ready.cookie,
-    );
-    expect(completed.response.status).toBe(200);
-    const activeTerminal = await jsonRequest(
-      `${pathname}/active`,
-      ready.cookie,
-    );
-    expect(activeTerminal.response.status).toBe(200);
-    expect(activeTerminal.body).toMatchObject({
-      validation: {
-        clientRequestId: CUSTOM_QUESTION_CLIENT_REQUEST_ID,
-        state: "completed",
-      },
-    });
-
-    const otherBrowser = await verifyInvite();
-    const forbidden = await jsonRequest(
-      `${pathname}/${CUSTOM_QUESTION_CLIENT_REQUEST_ID}/ack`,
-      otherBrowser.cookie,
-      { method: "POST", body: {} },
-    );
-    expect(forbidden.response.status).toBe(403);
-    expect(forbidden.body).toMatchObject({
-      error: { code: "PROJECT_SESSION_MISMATCH" },
-    });
-
-    const acknowledgePath = `${pathname}/${CUSTOM_QUESTION_CLIENT_REQUEST_ID}/ack`;
-    const acknowledged = await jsonRequest(acknowledgePath, ready.cookie, {
-      method: "POST",
-      body: {},
-    });
-    expect(acknowledged.response.status).toBe(200);
-    expect(acknowledged.body).toEqual({
-      ok: true,
-      validation: {
-        schemaVersion: 1,
-        clientRequestId: CUSTOM_QUESTION_CLIENT_REQUEST_ID,
-        state: "completed",
-        acknowledged: true,
-      },
-    });
-    const afterAck = await jsonRequest(`${pathname}/active`, ready.cookie);
-    expect(afterAck.response.status).toBe(404);
-
-    // Simulates the first 200 response being lost after the server committed
-    // the ACK. The exact request remains an idempotent success.
-    const replayedAck = await jsonRequest(acknowledgePath, ready.cookie, {
-      method: "POST",
-      body: {},
-    });
-    expect(replayedAck.response.status).toBe(200);
-    expect(replayedAck.body).toEqual(acknowledged.body);
-    expect(broker.customQuestionClassifierTaskCount).toBe(1);
-  });
-
-  it("keeps an unacknowledged completed result past 24 hours, then serves permanent 410 after ACK and GC", async () => {
-    await restartWithCustomQuestionValidationStore(
-      new MemoryGeoCustomQuestionValidationStore({
-        now: () => customQuestionValidationNowMs,
-      }),
-    );
-    const ready = await createReadyProject();
-    const pathname = `/projects/${encodeURIComponent(
-      ready.projectToken,
-    )}/questions/custom`;
-    const question = "Acme 在高校科研场景中能解决什么问题？";
-    const completed = await jsonRequest(pathname, ready.cookie, {
-      method: "POST",
-      body: {
-        question,
-        clientRequestId: CUSTOM_QUESTION_CLIENT_REQUEST_ID,
-      },
-    });
-    expect(completed.response.status).toBe(201);
-
-    customQuestionValidationNowMs += 24 * 60 * 60 * 1000 + 1;
-    const worker = createGeoCustomQuestionRecoveryWorker({
-      broker,
-      store: customQuestionValidationStore,
-      now: () => customQuestionValidationNowMs,
-    });
-    await worker.runOnce();
-
-    const statusPath = `${pathname}/${CUSTOM_QUESTION_CLIENT_REQUEST_ID}`;
-    const stillRecoverable = await jsonRequest(statusPath, ready.cookie);
-    expect(stillRecoverable.response.status).toBe(200);
-    expect(stillRecoverable.body).toMatchObject({
-      validation: {
-        clientRequestId: CUSTOM_QUESTION_CLIENT_REQUEST_ID,
-        state: "completed",
-      },
-      question: { question },
-    });
-
-    const acknowledged = await jsonRequest(`${statusPath}/ack`, ready.cookie, {
-      method: "POST",
-      body: {},
-    });
-    expect(acknowledged.response.status).toBe(200);
-    await worker.runOnce();
-
-    const expiredGet = await jsonRequest(statusPath, ready.cookie);
-    expect(expiredGet.response.status).toBe(410);
-    expect(expiredGet.body).toMatchObject({
-      error: { code: "CUSTOM_QUESTION_VALIDATION_EXPIRED" },
-    });
-    const expiredPost = await jsonRequest(pathname, ready.cookie, {
-      method: "POST",
-      body: {
-        question,
-        clientRequestId: CUSTOM_QUESTION_CLIENT_REQUEST_ID,
-      },
-    });
-    expect(expiredPost.response.status).toBe(410);
-    expect(expiredPost.body).toMatchObject({
-      error: { code: "CUSTOM_QUESTION_VALIDATION_EXPIRED" },
-    });
-    expect(broker.tasks.has("custom-question-classifier-1")).toBe(true);
-  });
-
-  it("coalesces double-clicks and rejects cross-session recovery", async () => {
-    const ready = await createReadyProject();
-    broker.customQuestionClassifierPendingPolls = 1;
-    const pathname = `/projects/${encodeURIComponent(
-      ready.projectToken,
-    )}/questions/custom`;
-    const request = {
-      method: "POST",
-      body: {
-        question: "Acme 在高校科研场景中能解决什么问题？",
-        clientRequestId: CUSTOM_QUESTION_CLIENT_REQUEST_ID,
-      },
-    } as const;
-
-    const [first, second] = await Promise.all([
-      jsonRequest(pathname, ready.cookie, request),
-      jsonRequest(pathname, ready.cookie, request),
-    ]);
-    expect([201, 202]).toContain(first.response.status);
-    expect([201, 202]).toContain(second.response.status);
-    expect(broker.customQuestionClassifierTaskCount).toBe(1);
-
-    const statusPath = `${pathname}/${CUSTOM_QUESTION_CLIENT_REQUEST_ID}`;
-    const completed = await jsonRequest(statusPath, ready.cookie);
-    expect(completed.response.status).toBe(200);
-    expect(completed.body).toMatchObject({
-      validation: {
-        clientRequestId: CUSTOM_QUESTION_CLIENT_REQUEST_ID,
-        state: "completed",
-      },
-    });
-    expect(broker.customQuestionClassifierTaskCount).toBe(1);
-
-    const otherBrowser = await verifyInvite();
-    const forbidden = await jsonRequest(statusPath, otherBrowser.cookie);
-    expect(forbidden.response.status).toBe(403);
-    expect(forbidden.body).toMatchObject({
-      error: { code: "PROJECT_SESSION_MISMATCH" },
-    });
-
-    const conflict = await jsonRequest(pathname, ready.cookie, {
-      method: "POST",
-      body: {
-        question: "Acme 靠谱吗？",
-        clientRequestId: CUSTOM_QUESTION_CLIENT_REQUEST_ID,
-      },
-    });
-    expect(conflict.response.status).toBe(409);
-    expect(conflict.body).toMatchObject({
-      error: { code: "CUSTOM_QUESTION_IDEMPOTENCY_CONFLICT" },
-    });
-    expect(broker.customQuestionClassifierTaskCount).toBe(1);
-  });
-
-  it("returns the authority and permanently retires a different-UUID conflict loser", async () => {
-    const ready = await createReadyProject();
-    broker.customQuestionClassifierPendingPolls = 99;
-    const pathname = `/projects/${encodeURIComponent(
-      ready.projectToken,
-    )}/questions/custom`;
-    const first = await jsonRequest(pathname, ready.cookie, {
-      method: "POST",
-      body: {
-        question: "Acme 在高校科研场景中能解决什么问题？",
-        clientRequestId: CUSTOM_QUESTION_CLIENT_REQUEST_ID,
-      },
-    });
-    expect(first.response.status).toBe(202);
-
-    const competingRequestId = "99999999-9999-4999-8999-999999999999";
-    const competing = await jsonRequest(pathname, ready.cookie, {
-      method: "POST",
-      body: {
-        question: "Acme 如何为企业部署私有化系统？",
-        clientRequestId: competingRequestId,
-      },
-    });
-    expect(competing.response.status).toBe(409);
-    expect(competing.body).toMatchObject({
-      error: { code: "CUSTOM_QUESTION_ACTIVE_RESERVATION_CONFLICT" },
-      activeOperation: {
-        clientRequestId: CUSTOM_QUESTION_CLIENT_REQUEST_ID,
-        question: "Acme 在高校科研场景中能解决什么问题？",
-      },
-    });
-    expect(broker.customQuestionClassifierTaskCount).toBe(1);
-
-    const retiredLoser = await jsonRequest(
-      `${pathname}/${competingRequestId}`,
-      ready.cookie,
-    );
-    expect(retiredLoser.response.status).toBe(409);
-    expect(retiredLoser.body).toMatchObject({
-      validation: {
-        clientRequestId: competingRequestId,
-        state: "failed",
-        error: {
-          code: "CUSTOM_QUESTION_RESERVATION_SUPERSEDED",
-          retryable: false,
-        },
-      },
-      error: { code: "CUSTOM_QUESTION_RESERVATION_SUPERSEDED" },
-    });
-    expect(broker.customQuestionClassifierTaskCount).toBe(1);
-
-    const active = await jsonRequest(`${pathname}/active`, ready.cookie);
-    expect(active.response.status).toBe(202);
-    expect(active.body).toMatchObject({
-      validation: {
-        clientRequestId: CUSTOM_QUESTION_CLIENT_REQUEST_ID,
-        question: "Acme 在高校科研场景中能解决什么问题？",
-      },
-    });
-
-    broker.tasks.set("custom-question-classifier-1", {
-      id: "custom-question-classifier-1",
-      status: "completed",
-      output: [
-        {
-          role: "assistant",
-          content: [
-            { text: JSON.stringify(broker.customQuestionClassifierOutput) },
-          ],
-        },
-      ],
-    });
-    const completed = await jsonRequest(
-      `${pathname}/${CUSTOM_QUESTION_CLIENT_REQUEST_ID}`,
-      ready.cookie,
-    );
-    expect(completed.response.status).toBe(200);
-
-    const acknowledged = await jsonRequest(
-      `${pathname}/${CUSTOM_QUESTION_CLIENT_REQUEST_ID}/ack`,
-      ready.cookie,
-      { method: "POST", body: {} },
-    );
-    expect(acknowledged.response.status).toBe(200);
-
-    const worker = createGeoCustomQuestionRecoveryWorker({
-      broker,
-      store: customQuestionValidationStore,
-      now: () => customQuestionValidationNowMs,
-    });
-    await worker.runOnce();
-    expect(broker.customQuestionClassifierTaskCount).toBe(1);
-
-    broker.customQuestionClassifierPendingPolls = 1;
-    const replayedLoser = await jsonRequest(pathname, ready.cookie, {
-      method: "POST",
-      body: {
-        question: "Acme 如何为企业部署私有化系统？",
-        clientRequestId: competingRequestId,
-      },
-    });
-    expect(replayedLoser.response.status).toBe(409);
-    expect(replayedLoser.body).toMatchObject({
-      validation: {
-        state: "failed",
-        error: { code: "CUSTOM_QUESTION_RESERVATION_SUPERSEDED" },
-      },
-    });
-    expect(broker.customQuestionClassifierTaskCount).toBe(1);
-
-    const nextRequestId = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa";
-    const nextOperation = await jsonRequest(pathname, ready.cookie, {
-      method: "POST",
-      body: {
-        question: "Acme 如何为企业部署私有化系统？",
-        clientRequestId: nextRequestId,
-      },
-    });
-    expect(nextOperation.response.status).toBe(202);
-    expect(broker.customQuestionClassifierTaskCount).toBe(2);
-  });
-
-  it("keeps active custom-question validation recoverable after local removal", async () => {
-    const ready = await createReadyProject();
-    broker.customQuestionClassifierPendingPolls = 99;
-    const pathname = `/projects/${encodeURIComponent(
-      ready.projectToken,
-    )}/questions/custom`;
-    const started = await jsonRequest(pathname, ready.cookie, {
-      method: "POST",
-      body: {
-        question: "Acme 在高校科研场景中能解决什么问题？",
-        clientRequestId: CUSTOM_QUESTION_CLIENT_REQUEST_ID,
-      },
-    });
-    expect(started.response.status).toBe(202);
-    expect(broker.customQuestionClassifierTaskCount).toBe(1);
-
-    const deleted = await jsonRequest(
-      `/projects/${encodeURIComponent(ready.projectToken)}`,
-      ready.cookie,
-      { method: "DELETE" },
-    );
-    expect(deleted.response.status).toBe(200);
-    expect(deleted.body).toMatchObject({ ok: true });
-
-    const projectId = new GeoTokenCodec(
-      "test-session-secret-at-least-16-characters",
-    ).open<{ projectId: string }>(ready.projectToken, "project").value
-      .projectId;
-    await expect(
-      customQuestionValidationStore.getActive(projectId),
-    ).resolves.toMatchObject({ state: "submitted" });
-    await expect(customQuestionValidationStore.listActive()).resolves.toEqual([
-      expect.objectContaining({ state: "submitted" }),
-    ]);
-
-    const preciseStatus = await jsonRequest(
-      `${pathname}/${CUSTOM_QUESTION_CLIENT_REQUEST_ID}`,
-      ready.cookie,
-    );
-    expect(preciseStatus.response.status).toBe(202);
-    expect(preciseStatus.body).toMatchObject({
-      validation: { state: "submitted" },
-    });
-
-    const worker = createGeoCustomQuestionRecoveryWorker({
-      broker,
-      store: customQuestionValidationStore,
-      now: () => customQuestionValidationNowMs,
-    });
-    await worker.runOnce();
-    expect(broker.customQuestionClassifierTaskCount).toBe(1);
-  });
-
-  it("retains a record-only validation crash for later recovery", async () => {
-    const ready = await createReadyProject();
-    let crashOnce = true;
-    const crashedStore = new MemoryGeoCustomQuestionValidationStore({
-      afterInitialRecordCommit: () => {
-        if (!crashOnce) return;
-        crashOnce = false;
-        throw new Error("simulated process exit before active slot commit");
-      },
-    });
-    await restartWithCustomQuestionValidationStore(crashedStore);
-
-    const pathname = `/projects/${encodeURIComponent(
-      ready.projectToken,
-    )}/questions/custom`;
-    const interrupted = await jsonRequest(pathname, ready.cookie, {
-      method: "POST",
-      body: {
-        question: "Acme 在高校科研场景中能解决什么问题？",
-        clientRequestId: CUSTOM_QUESTION_CLIENT_REQUEST_ID,
-      },
-    });
-    expect(interrupted.response.status).toBe(500);
-
-    const deleted = await jsonRequest(
-      `/projects/${encodeURIComponent(ready.projectToken)}`,
-      ready.cookie,
-      { method: "DELETE" },
-    );
-    expect(deleted.response.status).toBe(200);
-    expect(deleted.body).toMatchObject({ ok: true });
-    const project = new GeoTokenCodec(
-      "test-session-secret-at-least-16-characters",
-    ).open<{ knowledgeBaseTaskId: string; projectId: string }>(
-      ready.projectToken,
-      "project",
-    ).value;
-    expect(broker.tasks.has(project.knowledgeBaseTaskId)).toBe(true);
-    await expect(crashedStore.listActive()).resolves.toEqual([
-      expect.objectContaining({ state: "reserved" }),
-    ]);
-    await expect(
-      crashedStore.get(project.projectId, CUSTOM_QUESTION_CLIENT_REQUEST_ID),
-    ).resolves.toMatchObject({ state: "reserved" });
-    await expect(
-      crashedStore.getProjectDeletionTargets(project.projectId),
-    ).resolves.toEqual({ localTaskIds: [], temporaryLocalAssetIds: [] });
-    await expect(
-      crashedStore.isProjectDeletionFenced(project.projectId),
-    ).resolves.toBe(false);
-  });
-
-  it("bridges a cached client without clientRequestId to one deterministic upstream task", async () => {
-    const ready = await createReadyProject();
-    const pathname = `/projects/${encodeURIComponent(
-      ready.projectToken,
-    )}/questions/custom`;
-    const request = {
-      method: "POST",
-      body: { question: "Acme 在高校科研场景中能解决什么问题？" },
-    } as const;
-    const first = await jsonRequest(pathname, ready.cookie, request);
-    const replay = await jsonRequest(pathname, ready.cookie, request);
-
-    expect(first.response.status).toBe(201);
-    expect(replay.response.status).toBe(201);
-    expect(first.body).toMatchObject({
-      validation: {
-        clientRequestId: expect.stringMatching(
-          /^[0-9a-f]{8}-[0-9a-f]{4}-5[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/,
-        ),
-      },
-    });
-    expect(replay.body).toMatchObject({
-      validation: {
-        clientRequestId: (first.body as any).validation.clientRequestId,
-      },
-    });
-    expect(broker.customQuestionClassifierTaskCount).toBe(1);
-  });
-
-  it("lets the precise GET reclaim a reservation whose process crashed before writing the active slot", async () => {
-    let crashOnce = true;
-    await restartWithCustomQuestionValidationStore(
-      new MemoryGeoCustomQuestionValidationStore({
-        afterInitialRecordCommit: () => {
-          if (!crashOnce) return;
-          crashOnce = false;
-          throw new Error("simulated process exit before active-slot commit");
-        },
-      }),
-    );
-    const ready = await createReadyProject();
-    const pathname = `/projects/${encodeURIComponent(
-      ready.projectToken,
-    )}/questions/custom`;
-    const log = vi.spyOn(console, "error").mockImplementation(() => undefined);
-    try {
-      const interrupted = await jsonRequest(pathname, ready.cookie, {
-        method: "POST",
-        body: {
-          question: "Acme 在高校科研场景中能解决什么问题？",
-          clientRequestId: CUSTOM_QUESTION_CLIENT_REQUEST_ID,
-        },
-      });
-      expect(interrupted.response.status).toBe(500);
-
-      const projectId = new GeoTokenCodec(
-        "test-session-secret-at-least-16-characters",
-      ).open<{ projectId: string }>(ready.projectToken, "project").value
-        .projectId;
-      await expect(
-        customQuestionValidationStore.getActive(projectId),
-      ).resolves.toBeUndefined();
-
-      const recovered = await jsonRequest(
-        `${pathname}/${CUSTOM_QUESTION_CLIENT_REQUEST_ID}`,
-        ready.cookie,
-      );
-      expect(recovered.response.status).toBe(200);
-      expect(recovered.body).toMatchObject({
-        validation: {
-          clientRequestId: CUSTOM_QUESTION_CLIENT_REQUEST_ID,
-          state: "completed",
-        },
-      });
-      expect(broker.customQuestionClassifierTaskCount).toBe(1);
-    } finally {
-      log.mockRestore();
-    }
-  });
-
-  it("lets the recovery worker discover and finish an orphan reservation without a browser poll", async () => {
-    let crashOnce = true;
-    await restartWithCustomQuestionValidationStore(
-      new MemoryGeoCustomQuestionValidationStore({
-        afterInitialRecordCommit: () => {
-          if (!crashOnce) return;
-          crashOnce = false;
-          throw new Error("simulated worker recovery crash window");
-        },
-      }),
-    );
-    const ready = await createReadyProject();
-    const pathname = `/projects/${encodeURIComponent(
-      ready.projectToken,
-    )}/questions/custom`;
-    const log = vi.spyOn(console, "error").mockImplementation(() => undefined);
-    try {
-      const interrupted = await jsonRequest(pathname, ready.cookie, {
-        method: "POST",
-        body: {
-          question: "Acme 在高校科研场景中能解决什么问题？",
-          clientRequestId: CUSTOM_QUESTION_CLIENT_REQUEST_ID,
-        },
-      });
-      expect(interrupted.response.status).toBe(500);
-
-      const worker = createGeoCustomQuestionRecoveryWorker({
-        broker,
-        store: customQuestionValidationStore,
-        now: () => customQuestionValidationNowMs,
-      });
-      await worker.runOnce();
-
-      const projectId = new GeoTokenCodec(
-        "test-session-secret-at-least-16-characters",
-      ).open<{ projectId: string }>(ready.projectToken, "project").value
-        .projectId;
-      await expect(
-        customQuestionValidationStore.get(
-          projectId,
-          CUSTOM_QUESTION_CLIENT_REQUEST_ID,
-        ),
-      ).resolves.toMatchObject({
-        state: "completed",
-        cleanupCompleted: true,
-      });
-      expect(broker.customQuestionClassifierTaskCount).toBe(1);
-    } finally {
-      log.mockRestore();
-    }
-  });
-
-  it("polls an in-flight pre-upgrade classifier task without creating the new input attachment", async () => {
-    const store = new MemoryGeoCustomQuestionValidationStore();
-    const projectId = "rolling-upgrade-project";
-    const clientRequestId = "22222222-2222-4222-8222-222222222222";
-    const question = "Acme 在高校科研场景中能解决什么问题？";
-    const reservation = await store.reserve({
-      projectId,
-      ownerSessionHash: "a".repeat(64),
-      clientRequestId,
-      requestHash: geoCustomQuestionRequestHash({
-        projectId,
-        knowledgeBaseTaskId: "knowledge-task-before-upgrade",
-        question,
-      }),
-      question,
-      questionHash: geoCustomQuestionHash(question),
-      companyName: "Acme",
-      knowledgeBaseTaskId: "knowledge-task-before-upgrade",
-      knowledgeBaseValidationProfile: "website-lead-v1",
-      knowledgeBaseArtifact: {
-        artifactId: "knowledge-file-before-upgrade",
-        filename: "Acme.zip",
-        sha256: "1".repeat(64),
-        packageManifestSha256: "2".repeat(64),
-      },
-      expiresAt: "2027-08-01T00:00:00.000Z",
-    });
-    const lease = await store.tryAcquireLease(projectId, clientRequestId);
-    expect(lease).toBeDefined();
-    const taskId = "custom-question-classifier-before-upgrade";
-    await store.update(
-      {
-        ...reservation.record,
-        state: "submitted",
-        archiveAttachment: {
-          localAssetId: "archive-before-upgrade",
-          filename: "Acme.zip",
-          temporary: false,
-        },
-        skillAttachment: {
-          localAssetId: "skill-before-upgrade",
-          filename: "geo-custom-question-classifier.skill.zip",
-          temporary: false,
-        },
-        localTaskId: taskId,
-      },
-      lease!,
-    );
-    await store.releaseLease(lease!);
-    broker.customQuestionClassifierOutput = {
-      decision: "reject",
-      category: "unrelated",
-      enterpriseRelated: false,
-      reasonCode: "enterprise_unrelated",
-      reason: "问题与当前企业知识无关。",
-      enterpriseAnchor: null,
-      offeringAnchor: null,
-      evidenceRefs: [],
-    };
-    broker.tasks.set(taskId, {
-      id: taskId,
-      status: "completed",
-      output: [
-        {
-          role: "assistant",
-          content: [
-            {
-              text: JSON.stringify(broker.customQuestionClassifierOutput),
-            },
-          ],
-        },
-      ],
-    });
-    broker.regularUploadError = new Error(
-      "new protocol uploads must not gate an existing task",
-    );
-
-    await createGeoCustomQuestionRecoveryWorker({ broker, store }).runOnce();
-
-    await expect(store.get(projectId, clientRequestId)).resolves.toMatchObject({
-      state: "rejected",
-      localTaskId: taskId,
-      cleanupCompleted: true,
-    });
-    expect(broker.taskInputUploads.size).toBe(0);
-    expect(
-      broker.createdFileIds.some((fileId) => fileId.startsWith("task-input-")),
-    ).toBe(false);
-  });
-
-  it("recovers every reservation beyond the concurrency limit across competing workers without duplicate tasks", async () => {
-    const store = new MemoryGeoCustomQuestionValidationStore();
-    const question = "Acme 在高校科研场景中能解决什么问题？";
-    const operationCount = 25;
-    const operations: Array<{ projectId: string; clientRequestId: string }> =
-      [];
-
-    for (let index = 0; index < operationCount; index += 1) {
-      const projectId = `fair-recovery-project-${String(index).padStart(2, "0")}`;
-      const clientRequestId = `00000000-0000-4000-8000-${String(index).padStart(12, "0")}`;
-      const reservation = await store.reserve({
-        projectId,
-        ownerSessionHash: "a".repeat(64),
-        clientRequestId,
-        requestHash: geoCustomQuestionRequestHash({
-          projectId,
-          knowledgeBaseTaskId: `knowledge-task-${index}`,
-          question,
-        }),
-        question,
-        questionHash: geoCustomQuestionHash(question),
-        companyName: "Acme",
-        knowledgeBaseTaskId: `knowledge-task-${index}`,
-        knowledgeBaseValidationProfile: "website-lead-v1",
-        knowledgeBaseArtifact: {
-          artifactId: `knowledge-file-${index}`,
-          filename: "Acme.zip",
-          sha256: "1".repeat(64),
-          packageManifestSha256: "2".repeat(64),
-        },
-        expiresAt: "2027-08-01T00:00:00.000Z",
-      });
-      const lease = await store.tryAcquireLease(projectId, clientRequestId);
-      expect(lease).toBeDefined();
-      await store.update(
-        {
-          ...reservation.record,
-          state: "prepared",
-          archiveAttachment: {
-            localAssetId: `prepared-archive-${index}`,
-            filename: "Acme.zip",
-            temporary: false,
-          },
-          skillAttachment: {
-            localAssetId: `prepared-skill-${index}`,
-            filename: "geo-custom-question-classifier.skill.zip",
-            temporary: false,
-          },
-        },
-        lease!,
-      );
-      await store.releaseLease(lease!);
-      operations.push({ projectId, clientRequestId });
-    }
-
-    broker.customQuestionClassifierOutput = {
-      decision: "reject",
-      category: "unrelated",
-      enterpriseRelated: false,
-      reasonCode: "enterprise_unrelated",
-      reason: "问题与当前企业知识无关。",
-      enterpriseAnchor: null,
-      offeringAnchor: null,
-      evidenceRefs: [],
-    };
-    const createTask = broker.createTask.bind(broker);
-    let loseFirstTaskResponse = true;
-    broker.createTask = async (input) => {
-      const task = await createTask(input);
-      if (loseFirstTaskResponse) {
-        loseFirstTaskResponse = false;
-        throw new GeoBrokerError(
-          "task was committed before the Website process exited",
-          502,
-          "AGENT_UNAVAILABLE",
-        );
-      }
-      return task;
-    };
-
-    const firstProcess = createGeoCustomQuestionRecoveryWorker({
-      broker,
-      store,
-      batchSize: 3,
-    });
-    const competingProcess = createGeoCustomQuestionRecoveryWorker({
-      broker,
-      store,
-      batchSize: 3,
-    });
-    await Promise.all([firstProcess.runOnce(), competingProcess.runOnce()]);
-
-    // A new process must converge the lost response through the original
-    // idempotency key, while records after the former fixed prefix are not
-    // starved by the three-operation concurrency limit.
-    const restartedProcess = createGeoCustomQuestionRecoveryWorker({
-      broker,
-      store,
-      batchSize: 3,
-    });
-    await restartedProcess.runOnce();
-    await restartedProcess.runOnce();
-
-    const recoveredRecords = await Promise.all(
-      operations.map((operation) =>
-        store.get(operation.projectId, operation.clientRequestId),
-      ),
-    );
-    expect(
-      recoveredRecords.map((record, index) => ({
-        index,
-        state: record?.state,
-        cleanupCompleted: record?.cleanupCompleted,
-        localTaskId: record?.localTaskId,
-        error: record?.error?.code,
-      })),
-    ).toEqual(
-      Array.from({ length: operationCount }, (_, index) => ({
-        index,
-        state: "rejected",
-        cleanupCompleted: true,
-        localTaskId: expect.stringMatching(/^custom-question-classifier-/),
-        error: "CUSTOM_QUESTION_ENTERPRISE_UNRELATED",
-      })),
-    );
-    expect(broker.customQuestionClassifierTaskCount).toBe(operationCount);
-    expect(broker.idempotentTasks.size).toBe(operationCount);
-
-    await restartedProcess.runOnce();
-    expect(broker.customQuestionClassifierTaskCount).toBe(operationCount);
-  });
-
-  it("keeps the 15-second legacy compatibility contract while a timed-out refresh reuses the same task", async () => {
-    expect(GEO_LEGACY_CUSTOM_QUESTION_COMPATIBILITY_WAIT_MS).toBe(15_000);
-
-    await new Promise<void>((resolve, reject) =>
-      server.close((error) => (error ? reject(error) : resolve())),
-    );
-    const compatibilityApp = express();
-    compatibilityApp.use(
-      "/api/geo",
-      createGeoRouter({
-        broker,
-        customQuestionValidationStore,
-        projectOrderRegistry,
-        legacyCustomQuestionCompatibilityWaitMs: 30,
-        legacyCustomQuestionCompatibilityPollMs: 5,
-        env: {
-          NODE_ENV: "test",
-          FRONTMIND_GEO_INVITE_CODE: "frontmind666",
-          FRONTMIND_GEO_SESSION_SECRET:
-            "test-session-secret-at-least-16-characters",
-        },
-      }),
-    );
-    server = compatibilityApp.listen(0);
-    await new Promise<void>((resolve) => server.once("listening", resolve));
-    baseUrl = `http://127.0.0.1:${(server.address() as AddressInfo).port}/api/geo`;
-
-    const ready = await createReadyProject();
-    broker.customQuestionClassifierPendingPolls = 99;
-    const pathname = `/projects/${encodeURIComponent(
-      ready.projectToken,
-    )}/questions/custom`;
-    const request = {
-      method: "POST",
-      body: { question: "Acme 在高校科研场景中能解决什么问题？" },
-    } as const;
-
-    const timedOut = await jsonRequest(pathname, ready.cookie, request);
-    expect(timedOut.response.status).toBe(504);
-    expect(timedOut.body).toMatchObject({
-      error: { code: "CUSTOM_QUESTION_LEGACY_CLIENT_REFRESH_REQUIRED" },
-    });
-    const active = await jsonRequest(`${pathname}/active`, ready.cookie);
-    expect(active.response.status).toBe(202);
-    expect(active.body).toMatchObject({
-      validation: {
-        state: "submitted",
-        clientRequestId: expect.stringMatching(
-          /^[0-9a-f]{8}-[0-9a-f]{4}-5[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/,
-        ),
-      },
-    });
-
-    const refreshed = await jsonRequest(pathname, ready.cookie, request);
-    expect(refreshed.response.status).toBe(504);
-    expect(broker.customQuestionClassifierTaskCount).toBe(1);
-  });
-
-  it("converges repeated task-read failures to one retryable terminal result", async () => {
-    const ready = await createReadyProject();
-    broker.customQuestionClassifierPendingPolls = 99;
-    const pathname = `/projects/${encodeURIComponent(
-      ready.projectToken,
-    )}/questions/custom`;
-    const started = await jsonRequest(pathname, ready.cookie, {
-      method: "POST",
-      body: {
-        question: "Acme 在高校科研场景中能解决什么问题？",
-        clientRequestId: CUSTOM_QUESTION_CLIENT_REQUEST_ID,
-      },
-    });
-    expect(started.response.status).toBe(202);
-    broker.taskErrors.set(
-      "custom-question-classifier-1",
-      new GeoBrokerError(
-        "task permanently missing",
-        404,
-        "AGENT_REQUEST_FAILED",
-      ),
-    );
-    const statusPath = `${pathname}/${CUSTOM_QUESTION_CLIENT_REQUEST_ID}`;
-    const firstFailure = await jsonRequest(statusPath, ready.cookie);
-    expect(firstFailure.response.status).toBe(202);
-    customQuestionValidationNowMs += 15_000;
-    const secondFailure = await jsonRequest(statusPath, ready.cookie);
-    expect(secondFailure.response.status).toBe(202);
-    customQuestionValidationNowMs += 15_000;
-    const terminal = await jsonRequest(statusPath, ready.cookie);
-    expect(terminal.response.status).toBe(502);
-    expect(terminal.body).toMatchObject({
-      validation: {
-        state: "failed",
-        error: {
-          code: "CUSTOM_QUESTION_CLASSIFIER_TASK_UNAVAILABLE",
-          retryable: true,
-        },
-      },
-      error: { code: "CUSTOM_QUESTION_CLASSIFIER_TASK_UNAVAILABLE" },
-    });
-    expect(broker.customQuestionClassifierTaskCount).toBe(1);
-  });
-
-  it("stages one skill file before upload and bounds repeated preparation failures to one retryable terminal", async () => {
-    const ready = await createReadyProject();
-    const createdBefore = new Set(broker.createdFileIds);
-    broker.skillUploadError = new GeoBrokerError(
-      "skill upload unavailable",
-      503,
-      "AGENT_REQUEST_FAILED",
-    );
-    const pathname = `/projects/${encodeURIComponent(
-      ready.projectToken,
-    )}/questions/custom`;
-    const first = await jsonRequest(pathname, ready.cookie, {
-      method: "POST",
-      body: {
-        question: "Acme 在高校科研场景中能解决什么问题？",
-        clientRequestId: CUSTOM_QUESTION_CLIENT_REQUEST_ID,
-      },
-    });
-    expect(first.response.status).toBe(202);
-    expect(first.body).toMatchObject({ validation: { state: "prepared" } });
-
-    const projectId = new GeoTokenCodec(
-      "test-session-secret-at-least-16-characters",
-    ).open<{ projectId: string }>(ready.projectToken, "project").value
-      .projectId;
-    const staged = await customQuestionValidationStore.get(
-      projectId,
-      CUSTOM_QUESTION_CLIENT_REQUEST_ID,
-    );
-    expect(staged).toMatchObject({
-      skillStagingAttachment: {
-        localAssetId: expect.stringMatching(/^skill-file-/),
-        temporary: true,
-      },
-      transientErrorCount: 1,
-    });
-    expect(staged?.skillAttachment).toBeUndefined();
-    const stagedFileId = staged!.skillStagingAttachment!.localAssetId;
-    expect(staged!.temporaryLocalAssetIds).toContain(stagedFileId);
-    expect(
-      broker.createdFileIds.filter(
-        (id) => !createdBefore.has(id) && id.startsWith("skill-file-"),
-      ),
-    ).toEqual([stagedFileId]);
-
-    const worker = createGeoCustomQuestionRecoveryWorker({
-      broker,
-      store: customQuestionValidationStore,
-      now: () => customQuestionValidationNowMs,
-    });
-    customQuestionValidationNowMs += 15_000;
-    await worker.runOnce();
-    await expect(
-      customQuestionValidationStore.get(
-        projectId,
-        CUSTOM_QUESTION_CLIENT_REQUEST_ID,
-      ),
-    ).resolves.toMatchObject({ state: "prepared", transientErrorCount: 2 });
-
-    customQuestionValidationNowMs += 15_000;
-    await worker.runOnce();
-    await expect(
-      customQuestionValidationStore.get(
-        projectId,
-        CUSTOM_QUESTION_CLIENT_REQUEST_ID,
-      ),
-    ).resolves.toMatchObject({
-      state: "failed",
-      cleanupCompleted: true,
-      error: {
-        code: "CUSTOM_QUESTION_SKILL_PREPARATION_UNAVAILABLE",
-        retryable: true,
-      },
-    });
-    const terminal = await jsonRequest(
-      `${pathname}/${CUSTOM_QUESTION_CLIENT_REQUEST_ID}`,
-      ready.cookie,
-    );
-    expect(terminal.response.status).toBe(502);
-    expect(terminal.body).toMatchObject({
-      validation: {
-        state: "failed",
-        error: {
-          code: "CUSTOM_QUESTION_SKILL_PREPARATION_UNAVAILABLE",
-          retryable: true,
-        },
-      },
-      error: { code: "CUSTOM_QUESTION_SKILL_PREPARATION_UNAVAILABLE" },
-    });
-    expect(
-      broker.uploadAttempts.filter((id) => id === stagedFileId),
-    ).toHaveLength(3);
-    expect(broker.deletedFiles).toContain(stagedFileId);
-    const createsAfterTerminal = broker.createdFileIds.length;
-    const uploadsAfterTerminal = broker.uploadAttempts.length;
-    await worker.runOnce();
-    expect(broker.createdFileIds).toHaveLength(createsAfterTerminal);
-    expect(broker.uploadAttempts).toHaveLength(uploadsAfterTerminal);
-  });
-
-  it("recovers the same temporary file after create succeeded but its response was lost", async () => {
-    const ready = await createReadyProject();
-    const filesBefore = new Set(broker.createdFileIds);
-    broker.loseNextIdempotentFileCreateResponse = true;
-    const pathname = `/projects/${encodeURIComponent(
-      ready.projectToken,
-    )}/questions/custom`;
-
-    const first = await jsonRequest(pathname, ready.cookie, {
-      method: "POST",
-      body: {
-        question: "Acme 在高校科研场景中能解决什么问题？",
-        clientRequestId: CUSTOM_QUESTION_CLIENT_REQUEST_ID,
-      },
-    });
-    expect(first.response.status).toBe(202);
-
-    const projectId = new GeoTokenCodec(
-      "test-session-secret-at-least-16-characters",
-    ).open<{ projectId: string }>(ready.projectToken, "project").value
-      .projectId;
-    await expect(
-      customQuestionValidationStore.get(
-        projectId,
-        CUSTOM_QUESTION_CLIENT_REQUEST_ID,
-      ),
-    ).resolves.toMatchObject({
-      state: "reserved",
-      transientErrorCount: 1,
-    });
-    const createdAfterLostResponse = broker.createdFileIds.filter(
-      (id) => !filesBefore.has(id),
-    );
-    expect(createdAfterLostResponse).toHaveLength(1);
-    const upstreamFileId = createdAfterLostResponse[0]!;
-
-    // A fresh recovery worker represents the Website process restarting. Its
-    // retry carries the same operation key and receives the already-created
-    // upstream file id, which is then persisted and cleaned normally.
-    const worker = createGeoCustomQuestionRecoveryWorker({
-      broker,
-      store: customQuestionValidationStore,
-      now: () => customQuestionValidationNowMs,
-    });
-    customQuestionValidationNowMs += 15_000;
-    await worker.runOnce();
-
-    const recovered = await customQuestionValidationStore.get(
-      projectId,
-      CUSTOM_QUESTION_CLIENT_REQUEST_ID,
-    );
-    expect(recovered).toMatchObject({
-      state: "completed",
-      cleanupCompleted: true,
-    });
-    expect(broker.createdFileIds.filter((id) => id === upstreamFileId)).toEqual(
-      [upstreamFileId],
-    );
-    expect(broker.deletedFiles).toContain(upstreamFileId);
-    const operationKeys = broker.fileCreateOperationKeys.filter((key) =>
-      key.includes(":archive:0:v1"),
-    );
-    expect(operationKeys).toHaveLength(2);
-    expect(new Set(operationKeys).size).toBe(1);
-    expect(operationKeys[0]).toMatch(
-      /^geo-custom-question-file:[a-f0-9]{64}:archive:0:v1$/,
-    );
-  });
-
-  it("rebuilds both attachments under the current credential after rotation and a lost file response", async () => {
-    const ready = await createReadyProject();
-    const filesBefore = new Set(broker.createdFileIds);
-    broker.enforceCurrentCredentialAttachments = true;
-    broker.loseNextIdempotentFileCreateResponse = true;
-    broker.rotateCredentialWhenFileResponseIsLost = true;
-    const pathname = `/projects/${encodeURIComponent(
-      ready.projectToken,
-    )}/questions/custom`;
-
-    const first = await jsonRequest(pathname, ready.cookie, {
-      method: "POST",
-      body: {
-        question: "Acme 在高校科研场景中能解决什么问题？",
-        clientRequestId: CUSTOM_QUESTION_CLIENT_REQUEST_ID,
-      },
-    });
-    expect(first.response.status).toBe(202);
-    expect(broker.currentCredentialVersion).toBe(2);
-
-    const projectId = new GeoTokenCodec(
-      "test-session-secret-at-least-16-characters",
-    ).open<{ projectId: string }>(ready.projectToken, "project").value
-      .projectId;
-    const fileCreatedBeforeRotation = broker.createdFileIds.find(
-      (id) => !filesBefore.has(id),
-    );
-    expect(fileCreatedBeforeRotation).toBeDefined();
-    expect(broker.fileCredentialVersions.get(fileCreatedBeforeRotation!)).toBe(
-      1,
-    );
-
-    // A fresh worker represents process restart. Its first cycle replays the
-    // completed generation-0 file exactly once, then observes Dashboard's
-    // current-credential conflict and atomically advances the attachment
-    // generation without creating a task.
-    const worker = createGeoCustomQuestionRecoveryWorker({
-      broker,
-      store: customQuestionValidationStore,
-      now: () => customQuestionValidationNowMs,
-    });
-    customQuestionValidationNowMs += 15_000;
-    await worker.runOnce();
-    await expect(
-      customQuestionValidationStore.get(
-        projectId,
-        CUSTOM_QUESTION_CLIENT_REQUEST_ID,
-      ),
-    ).resolves.toMatchObject({
-      state: "reserved",
-      attachmentRebuildCount: 1,
-    });
-    expect(broker.customQuestionClassifierTaskCount).toBe(0);
-    expect(
-      broker.createdFileIds.filter((id) => id === fileCreatedBeforeRotation),
-    ).toEqual([fileCreatedBeforeRotation]);
-
-    // The next cycle copies the ZIP and uploads the Skill under credential 2;
-    // the task is then created once and terminal cleanup retires every
-    // temporary file, including the replayed generation-0 file.
-    customQuestionValidationNowMs += 15_000;
-    await worker.runOnce();
-    const completed = await customQuestionValidationStore.get(
-      projectId,
-      CUSTOM_QUESTION_CLIENT_REQUEST_ID,
-    );
-    expect(completed).toMatchObject({
-      state: "completed",
-      cleanupCompleted: true,
-      attachmentRebuildCount: 1,
-    });
-    expect(broker.customQuestionClassifierTaskCount).toBe(1);
-    const finalAttachments = broker.taskAttachments.at(-1)!;
-    expect(finalAttachments).toHaveLength(3);
-    expect(
-      finalAttachments.map((attachment) =>
-        broker.fileCredentialVersions.get(attachment.file_id),
-      ),
-    ).toEqual([2, 2, 2]);
-    expect(broker.deletedFiles).toContain(fileCreatedBeforeRotation);
-
-    const generationZeroArchiveKeys = broker.fileCreateOperationKeys.filter(
-      (key) => key.includes(":archive:0:v1"),
-    );
-    expect(generationZeroArchiveKeys).toHaveLength(2);
-    expect(new Set(generationZeroArchiveKeys).size).toBe(1);
-    const generationOneKeys = broker.fileCreateOperationKeys.filter((key) =>
-      /:(?:archive|skill):1:v1$/.test(key),
-    );
-    expect(generationOneKeys).toHaveLength(2);
-  });
-
-  it("stages and reuses one force-copied archive file, retaining every temporary ID for terminal cleanup", async () => {
-    const ready = await createReadyProject();
-    broker.createTaskErrors.push(
-      new GeoBrokerError(
-        "attachment no longer exists",
-        404,
-        "AGENT_REQUEST_FAILED",
-      ),
-    );
-    const pathname = `/projects/${encodeURIComponent(
-      ready.projectToken,
-    )}/questions/custom`;
-    const first = await jsonRequest(pathname, ready.cookie, {
-      method: "POST",
-      body: {
-        question: "Acme 在高校科研场景中能解决什么问题？",
-        clientRequestId: CUSTOM_QUESTION_CLIENT_REQUEST_ID,
-      },
-    });
-    expect(first.response.status).toBe(202);
-    expect(first.body).toMatchObject({ validation: { state: "reserved" } });
-    const filesBeforeCopy = new Set(broker.createdFileIds);
-    broker.regularUploadError = new GeoBrokerError(
-      "archive upload unavailable",
-      503,
-      "AGENT_REQUEST_FAILED",
-    );
-
-    const statusPath = `${pathname}/${CUSTOM_QUESTION_CLIENT_REQUEST_ID}`;
-    const copyFailure = await jsonRequest(statusPath, ready.cookie);
-    expect(copyFailure.response.status).toBe(202);
-    const projectId = new GeoTokenCodec(
-      "test-session-secret-at-least-16-characters",
-    ).open<{ projectId: string }>(ready.projectToken, "project").value
-      .projectId;
-    const staged = await customQuestionValidationStore.get(
-      projectId,
-      CUSTOM_QUESTION_CLIENT_REQUEST_ID,
-    );
-    expect(staged).toMatchObject({
-      attachmentRebuildCount: 1,
-      archiveStagingAttachment: {
-        localAssetId: expect.stringMatching(/^file-/),
-        temporary: true,
-      },
-      transientErrorCount: 1,
-    });
-    expect(staged?.archiveAttachment).toBeUndefined();
-    const archiveStagingId = staged!.archiveStagingAttachment!.localAssetId;
-    const originalSkillId = staged!.temporaryLocalAssetIds.find((id) =>
-      id.startsWith("skill-file-"),
-    );
-    expect(originalSkillId).toBeDefined();
-    expect(staged!.temporaryLocalAssetIds).toEqual(
-      expect.arrayContaining([archiveStagingId, originalSkillId]),
-    );
-    expect(
-      broker.createdFileIds.filter(
-        (id) => !filesBeforeCopy.has(id) && id.startsWith("file-"),
-      ),
-    ).toEqual([archiveStagingId]);
-
-    customQuestionValidationNowMs += 15_000;
-    const second = await jsonRequest(statusPath, ready.cookie);
-    expect(second.response.status).toBe(202);
-    customQuestionValidationNowMs += 15_000;
-    const terminal = await jsonRequest(statusPath, ready.cookie);
-    expect(terminal.response.status).toBe(502);
-    expect(terminal.body).toMatchObject({
-      validation: {
-        state: "failed",
-        error: {
-          code: "CUSTOM_QUESTION_ARCHIVE_PREPARATION_UNAVAILABLE",
-          retryable: true,
-        },
-      },
-    });
-    expect(
-      broker.uploadAttempts.filter((id) => id === archiveStagingId),
-    ).toHaveLength(3);
-    expect(broker.deletedFiles).toEqual(
-      expect.arrayContaining([archiveStagingId, originalSkillId]),
-    );
-    const worker = createGeoCustomQuestionRecoveryWorker({
-      broker,
-      store: customQuestionValidationStore,
-      now: () => customQuestionValidationNowMs,
-    });
-    const createsAfterTerminal = broker.createdFileIds.length;
-    await worker.runOnce();
-    expect(broker.createdFileIds).toHaveLength(createsAfterTerminal);
-  });
-
-  it("rebuilds invalid frozen attachments without creating a second operation", async () => {
-    const ready = await createReadyProject();
-    broker.createTaskErrors.push(
-      new GeoBrokerError(
-        "attachment no longer exists",
-        404,
-        "AGENT_REQUEST_FAILED",
-      ),
-    );
-    const pathname = `/projects/${encodeURIComponent(
-      ready.projectToken,
-    )}/questions/custom`;
-    const first = await jsonRequest(pathname, ready.cookie, {
-      method: "POST",
-      body: {
-        question: "Acme 在高校科研场景中能解决什么问题？",
-        clientRequestId: CUSTOM_QUESTION_CLIENT_REQUEST_ID,
-      },
-    });
-    expect(first.response.status).toBe(202);
-    expect(first.body).toMatchObject({
-      validation: { state: "reserved" },
-    });
-    expect(broker.customQuestionClassifierTaskCount).toBe(0);
-
-    const recovered = await jsonRequest(
-      `${pathname}/${CUSTOM_QUESTION_CLIENT_REQUEST_ID}`,
-      ready.cookie,
-    );
-    expect(recovered.response.status).toBe(200);
-    expect(recovered.body).toMatchObject({
-      validation: { state: "completed" },
-    });
-    expect(broker.customQuestionClassifierTaskCount).toBe(1);
-    const classifierAttachments = broker.taskAttachments.at(-1)!;
-    expect(classifierAttachments[0]?.file_id).toMatch(/^skill-file-/);
-    expect(classifierAttachments[1]?.file_id).toMatch(/^task-input-file-/);
-    expect(classifierAttachments[2]?.file_id).toMatch(/^file-/);
-  });
-
-  it("retries terminal resource cleanup in the background before marking it complete", async () => {
-    const ready = await createReadyProject();
-    broker.failDeleteFile = true;
-    const pathname = `/projects/${encodeURIComponent(
-      ready.projectToken,
-    )}/questions/custom`;
-    const completed = await jsonRequest(pathname, ready.cookie, {
-      method: "POST",
-      body: {
-        question: "Acme 在高校科研场景中能解决什么问题？",
-        clientRequestId: CUSTOM_QUESTION_CLIENT_REQUEST_ID,
-      },
-    });
-    expect(completed.response.status).toBe(201);
-    const projectId = new GeoTokenCodec(
-      "test-session-secret-at-least-16-characters",
-    ).open<{ projectId: string }>(ready.projectToken, "project").value
-      .projectId;
-    await expect(
-      customQuestionValidationStore.get(
-        projectId,
-        CUSTOM_QUESTION_CLIENT_REQUEST_ID,
-      ),
-    ).resolves.toMatchObject({ cleanupCompleted: false });
-
-    const worker = createGeoCustomQuestionRecoveryWorker({
-      broker,
-      store: customQuestionValidationStore,
-    });
-    await worker.runOnce();
-    await expect(
-      customQuestionValidationStore.get(
-        projectId,
-        CUSTOM_QUESTION_CLIENT_REQUEST_ID,
-      ),
-    ).resolves.toMatchObject({ cleanupCompleted: false });
-
-    broker.failDeleteFile = false;
-    await worker.runOnce();
-    await expect(
-      customQuestionValidationStore.get(
-        projectId,
-        CUSTOM_QUESTION_CLIENT_REQUEST_ID,
-      ),
-    ).resolves.toMatchObject({ cleanupCompleted: true });
-    expect(broker.tasks.has("custom-question-classifier-1")).toBe(true);
-  });
-
-  it("completes an active reservation in the background without another browser poll", async () => {
-    const ready = await createReadyProject();
-    broker.customQuestionClassifierPendingPolls = 99;
-    const pathname = `/projects/${encodeURIComponent(
-      ready.projectToken,
-    )}/questions/custom`;
-    const started = await jsonRequest(pathname, ready.cookie, {
-      method: "POST",
-      body: {
-        question: "Acme 在高校科研场景中能解决什么问题？",
-        clientRequestId: CUSTOM_QUESTION_CLIENT_REQUEST_ID,
-      },
-    });
-    expect(started.response.status).toBe(202);
-    broker.tasks.set("custom-question-classifier-1", {
-      id: "custom-question-classifier-1",
-      status: "completed",
-      output: [
-        {
-          role: "assistant",
-          content: [
-            { text: JSON.stringify(broker.customQuestionClassifierOutput) },
-          ],
-        },
-      ],
-    });
-
-    const worker = createGeoCustomQuestionRecoveryWorker({
-      broker,
-      store: customQuestionValidationStore,
-    });
-    await worker.runOnce();
-
-    const projectId = new GeoTokenCodec(
-      "test-session-secret-at-least-16-characters",
-    ).open<{ projectId: string }>(ready.projectToken, "project").value
-      .projectId;
-    await expect(
-      customQuestionValidationStore.get(
-        projectId,
-        CUSTOM_QUESTION_CLIENT_REQUEST_ID,
-      ),
-    ).resolves.toMatchObject({
-      state: "completed",
-      cleanupCompleted: true,
-      result: {
-        question: "Acme 在高校科研场景中能解决什么问题？",
-      },
-    });
-    expect(broker.customQuestionClassifierTaskCount).toBe(1);
-    expect(broker.tasks.has("custom-question-classifier-1")).toBe(true);
-  });
-
-  it("accepts succeeded as the terminal v2 classifier status", async () => {
-    const ready = await createReadyProject();
-    broker.customQuestionClassifierPendingPolls = 99;
-    const pathname = `/projects/${encodeURIComponent(
-      ready.projectToken,
-    )}/questions/custom`;
-    const started = await jsonRequest(pathname, ready.cookie, {
-      method: "POST",
-      body: {
-        question: "Acme 在高校科研场景中能解决什么问题？",
-        clientRequestId: CUSTOM_QUESTION_CLIENT_REQUEST_ID,
-      },
-    });
-    expect(started.response.status).toBe(202);
-
-    broker.tasks.set("custom-question-classifier-1", {
-      localTaskId: "custom-question-classifier-1",
-      operationId: "operation:custom-question-classifier-1",
-      status: "succeeded",
-      safeEvents: [],
-      result: {
-        structuredResult: broker.customQuestionClassifierOutput,
-        artifacts: [],
-      },
-    });
-    const completed = await jsonRequest(
-      `${pathname}/${CUSTOM_QUESTION_CLIENT_REQUEST_ID}`,
-      ready.cookie,
-    );
-    expect(completed.response.status).toBe(200);
-    expect(completed.body).toMatchObject({
-      validation: { state: "completed" },
-      question: {
-        question: "Acme 在高校科研场景中能解决什么问题？",
-      },
-    });
-    expect(broker.customQuestionClassifierTaskCount).toBe(1);
-  });
-
-  it("keeps a Dashboard-normalized nonterminal classifier status pending", async () => {
-    const ready = await createReadyProject();
-    broker.customQuestionClassifierPendingPolls = 99;
-    const pathname = `/projects/${encodeURIComponent(
-      ready.projectToken,
-    )}/questions/custom`;
-    const started = await jsonRequest(pathname, ready.cookie, {
-      method: "POST",
-      body: {
-        question: "Acme 在高校科研场景中能解决什么问题？",
-        clientRequestId: CUSTOM_QUESTION_CLIENT_REQUEST_ID,
-      },
-    });
-    expect(started.response.status).toBe(202);
-    broker.tasks.set("custom-question-classifier-1", {
-      id: "custom-question-classifier-1",
-      status: "provider-new-terminal-state",
-      output: [],
-    });
-    const statusPath = `${pathname}/${CUSTOM_QUESTION_CLIENT_REQUEST_ID}`;
-
-    for (let observation = 1; observation <= 2; observation += 1) {
-      const pending = await jsonRequest(statusPath, ready.cookie);
-      expect(pending.response.status).toBe(202);
-      expect(pending.body).toMatchObject({
-        validation: { state: "submitted" },
-      });
-    }
-    const pending = await jsonRequest(statusPath, ready.cookie);
-    expect(pending.response.status).toBe(202);
-    expect(pending.body).toMatchObject({
-      validation: { state: "submitted" },
-    });
-    expect(broker.customQuestionClassifierTaskCount).toBe(1);
-  });
-
-  it.each([
-    "科研仪器行业排名前十的品牌有哪些？",
-    "GEO 服务商哪家最好？",
-    "有哪些企业知识库产品值得推荐？",
-    "GEO 服务商有推荐的吗？",
-    "推荐品牌有哪些？",
-  ])(
-    "rejects a custom industry-ranking question before payment: %s",
-    async (question) => {
-      const ready = await createReadyProject();
-      const rejected = await jsonRequest(
-        `/projects/${encodeURIComponent(ready.projectToken)}/questions/custom`,
-        ready.cookie,
-        {
-          method: "POST",
-          body: {
-            question,
-            clientRequestId: CUSTOM_QUESTION_CLIENT_REQUEST_ID,
-          },
-        },
-      );
-      expect(rejected.response.status).toBe(422);
-      expect(rejected.body).toMatchObject({
-        error: { code: "INDUSTRY_RANKING_QUESTION" },
-      });
-      expect(paymentCheckoutCalls).toHaveLength(0);
-      expect(broker.monitorCreates).toBe(0);
-    },
-  );
-
-  it("rejects a question that the knowledge-base classifier identifies as enterprise-unrelated", async () => {
-    const ready = await createReadyProject();
-    broker.customQuestionClassifierOutput = {
-      decision: "reject",
-      category: "unrelated",
-      enterpriseRelated: false,
-      reasonCode: "enterprise_unrelated",
-      reason: "问题讨论其他品牌手机，与 Acme 企业知识无关。",
-      enterpriseAnchor: null,
-      offeringAnchor: null,
-      evidenceRefs: [],
-    };
-
-    const rejected = await jsonRequest(
-      `/projects/${encodeURIComponent(ready.projectToken)}/questions/custom`,
-      ready.cookie,
-      {
-        method: "POST",
-        body: {
-          question: "苹果手机最近有什么新功能？",
-          clientRequestId: CUSTOM_QUESTION_CLIENT_REQUEST_ID,
-        },
-      },
-    );
-
-    expect(rejected.response.status).toBe(422);
-    expect(rejected.body).toMatchObject({
-      error: { code: "CUSTOM_QUESTION_ENTERPRISE_UNRELATED" },
-      validation: {
-        clientRequestId: CUSTOM_QUESTION_CLIENT_REQUEST_ID,
-        state: "rejected",
-        error: { retryable: false },
-      },
-    });
-    expect(broker.customQuestionClassifierTaskCount).toBe(1);
-    expect(paymentCheckoutCalls).toHaveLength(0);
-
-    const deleted = await jsonRequest(
-      `/projects/${encodeURIComponent(ready.projectToken)}`,
-      ready.cookie,
-      { method: "DELETE" },
-    );
-    expect(deleted.response.status).toBe(200);
-    expect(deleted.body).toMatchObject({ ok: true });
-  });
-
-  it("does not salvage a quoted malformed classifier result", async () => {
-    const ready = await createReadyProject();
-    broker.customQuestionClassifierRawText = `{"decision":"reject","category":"unrelated","enterpriseRelated":false,"reasonCode":"enterprise_unrelated","reason":"问题询问"FrontMind"是什么企业，该名称在硅基流动企业知识库中无任何记录，既非硅基流动的产品、服务、别名，也未与硅基流动存在任何可验证的关联路径，无法将其绑定至被评估企业。","enterpriseAnchor":null,"offeringAnchor":null,"evidenceRefs":[]}`;
-
-    const rejected = await jsonRequest(
-      `/projects/${encodeURIComponent(ready.projectToken)}/questions/custom`,
-      ready.cookie,
-      {
-        method: "POST",
-        body: {
-          question: "FrontMind是什么企业？",
-          clientRequestId: CUSTOM_QUESTION_CLIENT_REQUEST_ID,
-        },
-      },
-    );
-
-    expect(rejected.response.status).toBe(502);
-    expect(rejected.body).toMatchObject({
-      error: { code: "CUSTOM_QUESTION_CLASSIFIER_INVALID_RESPONSE" },
-      validation: { state: "failed", error: { retryable: true } },
-    });
-    expect(broker.customQuestionClassifierTaskCount).toBe(1);
-  });
-
-  it("fails one malformed classifier result without continuing the same task", async () => {
-    const ready = await createReadyProject();
-    broker.customQuestionClassifierRawText = "not-json";
-    const pathname = `/projects/${encodeURIComponent(
-      ready.projectToken,
-    )}/questions/custom`;
-
-    const started = await jsonRequest(pathname, ready.cookie, {
-      method: "POST",
-      body: {
-        question: "Acme 在高校科研场景中能解决什么问题？",
-        clientRequestId: CUSTOM_QUESTION_CLIENT_REQUEST_ID,
-      },
-    });
-    expect(started.response.status).toBe(502);
-    expect(started.body).toMatchObject({
-      validation: {
-        state: "failed",
-        error: { code: "CUSTOM_QUESTION_CLASSIFIER_INVALID_RESPONSE" },
-      },
-    });
-    expect(broker.customQuestionClassifierTaskCount).toBe(1);
-    expect(broker.repairCalls).toHaveLength(0);
-  });
-
-  it("consumes a Dashboard-localized classifier result without downloading a Provider output file", async () => {
-    const ready = await createReadyProject();
-    broker.customQuestionClassifierUseOutputFile = true;
-    broker.customQuestionClassifierOutput = {
-      decision: "accept",
-      category: "reputation",
-      enterpriseRelated: true,
-      reasonCode: "accepted",
-      reason: "问题明确询问 Acme 在长期业务中的服务可靠性。",
-      enterpriseAnchor: "Acme",
-      offeringAnchor: null,
-      evidenceRefs: ["evidence/S001.md"],
-    };
-
-    const accepted = await jsonRequest(
-      `/projects/${encodeURIComponent(ready.projectToken)}/questions/custom`,
-      ready.cookie,
-      {
-        method: "POST",
-        body: {
-          question: "Acme 的长期服务可靠性如何？",
-          clientRequestId: CUSTOM_QUESTION_CLIENT_REQUEST_ID,
-        },
-      },
-    );
-
-    expect(accepted.response.status).toBe(201);
-    expect(accepted.body).toMatchObject({
-      validation: { state: "completed" },
-      question: { category: "reputation" },
-    });
-    expect(broker.downloadedFileIds).not.toContain(
-      "custom-question-classifier-1-result-json",
-    );
-    expect(broker.customQuestionClassifierTaskCount).toBe(1);
-  });
-
-  it("fails closed on conflicting classifier objects", async () => {
-    const ready = await createReadyProject();
-    const accepted = {
-      decision: "accept",
-      category: "reputation",
-      enterpriseRelated: true,
-      reasonCode: "accepted",
-      reason: "第一份结果依据企业知识库判断 Acme 可靠。",
-      enterpriseAnchor: "Acme",
-      offeringAnchor: null,
-      evidenceRefs: ["evidence/S001.md"],
-    };
-    broker.customQuestionClassifierRawTexts = [
-      `${JSON.stringify(accepted)}\n${JSON.stringify({
-        ...accepted,
-        reason: "第二份结果给出了不同的结构有效判断理由。",
-      })}`,
-      JSON.stringify({
-        ...accepted,
-        reason: "重验结果唯一且明确绑定 Acme 的服务可靠性。",
-      }),
-    ];
-
-    const started = await jsonRequest(
-      `/projects/${encodeURIComponent(ready.projectToken)}/questions/custom`,
-      ready.cookie,
-      {
-        method: "POST",
-        body: {
-          question: "Acme 靠谱吗？",
-          clientRequestId: CUSTOM_QUESTION_CLIENT_REQUEST_ID,
-        },
-      },
-    );
-    expect(started.response.status).toBe(502);
-    expect(started.body).toMatchObject({
-      error: { code: "CUSTOM_QUESTION_CLASSIFIER_INVALID_RESPONSE" },
-      validation: { state: "failed", error: { retryable: true } },
-    });
-    expect(broker.customQuestionClassifierTaskCount).toBe(1);
-  });
-
-  it("fails closed on one irreparable classifier result", async () => {
-    const ready = await createReadyProject();
-    broker.customQuestionClassifierRawTexts = [
-      "not-json",
-      JSON.stringify({
-        decision: "accept",
-        category: "reputation",
-        enterpriseRelated: true,
-        reasonCode: "accepted",
-        reason: "问题明确询问 Acme 的服务可靠性。",
-        enterpriseAnchor: "Acme",
-        offeringAnchor: null,
-        evidenceRefs: ["evidence/S001.md"],
-      }),
-    ];
-
-    const started = await jsonRequest(
-      `/projects/${encodeURIComponent(ready.projectToken)}/questions/custom`,
-      ready.cookie,
-      {
-        method: "POST",
-        body: {
-          question: "Acme 靠谱吗？",
-          clientRequestId: CUSTOM_QUESTION_CLIENT_REQUEST_ID,
-        },
-      },
-    );
-    expect(started.response.status).toBe(502);
-    expect(started.body).toMatchObject({
-      validation: {
-        state: "failed",
-        question: "Acme 靠谱吗？",
-        error: { retryable: true },
-      },
-    });
-    expect(broker.customQuestionClassifierTaskCount).toBe(1);
-    expect(paymentCheckoutCalls).toHaveLength(0);
-  });
-
-  it("returns a retryable system error for an invalid typed result", async () => {
-    const ready = await createReadyProject();
-    broker.customQuestionClassifierRawTexts = ["not-json", "still-not-json"];
-
-    const started = await jsonRequest(
-      `/projects/${encodeURIComponent(ready.projectToken)}/questions/custom`,
-      ready.cookie,
-      {
-        method: "POST",
-        body: {
-          question: "Acme 靠谱吗？",
-          clientRequestId: CUSTOM_QUESTION_CLIENT_REQUEST_ID,
-        },
-      },
-    );
-    expect(started.response.status).toBe(502);
-    expect(started.body).toMatchObject({
-      error: {
-        code: "CUSTOM_QUESTION_CLASSIFIER_INVALID_RESPONSE",
-        message: "验证结果格式异常，可重新验证当前问题",
-      },
-      validation: {
-        state: "failed",
-        error: { retryable: true },
-      },
-    });
-    expect(broker.customQuestionClassifierTaskCount).toBe(1);
-  });
-
-  it("does not salvage a retained malformed result for a new operation", async () => {
-    customQuestionValidationNowMs = Date.now();
-    const ready = await createReadyProject();
-    broker.customQuestionClassifierRawTexts = ["not-json", "still-not-json"];
-    const pathname = `/projects/${encodeURIComponent(
-      ready.projectToken,
-    )}/questions/custom`;
-    const question = "Acme 在高并发突发流量下的长期服务稳定性靠谱吗？";
-    const firstClientRequestId = CUSTOM_QUESTION_CLIENT_REQUEST_ID;
-    const secondClientRequestId = "22222222-2222-4222-8222-222222222222";
-
-    const started = await jsonRequest(pathname, ready.cookie, {
-      method: "POST",
-      body: { question, clientRequestId: firstClientRequestId },
-    });
-    expect(started.response.status).toBe(502);
-    expect(broker.customQuestionClassifierTaskCount).toBe(1);
-
-    broker.customQuestionClassifierRawTexts = [];
-    broker.customQuestionClassifierRawText = undefined;
-    broker.customQuestionClassifierOutput = {
-      decision: "accept",
-      category: "reputation",
-      enterpriseRelated: true,
-      reasonCode: "accepted",
-      reason: "问题明确以 Acme 为主语询问其可靠性。",
-      enterpriseAnchor: "Acme",
-      offeringAnchor: null,
-      evidenceRefs: ["evidence/S001.md"],
-    };
-
-    const replayed = await jsonRequest(pathname, ready.cookie, {
-      method: "POST",
-      body: { question, clientRequestId: secondClientRequestId },
-    });
-    expect(replayed.response.status).toBe(201);
-    expect(replayed.body).toMatchObject({
-      validation: {
-        clientRequestId: secondClientRequestId,
-        state: "completed",
-        question,
-      },
-      question: { question, category: "reputation" },
-    });
-    expect(broker.customQuestionClassifierTaskCount).toBe(2);
-  });
-
-  it("fails closed when a classifier accepts a question without a verified enterprise or offering anchor", async () => {
-    const ready = await createReadyProject();
-    broker.customQuestionClassifierOutput = {
-      decision: "accept",
-      category: "product_scenario",
-      enterpriseRelated: true,
-      reasonCode: "accepted",
-      reason: "问题看似涉及一种通用产品场景。",
-      enterpriseAnchor: null,
-      offeringAnchor: null,
-      evidenceRefs: ["evidence/S001.md"],
-    };
-
-    const rejected = await jsonRequest(
-      `/projects/${encodeURIComponent(ready.projectToken)}/questions/custom`,
-      ready.cookie,
-      {
-        method: "POST",
-        body: {
-          question: "苹果手机最近有什么新功能？",
-          clientRequestId: CUSTOM_QUESTION_CLIENT_REQUEST_ID,
-        },
-      },
-    );
-
-    expect(rejected.response.status).toBe(422);
-    expect(rejected.body).toMatchObject({
-      error: { code: "CUSTOM_QUESTION_ENTERPRISE_UNRELATED" },
-    });
-    expect(paymentCheckoutCalls).toHaveLength(0);
-  });
-
-  it("fails closed on an evidence path outside the enterprise knowledge base", async () => {
-    const ready = await createReadyProject();
-    const invalidEvidence = {
-      decision: "accept",
-      category: "reputation",
-      enterpriseRelated: true,
-      reasonCode: "accepted",
-      reason: "问题明确询问 Acme 的可信度。",
-      enterpriseAnchor: "Acme",
-      offeringAnchor: null,
-      evidenceRefs: ["external/nonexistent.md"],
-    };
-    broker.customQuestionClassifierRawTexts = [
-      JSON.stringify(invalidEvidence),
-      JSON.stringify({
-        ...invalidEvidence,
-        reason: "问题明确询问 Acme 在关键业务中的长期服务可靠性。",
-        evidenceRefs: ["evidence/S001.md"],
-      }),
-    ];
-
-    const started = await jsonRequest(
-      `/projects/${encodeURIComponent(ready.projectToken)}/questions/custom`,
-      ready.cookie,
-      {
-        method: "POST",
-        body: {
-          question: "Acme 在关键业务中的长期服务可靠性如何？",
-          clientRequestId: CUSTOM_QUESTION_CLIENT_REQUEST_ID,
-        },
-      },
-    );
-    expect(started.response.status).toBe(502);
-    expect(started.body).toMatchObject({
-      error: { code: "CUSTOM_QUESTION_CLASSIFIER_INVALID_RESPONSE" },
-      validation: { state: "failed", error: { retryable: true } },
-    });
-    expect(broker.customQuestionClassifierTaskCount).toBe(1);
-    expect(paymentCheckoutCalls).toHaveLength(0);
-  });
-
-  it("returns one retryable system error for evidence outside the knowledge base", async () => {
-    const ready = await createReadyProject();
-    const invalidEvidence = JSON.stringify({
-      decision: "accept",
-      category: "reputation",
-      enterpriseRelated: true,
-      reasonCode: "accepted",
-      reason: "问题明确询问 Acme 在关键业务中的长期服务可靠性。",
-      enterpriseAnchor: "Acme",
-      offeringAnchor: null,
-      evidenceRefs: ["external/nonexistent.md"],
-    });
-    broker.customQuestionClassifierRawTexts = [
-      invalidEvidence,
-      invalidEvidence,
-    ];
-    const pathname = `/projects/${encodeURIComponent(
-      ready.projectToken,
-    )}/questions/custom`;
-    const started = await jsonRequest(pathname, ready.cookie, {
-      method: "POST",
-      body: {
-        question: "Acme 在关键业务中的长期服务可靠性如何？",
-        clientRequestId: CUSTOM_QUESTION_CLIENT_REQUEST_ID,
-      },
-    });
-    expect(started.response.status).toBe(502);
-    expect(started.body).toMatchObject({
-      error: {
-        code: "CUSTOM_QUESTION_CLASSIFIER_INVALID_RESPONSE",
-        message: "验证结果格式异常，可重新验证当前问题",
-      },
-      validation: { state: "failed", error: { retryable: true } },
-    });
-    expect(broker.customQuestionClassifierTaskCount).toBe(1);
-  });
-
-  it("uses the classifier category instead of the previous regex fallback", async () => {
-    const ready = await createReadyProject();
-    broker.customQuestionClassifierOutput = {
-      decision: "accept",
-      category: "competitor_comparison",
-      enterpriseRelated: true,
-      reasonCode: "accepted",
-      reason: "问题要求在 Acme 与传统自建路线之间进行具体取舍。",
-      enterpriseAnchor: "Acme",
-      offeringAnchor: null,
-      evidenceRefs: ["evidence/S001.md"],
-    };
-
-    const accepted = await jsonRequest(
-      `/projects/${encodeURIComponent(ready.projectToken)}/questions/custom`,
-      ready.cookie,
-      {
-        method: "POST",
-        body: {
-          question: "Acme 与传统自建路线应如何取舍？",
-          clientRequestId: CUSTOM_QUESTION_CLIENT_REQUEST_ID,
-        },
-      },
-    );
-
-    expect(accepted.response.status).toBe(201);
-    expect(accepted.body).toMatchObject({
-      question: {
-        category: "competitor_comparison",
-        enterpriseAnchor: "Acme",
-      },
-      project: {
-        questions: expect.arrayContaining([
-          expect.objectContaining({
-            category: "competitor_comparison",
-            question: "Acme 与传统自建路线应如何取舍？",
-          }),
-        ]),
-      },
-    });
-  });
-
   it("returns the exact acknowledgement expected by a verified ZPAY notify", async () => {
     const response = await fetch(`${baseUrl}/payments/notify?sign=mock`);
 
@@ -7982,6 +5720,354 @@ describe("GEO API", () => {
       error: { code: "MONITOR_SCOPE_CONFLICT" },
     });
     expect(broker.monitorCreateInputs).toHaveLength(1);
+  });
+
+  it("creates locked industry ranking and product monitors as two independent runs with one shared sampling scope", async () => {
+    const ready = await createReadyProject();
+    expect(
+      validQuestionSet().questions.find(
+        (question) => question.id === "industry-ranking-01",
+      ),
+    ).toMatchObject({ category: "industry_ranking", selectable: false });
+    const body = {
+      schemaVersion: 2,
+      clientRequestId: "71717171-7171-4717-8717-717171717171",
+      questionId: "product-scenario-01",
+      industryRankingQuestionId: "industry-ranking-01",
+      monitoringEdition: "domestic",
+      regionCode: "110000",
+      screenshotEnabled: true,
+      platformIds: ["deepseek", "doubao"],
+    };
+
+    const started = await jsonRequest(
+      `/projects/${encodeURIComponent(ready.projectToken)}/monitoring`,
+      ready.cookie,
+      { method: "POST", body },
+    );
+
+    expect(started.response.status).toBe(201);
+    expect(broker.monitorCreateInputs).toHaveLength(2);
+    const [productInput, industryInput] = broker.monitorCreateInputs;
+    expect(productInput.idempotencyKey).not.toBe(industryInput.idempotencyKey);
+    expect(productInput.question).toContain("Acme");
+    expect(industryInput.question).toContain("科研企业 GEO 服务商");
+    for (const input of broker.monitorCreateInputs) {
+      expect(input).toMatchObject({
+        projectId: productInput.projectId,
+        platforms: body.platformIds,
+        monitorKeyword: "Acme",
+        screenshot: 1,
+        region: { scope: "domestic", code: "110000" },
+      });
+    }
+    expect(started.body).toMatchObject({
+      state: "started",
+      project: {
+        selectedQuestionId: "product-scenario-01",
+        selectedIndustryRankingQuestionId: "industry-ranking-01",
+        selectedPlatformIds: body.platformIds,
+        monitoring: { runId: "monitor-1" },
+        industryRankingMonitoring: { runId: "monitor-2" },
+      },
+    });
+    const value = new GeoTokenCodec(
+      "test-session-secret-at-least-16-characters",
+    ).open<Record<string, unknown>>(started.body.projectToken, "project").value;
+    expect(value).toMatchObject({
+      monitorRunId: "monitor-1",
+      industryRankingMonitorRunId: "monitor-2",
+      monitorQuestionId: "product-scenario-01",
+      industryRankingQuestionId: "industry-ranking-01",
+    });
+  });
+
+  it("recovers an industry submission still settling without duplicating the known product run", async () => {
+    const ready = await createReadyProject();
+    const createMonitorRun = broker.createMonitorRun.bind(broker);
+    let firstIndustrySubmission = true;
+    broker.createMonitorRun = async (input) => {
+      if (
+        input.question.includes("科研企业 GEO 服务商") &&
+        firstIndustrySubmission
+      ) {
+        firstIndustrySubmission = false;
+        const previousStatus = broker.monitorCreateStatus;
+        broker.monitorCreateStatus = "submission_unknown";
+        try {
+          return await createMonitorRun(input);
+        } finally {
+          broker.monitorCreateStatus = previousStatus;
+        }
+      }
+      return createMonitorRun(input);
+    };
+    const body = {
+      schemaVersion: 2,
+      clientRequestId: "72727272-7272-4727-8727-727272727272",
+      questionId: "product-scenario-01",
+      industryRankingQuestionId: "industry-ranking-01",
+      monitoringEdition: "domestic",
+      platformIds: ["doubao"],
+    };
+
+    const processing = await jsonRequest(
+      `/projects/${encodeURIComponent(ready.projectToken)}/monitoring`,
+      ready.cookie,
+      { method: "POST", body },
+    );
+    expect(processing.response.status).toBe(202);
+    expect(processing.body).toMatchObject({ state: "processing" });
+    expect(broker.monitorCreates).toBe(2);
+    const industryRun = broker.monitorRuns.get("monitor-2")!;
+    broker.monitorRuns.set("monitor-2", {
+      ...industryRun,
+      status: "submitted",
+    });
+
+    const recovered = await jsonRequest(
+      `/projects/${encodeURIComponent(processing.body.projectToken)}/monitoring`,
+      ready.cookie,
+      { method: "POST", body },
+    );
+    expect(recovered.response.status).toBe(200);
+    expect(recovered.body).toMatchObject({
+      state: "started",
+      replayed: true,
+      project: {
+        monitoring: { runId: "monitor-1" },
+        industryRankingMonitoring: { runId: "monitor-2" },
+      },
+    });
+    expect(broker.monitorCreates).toBe(2);
+    expect(broker.monitorCreateInputs).toHaveLength(2);
+  });
+
+  it("returns independent dual assessment and forecast chains without making one failed side global", async () => {
+    const ready = await createReadyProject();
+    const started = await jsonRequest(
+      `/projects/${encodeURIComponent(ready.projectToken)}/monitoring`,
+      ready.cookie,
+      {
+        method: "POST",
+        body: {
+          schemaVersion: 2,
+          clientRequestId: "73737373-7373-4737-8737-737373737374",
+          questionId: "product-scenario-01",
+          industryRankingQuestionId: "industry-ranking-01",
+          monitoringEdition: "domestic",
+          platformIds: ["doubao"],
+        },
+      },
+    );
+    expect(started.response.status).toBe(201);
+    const productRun = broker.monitorRuns.get("monitor-1")!;
+    broker.monitorRuns.set("monitor-1", {
+      ...productRun,
+      status: "completed",
+      completedItems: 5,
+      records: Array.from({ length: 5 }, (_, index) =>
+        monitorRecord(index + 1, `产品回答 ${index + 1}`),
+      ),
+    });
+    const industryRun = broker.monitorRuns.get("monitor-2")!;
+    broker.monitorRuns.set("monitor-2", {
+      ...industryRun,
+      status: "completed",
+      completedItems: 5,
+      records: [
+        { ...monitorRecord(1, "行业回答 1"), mentionPosition: 1 },
+        { ...monitorRecord(2, "行业回答 2"), mentionPosition: null },
+        monitorRecord(3, "行业回答 3"),
+        monitorRecord(4, "行业回答 4"),
+        { ...monitorRecord(5, "行业回答 5"), mentionPosition: 2 },
+      ],
+    });
+    broker.completeAssessmentImmediately = true;
+    broker.completeForecastImmediately = true;
+
+    const completed = await jsonRequest(
+      `/projects/${encodeURIComponent(started.body.projectToken)}`,
+      ready.cookie,
+    );
+    expect(completed.response.status).toBe(200);
+    expect(completed.body).toMatchObject({
+      project: {
+        status: "completed",
+        monitoring: { runId: "monitor-1", status: "completed" },
+        industryRankingMonitoring: {
+          runId: "monitor-2",
+          status: "completed",
+        },
+        assessment: { status: "ready" },
+        optimizationForecast: { status: "ready" },
+        industryRankingAssessment: { status: "ready" },
+        industryRankingOptimizationForecast: {
+          status: "ready",
+          brandMentionRateForecast: {
+            current: 2 / 3,
+            low: 2 / 3,
+            expected: 0.7,
+            high: 0.9,
+            observedAnswers: 3,
+          },
+        },
+      },
+    });
+    expect(completed.body.project.optimizationForecast).not.toHaveProperty(
+      "brandMentionRateForecast",
+    );
+    const taskInputs = Array.from(broker.taskInputUploads.values()).map(
+      (bytes) => JSON.parse(bytes.toString("utf8")),
+    );
+    expect(
+      taskInputs.some(
+        (input) =>
+          input.data?.brandMentionRateObservation?.observedAnswers === 3 &&
+          input.data?.brandMentionRateObservation?.current === 2 / 3,
+      ),
+    ).toBe(true);
+
+    const codec = new GeoTokenCodec(
+      "test-session-secret-at-least-16-characters",
+    );
+    const completeValue = codec.open<Record<string, any>>(
+      completed.body.projectToken,
+      "project",
+    ).value;
+    broker.tasks.set(completeValue.optimizationForecastTaskId, {
+      id: completeValue.optimizationForecastTaskId,
+      status: "failed",
+      error: "product forecast failed",
+    });
+    const oneSideFailedToken = codec.seal(
+      "project",
+      { ...completeValue, optimizationForecastAttempt: 2 },
+      60 * 60 * 1000,
+    );
+    const oneSideFailed = await jsonRequest(
+      `/projects/${encodeURIComponent(oneSideFailedToken)}`,
+      ready.cookie,
+    );
+    expect(oneSideFailed.response.status).toBe(200);
+    expect(oneSideFailed.body).toMatchObject({
+      project: {
+        status: "completed",
+        optimizationForecast: { status: "failed" },
+        industryRankingOptimizationForecast: { status: "ready" },
+      },
+    });
+  });
+
+  it("keeps scoped screenshot ownership and fences both reservations on deletion", async () => {
+    const ready = await createReadyProject();
+    const started = await jsonRequest(
+      `/projects/${encodeURIComponent(ready.projectToken)}/monitoring`,
+      ready.cookie,
+      {
+        method: "POST",
+        body: {
+          schemaVersion: 2,
+          clientRequestId: "74747474-7474-4747-8747-747474747475",
+          questionId: "product-scenario-01",
+          industryRankingQuestionId: "industry-ranking-01",
+          monitoringEdition: "domestic",
+          screenshotEnabled: true,
+          platformIds: ["deepseek"],
+        },
+      },
+    );
+    expect(started.response.status).toBe(201);
+    const productRun = broker.monitorRuns.get("monitor-1")!;
+    broker.monitorRuns.set("monitor-1", {
+      ...productRun,
+      status: "polling",
+      completedItems: 1,
+      records: [
+        {
+          ...monitorRecord(1, "产品截图回答", "deepseek"),
+          recordId: "product-record",
+          screenshot: { available: true },
+        },
+      ],
+    });
+    const industryRun = broker.monitorRuns.get("monitor-2")!;
+    broker.monitorRuns.set("monitor-2", {
+      ...industryRun,
+      status: "polling",
+      completedItems: 1,
+      records: [
+        {
+          ...monitorRecord(1, "行业截图回答", "deepseek"),
+          recordId: "industry-record",
+          screenshot: { available: true },
+        },
+      ],
+    });
+
+    const industryScreenshot = await fetch(
+      `${baseUrl}/projects/${encodeURIComponent(started.body.projectToken)}/monitoring/industry-ranking/records/industry-record/screenshot`,
+      { headers: { cookie: ready.cookie } },
+    );
+    expect(industryScreenshot.status).toBe(200);
+    const wrongPerspective = await fetch(
+      `${baseUrl}/projects/${encodeURIComponent(started.body.projectToken)}/monitoring/industry-ranking/records/product-record/screenshot`,
+      { headers: { cookie: ready.cookie } },
+    );
+    expect(wrongPerspective.status).toBe(404);
+    const legacyProductScreenshot = await fetch(
+      `${baseUrl}/projects/${encodeURIComponent(started.body.projectToken)}/monitoring/records/product-record/screenshot`,
+      { headers: { cookie: ready.cookie } },
+    );
+    expect(legacyProductScreenshot.status).toBe(200);
+    expect(broker.monitorScreenshotDownloads).toEqual([
+      { runId: "monitor-2", recordId: "industry-record" },
+      { runId: "monitor-1", recordId: "product-record" },
+    ]);
+
+    const codec = new GeoTokenCodec(
+      "test-session-secret-at-least-16-characters",
+    );
+    const value = codec.open<{ projectId: string }>(
+      started.body.projectToken,
+      "project",
+    ).value;
+    const industryReservationProjectId = `geo-industry-${createHash("sha256")
+      .update(value.projectId, "utf8")
+      .digest("hex")}`;
+    expect(
+      await monitorFreeReservationStore.get(value.projectId),
+    ).toBeDefined();
+    expect(
+      await monitorFreeReservationStore.get(industryReservationProjectId),
+    ).toBeDefined();
+
+    const deleted = await jsonRequest(
+      `/projects/${encodeURIComponent(started.body.projectToken)}`,
+      ready.cookie,
+      { method: "DELETE" },
+    );
+    expect(deleted.response.status).toBe(200);
+    expect(deleted.body).toMatchObject({
+      ok: true,
+      reservationState: "released",
+    });
+    expect(
+      await monitorFreeReservationStore.isProjectDeletionFenced(
+        value.projectId,
+      ),
+    ).toBe(true);
+    expect(
+      await monitorFreeReservationStore.isProjectDeletionFenced(
+        industryReservationProjectId,
+      ),
+    ).toBe(true);
+    expect(
+      await monitorFreeReservationStore.get(value.projectId),
+    ).toBeUndefined();
+    expect(
+      await monitorFreeReservationStore.get(industryReservationProjectId),
+    ).toBeUndefined();
   });
 
   it("returns REGION_UNAVAILABLE without a second Website catalog lookup", async () => {
@@ -8533,7 +6619,10 @@ describe("GEO API", () => {
         },
       },
     );
-    expect(rejected.response.status).toBe(403);
+    expect(rejected.response.status).toBe(400);
+    expect(rejected.body).toMatchObject({
+      error: { code: "QUESTION_SCOPE_MISMATCH" },
+    });
     expect(paymentCalls).toHaveLength(0);
     expect(broker.monitorCreates).toBe(0);
   });
@@ -8563,9 +6652,9 @@ describe("GEO API", () => {
       },
     );
 
-    expect(rejected.response.status).toBe(403);
+    expect(rejected.response.status).toBe(400);
     expect(rejected.body).toMatchObject({
-      error: { code: "QUESTION_NOT_SELECTABLE" },
+      error: { code: "QUESTION_SCOPE_MISMATCH" },
     });
     expect(paymentCalls).toHaveLength(0);
     expect(broker.monitorCreates).toBe(0);
@@ -8739,7 +6828,7 @@ describe("GEO API", () => {
     ).toHaveLength(2);
   });
 
-  it("shows a scope-safe partial assessment and creates a fresh task on explicit retry", async () => {
+  it("shows a scope-safe failed assessment and creates a fresh task on explicit retry", async () => {
     const ready = await createReadyProject();
     const monitored = await startOnePlatformMonitor(ready);
     const run = broker.monitorRuns.get("monitor-1")!;
@@ -8760,12 +6849,7 @@ describe("GEO API", () => {
     expect(first.response.status).toBe(201);
     expect(broker.assessmentTaskCount).toBe(1);
     const invalidAssessmentOutput = validAssessmentOutput();
-    invalidAssessmentOutput.rankingDiagnostics = {
-      ...invalidAssessmentOutput.rankingDiagnostics,
-      totalObservations: 5,
-      rankedObservations: 0,
-      unmentionedObservations: 0,
-    };
+    invalidAssessmentOutput.sample.successfulResponses = 4;
     broker.tasks.set("assessment-1", {
       id: "assessment-1",
       status: "completed",
@@ -8782,11 +6866,7 @@ describe("GEO API", () => {
     );
     expect(viewed.response.status).toBe(200);
     expect((viewed.body as any).project.assessment).toMatchObject({
-      status: "ready",
-      quality: {
-        completeness: "partial",
-        downstreamEligible: false,
-      },
+      status: "failed",
     });
     expect((viewed.body as any).project.assessment.totalScore).toBeUndefined();
     expect((viewed.body as any).project.optimizationForecast).toBeUndefined();
@@ -11516,9 +9596,9 @@ describe("GEO API", () => {
       { method: "POST", body: { method: "alipay" } },
     );
 
-    expect(checkout.response.status).toBe(403);
+    expect(checkout.response.status).toBe(400);
     expect(checkout.body).toMatchObject({
-      error: { code: "QUESTION_NOT_SELECTABLE" },
+      error: { code: "QUESTION_SCOPE_MISMATCH" },
     });
     expect(servicePaymentCheckoutCalls).toHaveLength(0);
   });
@@ -13023,7 +11103,7 @@ function validAssessmentOutput(
   },
   platform: GeoMonitorPlatformId = "doubao",
 ) {
-  const rankingMetricEligible = question.category !== "reputation";
+  const rankingMetricEligible = question.category === "industry_ranking";
   const indicator = () => ({
     rawValue: 0.5,
     measurementStatus: "measured",
@@ -13168,7 +11248,7 @@ function validAssessmentOutput(
   };
 }
 
-function validForecastOutput() {
+function validForecastOutput(includeBrandMentionRateTarget = false) {
   const indicator = (
     effectType: "direct_asset" | "observed_outcome",
     actionIds: Array<
@@ -13263,6 +11343,15 @@ function validForecastOutput() {
         ]),
       },
     },
+    ...(includeBrandMentionRateTarget
+      ? {
+          brandMentionRateTarget: {
+            low: 0.5,
+            expected: 0.7,
+            high: 0.9,
+          },
+        }
+      : { brandMentionRateTarget: null }),
     roadmap: [
       {
         phase: 1,

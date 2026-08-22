@@ -173,6 +173,63 @@ describe("GEO project refresh policy", () => {
     ).toBe("30 秒");
   });
 
+  it("uses the earliest active perspective nextPollAt", () => {
+    const now = Date.parse("2026-07-28T01:00:00.000Z");
+    expect(
+      geoAutoRefreshDelayMs(
+        project({
+          monitoring: {
+            runId: "product-run",
+            status: "capturing",
+            platforms: ["doubao"],
+            expectedRecords: 5,
+            completedRecords: 1,
+            failedRecords: 0,
+            answers: [],
+            nextPollAt: "2026-07-28T01:05:00.000Z",
+          },
+          industryRankingMonitoring: {
+            runId: "industry-run",
+            status: "capturing",
+            platforms: ["doubao"],
+            expectedRecords: 5,
+            completedRecords: 2,
+            failedRecords: 0,
+            answers: [],
+            nextPollAt: "2026-07-28T01:02:00.000Z",
+          },
+        }),
+        now,
+      ),
+    ).toBe(120_250);
+  });
+
+  it("does not postpone an active assessment behind a monitor nextPollAt", () => {
+    const now = Date.parse("2026-07-28T01:00:00.000Z");
+    expect(
+      geoAutoRefreshDelayMs(
+        project({
+          monitoring: {
+            runId: "product-run",
+            status: "capturing",
+            platforms: ["doubao"],
+            expectedRecords: 5,
+            completedRecords: 1,
+            failedRecords: 0,
+            answers: [],
+            nextPollAt: "2026-07-28T01:05:00.000Z",
+          },
+          industryRankingAssessment: {
+            status: "running",
+            dimensions: [],
+            comparisons: [],
+          },
+        }),
+        now,
+      ),
+    ).toBe(GEO_AUTO_REFRESH_INTERVAL_MS);
+  });
+
   it.each(["completed", "failed", "partial_review"] as const)(
     "stops monitoring refresh when status is %s",
     (status) => {
@@ -244,6 +301,24 @@ describe("GEO project refresh policy", () => {
   );
 
   it.each(["queued", "running"] as const)(
+    "keeps refreshing an industry assessment when the product chain is terminal and industry is %s",
+    (status) => {
+      expect(
+        shouldAutoRefreshGeoProject(
+          project({
+            assessment: { status: "failed", dimensions: [], comparisons: [] },
+            industryRankingAssessment: {
+              status,
+              dimensions: [],
+              comparisons: [],
+            },
+          }),
+        ),
+      ).toBe(true);
+    },
+  );
+
+  it.each(["queued", "running"] as const)(
     "keeps refreshing while the optimization forecast is %s",
     (status) => {
       expect(
@@ -280,6 +355,61 @@ describe("GEO project refresh policy", () => {
       ).toBe(false);
     },
   );
+
+  it("keeps refreshing an industry forecast after the product forecast is ready", () => {
+    expect(
+      shouldAutoRefreshGeoProject(
+        project({
+          optimizationForecast: {
+            status: "ready",
+            dimensions: [],
+            assumptions: [],
+            roadmap: [],
+          },
+          industryRankingOptimizationForecast: {
+            status: "running",
+            dimensions: [],
+            assumptions: [],
+            roadmap: [],
+          },
+        }),
+      ),
+    ).toBe(true);
+  });
+
+  it("keeps refreshing industry monitoring after the product chain completes", () => {
+    expect(
+      shouldAutoRefreshGeoProject(
+        project({
+          monitoring: {
+            runId: "product-run",
+            status: "completed",
+            platforms: ["doubao"],
+            expectedRecords: 5,
+            completedRecords: 5,
+            failedRecords: 0,
+            answers: [],
+          },
+          assessment: { status: "ready", dimensions: [], comparisons: [] },
+          optimizationForecast: {
+            status: "ready",
+            dimensions: [],
+            assumptions: [],
+            roadmap: [],
+          },
+          industryRankingMonitoring: {
+            runId: "industry-run",
+            status: "capturing",
+            platforms: ["doubao"],
+            expectedRecords: 5,
+            completedRecords: 2,
+            failedRecords: 0,
+            answers: [],
+          },
+        }),
+      ),
+    ).toBe(true);
+  });
 
   it("polls only while question recommendation is explicitly pending", () => {
     const base = {
@@ -344,7 +474,7 @@ describe("GEO project refresh policy", () => {
     ).toBe(false);
   });
 
-  it("stops when the project itself has failed", () => {
+  it("keeps an active perspective refreshing when the product-level project status failed", () => {
     expect(
       shouldAutoRefreshGeoProject(
         project({
@@ -355,6 +485,34 @@ describe("GEO project refresh policy", () => {
             platforms: ["doubao"],
             expectedRecords: 5,
             completedRecords: 1,
+            failedRecords: 0,
+            answers: [],
+          },
+        }),
+      ),
+    ).toBe(true);
+  });
+
+  it("stops a failed project after every perspective is terminal", () => {
+    expect(
+      shouldAutoRefreshGeoProject(
+        project({
+          status: "failed",
+          monitoring: {
+            runId: "product-run",
+            status: "failed",
+            platforms: ["doubao"],
+            expectedRecords: 5,
+            completedRecords: 0,
+            failedRecords: 5,
+            answers: [],
+          },
+          industryRankingMonitoring: {
+            runId: "industry-run",
+            status: "completed",
+            platforms: ["doubao"],
+            expectedRecords: 5,
+            completedRecords: 5,
             failedRecords: 0,
             answers: [],
           },

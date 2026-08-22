@@ -91,7 +91,7 @@ describe("GEO monitoring edition setup", () => {
     ).toBeTruthy();
     expect(screen.queryByText(/¥|支付/)).toBeNull();
     expect(screen.getByText("本次监控")).toBeTruthy();
-    expect(screen.getByText("1 个平台 · 5 次回答")).toBeTruthy();
+    expect(screen.getByText("1 类问题 · 1 个平台 · 5 次回答")).toBeTruthy();
     expect(screen.queryByText("免费获取")).toBeNull();
     expect(
       (
@@ -129,7 +129,7 @@ describe("GEO monitoring edition setup", () => {
     expect(onChangeEdition).toHaveBeenCalledWith("overseas");
   });
 
-  it("shows compact domestic sampling controls with screenshots disabled in preview", () => {
+  it("shows compact domestic sampling controls with screenshots enabled in preview", () => {
     const onToggleScreenshot = vi.fn();
     render(
       <MonitoringSetup
@@ -155,9 +155,89 @@ describe("GEO monitoring edition setup", () => {
     const screenshotSwitch = screen.getByRole("switch", {
       name: "采集并展示原始页面截图",
     }) as HTMLButtonElement;
-    expect(screenshotSwitch.getAttribute("data-state")).toBe("unchecked");
+    expect(screenshotSwitch.getAttribute("data-state")).toBe("checked");
+    expect(
+      screen.getByText(
+        "两类问题各按每个平台 5 次采样，共享同一时间窗口与采样范围。",
+      ),
+    ).toBeTruthy();
+    expect(screen.getByText("2 类问题 · 1 个平台 · 10 次回答")).toBeTruthy();
     fireEvent.click(screenshotSwitch);
-    expect(onToggleScreenshot).toHaveBeenCalledWith(true);
+    expect(onToggleScreenshot).toHaveBeenCalledWith(false);
+  });
+
+  it("confirms both preview questions as one shared monitoring scope", () => {
+    render(
+      <MonitoringConfirmDialog
+        open
+        project={createGeoStylePreviewProject("monitoring-setup")}
+        starting={false}
+        error=""
+        onOpenChange={vi.fn()}
+        onConfirm={vi.fn()}
+      />,
+    );
+
+    expect(screen.getByText("华润医药的渠道服务与公开口碑如何？")).toBeTruthy();
+    expect(screen.getByText("国内医药流通企业应该如何选择？")).toBeTruthy();
+    expect(screen.getByText("10 次")).toBeTruthy();
+    expect(
+      screen.getByText(
+        "确认两类问题、监控版本和平台范围后，即可分别获取并留存回答。",
+      ),
+    ).toBeTruthy();
+  });
+
+  it("keeps shared settings locked while allowing an incomplete dual start to resume", () => {
+    const fixture = createGeoStylePreviewProject("monitoring-setup");
+    const onCheckout = vi.fn();
+    render(
+      <MonitoringSetup
+        project={{
+          ...fixture,
+          preview: undefined,
+          monitoring: {
+            runId: "product-run",
+            status: "capturing",
+            platforms: ["deepseek"],
+            expectedRecords: 5,
+            completedRecords: 1,
+            failedRecords: 0,
+            answers: [],
+          },
+          industryRankingMonitoring: undefined,
+          monitoringRecovery: {
+            schemaVersion: 2,
+            clientRequestId: "same-dual-start-request",
+            questionId: fixture.selectedQuestionId!,
+            industryRankingQuestionId:
+              fixture.selectedIndustryRankingQuestionId,
+            monitoringEdition: "domestic",
+            screenshotEnabled: true,
+            platformIds: ["deepseek"],
+          },
+        }}
+        onChangeEdition={vi.fn()}
+        onChangeRegion={vi.fn()}
+        onToggleScreenshot={vi.fn()}
+        onTogglePlatform={vi.fn()}
+        onBack={vi.fn()}
+        onCheckout={onCheckout}
+        paymentPending={false}
+        locked
+      />,
+    );
+
+    const resume = screen.getByRole("button", {
+      name: "继续启动剩余问题",
+    }) as HTMLButtonElement;
+    expect(resume.disabled).toBe(false);
+    expect(
+      (screen.getByRole("button", { name: "国内版" }) as HTMLButtonElement)
+        .disabled,
+    ).toBe(true);
+    fireEvent.click(resume);
+    expect(onCheckout).toHaveBeenCalledOnce();
   });
 
   it("confirms the monitoring scope without exposing any payment action", () => {

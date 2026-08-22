@@ -379,6 +379,13 @@ export type GeoOptimizationForecastResult = {
   error?: string;
   failureCode?: GeoAssessmentFailureCode;
   quality?: GeoResultQuality;
+  brandMentionRateForecast?: {
+    current: number;
+    low: number;
+    expected: number;
+    high: number;
+    observedAnswers: number;
+  };
 };
 
 export type GeoFileReference = {
@@ -666,14 +673,17 @@ export type GeoProject = {
   };
   questionRetryAvailable?: boolean;
   assessmentRetryAvailable?: boolean;
+  industryRankingAssessmentRetryAvailable?: boolean;
   assessmentUpdatingToVersion2?: boolean;
   optimizationForecastRetryAvailable?: boolean;
+  industryRankingOptimizationForecastRetryAvailable?: boolean;
   files: GeoFileReference[];
   knowledgeBase?: GeoKnowledgeBase;
   /** Server-authoritative lifecycle for the one recommendation task. */
   questionRecommendation?: GeoQuestionRecommendation;
   questions: GeoQuestion[];
   selectedQuestionId?: string;
+  selectedIndustryRankingQuestionId?: string;
   /** Missing on historical projects and therefore resolved as `domestic`. */
   monitoringEdition?: GeoMonitoringEdition;
   /** Missing means the provider-selected default node was used. */
@@ -685,14 +695,18 @@ export type GeoProject = {
     schemaVersion: 2;
     clientRequestId: string;
     questionId: string;
+    industryRankingQuestionId?: string;
     monitoringEdition: GeoMonitoringEdition;
     regionCode?: string;
     screenshotEnabled?: boolean;
     platformIds: GeoPlatformId[];
   };
   monitoring?: GeoMonitoringResult;
+  industryRankingMonitoring?: GeoMonitoringResult;
   assessment?: GeoAssessmentResult;
+  industryRankingAssessment?: GeoAssessmentResult;
   optimizationForecast?: GeoOptimizationForecastResult;
+  industryRankingOptimizationForecast?: GeoOptimizationForecastResult;
   serviceActivation?: GeoServiceActivation;
   executionLog?: GeoExecutionLog;
   error?: string;

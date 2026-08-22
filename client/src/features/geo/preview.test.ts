@@ -208,7 +208,7 @@ describe("GEO monitoring style previews", () => {
 
     expect(project.title).toBe("华润医药");
     expect(project.monitoring).toBeUndefined();
-    expect(project.monitoringScreenshotEnabled).toBe(false);
+    expect(project.monitoringScreenshotEnabled).toBe(true);
     expect(project.monitoringRegion).toBeUndefined();
     expect(geoStylePreviewRegions("domestic").regions).toHaveLength(31);
     expect(geoStylePreviewRegions("domestic").regions).toContainEqual({
@@ -226,6 +226,7 @@ describe("GEO monitoring style previews", () => {
   it("builds a DeepSeek 4-success and 1-failure monitoring result", () => {
     const project = createGeoStylePreviewProject("monitoring");
     const monitoring = project.monitoring;
+    const industryMonitoring = project.industryRankingMonitoring;
 
     expect(project.title).toBe("华润医药");
     expect(project.selectedPlatformIds).toEqual(["deepseek"]);
@@ -256,8 +257,8 @@ describe("GEO monitoring style previews", () => {
     expect(monitoring?.answers[0].screenshotUrl).toMatch(
       /^data:image\/svg\+xml/,
     );
-    expect(monitoring?.answers[2].answer).toContain("〔来源 9〕");
-    expect(monitoring?.answers[3]).toMatchObject({
+    expect(industryMonitoring?.answers[2].answer).toContain("〔来源 9〕");
+    expect(industryMonitoring?.answers[3]).toMatchObject({
       mentionPosition: null,
       sentiment: null,
       categoryRanking: null,

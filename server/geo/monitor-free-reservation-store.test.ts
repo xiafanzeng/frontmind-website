@@ -3,6 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import {
+  createGeoMonitorFreeReservationStore,
   FileGeoMonitorFreeReservationStore,
   GeoMonitorFreeReservationStoreError,
   monitorFreeProjectHash,
@@ -52,6 +53,36 @@ function reserveInput(
 }
 
 describe("FileGeoMonitorFreeReservationStore", () => {
+  it("uses the retired store path only as a persistent sibling hint without reading its JSON", async () => {
+    const parent = await temporaryDirectory();
+    const retiredDirectory = path.join(parent, "custom-question-validations");
+    await fs.mkdir(retiredDirectory);
+    const legacyFile = path.join(retiredDirectory, "legacy.json");
+    await fs.writeFile(legacyFile, "{malformed legacy state", "utf8");
+
+    const store = createGeoMonitorFreeReservationStore({
+      env: {
+        NODE_ENV: "test",
+        FRONTMIND_GEO_CUSTOM_QUESTION_STORE_DIR: retiredDirectory,
+      },
+    });
+    await store.assertReady();
+    await store.reserve(reserveInput());
+
+    await expect(fs.readFile(legacyFile, "utf8")).resolves.toBe(
+      "{malformed legacy state",
+    );
+    await expect(
+      fs.access(
+        path.join(
+          parent,
+          "monitor-free-reservations",
+          `${monitorFreeProjectHash(PROJECT_ID)}.reservation.json`,
+        ),
+      ),
+    ).resolves.toBeUndefined();
+  });
+
   it("removes a crash-left lock during startup before the first reservation", async () => {
     const directory = await temporaryDirectory();
     const lockPath = path.join(

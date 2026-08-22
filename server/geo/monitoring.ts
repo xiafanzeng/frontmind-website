@@ -13,6 +13,23 @@ type NormalizedMonitorRun = BrokerMonitorRun & {
   quality?: ResultQuality;
 };
 
+export function monitorBrandMentionRate(monitorRun: BrokerMonitorRun) {
+  const observed = (monitorRun.records || []).filter(
+    (record) =>
+      record.status === "completed" &&
+      Boolean(record.answerText?.trim()) &&
+      !record.error &&
+      Object.prototype.hasOwnProperty.call(record, "mentionPosition"),
+  );
+  if (observed.length === 0) return undefined;
+  return {
+    current:
+      observed.filter((record) => record.mentionPosition !== null).length /
+      observed.length,
+    observedAnswers: observed.length,
+  };
+}
+
 const PlatformSchema = z.enum(GEO_MONITOR_PLATFORM_IDS);
 const StatusSchema = z.enum([
   "submission_in_progress",

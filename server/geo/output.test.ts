@@ -138,7 +138,7 @@ describe("Website v2 task output normalization", () => {
     expect(
       parsed?.questions
         .filter((question) => question.category === "industry_ranking")
-        .every((question) => question.selectable === false),
+        .every((question) => question.selectable === true),
     ).toBe(true);
   });
 
@@ -295,7 +295,7 @@ describe("Website v2 task output normalization", () => {
     ]);
   });
 
-  it("computes complete-result selectableCount after deterministic ranking relock", () => {
+  it("computes complete-result selectableCount after deterministic ranking classification", () => {
     const set = buildValidQuestionSet();
     set.questions[0] = {
       ...set.questions[0],
@@ -305,11 +305,11 @@ describe("Website v2 task output normalization", () => {
     const parsed = parseQuestionSetFromTask(typedTask(set));
     expect(parsed?.questions[0]).toMatchObject({
       category: "industry_ranking",
-      selectable: false,
+      selectable: true,
     });
     expect(questionSetQualityFromTask(typedTask(set))).toMatchObject({
       completeness: "complete",
-      stats: { selectableCount: 14 },
+      stats: { selectableCount: 20 },
     });
   });
 });

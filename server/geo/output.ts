@@ -502,22 +502,17 @@ function salvageDisplayableQuestions(value: unknown) {
 function enforceGeneratedQuestionSelectionSafety(
   questionSet: GeoQuestionSet,
 ): GeoQuestionSet {
-  let changed = false;
-  const questions = questionSet.questions.map((question) => {
-    if (!isIndustryRankingQuestion(question.question)) return question;
-    if (
-      question.category === "industry_ranking" &&
-      question.selectable === false
-    )
-      return question;
-    changed = true;
-    return {
-      ...question,
-      category: "industry_ranking" as const,
-      selectable: false,
-    };
-  });
-  return changed ? { questions } : questionSet;
+  return {
+    questions: questionSet.questions.map((question) =>
+      isIndustryRankingQuestion(question.question)
+        ? {
+            ...question,
+            category: "industry_ranking" as const,
+            selectable: question.classificationState !== "unclassified",
+          }
+        : question,
+    ),
+  };
 }
 
 function asRecord(value: unknown) {

@@ -77,7 +77,7 @@ const QUESTION_COPY: Record<GeoQuestionCategory, string[]> = {
 const QUESTION_RATIONALE: Record<GeoQuestionCategory, string> = {
   reputation: "覆盖用户对企业可信度、交付表现与公开评价的核验意图。",
   product_scenario: "覆盖方案能力、适用场景、实施条件与持续服务问题。",
-  industry_ranking: "涉及行业词竞争，仅在获得全域服务权限后执行。",
+  industry_ranking: "用于建立行业排名问题下的品牌提及率与语义资产基线。",
   competitor_comparison: "覆盖差异定位、选择依据与采购决策边界。",
 };
 
@@ -91,7 +91,7 @@ function previewQuestions(): GeoQuestion[] {
       question,
       rationale: QUESTION_RATIONALE[category],
       evidenceRefs: ["企业事实底稿.md", "方案与服务边界.md"],
-      selectable: category !== "industry_ranking",
+      selectable: true,
     })),
   );
 }
@@ -412,6 +412,36 @@ function medicalMonitoringPreviewAnswers(): GeoMonitoringAnswer[] {
   });
 }
 
+function medicalProductOpinionPreviewAnswers(): GeoMonitoringAnswer[] {
+  return medicalMonitoringPreviewAnswers().map((answer) => {
+    const {
+      mentionPosition: _mentionPosition,
+      mentionContext: _mentionContext,
+      categoryRanking: _categoryRanking,
+      ...productAnswer
+    } = answer;
+    if (productAnswer.status !== "completed") {
+      return {
+        ...productAnswer,
+        id: productAnswer.id.replace("preview-monitor", "preview-product"),
+      };
+    }
+    return {
+      ...productAnswer,
+      id: productAnswer.id.replace("preview-monitor", "preview-product"),
+      answer: [
+        "### 华润医药渠道服务与公开口碑观察",
+        "",
+        "平台回答能够识别华润医药的综合医药商业能力、医院及零售终端覆盖，并引用行业与监管来源核验服务边界。〔来源 0〕",
+        "",
+        answer.runIndex === 3
+          ? "部分回答对跨区域供应稳定性持谨慎态度，建议结合目标省份的仓配记录和真实客户评价继续核验。〔来源 4〕"
+          : "公开信息对渠道覆盖与大型客户服务给出较积极评价，但采购方仍应核对冷链、账期和本地履约数据。〔来源 1〕",
+      ].join("\n"),
+    };
+  });
+}
+
 /**
  * Development-only, anonymous synthetic project used to exercise every result
  * renderer without embedding customer names, domains, documents, or answers.
@@ -420,25 +450,36 @@ export function createGeoStylePreviewProject(
   mode: GeoStylePreviewMode = "assessment",
 ): GeoProject {
   const monitoringPreview = mode !== "assessment";
-  const medicalQuestion: GeoQuestion = {
-    id: "preview-medical-distribution",
-    category: "product_scenario",
+  const medicalProductQuestion: GeoQuestion = {
+    id: "preview-medical-reputation",
+    category: "reputation",
+    question: "华润医药的渠道服务与公开口碑如何？",
+    rationale: "用于核验企业渠道服务、公开评价与可信证据。",
+    evidenceRefs: ["医药流通行业资料.md"],
+    selectable: true,
+  };
+  const medicalIndustryQuestion: GeoQuestion = {
+    id: "preview-medical-industry-ranking",
+    category: "industry_ranking",
     question: "国内医药流通企业应该如何选择？",
-    rationale: "用于核验医药流通企业的渠道、配送、合规与供应链能力。",
+    rationale: "用于建立医药流通行业的品牌提及率与语义资产基线。",
     evidenceRefs: ["医药流通行业资料.md"],
     selectable: true,
   };
   const questions = monitoringPreview
-    ? [medicalQuestion, ...previewQuestions()]
+    ? [medicalProductQuestion, medicalIndustryQuestion, ...previewQuestions()]
     : previewQuestions();
   const answers = monitoringPreview
-    ? medicalMonitoringPreviewAnswers()
+    ? medicalProductOpinionPreviewAnswers()
     : previewAnswers();
   const selectedQuestionId = monitoringPreview
-    ? medicalQuestion.id
+    ? medicalProductQuestion.id
     : "preview-reputation-1";
+  const selectedIndustryRankingQuestionId = monitoringPreview
+    ? medicalIndustryQuestion.id
+    : "preview-industry_ranking-1";
 
-  return {
+  const project: GeoProject = {
     id: GEO_STYLE_PREVIEW_ID,
     preview: true,
     remoteToken: "preview-only-do-not-submit",
@@ -609,12 +650,14 @@ export function createGeoStylePreviewProject(
     },
     questions,
     selectedQuestionId,
+    selectedIndustryRankingQuestionId,
     monitoringEdition: "domestic",
     monitoringRegion:
       mode === "monitoring"
         ? { edition: "domestic", code: "110000", label: "北京市" }
         : undefined,
-    monitoringScreenshotEnabled: mode === "monitoring",
+    monitoringScreenshotEnabled:
+      mode === "monitoring" || mode === "monitoring-setup",
     selectedPlatformIds: monitoringPreview
       ? ["deepseek"]
       : [...MONITOR_PLATFORM_IDS],
@@ -984,5 +1027,61 @@ export function createGeoStylePreviewProject(
       amountFen: 200_000,
       billingMonths: 1,
     },
+  };
+  const industryAnswers = medicalMonitoringPreviewAnswers();
+  return {
+    ...project,
+    industryRankingMonitoring:
+      mode === "monitoring-setup"
+        ? undefined
+        : {
+            runId: "preview-industry-ranking-monitor-run",
+            status: "partial_review",
+            platforms: ["deepseek"],
+            expectedRecords: 5,
+            completedRecords: 4,
+            failedRecords: 1,
+            startedAt: "2026-08-21T08:50:00.000Z",
+            completedAt: "2026-08-21T13:30:00.000Z",
+            region: {
+              edition: "domestic",
+              code: "110000",
+              label: "北京市",
+            },
+            screenshotEnabled: true,
+            answers: industryAnswers,
+          },
+    industryRankingAssessment: project.assessment
+      ? {
+          ...project.assessment,
+          totalScore: 61,
+          rawTotalScore: 61,
+          grade: "B",
+          rawGrade: "B",
+          scopeLabel: "行业排名与品牌优胜语义资产评分",
+          summary:
+            "行业问题能够识别企业主体与渠道优势，但品牌提及稳定性和权威引用仍需提升。",
+        }
+      : undefined,
+    industryRankingOptimizationForecast: project.optimizationForecast
+      ? {
+          ...project.optimizationForecast,
+          currentScore: 61,
+          rawCurrentScore: 61,
+          targetLow: 73,
+          targetExpected: 79,
+          targetHigh: 84,
+          rawTargetLow: 73,
+          rawTargetExpected: 79,
+          rawTargetHigh: 84,
+          brandMentionRateForecast: {
+            current: 0.75,
+            low: 0.8,
+            expected: 0.9,
+            high: 1,
+            observedAnswers: 4,
+          },
+        }
+      : undefined,
   };
 }

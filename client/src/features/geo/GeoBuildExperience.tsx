@@ -35,7 +35,6 @@ import {
   Minus,
   Paperclip,
   PackageOpen,
-  Play,
   Plus,
   Quote,
   RadioTower,
@@ -81,26 +80,17 @@ import {
 } from "@/components/ui/select";
 import { Switch } from "@/components/ui/switch";
 import {
-  authoritativeGeoCustomQuestionValidationTerminal,
-  clearPendingGeoCustomQuestionValidation,
   confirmGeoServiceBankTransfer,
   createGeoServiceAccount,
-  createGeoCustomQuestion,
   createGeoProject,
   createGeoServicePaymentCheckout,
   downloadGeoArchive,
-  expiredGeoCustomQuestionValidation,
   getGeoProject,
   getGeoMonitoringRegions,
   getGeoServiceContractStatus,
   getGeoServicePaymentStatus,
   getGeoServiceProvisioningStatus,
   GeoApiError,
-  persistGeoCustomQuestionResultAndAcknowledge,
-  readPendingGeoCustomQuestionValidation,
-  retryableGeoCustomQuestionValidation,
-  retryGeoCustomQuestionValidation,
-  resumeGeoCustomQuestionValidation,
   type GeoPaymentCheckout,
   type GeoPaymentMethod,
   type GeoServicePaymentCheckout,
@@ -108,6 +98,8 @@ import {
   startGeoCurrentAssessment,
   startGeoMonitoring,
   startGeoOptimizationForecast,
+  retryIndustryRankingAssessment,
+  startIndustryRankingOptimizationForecast,
   startGeoQuestionRecommendation,
   startGeoService,
   submitGeoServiceContractProfile,
@@ -115,6 +107,10 @@ import {
   verifyGeoInvitation,
 } from "./api";
 import { normalizeBusinessOwnerName } from "@shared/business-owner-name";
+import {
+  geoServiceMonthlyPriceFen,
+  type GeoPricedServiceCategory,
+} from "@shared/geo-pricing";
 import {
   createGeoDraftProject,
   isGeoDraftProject,
@@ -217,12 +213,37 @@ const GEO_MONITORING_PLATFORM_SELECTION_MESSAGE =
 const LEGACY_RECOVERABLE_MONITORING_FAILURE =
   /英文监控问题正在准备|(?:邀请会话|网络来源)请求过于频繁|提交内容有误，请检查后重试|QUESTION_TRANSLATION_PENDING|(?:SESSION|IDENTITY)_RATE_LIMITED|AGENT_REQUEST_FAILED/i;
 
+export function clearGeoStorageNoticeIfMatching(
+  current: string,
+  expected: string,
+) {
+  return current === expected ? "" : current;
+}
+
+export function isHistoricalRankingOnlyProject(project?: GeoProject) {
+  if (!project || project.industryRankingMonitoring?.runId) return false;
+  return (
+    project.questions.find(
+      (question) => question.id === project.selectedQuestionId,
+    )?.category === "industry_ranking"
+  );
+}
+
 const DOMESTIC_GEO_PLATFORM_IDS = GEO_PLATFORMS.filter(
   (platform) => platform.id !== "chatgpt",
 ).map((platform) => platform.id);
 
 function monitoringEditionLabel(edition: GeoMonitoringEdition) {
   return edition === "overseas" ? "海外版" : "国内版";
+}
+
+function formatGeoMonthlyPrice(
+  category: GeoPricedServiceCategory,
+  edition: GeoMonitoringEdition,
+) {
+  return `¥${(
+    geoServiceMonthlyPriceFen(category, edition) / 100
+  ).toLocaleString("zh-CN")}/月`;
 }
 
 function monitoringPlatformsForEdition(edition: GeoMonitoringEdition) {
@@ -249,17 +270,23 @@ function matchingMonitoringRecoveryClientRequestId(
   project: GeoProject,
   input: {
     questionId: string;
+    industryRankingQuestionId?: string;
     monitoringEdition: GeoMonitoringEdition;
     platformIds: GeoPlatformId[];
     regionCode?: string;
     screenshotEnabled?: boolean;
   },
 ) {
-  const recovery = project.monitoringRecovery;
+  const recovery = project.monitoringRecovery as
+    | (NonNullable<GeoProject["monitoringRecovery"]> & {
+        industryRankingQuestionId?: string;
+      })
+    | undefined;
   if (
     !recovery ||
     recovery.schemaVersion !== 2 ||
     recovery.questionId !== input.questionId ||
+    recovery.industryRankingQuestionId !== input.industryRankingQuestionId ||
     recovery.monitoringEdition !== input.monitoringEdition ||
     recovery.regionCode !== input.regionCode ||
     Boolean(recovery.screenshotEnabled) !== Boolean(input.screenshotEnabled) ||
@@ -280,13 +307,7 @@ export function geoServiceFallbackAmountFen(
   category: GeoServiceCategory | undefined,
   edition: GeoMonitoringEdition,
 ) {
-  const domesticAmountFen =
-    category === "product_scenario"
-      ? 150_000
-      : category === "reputation" || category === "competitor_comparison"
-        ? 200_000
-        : 0;
-  return domesticAmountFen * (edition === "overseas" ? 2 : 1);
+  return category ? geoServiceMonthlyPriceFen(category, edition) : 0;
 }
 
 export function readGeoPurchaseIntentFromUrl(value: string) {
@@ -469,13 +490,28 @@ export function isGeoMonitoringStartPendingError(error: unknown) {
 }
 
 export function isGeoQuestionSelectionLocked(
-  project: Pick<GeoProject, "id" | "preview" | "monitoring">,
+  project: Pick<
+    GeoProject,
+    "id" | "preview" | "monitoring" | "industryRankingMonitoring"
+  >,
   pendingPaymentProjectId?: string,
 ) {
   return (
     !project.preview &&
-    (Boolean(project.monitoring?.runId) ||
+    (Boolean(
+      project.monitoring?.runId || project.industryRankingMonitoring?.runId,
+    ) ||
       isGeoProjectPaymentProtected(project.id, pendingPaymentProjectId))
+  );
+}
+
+function canResumeIncompleteDualMonitoring(project: GeoProject) {
+  if (!project.monitoringRecovery || !project.selectedIndustryRankingQuestionId)
+    return false;
+  const productStarted = Boolean(project.monitoring?.runId);
+  const industryStarted = Boolean(project.industryRankingMonitoring?.runId);
+  return (
+    (productStarted || industryStarted) && (!productStarted || !industryStarted)
   );
 }
 
@@ -921,28 +957,6 @@ function errorMessage(error: unknown): string {
   return localizedUserFacingError(error);
 }
 
-function looksLikeIndustryRankingQuestion(value: string) {
-  return /(?:(?:行业|品类|领域|赛道).{0,10}(?:排名|排行|榜单|top\s*\d*|最好|最佳|第一|领先)|(?:哪家|哪个|哪些).{0,10}(?:最好|最佳|领先|值得推荐)|(?:推荐).{0,8}(?:品牌|公司|厂商|产品)|(?:品牌|公司|企业|平台|机构|服务商|供应商|厂商|工具|方案).{0,12}(?:推荐|排行|排名|有哪些|有哪(?:些|几)家|怎么选|如何选)|(?:有哪些|有哪(?:些|几)家).{0,12}(?:品牌|公司|企业|平台|机构|服务商|供应商|厂商|工具|方案))/i.test(
-    value,
-  );
-}
-
-function explicitlyReferencesProjectCompany(
-  question: string,
-  companyName: string,
-) {
-  const normalize = (value: string) =>
-    value
-      .normalize("NFKC")
-      .toLocaleLowerCase("zh-CN")
-      .replace(/[\s，。！？、；：“”‘’（）【】《》?.,!()[\]{}'"]/g, "");
-  const normalizedCompanyName = normalize(companyName);
-  return (
-    normalizedCompanyName.length >= 2 &&
-    normalize(question).includes(normalizedCompanyName)
-  );
-}
-
 function preparePaymentWindow() {
   const target = `frontmind-zpay-${Date.now()}`;
   const popup = window.open(
@@ -1111,8 +1125,13 @@ function canOpenStage(project: GeoProject, stage: GeoStage): boolean {
   if (stage === "current_assessment")
     return (
       project.monitoring?.status === "completed" ||
+      project.industryRankingMonitoring?.status === "completed" ||
       Boolean(
         project.assessment && project.assessment.status !== "not_started",
+      ) ||
+      Boolean(
+        project.industryRankingAssessment &&
+          project.industryRankingAssessment.status !== "not_started",
       ) ||
       project.executionLog?.entries.some(
         (entry) => entry.stage === "current_assessment",
@@ -1129,10 +1148,14 @@ function projectDefaultStage(project: GeoProject): GeoStage {
     return "service_activation";
   if (
     project.monitoring?.status === "completed" ||
-    (project.assessment && project.assessment.status !== "not_started")
+    project.industryRankingMonitoring?.status === "completed" ||
+    (project.assessment && project.assessment.status !== "not_started") ||
+    (project.industryRankingAssessment &&
+      project.industryRankingAssessment.status !== "not_started")
   )
     return "current_assessment";
-  if (project.monitoring?.runId) return "monitoring";
+  if (project.monitoring?.runId || project.industryRankingMonitoring?.runId)
+    return "monitoring";
   if (project.selectedQuestionId) return "monitoring";
   if (questionRecommendationStatus(project) !== "not_started")
     return "question_recommendation";
@@ -1148,13 +1171,29 @@ function projectDefaultStage(project: GeoProject): GeoStage {
 function isStageComplete(project: GeoProject, stage: GeoStage): boolean {
   if (stage === "enterprise_analysis") return Boolean(project.knowledgeBase);
   if (stage === "question_recommendation")
-    return Boolean(project.selectedQuestionId);
-  if (stage === "monitoring") return project.monitoring?.status === "completed";
-  if (stage === "current_assessment")
-    return (
-      isCompleteAssessment(project.assessment) &&
-      isCompleteForecast(project.optimizationForecast)
+    return Boolean(
+      project.selectedQuestionId &&
+        (!project.questions.some(
+          (question) => question.category === "industry_ranking",
+        ) ||
+          project.selectedIndustryRankingQuestionId),
     );
+  if (stage === "monitoring") {
+    if (project.monitoring?.status !== "completed") return false;
+    return project.selectedIndustryRankingQuestionId
+      ? project.industryRankingMonitoring?.status === "completed"
+      : true;
+  }
+  if (stage === "current_assessment") {
+    const productComplete =
+      isCompleteAssessment(project.assessment) &&
+      isCompleteForecast(project.optimizationForecast);
+    if (!productComplete) return false;
+    return project.selectedIndustryRankingQuestionId
+      ? isCompleteAssessment(project.industryRankingAssessment) &&
+          isCompleteForecast(project.industryRankingOptimizationForecast)
+      : true;
+  }
   return project.serviceActivation?.status === "active";
 }
 
@@ -1516,23 +1555,6 @@ function KnowledgeBuildTree({
   );
 }
 
-function PermissionChannel({
-  name,
-  logo,
-  tone,
-}: {
-  name: string;
-  logo: string;
-  tone: string;
-}) {
-  return (
-    <span className={`geo-permission-channel ${tone}`}>
-      <img src={logo} alt="" draggable={false} />
-      {name}
-    </span>
-  );
-}
-
 export default function GeoBuildExperience() {
   const { lang } = useLang();
   if (lang !== "zh") return null;
@@ -1563,9 +1585,17 @@ function GeoBuildExperienceZh() {
     useState<string>();
   const [retryingAssessmentProjectId, setRetryingAssessmentProjectId] =
     useState<string>();
+  const [
+    retryingIndustryAssessmentProjectId,
+    setRetryingIndustryAssessmentProjectId,
+  ] = useState<string>();
   const [retryingForecastProjectIds, setRetryingForecastProjectIds] = useState<
     Record<string, boolean>
   >({});
+  const [
+    retryingIndustryForecastProjectIds,
+    setRetryingIndustryForecastProjectIds,
+  ] = useState<Record<string, boolean>>({});
   const [projects, setProjects] = useState<GeoProject[]>([]);
   const [projectsHydrated, setProjectsHydrated] = useState(false);
   const [activeProjectId, setActiveProjectId] = useState<string | undefined>();
@@ -1584,7 +1614,11 @@ function GeoBuildExperienceZh() {
   );
   const [deleteAction, setDeleteAction] = useState<"local">();
   const [deleteError, setDeleteError] = useState("");
-  const [pendingQuestion, setPendingQuestion] = useState<GeoQuestion>();
+  const [pendingProductQuestion, setPendingProductQuestion] =
+    useState<GeoQuestion>();
+  const [pendingIndustryQuestion, setPendingIndustryQuestion] =
+    useState<GeoQuestion>();
+  const [questionConfirmOpen, setQuestionConfirmOpen] = useState(false);
   const [monitoringConfirmOpen, setMonitoringConfirmOpen] = useState(false);
   const [monitoringStarting, setMonitoringStarting] = useState(false);
   const [monitoringStartError, setMonitoringStartError] = useState("");
@@ -1622,6 +1656,8 @@ function GeoBuildExperienceZh() {
   const questionStartInFlight = useRef(new Set<string>());
   const assessmentStartInFlight = useRef(new Set<string>());
   const forecastStartInFlight = useRef(new Set<string>());
+  const industryAssessmentStartInFlight = useRef(new Set<string>());
+  const industryForecastStartInFlight = useRef(new Set<string>());
   const paymentMonitorStartInFlight = useRef(new Set<string>());
   const cashierWindowsRef = useRef(new Set<Window>());
   const paymentPollingPausedRef = useRef(
@@ -1632,6 +1668,7 @@ function GeoBuildExperienceZh() {
   const pendingDrafts = useRef(new Map<string, PendingGeoDraft>());
   const draftAnalysisControllers = useRef(new Map<string, AbortController>());
   const refreshInFlight = useRef(new Map<string, Promise<GeoProject>>());
+  const autoRefreshNotice = useRef("");
   const deletedProjectIds = useRef(new Set<string>());
   const fileInputRef = useRef<HTMLInputElement>(null);
   const workbenchRef = useRef<HTMLDivElement>(null);
@@ -1653,6 +1690,24 @@ function GeoBuildExperienceZh() {
     ? (projects.find((project) => project.id === pendingPayment.projectId) ??
       pendingPaymentRecoveryProject(pendingPayment))
     : activeProject;
+
+  useEffect(() => {
+    const dualProject = activeProject as
+      | (GeoProject & { selectedIndustryRankingQuestionId?: string })
+      | undefined;
+    setPendingProductQuestion(
+      activeProject?.questions.find(
+        (question) => question.id === activeProject.selectedQuestionId,
+      ),
+    );
+    setPendingIndustryQuestion(
+      activeProject?.questions.find(
+        (question) =>
+          question.id === dualProject?.selectedIndustryRankingQuestionId,
+      ),
+    );
+    setQuestionConfirmOpen(false);
+  }, [activeProject?.id]);
 
   useEffect(() => {
     // Legacy monitoring payment state is read-only migration input. Do not
@@ -1680,6 +1735,20 @@ function GeoBuildExperienceZh() {
           pendingPayment.selectedChannel === "bank_transfer"),
     );
   }, [bankConfirmationActive, pendingPayment]);
+
+  useEffect(() => {
+    if (!storageNotice) return;
+    const notice = storageNotice;
+    const timer = window.setTimeout(() => {
+      setStorageNotice((current) =>
+        clearGeoStorageNoticeIfMatching(current, notice),
+      );
+      if (autoRefreshNotice.current === notice) {
+        autoRefreshNotice.current = "";
+      }
+    }, 60_000);
+    return () => window.clearTimeout(timer);
+  }, [storageNotice]);
 
   useEffect(() => {
     if (
@@ -1927,6 +1996,38 @@ function GeoBuildExperienceZh() {
     }
   }, [activeProject, commitRemoteProjectObservation]);
 
+  const retryIndustryAssessment = useCallback(async () => {
+    const project = activeProject;
+    const historicalRankingOnly = isHistoricalRankingOnlyProject(project);
+    const assessment = historicalRankingOnly
+      ? project?.assessment
+      : project?.industryRankingAssessment;
+    if (
+      !project ||
+      isGeoStylePreviewProject(project) ||
+      isGeoDraftProject(project) ||
+      !project.remoteToken ||
+      assessment?.status !== "failed" ||
+      industryAssessmentStartInFlight.current.has(project.id)
+    )
+      return;
+
+    industryAssessmentStartInFlight.current.add(project.id);
+    setRetryingIndustryAssessmentProjectId(project.id);
+    setStorageNotice("");
+    try {
+      const updated = await retryIndustryRankingAssessment(project);
+      await commitRemoteProjectObservation(project, updated);
+    } catch (error) {
+      setStorageNotice(`行业排名现状评估未能重新启动：${errorMessage(error)}`);
+    } finally {
+      industryAssessmentStartInFlight.current.delete(project.id);
+      setRetryingIndustryAssessmentProjectId((current) =>
+        current === project.id ? undefined : current,
+      );
+    }
+  }, [activeProject, commitRemoteProjectObservation]);
+
   const retryOptimizationForecast = useCallback(async () => {
     const project = activeProject;
     if (
@@ -1963,6 +2064,52 @@ function GeoBuildExperienceZh() {
       setRetryingForecastProjectIds((current) => ({
         ...current,
         [projectId]: false,
+      }));
+    }
+  }, [activeProject, commitRemoteProjectObservation]);
+
+  const retryIndustryOptimizationForecast = useCallback(async () => {
+    const project = activeProject;
+    const historicalRankingOnly = isHistoricalRankingOnlyProject(project);
+    const assessment = historicalRankingOnly
+      ? project?.assessment
+      : project?.industryRankingAssessment;
+    const forecast = historicalRankingOnly
+      ? project?.optimizationForecast
+      : project?.industryRankingOptimizationForecast;
+    const retryAvailable = historicalRankingOnly
+      ? project?.optimizationForecastRetryAvailable
+      : project?.industryRankingOptimizationForecastRetryAvailable;
+    if (
+      !project ||
+      isGeoStylePreviewProject(project) ||
+      isGeoDraftProject(project) ||
+      !project.remoteToken ||
+      !isCompleteAssessment(assessment) ||
+      forecast?.status !== "failed" ||
+      retryAvailable === false ||
+      industryForecastStartInFlight.current.has(project.id)
+    )
+      return;
+
+    industryForecastStartInFlight.current.add(project.id);
+    setRetryingIndustryForecastProjectIds((current) => ({
+      ...current,
+      [project.id]: true,
+    }));
+    setStorageNotice("");
+    try {
+      const updated = await startIndustryRankingOptimizationForecast(project);
+      await commitRemoteProjectObservation(project, updated);
+    } catch (error) {
+      setStorageNotice(
+        `行业排名优化效果评估未能重新启动：${errorMessage(error)}`,
+      );
+    } finally {
+      industryForecastStartInFlight.current.delete(project.id);
+      setRetryingIndustryForecastProjectIds((current) => ({
+        ...current,
+        [project.id]: false,
       }));
     }
   }, [activeProject, commitRemoteProjectObservation]);
@@ -2138,6 +2285,7 @@ function GeoBuildExperienceZh() {
     let cancelled = false;
     let polling = false;
     let failures = 0;
+    let failureNoticeShown = false;
     let timer: number | undefined;
 
     const clearTimer = () => {
@@ -2158,7 +2306,17 @@ function GeoBuildExperienceZh() {
       polling = true;
       try {
         await refreshProject(project);
-        if (!cancelled) failures = 0;
+        if (!cancelled) {
+          failures = 0;
+          failureNoticeShown = false;
+          const priorAutoRefreshNotice = autoRefreshNotice.current;
+          autoRefreshNotice.current = "";
+          if (priorAutoRefreshNotice) {
+            setStorageNotice((current) =>
+              clearGeoStorageNoticeIfMatching(current, priorAutoRefreshNotice),
+            );
+          }
+        }
       } catch (error) {
         if (!cancelled && error instanceof GeoApiError) {
           if (error.status === 401 || error.status === 404) {
@@ -2170,10 +2328,12 @@ function GeoBuildExperienceZh() {
             );
           } else {
             failures += 1;
-            if (failures >= 2)
-              setStorageNotice(
-                `项目状态暂时无法更新：${errorMessage(error)}（将自动重试）`,
-              );
+            if (failures >= 2 && !failureNoticeShown) {
+              const message = `项目状态暂时无法更新：${errorMessage(error)}（将自动重试）`;
+              failureNoticeShown = true;
+              autoRefreshNotice.current = message;
+              setStorageNotice(message);
+            }
           }
         } else if (!cancelled) {
           failures += 1;
@@ -2204,8 +2364,11 @@ function GeoBuildExperienceZh() {
     activeProject?.remoteToken,
     activeProject?.status,
     activeProject?.monitoring?.status,
+    activeProject?.industryRankingMonitoring?.status,
     activeProject?.assessment?.status,
+    activeProject?.industryRankingAssessment?.status,
     activeProject?.optimizationForecast?.status,
+    activeProject?.industryRankingOptimizationForecast?.status,
     activeProject?.serviceActivation?.status,
     activeProject?.serviceActivation?.provisioningVersion,
     activeProject?.questions.length,
@@ -2247,6 +2410,43 @@ function GeoBuildExperienceZh() {
 
   useEffect(() => {
     if (isGeoStylePreviewProject(activeProject)) return;
+    if (
+      !activeProject ||
+      !isCompleteAssessment(activeProject.industryRankingAssessment)
+    )
+      return;
+    if (
+      activeProject.industryRankingOptimizationForecast &&
+      activeProject.industryRankingOptimizationForecast.status !== "not_started"
+    )
+      return;
+    if (industryForecastStartInFlight.current.has(activeProject.id)) return;
+    industryForecastStartInFlight.current.add(activeProject.id);
+    const operationProject = activeProject;
+    void startIndustryRankingOptimizationForecast(operationProject)
+      .then(async (updated) => {
+        const committed = await commitRemoteProjectObservation(
+          operationProject,
+          updated,
+        );
+        if (!committed) {
+          setStorageNotice(
+            "项目已由更新的操作推进，已忽略迟到的行业排名预测结果。",
+          );
+        }
+      })
+      .catch((error) => {
+        setStorageNotice(
+          `行业排名现状评估已生成，优化后评估将稍后继续：${errorMessage(error)}`,
+        );
+      })
+      .finally(() =>
+        industryForecastStartInFlight.current.delete(operationProject.id),
+      );
+  }, [activeProject, commitRemoteProjectObservation]);
+
+  useEffect(() => {
+    if (isGeoStylePreviewProject(activeProject)) return;
     if (!activeProject?.monitoring?.runId) return;
     if (activeProject.monitoring.status !== "completed") return;
     if (activeProject.monitoring.quality?.downstreamEligible === false) return;
@@ -2277,6 +2477,37 @@ function GeoBuildExperienceZh() {
       })
       .finally(() =>
         assessmentStartInFlight.current.delete(operationProject.id),
+      );
+  }, [activeProject, commitRemoteProjectObservation]);
+
+  useEffect(() => {
+    if (isGeoStylePreviewProject(activeProject)) return;
+    if (!activeProject?.industryRankingMonitoring?.runId) return;
+    if (activeProject.industryRankingMonitoring.status !== "completed") return;
+    if (
+      activeProject.industryRankingMonitoring.quality?.downstreamEligible ===
+      false
+    )
+      return;
+    if (
+      activeProject.industryRankingAssessment &&
+      activeProject.industryRankingAssessment.status !== "not_started"
+    )
+      return;
+    if (industryAssessmentStartInFlight.current.has(activeProject.id)) return;
+    industryAssessmentStartInFlight.current.add(activeProject.id);
+    const operationProject = activeProject;
+    void retryIndustryRankingAssessment(operationProject)
+      .then(async (updated) => {
+        await commitRemoteProjectObservation(operationProject, updated);
+      })
+      .catch((error) => {
+        setStorageNotice(
+          `行业排名监控已完成，但现状评估尚未启动：${errorMessage(error)}`,
+        );
+      })
+      .finally(() =>
+        industryAssessmentStartInFlight.current.delete(operationProject.id),
       );
   }, [activeProject, commitRemoteProjectObservation]);
 
@@ -2571,7 +2802,8 @@ function GeoBuildExperienceZh() {
   const selectQuestion = (question: GeoQuestion) => {
     if (activeQuestionSelectionLocked) {
       setStorageNotice(
-        activeProject?.monitoring?.runId
+        activeProject?.monitoring?.runId ||
+          activeProject?.industryRankingMonitoring?.runId
           ? "本次监控范围已经确认，不能再更换问题。"
           : "当前问题已有待核对的支付订单，请先完成订单处理。",
       );
@@ -2579,215 +2811,55 @@ function GeoBuildExperienceZh() {
     }
     if (
       !activeProject ||
-      !question.selectable ||
-      question.category === "industry_ranking"
+      (!question.selectable && question.category !== "industry_ranking")
     )
       return;
-    setPendingQuestion(question);
-  };
-
-  const createCustomQuestion = async (
-    questionText: string,
-    signal?: AbortSignal,
-  ) => {
-    if (!activeProject) throw new Error("当前项目不可用，请刷新后重试。");
-    const operationProject = activeProject;
-    if (activeQuestionSelectionLocked) {
-      throw new Error(
-        activeProject.monitoring?.runId
-          ? "本次监控范围已经确认，不能再创建或更换问题。"
-          : "当前问题已有待核对的支付订单，请先完成订单处理。",
-      );
+    if (question.category === "industry_ranking") {
+      setPendingIndustryQuestion(question);
+    } else {
+      setPendingProductQuestion(question);
     }
-    if (isGeoStylePreviewProject(activeProject)) {
-      if (looksLikeIndustryRankingQuestion(questionText)) {
-        throw new Error(
-          "该问题属于行业排名或品牌推荐方向，请选择其他非行业排名类问题。",
-        );
-      }
-      const companyName =
-        activeProject.knowledgeBase?.companyName || activeProject.title;
-      if (!explicitlyReferencesProjectCompany(questionText, companyName)) {
-        throw new Error(
-          `该问题与「${companyName}」没有明确关系，请重新输入与当前企业相关的非行业排名类问题。`,
-        );
-      }
-      const normalized = `${questionText.trim().replace(/[?？]+$/, "")}？`;
-      const question: GeoQuestion = {
-        id: `custom-preview-${Date.now()}`,
-        category: "product_scenario",
-        question: normalized,
-        rationale: "您自定义的 GEO 优化问题",
-        evidenceRefs: [],
-        selectable: true,
-      };
-      commitProject({
-        ...activeProject,
-        questions: [
-          ...activeProject.questions.filter(
-            (item) => !item.id.startsWith("custom-preview-"),
-          ),
-          question,
-        ],
-        updatedAt: new Date().toISOString(),
-      });
-      return question;
-    }
-
-    const result = await createGeoCustomQuestion(
-      operationProject,
-      questionText,
-      {
-        signal,
-      },
-    );
-    try {
-      await persistGeoCustomQuestionResultAndAcknowledge(
-        result,
-        async (nextProject) => {
-          if (signal?.aborted) {
-            throw (
-              signal.reason ?? new DOMException("请求已取消。", "AbortError")
-            );
-          }
-          const saved = await saveGeoProjectObservationIfCurrent(
-            nextProject,
-            operationProject.remoteToken,
-          );
-          if (!saved) {
-            throw new Error(
-              "项目已被删除或已由更新的操作推进，已忽略本次迟到结果。",
-            );
-          }
-        },
-        { signal },
-      );
-    } catch (error) {
-      setStorageNotice(
-        "问题已验证，但项目令牌尚未持久保存；系统会保留同一请求并在刷新后继续恢复。",
-      );
-      throw error;
-    }
-    commitProject(result.project, {
-      expectedRemoteToken: operationProject.remoteToken,
-      skipPersistence: true,
-    });
-    return result.question;
-  };
-
-  const resumeCustomQuestion = async (signal?: AbortSignal) => {
-    if (
-      !activeProject ||
-      activeQuestionSelectionLocked ||
-      isGeoStylePreviewProject(activeProject)
-    )
-      return undefined;
-    const operationProject = activeProject;
-    const result = await resumeGeoCustomQuestionValidation(operationProject, {
-      signal,
-    });
-    if (!result) return undefined;
-    await persistGeoCustomQuestionResultAndAcknowledge(
-      result,
-      async (nextProject) => {
-        if (signal?.aborted) {
-          throw signal.reason ?? new DOMException("请求已取消。", "AbortError");
-        }
-        const saved = await saveGeoProjectObservationIfCurrent(
-          nextProject,
-          operationProject.remoteToken,
-        );
-        if (!saved) {
-          throw new Error(
-            "项目已被删除或已由更新的操作推进，已忽略本次迟到结果。",
-          );
-        }
-      },
-      { signal },
-    );
-    commitProject(result.project, {
-      expectedRemoteToken: operationProject.remoteToken,
-      skipPersistence: true,
-    });
-    return result.question;
-  };
-
-  const retryCustomQuestion = async (
-    terminalError: unknown,
-    signal?: AbortSignal,
-  ) => {
-    if (!activeProject) throw new Error("当前项目不可用，请刷新后重试。");
-    const operationProject = activeProject;
-    const result = await retryGeoCustomQuestionValidation(
-      operationProject,
-      terminalError,
-      { signal },
-    );
-    try {
-      await persistGeoCustomQuestionResultAndAcknowledge(
-        result,
-        async (nextProject) => {
-          if (signal?.aborted) {
-            throw (
-              signal.reason ?? new DOMException("请求已取消。", "AbortError")
-            );
-          }
-          const saved = await saveGeoProjectObservationIfCurrent(
-            nextProject,
-            operationProject.remoteToken,
-          );
-          if (!saved) {
-            throw new Error(
-              "项目已被删除或已由更新的操作推进，已忽略本次迟到结果。",
-            );
-          }
-        },
-        { signal },
-      );
-    } catch (error) {
-      setStorageNotice(
-        "问题已验证，但项目令牌尚未持久保存；系统会保留同一请求并在刷新后继续恢复。",
-      );
-      throw error;
-    }
-    commitProject(result.project, {
-      expectedRemoteToken: operationProject.remoteToken,
-      skipPersistence: true,
-    });
-    return result.question;
   };
 
   const confirmQuestionSelection = () => {
-    if (!activeProject || !pendingQuestion) return;
+    if (!activeProject || !pendingProductQuestion || !pendingIndustryQuestion)
+      return;
     if (activeQuestionSelectionLocked) {
-      setPendingQuestion(undefined);
+      setQuestionConfirmOpen(false);
       setStorageNotice(
-        activeProject.monitoring?.runId
+        activeProject.monitoring?.runId ||
+          activeProject.industryRankingMonitoring?.runId
           ? "本次监控范围已经确认，不能再更换问题。"
           : "当前问题已有待核对的支付订单，请先完成订单处理。",
       );
       return;
     }
     const question = activeProject.questions.find(
-      (item) => item.id === pendingQuestion.id,
+      (item) => item.id === pendingProductQuestion.id,
+    );
+    const industryQuestion = activeProject.questions.find(
+      (item) => item.id === pendingIndustryQuestion.id,
     );
     if (
       !question ||
       !question.selectable ||
-      question.category === "industry_ranking"
+      question.category === "industry_ranking" ||
+      !industryQuestion ||
+      industryQuestion.category !== "industry_ranking"
     ) {
-      setPendingQuestion(undefined);
+      setQuestionConfirmOpen(false);
       return;
     }
     const updated = {
       ...activeProject,
       selectedQuestionId: question.id,
+      selectedIndustryRankingQuestionId: industryQuestion.id,
       selectedPlatformIds: [],
       stage: "monitoring" as const,
       updatedAt: new Date().toISOString(),
     };
     commitProject(updated);
-    setPendingQuestion(undefined);
+    setQuestionConfirmOpen(false);
     setActiveStage("monitoring");
   };
 
@@ -2795,7 +2867,8 @@ function GeoBuildExperienceZh() {
     if (
       !activeProject ||
       activePendingPayment ||
-      activeProject.monitoring?.runId
+      activeProject.monitoring?.runId ||
+      activeProject.industryRankingMonitoring?.runId
     )
       return;
     const monitoringEdition = resolveGeoMonitoringEdition(
@@ -2822,6 +2895,7 @@ function GeoBuildExperienceZh() {
       !activeProject ||
       activePendingPayment ||
       activeProject.monitoring?.runId ||
+      activeProject.industryRankingMonitoring?.runId ||
       resolveGeoMonitoringEdition(activeProject.monitoringEdition) === edition
     ) {
       return;
@@ -2839,7 +2913,8 @@ function GeoBuildExperienceZh() {
     if (
       !activeProject ||
       activePendingPayment ||
-      activeProject.monitoring?.runId
+      activeProject.monitoring?.runId ||
+      activeProject.industryRankingMonitoring?.runId
     ) {
       return;
     }
@@ -2858,7 +2933,8 @@ function GeoBuildExperienceZh() {
     if (
       !activeProject ||
       activePendingPayment ||
-      activeProject.monitoring?.runId
+      activeProject.monitoring?.runId ||
+      activeProject.industryRankingMonitoring?.runId
     ) {
       return;
     }
@@ -2871,7 +2947,25 @@ function GeoBuildExperienceZh() {
 
   const openPaymentDialog = () => {
     if (!activeProject) return;
-    if (activeProject.monitoring?.runId) {
+    const dualProject = activeProject as GeoProject & {
+      selectedIndustryRankingQuestionId?: string;
+    };
+    const legacyPayment =
+      activePendingPayment?.kind === "monitoring"
+        ? activePendingPayment
+        : undefined;
+    const questionId =
+      legacyPayment?.questionId ?? activeProject.selectedQuestionId;
+    const platformIds =
+      legacyPayment?.platformIds ?? activeProject.selectedPlatformIds;
+    const monitoringEdition =
+      legacyPayment?.monitoringEdition ??
+      resolveGeoMonitoringEdition(activeProject.monitoringEdition);
+    if (
+      (activeProject.monitoring?.runId ||
+        activeProject.industryRankingMonitoring?.runId) &&
+      !canResumeIncompleteDualMonitoring(activeProject)
+    ) {
       setStorageNotice("本次监控范围已确认。");
       return;
     }
@@ -2881,21 +2975,14 @@ function GeoBuildExperienceZh() {
       return;
     }
     if (
-      !activeProject.selectedQuestionId ||
-      activeProject.selectedPlatformIds.length === 0
+      !questionId ||
+      (!legacyPayment && !dualProject.selectedIndustryRankingQuestionId) ||
+      platformIds.length === 0
     ) {
-      setStorageNotice("请先选择至少一个需要监控的平台。");
+      setStorageNotice("请先选择两类问题和至少一个需要监控的平台。");
       return;
     }
-    const monitoringEdition = resolveGeoMonitoringEdition(
-      activeProject.monitoringEdition,
-    );
-    if (
-      !monitoringPlatformSelectionIsValid(
-        monitoringEdition,
-        activeProject.selectedPlatformIds,
-      )
-    ) {
+    if (!monitoringPlatformSelectionIsValid(monitoringEdition, platformIds)) {
       setStorageNotice(GEO_MONITORING_PLATFORM_SELECTION_MESSAGE);
       return;
     }
@@ -2911,11 +2998,18 @@ function GeoBuildExperienceZh() {
     const recoveryClientRequestId = matchingMonitoringRecoveryClientRequestId(
       activeProject,
       {
-        questionId: activeProject.selectedQuestionId,
+        questionId,
+        industryRankingQuestionId: legacyPayment
+          ? undefined
+          : dualProject.selectedIndustryRankingQuestionId,
         monitoringEdition,
-        platformIds: activeProject.selectedPlatformIds,
-        regionCode: activeProject.monitoringRegion?.code,
-        screenshotEnabled: activeProject.monitoringScreenshotEnabled,
+        platformIds,
+        regionCode: legacyPayment
+          ? undefined
+          : activeProject.monitoringRegion?.code,
+        screenshotEnabled: legacyPayment
+          ? false
+          : activeProject.monitoringScreenshotEnabled,
       },
     );
     setMonitoringClientRequestId(
@@ -2937,19 +3031,29 @@ function GeoBuildExperienceZh() {
         ? activePendingPayment
         : undefined;
     const questionId = legacyPayment?.questionId ?? project.selectedQuestionId;
+    const industryRankingQuestionId = (
+      project as GeoProject & { selectedIndustryRankingQuestionId?: string }
+    ).selectedIndustryRankingQuestionId;
     const platformIds =
       legacyPayment?.platformIds ?? project.selectedPlatformIds;
     const monitoringEdition =
       legacyPayment?.monitoringEdition ??
       resolveGeoMonitoringEdition(project.monitoringEdition);
-    if (!questionId || platformIds.length === 0) {
-      setMonitoringStartError("请先选择问题和至少一个监控平台。");
+    if (
+      !questionId ||
+      (!legacyPayment && !industryRankingQuestionId) ||
+      platformIds.length === 0
+    ) {
+      setMonitoringStartError("请先选择两类问题和至少一个监控平台。");
       return;
     }
     const clientRequestId =
       monitoringClientRequestId ??
       matchingMonitoringRecoveryClientRequestId(project, {
         questionId,
+        industryRankingQuestionId: legacyPayment
+          ? undefined
+          : industryRankingQuestionId,
         monitoringEdition,
         platformIds,
         regionCode: legacyPayment ? undefined : project.monitoringRegion?.code,
@@ -2962,9 +3066,12 @@ function GeoBuildExperienceZh() {
     setMonitoringStarting(true);
     setMonitoringStartError("");
     try {
-      const updated = await startGeoMonitoring(project, {
+      const startRequest = {
         clientRequestId,
         questionId,
+        ...(!legacyPayment && industryRankingQuestionId
+          ? { industryRankingQuestionId }
+          : {}),
         platformIds,
         monitoringEdition,
         ...(legacyPayment || !project.monitoringRegion
@@ -2978,13 +3085,16 @@ function GeoBuildExperienceZh() {
               legacyPaymentAuthorization: legacyPayment.checkout.authorization,
             }
           : {}),
-        onProcessing: (recoveringProject) => {
+        onProcessing: (recoveringProject: GeoProject) => {
           // The 202 token contains the durable reservation. Persist every
           // rotation so a timeout, refresh, or server restart resumes the same
           // free scope without consuming a new create allowance.
           commitProject(recoveringProject);
         },
-      });
+      } as Parameters<typeof startGeoMonitoring>[1] & {
+        industryRankingQuestionId?: string;
+      };
+      const updated = await startGeoMonitoring(project, startRequest);
       commitProject(updated);
       if (legacyPayment) {
         setPendingPayment(undefined);
@@ -3768,7 +3878,6 @@ function GeoBuildExperienceZh() {
     for (const question of project.questions) {
       clearGeoServiceContractProfile(contractCompanyName, question.question);
     }
-    clearPendingGeoCustomQuestionValidation(project.id);
     if (pendingPayment?.projectId === project.id) {
       setPendingPayment(undefined);
       setPaymentDialogOpen(false);
@@ -4221,10 +4330,7 @@ function GeoBuildExperienceZh() {
         </DialogContent>
       </Dialog>
 
-      <Dialog
-        open={Boolean(pendingQuestion)}
-        onOpenChange={(open) => !open && setPendingQuestion(undefined)}
-      >
+      <Dialog open={questionConfirmOpen} onOpenChange={setQuestionConfirmOpen}>
         <DialogContent
           className="geo-dialog geo-question-confirm-dialog"
           overlayClassName="geo-dialog-overlay"
@@ -4235,28 +4341,36 @@ function GeoBuildExperienceZh() {
               <Check size={19} />
             </span>
             <DialogTitle className="geo-dialog-title">
-              确认本次 GEO 优化问题
+              确认两类 GEO 优化问题
             </DialogTitle>
             <DialogDescription className="geo-dialog-description">
-              后续平台监控与现状评估将围绕这一个问题展开，请确认选择无误。
+              两个问题将使用相同的版本、地区、平台与截图设置分别采集，请确认选择无误。
             </DialogDescription>
           </DialogHeader>
-          <div className="geo-question-confirm-card">
-            <span>您选择的问题</span>
-            <strong>“{pendingQuestion?.question}”</strong>
-            <small>
-              {
-                GEO_QUESTION_CATEGORIES.find(
-                  (category) => category.id === pendingQuestion?.category,
-                )?.title
-              }
-            </small>
+          <div className="geo-question-confirm-stack">
+            <div className="geo-question-confirm-card">
+              <span>产品与舆情</span>
+              <strong>“{pendingProductQuestion?.question}”</strong>
+              <small>
+                {
+                  GEO_QUESTION_CATEGORIES.find(
+                    (category) =>
+                      category.id === pendingProductQuestion?.category,
+                  )?.title
+                }
+              </small>
+            </div>
+            <div className="geo-question-confirm-card is-ranking">
+              <span>行业排名与品牌优胜</span>
+              <strong>“{pendingIndustryQuestion?.question}”</strong>
+              <small>行业排名</small>
+            </div>
           </div>
           <DialogFooter className="geo-dialog-actions">
             <button
               type="button"
               className="geo-secondary-button"
-              onClick={() => setPendingQuestion(undefined)}
+              onClick={() => setQuestionConfirmOpen(false)}
             >
               返回修改
             </button>
@@ -4602,11 +4716,12 @@ function GeoBuildExperienceZh() {
                   <QuestionRecommendation
                     project={activeProject}
                     selectionLocked={activeQuestionSelectionLocked}
+                    selectedProductQuestionId={pendingProductQuestion?.id}
+                    selectedIndustryRankingQuestionId={
+                      pendingIndustryQuestion?.id
+                    }
                     onSelect={selectQuestion}
-                    onCreateCustom={createCustomQuestion}
-                    onResumeCustom={resumeCustomQuestion}
-                    onRetryCustom={retryCustomQuestion}
-                    onContact={() => setContactOpen(true)}
+                    onContinue={() => setQuestionConfirmOpen(true)}
                   />
                 )}
                 {activeStage === "monitoring" && (
@@ -4633,9 +4748,17 @@ function GeoBuildExperienceZh() {
                     retryingAssessment={
                       retryingAssessmentProjectId === activeProject.id
                     }
+                    onRetryIndustryAssessment={retryIndustryAssessment}
+                    retryingIndustryAssessment={
+                      retryingIndustryAssessmentProjectId === activeProject.id
+                    }
                     onRetryForecast={retryOptimizationForecast}
                     retryingForecast={Boolean(
                       retryingForecastProjectIds[activeProject.id],
+                    )}
+                    onRetryIndustryForecast={retryIndustryOptimizationForecast}
+                    retryingIndustryForecast={Boolean(
+                      retryingIndustryForecastProjectIds[activeProject.id],
                     )}
                     onStartService={() => {
                       setActiveStage("service_activation");
@@ -5521,41 +5644,18 @@ function EmptyKnowledgeState({
 export function QuestionRecommendation({
   project,
   selectionLocked,
+  selectedProductQuestionId,
+  selectedIndustryRankingQuestionId,
   onSelect,
-  onCreateCustom,
-  onResumeCustom,
-  onRetryCustom,
-  onContact,
+  onContinue,
 }: {
   project: GeoProject;
   selectionLocked: boolean;
+  selectedProductQuestionId?: string;
+  selectedIndustryRankingQuestionId?: string;
   onSelect: (question: GeoQuestion) => void;
-  onCreateCustom: (
-    question: string,
-    signal?: AbortSignal,
-  ) => Promise<GeoQuestion>;
-  onResumeCustom?: (signal?: AbortSignal) => Promise<GeoQuestion | undefined>;
-  onRetryCustom?: (
-    terminalError: unknown,
-    signal?: AbortSignal,
-  ) => Promise<GeoQuestion>;
-  onContact: () => void;
+  onContinue?: () => void;
 }) {
-  const [customQuestion, setCustomQuestion] = useState("");
-  const [customSubmitting, setCustomSubmitting] = useState(false);
-  const [customError, setCustomError] = useState("");
-  const [customRetryable, setCustomRetryable] = useState(false);
-  const [customRetryTerminalError, setCustomRetryTerminalError] =
-    useState<unknown>();
-  const [customRestartAfterExpiration, setCustomRestartAfterExpiration] =
-    useState(false);
-  const [validatedCustomQuestion, setValidatedCustomQuestion] =
-    useState<GeoQuestion>();
-  const [customStartedAt, setCustomStartedAt] = useState<number>();
-  const [customClock, setCustomClock] = useState(() => Date.now());
-  const customRequestInFlight = useRef(false);
-  const customAbortController = useRef<AbortController | undefined>(undefined);
-  const [permissionVideoOpen, setPermissionVideoOpen] = useState(false);
   const recommendationStatus = questionRecommendationStatus(project);
   const recommendedQuestions = project.questions.filter(
     (question) => !question.id.startsWith("custom-"),
@@ -5572,94 +5672,14 @@ export function QuestionRecommendation({
         (question) => question.category === category.id,
       ).length === 5,
   );
-
-  useEffect(() => {
-    const pending = readPendingGeoCustomQuestionValidation(project.id);
-    const controller = new AbortController();
-    let cancelled = false;
-    customAbortController.current?.abort();
-    customAbortController.current = controller;
-    const shouldProbe =
-      recommendationStatus === "ready" && Boolean(onResumeCustom);
-    customRequestInFlight.current = shouldProbe;
-    setCustomQuestion(pending?.question ?? "");
-    setCustomSubmitting(Boolean(pending) || shouldProbe);
-    setCustomError("");
-    setCustomRetryable(false);
-    setCustomRetryTerminalError(undefined);
-    setCustomRestartAfterExpiration(false);
-    setValidatedCustomQuestion(undefined);
-    setCustomStartedAt(pending || shouldProbe ? Date.now() : undefined);
-    void (
-      shouldProbe
-        ? onResumeCustom!(controller.signal)
-        : Promise.resolve(undefined)
-    )
-      .then((question) => {
-        if (cancelled || !question) return;
-        setCustomQuestion(question.question);
-        setValidatedCustomQuestion(question);
-        setCustomRetryable(false);
-        setCustomRestartAfterExpiration(false);
-      })
-      .catch((error) => {
-        if (cancelled) return;
-        const expired = expiredGeoCustomQuestionValidation(error);
-        setCustomError(
-          expired
-            ? "原问题验证已过期，本地请求锁定已解除。"
-            : errorMessage(error),
-        );
-        const authoritativeTerminal =
-          authoritativeGeoCustomQuestionValidationTerminal(error);
-        const retryableTerminal = retryableGeoCustomQuestionValidation(error);
-        setCustomRetryTerminalError(retryableTerminal ? error : undefined);
-        setCustomRestartAfterExpiration(expired);
-        setCustomRetryable(
-          Boolean(
-            expired ||
-              retryableTerminal ||
-              (!authoritativeTerminal &&
-                readPendingGeoCustomQuestionValidation(project.id)),
-          ),
-        );
-      })
-      .finally(() => {
-        if (cancelled) return;
-        if (customAbortController.current === controller)
-          customAbortController.current = undefined;
-        customRequestInFlight.current = false;
-        setCustomSubmitting(false);
-        setCustomStartedAt(undefined);
-      });
-    return () => {
-      cancelled = true;
-      controller.abort();
-      customAbortController.current?.abort();
-      customAbortController.current = undefined;
-      customRequestInFlight.current = false;
-    };
-    // Recovery is keyed by the durable project id and starts only after the
-    // authoritative recommendation set becomes ready. Token rotation alone
-    // does not restart it.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [project.id, recommendationStatus]);
-
-  useEffect(() => {
-    if (!customSubmitting || customStartedAt === undefined) return;
-    setCustomClock(Date.now());
-    const timer = window.setInterval(() => setCustomClock(Date.now()), 1_000);
-    return () => window.clearInterval(timer);
-  }, [customStartedAt, customSubmitting]);
-
-  const customElapsed =
-    customStartedAt === undefined
-      ? "00:00:00"
-      : formatExecutionElapsed(
-          new Date(customStartedAt).toISOString(),
-          undefined,
-          customClock,
-        );
+  const storedIndustryQuestionId = (
+    project as GeoProject & { selectedIndustryRankingQuestionId?: string }
+  ).selectedIndustryRankingQuestionId;
+  const productQuestionId =
+    selectedProductQuestionId ?? project.selectedQuestionId;
+  const industryQuestionId =
+    selectedIndustryRankingQuestionId ?? storedIndustryQuestionId;
+  const readyToContinue = Boolean(productQuestionId && industryQuestionId);
 
   if (recommendationStatus === "pending") {
     return (
@@ -5673,20 +5693,25 @@ export function QuestionRecommendation({
           </div>
         </header>
         <div
-          className="geo-question-categories geo-question-pending-grid"
+          className="geo-question-groups geo-question-pending-grid"
           role="status"
           aria-label="GEO 问题生成中"
         >
-          {Array.from({ length: 4 }, (_, categoryIndex) => (
+          {Array.from({ length: 2 }, (_, groupIndex) => (
             <section
-              key={`question-pending-${categoryIndex + 1}`}
-              className="geo-question-category"
+              key={"question-pending-group-" + (groupIndex + 1)}
+              className="geo-question-group"
               aria-hidden="true"
             >
               <div className="geo-question-list">
                 {Array.from({ length: 5 }, (_, questionIndex) => (
                   <div
-                    key={`question-pending-${categoryIndex + 1}-${questionIndex + 1}`}
+                    key={
+                      "question-pending-" +
+                      (groupIndex + 1) +
+                      "-" +
+                      (questionIndex + 1)
+                    }
                     className="geo-question-skeleton"
                   />
                 ))}
@@ -5713,9 +5738,6 @@ export function QuestionRecommendation({
                 : "问题推荐服务未能返回可用结果，知识库仍已安全保留。"}
             </p>
           </div>
-          <button type="button" onClick={onContact}>
-            联系技术支持 <ArrowRight size={14} />
-          </button>
         </section>
       </div>
     );
@@ -5733,6 +5755,97 @@ export function QuestionRecommendation({
     );
   }
 
+  const renderCategory = (
+    categoryId: GeoQuestion["category"],
+    order: number,
+  ) => {
+    const category = GEO_QUESTION_CATEGORIES.find(
+      (candidate) => candidate.id === categoryId,
+    );
+    if (!category) return null;
+    const questions = classifiedQuestions.filter(
+      (question) => question.category === categoryId,
+    );
+    const CategoryIcon =
+      categoryId === "reputation"
+        ? Quote
+        : categoryId === "product_scenario"
+          ? Layers3
+          : categoryId === "industry_ranking"
+            ? BarChart3
+            : Search;
+    const isIndustry = categoryId === "industry_ranking";
+    const selectedId = isIndustry ? industryQuestionId : productQuestionId;
+    const pricedCategory: GeoPricedServiceCategory | undefined =
+      categoryId === "product_scenario" ||
+      categoryId === "reputation" ||
+      categoryId === "competitor_comparison"
+        ? categoryId
+        : undefined;
+
+    return (
+      <section
+        key={categoryId}
+        className="geo-question-category"
+        data-category={categoryId}
+      >
+        <header>
+          <span className="geo-category-icon" aria-hidden="true">
+            <CategoryIcon size={18} />
+          </span>
+          <div>
+            <h3>{category.title}</h3>
+            <p>{category.description}</p>
+          </div>
+          <div className="geo-question-category-meta">
+            {isIndustry ? (
+              <strong>根据企业实际情况定制</strong>
+            ) : pricedCategory ? (
+              <span>
+                <small>
+                  国内版 {formatGeoMonthlyPrice(pricedCategory, "domestic")}
+                </small>
+                <small>
+                  海外版 {formatGeoMonthlyPrice(pricedCategory, "overseas")}
+                </small>
+              </span>
+            ) : null}
+            <em>
+              {String(order).padStart(2, "0")} · {questions.length} 题
+            </em>
+          </div>
+        </header>
+        <div className="geo-question-list">
+          {questions.map((question, index) => {
+            const selected = selectedId === question.id;
+            const disabled =
+              selectionLocked || (!isIndustry && !question.selectable);
+            return (
+              <button
+                key={question.id}
+                type="button"
+                disabled={disabled}
+                className={selected ? "selected" : ""}
+                aria-pressed={selected}
+                onClick={() => onSelect(question)}
+              >
+                <span>{String(index + 1).padStart(2, "0")}</span>
+                <span>
+                  <strong>{question.question}</strong>
+                  {question.rationale && <small>{question.rationale}</small>}
+                </span>
+                {selected ? <Check size={15} /> : <ArrowRight size={15} />}
+              </button>
+            );
+          })}
+          {questions.length === 0 && (
+            <div className="geo-question-empty">本分类本次暂无可展示问题</div>
+          )}
+        </div>
+      </section>
+    );
+  };
+
   return (
     <div className="geo-question-view">
       <header className="geo-question-header">
@@ -5741,21 +5854,16 @@ export function QuestionRecommendation({
             <Sparkles size={14} /> 基于企业知识库推荐
           </span>
           <h2 className="geo-stage-title">
-            {selectionLocked
-              ? "查看本次 GEO 优化问题"
-              : "选择一个 GEO 优化问题"}
+            {selectionLocked ? "查看本次 GEO 优化问题" : "两类问题各选择一项"}
           </h2>
         </div>
         <p>
-          {selectionLocked ? (
-            "监控范围已经确认，当前页面仅供查看，不能更换问题。"
-          ) : (
-            <>
-              请从 <strong>非行业排名类</strong> 问题中选择一项继续。
-            </>
-          )}
+          {selectionLocked
+            ? "监控范围已经确认，当前页面仅供查看，不能更换问题。"
+            : "产品与舆情、行业排名与品牌优胜各选择一个问题，再统一设置采样范围。"}
         </p>
       </header>
+
       {selectionLocked && (
         <div className="geo-validation-notice" role="status">
           <LockKeyhole size={14} /> 本次问题范围已锁定，避免监控与评估结果错配。
@@ -5764,538 +5872,73 @@ export function QuestionRecommendation({
       {!countsValid && (
         <div className="geo-validation-notice" role="status">
           <CircleAlert size={14} />
-          已优先展示本次生成的 {recommendedQuestions.length}{" "}
-          道问题；题目数量或分类未达到 4 类 × 5
-          题时仍会正常展示，符合条件的问题可继续选择。
+          已优先展示本次生成的 {classifiedQuestions.length} 道已分类问题。
           {unclassifiedQuestions.length > 0
-            ? ` 其中 ${unclassifiedQuestions.length} 道已放入待分类并锁定。`
+            ? " 另有 " +
+              unclassifiedQuestions.length +
+              " 道分类未确认的问题，本次不用于选择。"
             : ""}
         </div>
       )}
 
-      <div className="geo-question-categories">
-        {GEO_QUESTION_CATEGORIES.map((category, categoryIndex) => {
-          const questions = classifiedQuestions.filter(
-            (question) => question.category === category.id,
-          );
-          const locked = category.id === "industry_ranking";
-          const CategoryIcon =
-            category.id === "reputation"
-              ? Quote
-              : category.id === "product_scenario"
-                ? Layers3
-                : category.id === "industry_ranking"
-                  ? BarChart3
-                  : Search;
-          return (
-            <section
-              key={category.id}
-              className={`geo-question-category ${locked ? "locked" : ""}`}
-              data-category={category.id}
-            >
-              <header>
-                <span className="geo-category-icon" aria-hidden="true">
-                  <CategoryIcon size={18} />
-                </span>
-                <div>
-                  <h3>
-                    {category.title}
-                    {locked && <LockKeyhole size={14} />}
-                  </h3>
-                  <p>{category.description}</p>
-                </div>
-                <small>
-                  {String(categoryIndex + 1).padStart(2, "0")} ·{" "}
-                  {questions.length} 题
-                </small>
-              </header>
-              <div className="geo-question-list">
-                {questions.map((question, index) => {
-                  const selected = project.selectedQuestionId === question.id;
-                  return (
-                    <button
-                      key={question.id}
-                      type="button"
-                      disabled={
-                        selectionLocked || locked || !question.selectable
-                      }
-                      className={selected ? "selected" : ""}
-                      onClick={() => onSelect(question)}
-                    >
-                      <span>{String(index + 1).padStart(2, "0")}</span>
-                      <span>
-                        <strong>{question.question}</strong>
-                        {question.rationale && (
-                          <small>{question.rationale}</small>
-                        )}
-                      </span>
-                      {locked ? (
-                        <LockKeyhole size={14} />
-                      ) : (
-                        <ArrowRight size={15} />
-                      )}
-                    </button>
-                  );
-                })}
-                {questions.length === 0 && (
-                  <div className="geo-question-empty">
-                    本分类本次暂无可展示问题
-                  </div>
-                )}
-              </div>
-            </section>
-          );
-        })}
-        {unclassifiedQuestions.length > 0 && (
-          <section
-            className="geo-question-category locked"
-            data-category="unclassified"
-          >
-            <header>
-              <span className="geo-category-icon" aria-hidden="true">
-                <CircleAlert size={18} />
-              </span>
+      <div className="geo-question-groups">
+        <section className="geo-question-group is-product">
+          <header className="geo-question-group-heading">
+            <div>
+              <span>01</span>
               <div>
-                <h3>
-                  待分类 <LockKeyhole size={14} />
-                </h3>
-                <p>分类语义存在冲突，可查看但不能用于付费选择。</p>
+                <h3>产品与舆情</h3>
+                <p>从产品服务、品牌口碑或竞品对比中选择一个核心问题</p>
               </div>
-              <small>{unclassifiedQuestions.length} 题</small>
-            </header>
-            <div className="geo-question-list">
-              {unclassifiedQuestions.map((question, index) => (
-                <button key={question.id} type="button" disabled>
-                  <span>{String(index + 1).padStart(2, "0")}</span>
-                  <span>
-                    <strong>{question.question}</strong>
-                    {question.rationale && <small>{question.rationale}</small>}
-                  </span>
-                  <LockKeyhole size={14} />
-                </button>
-              ))}
             </div>
-          </section>
-        )}
+            <small>
+              {productQuestionId ? "已选择 1 个问题" : "请选择 1 个问题"}
+            </small>
+          </header>
+          <div className="geo-question-categories">
+            {renderCategory("product_scenario", 1)}
+            {renderCategory("reputation", 2)}
+            {renderCategory("competitor_comparison", 3)}
+          </div>
+        </section>
+
+        <section className="geo-question-group is-ranking">
+          <header className="geo-question-group-heading">
+            <div>
+              <span>02</span>
+              <div>
+                <h3>行业排名与品牌优胜</h3>
+                <p>选择一个行业排名问题，建立品牌提及率与语义资产基线</p>
+              </div>
+            </div>
+            <small>
+              {industryQuestionId ? "已选择 1 个问题" : "请选择 1 个问题"}
+            </small>
+          </header>
+          <div className="geo-question-categories is-ranking">
+            {renderCategory("industry_ranking", 4)}
+          </div>
+        </section>
       </div>
 
-      <section className="geo-permission-card">
-        <div className="geo-permission-heading">
-          <span>
-            <LockKeyhole size={18} />
-          </span>
-          <div>
-            <h3>行业排名类问题需要全域营销权限</h3>
-            <p>如果想在行业中实现品牌优胜，需具备以下全域营销权限，举例如：</p>
-          </div>
-          <button
-            type="button"
-            className="geo-permission-video-trigger"
-            onClick={() => setPermissionVideoOpen(true)}
-            aria-haspopup="dialog"
-          >
-            <Play size={15} fill="currentColor" aria-hidden="true" />
-            观看视频解释
-            <span>01:06</span>
-          </button>
-        </div>
-        <ul>
-          <li>
-            <span className="geo-permission-number" aria-hidden="true">
-              1
-            </span>
-            <div>
-              <strong>行业内容矩阵</strong>
-              <p>
-                建立小红书、微信视频号、抖音企业号与抖音百科等官方阵地，让品牌主体、专业观点与行业内容在图文和视频中相互印证。
-              </p>
-              <div className="geo-permission-channels">
-                <PermissionChannel
-                  name="小红书"
-                  logo="/geo-builder/channels/xiaohongshu.svg"
-                  tone="is-red"
-                />
-                <PermissionChannel
-                  name="视频号"
-                  logo="/geo-builder/channels/wechat-channels.svg"
-                  tone="is-green"
-                />
-                <PermissionChannel
-                  name="抖音"
-                  logo="/geo-builder/channels/douyin.svg"
-                  tone="is-dark"
-                />
-                <PermissionChannel
-                  name="抖音百科"
-                  logo="/geo-builder/channels/douyin-baike.svg"
-                  tone="is-cyan"
-                />
-              </div>
-            </div>
-          </li>
-          <li>
-            <span className="geo-permission-number" aria-hidden="true">
-              2
-            </span>
-            <div>
-              <strong>商品与服务矩阵</strong>
-              <p>
-                完成抖音、美团、淘宝等商品与服务货架上架，并让对应的豆包、元宝、千问读取到一致的产品参数、适用场景与购买入口。
-              </p>
-              <div
-                className="geo-permission-platform-pairs"
-                aria-label="商品与服务货架和 AI 平台的对应关系"
-              >
-                <div className="geo-permission-platform-pair">
-                  <PermissionChannel
-                    name="抖音"
-                    logo="/geo-builder/channels/douyin.svg"
-                    tone="is-dark"
-                  />
-                  <span aria-hidden="true">↔</span>
-                  <PermissionChannel
-                    name="豆包"
-                    logo="/geo-builder/platforms/doubao.png"
-                    tone="is-blue"
-                  />
-                </div>
-                <div className="geo-permission-platform-pair">
-                  <PermissionChannel
-                    name="美团"
-                    logo="/geo-builder/channels/meituan.svg"
-                    tone="is-yellow"
-                  />
-                  <span aria-hidden="true">↔</span>
-                  <PermissionChannel
-                    name="元宝"
-                    logo="/geo-builder/platforms/yuanbao.png"
-                    tone="is-blue"
-                  />
-                </div>
-                <div className="geo-permission-platform-pair">
-                  <PermissionChannel
-                    name="淘宝"
-                    logo="/geo-builder/channels/taobao.svg"
-                    tone="is-red"
-                  />
-                  <span aria-hidden="true">↔</span>
-                  <PermissionChannel
-                    name="千问"
-                    logo="/geo-builder/platforms/qianwen.png"
-                    tone="is-blue"
-                  />
-                </div>
-              </div>
-            </div>
-          </li>
-          <li>
-            <span className="geo-permission-number" aria-hidden="true">
-              3
-            </span>
-            <div>
-              <strong>自有阵地与权威信源</strong>
-              <p>
-                建设 AI
-                专用官网，联动百度百科、微信公众号、知乎问答等认证与运营接口，将企业资质、专家内容与权威报道沉淀为可核验信源。
-              </p>
-              <div className="geo-permission-channels">
-                <PermissionChannel
-                  name="AI 专用官网"
-                  logo="/geo-builder/channels/frontmind.svg"
-                  tone="is-purple"
-                />
-                <PermissionChannel
-                  name="百度百科"
-                  logo="/geo-builder/channels/baidu-baike.svg"
-                  tone="is-blue"
-                />
-                <PermissionChannel
-                  name="微信公众号"
-                  logo="/geo-builder/channels/wechat.svg"
-                  tone="is-green"
-                />
-                <PermissionChannel
-                  name="知乎"
-                  logo="/geo-builder/channels/zhihu.svg"
-                  tone="is-blue"
-                />
-              </div>
-              <div className="geo-authority-sources" aria-label="权威信源">
-                <div className="geo-authority-sources-title">
-                  <BadgeCheck size={14} aria-hidden="true" />
-                  <span>权威信源</span>
-                </div>
-                <div className="geo-authority-source-channels">
-                  <PermissionChannel
-                    name="搜狐"
-                    logo="/geo-builder/channels/sohu.png"
-                    tone="is-red"
-                  />
-                  <PermissionChannel
-                    name="新浪"
-                    logo="/geo-builder/channels/sina.png"
-                    tone="is-red"
-                  />
-                  <PermissionChannel
-                    name="今日头条"
-                    logo="/geo-builder/channels/toutiao.png"
-                    tone="is-red"
-                  />
-                  <PermissionChannel
-                    name="网易"
-                    logo="/geo-builder/channels/netease.png"
-                    tone="is-red"
-                  />
-                  <PermissionChannel
-                    name="腾讯新闻"
-                    logo="/geo-builder/channels/tencent-news.png"
-                    tone="is-blue"
-                  />
-                </div>
-              </div>
-            </div>
-          </li>
-        </ul>
-        <div className="geo-permission-footer">
-          <p>
-            FrontMind坚持以科研级态度保证顶级质量控制，行业词为品牌护航套餐，需联系技术人员对接评估。
-          </p>
-          <button type="button" onClick={onContact}>
-            联系技术人员对接 <ArrowRight size={15} />
-          </button>
-        </div>
-      </section>
-
-      <Dialog open={permissionVideoOpen} onOpenChange={setPermissionVideoOpen}>
-        <DialogContent
-          className="geo-permission-video-dialog"
-          overlayClassName="geo-permission-video-overlay"
-        >
-          <DialogHeader className="geo-permission-video-dialog-header">
-            <span className="geo-permission-video-kicker">
-              <Play size={13} fill="currentColor" aria-hidden="true" />
-              66 秒视频解释
-            </span>
-            <DialogTitle>行业排名为什么需要全域营销权限？</DialogTitle>
-            <DialogDescription>
-              从行业内容、商品与服务、自有阵地和权威信源三个层面，理解 AI
-              推荐背后的品牌信号系统。
-            </DialogDescription>
-          </DialogHeader>
-          <div className="geo-permission-video-frame">
-            <video
-              controls
-              autoPlay
-              playsInline
-              preload="metadata"
-              poster="/videos/frontmind-industry-ranking-permission-explainer-poster.jpg?v=6"
-            >
-              <source
-                src="/videos/frontmind-industry-ranking-permission-explainer-66s.mp4?v=6"
-                type="video/mp4"
-              />
-              <track
-                kind="captions"
-                src="/videos/frontmind-industry-ranking-permission-explainer-zh-CN.vtt"
-                srcLang="zh-CN"
-                label="简体中文"
-              />
-              当前浏览器暂不支持 HTML5 视频播放。
-            </video>
-          </div>
-        </DialogContent>
-      </Dialog>
-
-      <section className="geo-custom-question-card">
-        <div className="geo-custom-question-copy">
-          <span aria-hidden="true">
-            <MessageSquareText size={20} />
-          </span>
-          <div>
-            <small>自定义问题</small>
-            <h3>已有明确的 GEO 优化问题？</h3>
-            <p>
-              输入一个与当前企业明确相关的
-              <strong>非行业排名类</strong>问题，验证并分类后即可继续。
-            </p>
-          </div>
-        </div>
-        <form
-          aria-busy={customSubmitting}
-          onSubmit={(event) => {
-            event.preventDefault();
-            if (customRequestInFlight.current) return;
-            if (selectionLocked) {
-              setCustomError("本次问题范围已经锁定，不能再创建或更换问题。");
-              return;
-            }
-            if (validatedCustomQuestion) {
-              onSelect(validatedCustomQuestion);
-              return;
-            }
-            const question = customQuestion.trim();
-            if (question.length < 4) {
-              setCustomError("请输入一个完整的问题。");
-              return;
-            }
-            customRequestInFlight.current = true;
-            const controller = new AbortController();
-            customAbortController.current?.abort();
-            customAbortController.current = controller;
-            const startedAt = Date.now();
-            setCustomSubmitting(true);
-            setCustomStartedAt(startedAt);
-            setCustomClock(startedAt);
-            setCustomError("");
-            setCustomRetryable(false);
-            setCustomRestartAfterExpiration(false);
-            const retryTerminalError = customRetryTerminalError;
-            setCustomRetryTerminalError(undefined);
-            const operation =
-              retryTerminalError && onRetryCustom
-                ? onRetryCustom(retryTerminalError, controller.signal)
-                : onCreateCustom(question, controller.signal);
-            void operation
-              .then((validatedQuestion) => {
-                if (
-                  controller.signal.aborted ||
-                  customAbortController.current !== controller
-                )
-                  return;
-                setValidatedCustomQuestion(validatedQuestion);
-                setCustomRetryable(false);
-                setCustomRetryTerminalError(undefined);
-              })
-              .catch((error) => {
-                if (
-                  controller.signal.aborted ||
-                  customAbortController.current !== controller
-                )
-                  return;
-                const expired = expiredGeoCustomQuestionValidation(error);
-                setCustomError(
-                  expired
-                    ? "原问题验证已过期，本地请求锁定已解除。"
-                    : errorMessage(error),
-                );
-                const directTerminal =
-                  retryableGeoCustomQuestionValidation(error);
-                const authoritativeTerminal =
-                  authoritativeGeoCustomQuestionValidationTerminal(error);
-                const priorTerminal = retryTerminalError
-                  ? retryableGeoCustomQuestionValidation(retryTerminalError)
-                  : undefined;
-                const pending = readPendingGeoCustomQuestionValidation(
-                  project.id,
-                );
-                const retainedTerminalError = directTerminal
-                  ? error
-                  : priorTerminal &&
-                      pending?.clientRequestId === priorTerminal.clientRequestId
-                    ? retryTerminalError
-                    : undefined;
-                setCustomRetryTerminalError(retainedTerminalError);
-                setCustomRestartAfterExpiration(expired);
-                setCustomRetryable(
-                  Boolean(
-                    expired ||
-                      retainedTerminalError ||
-                      (!authoritativeTerminal &&
-                        pending?.question === question),
-                  ),
-                );
-              })
-              .finally(() => {
-                if (customAbortController.current !== controller) return;
-                customAbortController.current = undefined;
-                customRequestInFlight.current = false;
-                setCustomSubmitting(false);
-                setCustomStartedAt(undefined);
-              });
-          }}
-        >
-          <label htmlFor="geo-custom-question">自定义优化问题</label>
-          <div>
-            <input
-              id="geo-custom-question"
-              value={customQuestion}
-              maxLength={120}
-              disabled={selectionLocked || customSubmitting}
-              onChange={(event) => {
-                setCustomQuestion(event.target.value);
-                setCustomError("");
-                setCustomRetryable(false);
-                setCustomRetryTerminalError(undefined);
-                setCustomRestartAfterExpiration(false);
-                setValidatedCustomQuestion(undefined);
-              }}
-              placeholder={`例如：${project.knowledgeBase?.companyName || project.title}有哪些值得重点了解的优势？`}
-            />
-            <button
-              type="submit"
-              className={validatedCustomQuestion ? "is-validated" : undefined}
-              disabled={
-                selectionLocked ||
-                customSubmitting ||
-                (Boolean(customError) && !customRetryable) ||
-                customQuestion.trim().length < 4
-              }
-            >
-              {customSubmitting ? (
-                <>
-                  <LoaderCircle size={15} className="is-spinning" />
-                  {customElapsed} · 等待返回
-                </>
-              ) : validatedCustomQuestion ? (
-                <>
-                  <Check size={15} /> 验证通过，进入下一步
-                  <ArrowRight size={15} />
-                </>
-              ) : customError ? (
-                customRetryable ? (
-                  <>
-                    <RotateCw size={15} />{" "}
-                    {customRestartAfterExpiration
-                      ? "重新提交验证"
-                      : customRetryTerminalError
-                        ? "重新发起验证"
-                        : "恢复同一验证"}
-                  </>
-                ) : (
-                  <>
-                    <LockKeyhole size={15} /> 请修改问题
-                  </>
-                )
-              ) : (
-                <>
-                  验证并继续 <ArrowRight size={15} />
-                </>
-              )}
-            </button>
-          </div>
+      <footer className="geo-question-selection-footer">
+        <div>
+          <strong>
+            {readyToContinue ? "两类问题均已选择" : "还需完成两类问题选择"}
+          </strong>
           <small>
-            问题需明确包含当前企业、品牌或知识库中的具体产品/服务；行业排名、榜单、开放式品牌推荐及企业无关问题不会通过。
+            下一步将为两个问题统一选择监控版本、地区、平台和截图设置。
           </small>
-          {customSubmitting && (
-            <p className="geo-custom-question-pending" role="status">
-              <Clock3 size={14} />
-              验证请求已锁定，上游返回前将持续等待并自动更新结果，请勿重复提交。
-            </p>
-          )}
-          {customError && (
-            <p className="geo-custom-question-error" role="alert">
-              <CircleAlert size={14} /> {customError}{" "}
-              {customRetryable
-                ? customRestartAfterExpiration
-                  ? "可点击上方按钮，使用新的请求重新提交同一问题。"
-                  : customRetryTerminalError
-                    ? "可点击上方按钮确认旧终态后，以新的请求重新发起一次验证。"
-                    : "可点击上方按钮恢复同一验证任务。"
-                : null}
-            </p>
-          )}
-        </form>
-      </section>
+        </div>
+        <button
+          type="button"
+          className="geo-primary-button"
+          disabled={selectionLocked || !readyToContinue}
+          onClick={onContinue}
+        >
+          确认两个问题并继续 <ArrowRight size={16} />
+        </button>
+      </footer>
     </div>
   );
 }
@@ -6373,6 +6016,23 @@ export function MonitoringConfirmDialog({
     legacyPending?.platformIds ?? project?.selectedPlatformIds ?? [];
   const questionId = legacyPending?.questionId ?? project?.selectedQuestionId;
   const question = project?.questions.find((item) => item.id === questionId);
+  const industryQuestionId = legacyPending
+    ? undefined
+    : (
+        project as
+          | (GeoProject & { selectedIndustryRankingQuestionId?: string })
+          | undefined
+      )?.selectedIndustryRankingQuestionId;
+  const industryQuestion = project?.questions.find(
+    (item) => item.id === industryQuestionId,
+  );
+  const hasDualQuestionScope = Boolean(
+    !legacyPending &&
+      (industryQuestion ||
+        project?.questions.some(
+          (item) => item.category === "industry_ranking",
+        )),
+  );
   const platformNames = platformIds
     .map((id) => GEO_PLATFORMS.find((platform) => platform.id === id)?.name)
     .filter(Boolean)
@@ -6396,14 +6056,24 @@ export function MonitoringConfirmDialog({
             确认并获取监控答案
           </DialogTitle>
           <DialogDescription className="geo-dialog-description">
-            确认当前问题、监控版本和平台范围后，即可获取并留存本次回答。
+            {hasDualQuestionScope
+              ? "确认两类问题、监控版本和平台范围后，即可分别获取并留存回答。"
+              : "确认当前问题、监控版本和平台范围后，即可获取并留存本次回答。"}
           </DialogDescription>
         </DialogHeader>
         <section className="geo-payment-order-summary">
           <div>
-            <span>当前问题</span>
+            <span>产品与舆情</span>
             <strong>{question?.question || "已选择的 GEO 优化问题"}</strong>
           </div>
+          {hasDualQuestionScope && (
+            <div>
+              <span>行业排名与品牌优胜</span>
+              <strong>
+                {industryQuestion?.question || "已选择的行业排名问题"}
+              </strong>
+            </div>
+          )}
           <dl>
             <div>
               <dt>监控版本</dt>
@@ -6439,7 +6109,9 @@ export function MonitoringConfirmDialog({
             </div>
             <div>
               <dt>预计回答</dt>
-              <dd>{platformIds.length * 5} 次</dd>
+              <dd>
+                {platformIds.length * 5 * (hasDualQuestionScope ? 2 : 1)} 次
+              </dd>
             </div>
           </dl>
           {legacyPending && (
@@ -7088,7 +6760,9 @@ function QuestionMonitoring({
   lastRefreshedAt,
   onContact,
 }: QuestionMonitoringProps) {
-  const monitoringStarted = Boolean(project.monitoring?.runId);
+  const monitoringStarted = Boolean(
+    project.monitoring?.runId || project.industryRankingMonitoring?.runId,
+  );
 
   return (
     <div className="geo-monitor-stage">
@@ -7144,16 +6818,35 @@ export function MonitoringSetup({
   const selectedQuestion = project.questions.find(
     (question) => question.id === project.selectedQuestionId,
   );
+  const selectedIndustryQuestion = project.questions.find(
+    (question) =>
+      question.id ===
+      (project as GeoProject & { selectedIndustryRankingQuestionId?: string })
+        .selectedIndustryRankingQuestionId,
+  );
+  const requiresIndustryQuestion = project.questions.some(
+    (question) => question.category === "industry_ranking",
+  );
+  const questionCount = requiresIndustryQuestion ? 2 : 1;
+  const lockedPlatformIds = project.monitoring?.platforms.length
+    ? project.monitoring.platforms
+    : project.industryRankingMonitoring?.platforms.length
+      ? project.industryRankingMonitoring.platforms
+      : undefined;
   const selectedPlatformIds =
-    locked && project.monitoring?.platforms.length
-      ? project.monitoring.platforms
+    locked && lockedPlatformIds?.length
+      ? lockedPlatformIds
       : project.selectedPlatformIds;
   const selectedCount = selectedPlatformIds.length;
-  const answers = selectedCount * 5;
-  const validSelection = monitoringPlatformSelectionIsValid(
-    monitoringEdition,
-    selectedPlatformIds,
-  );
+  const answers = selectedCount * 5 * questionCount;
+  const validSelection =
+    monitoringPlatformSelectionIsValid(
+      monitoringEdition,
+      selectedPlatformIds,
+    ) &&
+    Boolean(selectedQuestion) &&
+    (!requiresIndustryQuestion || Boolean(selectedIndustryQuestion));
+  const resumeIncompleteMonitoring = canResumeIncompleteDualMonitoring(project);
   const [regions, setRegions] = useState<
     Array<{ code: string; label: string }>
   >([]);
@@ -7233,7 +6926,9 @@ export function MonitoringSetup({
           </span>
           <h2 className="geo-stage-title">选择需要获取回答的平台</h2>
           <p>
-            每个平台将独立获取 5 次回答，用于建立当前问题的可见度与内容基线。
+            {requiresIndustryQuestion
+              ? "两类问题各按每个平台 5 次采样，共享同一时间窗口与采样范围。"
+              : "每个平台将独立获取 5 次回答，用于建立当前问题的可见度与内容基线。"}
           </p>
         </div>
         <button
@@ -7346,20 +7041,36 @@ export function MonitoringSetup({
         </div>
       </section>
 
-      <section className="geo-selected-question">
+      <section className="geo-selected-question" aria-label="当前优化问题">
         <span>当前优化问题</span>
-        <p>
-          {selectedQuestion?.question || "请先返回问题推荐选择一个优化问题。"}
-        </p>
-        {selectedQuestion && (
-          <small>
-            {
-              GEO_QUESTION_CATEGORIES.find(
-                (category) => category.id === selectedQuestion.category,
-              )?.title
-            }
-          </small>
-        )}
+        <div className="geo-selected-question-grid">
+          <article>
+            <small>产品与舆情</small>
+            <p>
+              {selectedQuestion?.question ||
+                "请先返回问题推荐选择产品与舆情问题。"}
+            </p>
+            {selectedQuestion && (
+              <em>
+                {
+                  GEO_QUESTION_CATEGORIES.find(
+                    (category) => category.id === selectedQuestion.category,
+                  )?.title
+                }
+              </em>
+            )}
+          </article>
+          {requiresIndustryQuestion && (
+            <article className="is-ranking">
+              <small>行业排名与品牌优胜</small>
+              <p>
+                {selectedIndustryQuestion?.question ||
+                  "请先返回问题推荐选择行业排名问题。"}
+              </p>
+              {selectedIndustryQuestion && <em>行业排名</em>}
+            </article>
+          )}
+        </div>
       </section>
 
       <div
@@ -7402,7 +7113,11 @@ export function MonitoringSetup({
           <ShieldCheck size={16} />
           <span>
             <strong>统一采样标准</strong>
-            <small>同一问题、同一时间窗口、平台独立采样</small>
+            <small>
+              {requiresIndustryQuestion
+                ? "两类问题共享同一时间窗口与采样范围"
+                : "同一问题、同一时间窗口、平台独立采样"}
+            </small>
           </span>
         </div>
         <div>
@@ -7437,43 +7152,53 @@ export function MonitoringSetup({
         <div className="geo-checkout-total">
           <span>本次监控</span>
           <small>
-            {selectedCount} 个平台 · {answers} 次回答
+            {questionCount} 类问题 · {selectedCount} 个平台 · {answers} 次回答
           </small>
         </div>
         <button
           type="button"
           onClick={onCheckout}
-          disabled={selectedCount === 0 || !validSelection || locked}
+          disabled={
+            selectedCount === 0 ||
+            !validSelection ||
+            (locked && !resumeIncompleteMonitoring)
+          }
           title={
-            locked
+            locked && !resumeIncompleteMonitoring
               ? "监控已开始，本次监控范围不可修改"
-              : selectedCount === 0
-                ? "请先选择至少一个监控平台"
-                : paymentPending
-                  ? "核对此前监控状态并继续"
-                  : "确认范围并获取监控答案"
+              : resumeIncompleteMonitoring
+                ? "继续恢复尚未启动的监控问题"
+                : selectedCount === 0
+                  ? "请先选择至少一个监控平台"
+                  : paymentPending
+                    ? "核对此前监控状态并继续"
+                    : "确认范围并获取监控答案"
           }
         >
-          {locked
-            ? "监控已开始"
-            : paymentPending
-              ? "获取监控答案"
-              : "获取监控答案"}
+          {resumeIncompleteMonitoring
+            ? "继续启动剩余问题"
+            : locked
+              ? "监控已开始"
+              : paymentPending
+                ? "获取监控答案"
+                : "获取监控答案"}
         </button>
       </footer>
     </div>
   );
 }
 
-type AssessmentView = "knowledge" | "overview" | "forecast";
-
 type CurrentAssessmentProps = {
   project: GeoProject;
   onContact: () => void;
   onRetryAssessment?: () => void | Promise<void>;
   retryingAssessment?: boolean;
+  onRetryIndustryAssessment?: () => void | Promise<void>;
+  retryingIndustryAssessment?: boolean;
   onRetryForecast?: () => void | Promise<void>;
   retryingForecast?: boolean;
+  onRetryIndustryForecast?: () => void | Promise<void>;
+  retryingIndustryForecast?: boolean;
   onStartService?: () => void;
 };
 
@@ -7483,6 +7208,42 @@ type MonitoringResultsProps = {
   refreshing: boolean;
   lastRefreshedAt?: string;
   onContact: () => void;
+};
+
+type MonitoringPerspective = "product_opinion" | "industry_ranking";
+
+function monitoringRunStatusLabel(
+  status?: NonNullable<GeoProject["monitoring"]>["status"],
+) {
+  if (status === "completed") return "采集完成";
+  if (status === "partial_review") return "部分完成";
+  if (status === "failed") return "采集失败";
+  if (status === "submitted" || status === "capturing") return "采集中";
+  return "等待采集";
+}
+
+function assessmentRunStatusLabel(
+  status?: NonNullable<GeoProject["assessment"]>["status"],
+) {
+  if (status === "ready") return "评估已生成";
+  if (status === "failed") return "评估失败";
+  if (status === "queued" || status === "running") return "评估生成中";
+  return "等待评估";
+}
+
+type DualPerspectiveProject = GeoProject & {
+  selectedIndustryRankingQuestionId?: string;
+  industryRankingMonitoring?: GeoProject["monitoring"];
+  industryRankingAssessment?: GeoProject["assessment"];
+  industryRankingOptimizationForecast?: GeoProject["optimizationForecast"] & {
+    brandMentionRateForecast?: {
+      current: number;
+      low: number;
+      expected: number;
+      high: number;
+      observedAnswers: number;
+    };
+  };
 };
 
 const COMPARISON_LABELS: Record<
@@ -7500,36 +7261,112 @@ export function CurrentAssessment({
   onContact,
   onRetryAssessment,
   retryingAssessment = false,
+  onRetryIndustryAssessment,
+  retryingIndustryAssessment = false,
   onRetryForecast,
   retryingForecast = false,
+  onRetryIndustryForecast,
+  retryingIndustryForecast = false,
   onStartService,
 }: CurrentAssessmentProps) {
-  const [view, setView] = useState<AssessmentView>("overview");
-  const monitoring = project.monitoring;
-  const assessment = project.assessment;
-  const forecast = project.optimizationForecast;
-  const preview = isGeoStylePreviewProject(project);
-  const assessmentStarted = Boolean(
-    assessment && assessment.status !== "not_started",
+  const productQuestion = project.questions.find(
+    (question) => question.id === project.selectedQuestionId,
   );
+  const industryQuestion = project.questions.find(
+    (question) => question.id === project.selectedIndustryRankingQuestionId,
+  );
+  const historicalRankingOnly = isHistoricalRankingOnlyProject(project);
+  const productPerspective = historicalRankingOnly
+    ? undefined
+    : {
+        kind: "product_opinion" as const,
+        question: productQuestion,
+        monitoring: project.monitoring,
+        assessment: project.assessment,
+        forecast: project.optimizationForecast,
+      };
+  const industryPerspective =
+    project.industryRankingMonitoring ||
+    project.industryRankingAssessment ||
+    historicalRankingOnly
+      ? {
+          kind: "industry_ranking" as const,
+          question: historicalRankingOnly ? productQuestion : industryQuestion,
+          monitoring:
+            project.industryRankingMonitoring ??
+            (historicalRankingOnly ? project.monitoring : undefined),
+          assessment:
+            project.industryRankingAssessment ??
+            (historicalRankingOnly ? project.assessment : undefined),
+          forecast:
+            project.industryRankingOptimizationForecast ??
+            (historicalRankingOnly ? project.optimizationForecast : undefined),
+        }
+      : undefined;
+  const perspectives = [productPerspective, industryPerspective].filter(
+    (
+      perspective,
+    ): perspective is NonNullable<
+      typeof productPerspective | typeof industryPerspective
+    > => Boolean(perspective),
+  );
+  const [activePerspective, setActivePerspective] =
+    useState<MonitoringPerspective>(perspectives[0]?.kind ?? "product_opinion");
 
-  if (monitoring?.status !== "completed" && !assessmentStarted) {
+  useEffect(() => {
+    if (
+      perspectives.length > 0 &&
+      !perspectives.some((item) => item.kind === activePerspective)
+    ) {
+      setActivePerspective(perspectives[0].kind);
+    }
+  }, [activePerspective, perspectives.map((item) => item.kind).join("|")]);
+
+  if (perspectives.length === 0) {
     return (
       <div className="geo-assessment-view">
         <div className="geo-assessment-empty">
           <LockKeyhole size={24} />
           <h2>现状评估尚未解锁</h2>
-          <p>平台回答采集完成后，将在这里生成知识对照、现状基线与优化目标。</p>
+          <p>两个问题的平台回答开始返回后，将分别建立语义资产基线。</p>
         </div>
       </div>
     );
   }
 
-  const assessmentReady = isCompleteAssessment(assessment);
+  const perspective =
+    perspectives.find((item) => item.kind === activePerspective) ??
+    perspectives[0];
+  const isIndustry = perspective.kind === "industry_ranking";
+  const assessmentStarted = Boolean(
+    perspective.assessment && perspective.assessment.status !== "not_started",
+  );
+  const assessmentReady = isCompleteAssessment(perspective.assessment);
   const assessmentPartial =
-    assessment?.status === "ready" &&
-    assessment.quality?.completeness === "partial";
-  const assessmentFailed = assessment?.status === "failed";
+    perspective.assessment?.status === "ready" &&
+    perspective.assessment.quality?.completeness === "partial";
+  const assessmentFailed = perspective.assessment?.status === "failed";
+  const perspectiveProject: GeoProject = {
+    ...project,
+    selectedQuestionId: perspective.question?.id,
+    monitoring: perspective.monitoring,
+    assessment: perspective.assessment,
+    optimizationForecast: perspective.forecast,
+    ...(isIndustry ? { serviceActivation: undefined } : {}),
+  };
+  const currentRetryingAssessment = isIndustry
+    ? retryingIndustryAssessment
+    : retryingAssessment;
+  const currentRetryingForecast = isIndustry
+    ? retryingIndustryForecast
+    : retryingForecast;
+  const currentRetryAssessment = isIndustry
+    ? onRetryIndustryAssessment
+    : onRetryAssessment;
+  const currentRetryForecast = isIndustry
+    ? onRetryIndustryForecast
+    : onRetryForecast;
+  const preview = isGeoStylePreviewProject(project);
 
   return (
     <div className="geo-assessment-view">
@@ -7538,121 +7375,419 @@ export function CurrentAssessment({
           <span className="geo-kb-kicker">
             <BarChart3 size={14} /> 企业 GEO 现状评估
           </span>
-          <h2 className="geo-stage-title">从知识事实，找到可提升的答案空间</h2>
-          <p>识别当前表现，并给出未来一个月的提升建议与条件目标区间</p>
+          <h2 className="geo-stage-title">按两类问题查看语义资产表现</h2>
+          <p>每个问题使用自己的监控回答、评估结果与一个月条件目标。</p>
         </div>
         <div className="geo-assessment-actions">
           <span
-            className={`geo-assessment-state state-${
-              retryingAssessment ? "running" : (assessment?.status ?? "queued")
-            }`}
+            className={
+              "geo-assessment-state state-" +
+              (currentRetryingAssessment
+                ? "running"
+                : (perspective.assessment?.status ?? "queued"))
+            }
           >
             <span />
             {assessmentReady
               ? "评估已生成"
               : assessmentPartial
                 ? "评估内容部分可用"
-                : retryingAssessment
+                : currentRetryingAssessment
                   ? "正在重新评估"
                   : assessmentFailed
                     ? "评估需支持"
                     : "正在生成评估"}
           </span>
-          {(assessmentFailed || assessmentPartial) && !preview && (
-            <>
-              {onRetryAssessment && (
-                <button
-                  type="button"
-                  className="geo-assessment-refresh is-retry"
-                  onClick={() => void onRetryAssessment()}
-                  disabled={retryingAssessment}
-                  aria-busy={retryingAssessment}
-                >
-                  <RotateCw
-                    size={14}
-                    className={retryingAssessment ? "is-spinning" : undefined}
-                  />
-                  {retryingAssessment ? "正在重新评估" : "重新评估"}
-                </button>
-              )}
+          {(assessmentFailed || assessmentPartial) &&
+            !preview &&
+            currentRetryAssessment && (
               <button
                 type="button"
                 className="geo-assessment-refresh is-retry"
-                onClick={onContact}
+                onClick={() => void currentRetryAssessment()}
+                disabled={currentRetryingAssessment}
+                aria-busy={currentRetryingAssessment}
               >
-                联系技术支持
+                <RotateCw
+                  size={14}
+                  className={
+                    currentRetryingAssessment ? "is-spinning" : undefined
+                  }
+                />
+                {currentRetryingAssessment ? "正在重新评估" : "重新评估"}
               </button>
-            </>
+            )}
+          {(assessmentFailed || assessmentPartial) && !preview && (
+            <button
+              type="button"
+              className="geo-assessment-refresh"
+              onClick={onContact}
+            >
+              联系技术支持
+            </button>
           )}
         </div>
       </header>
 
       <div
-        className="geo-assessment-tabs geo-assessment-section-tabs"
+        className="geo-assessment-perspective-tabs"
         role="tablist"
-        aria-label="现状评估板块"
+        aria-label="现状评估问题视角"
       >
-        {(
-          [
-            ["knowledge", "知识库对照", Database],
-            ["overview", "当前评估总览", BarChart3],
-            ["forecast", "优化后效果评估", Sparkles],
-          ] as Array<[AssessmentView, string, typeof BarChart3]>
-        ).map(([id, label, Icon]) => (
-          <button
-            key={id}
-            type="button"
-            role="tab"
-            aria-selected={view === id}
-            className={view === id ? "active" : ""}
-            onClick={() => setView(id)}
-          >
-            <Icon size={15} /> {label}
-          </button>
-        ))}
+        {perspectives.map((item) => {
+          const active = item.kind === perspective.kind;
+          const completed =
+            item.monitoring?.answers.filter(
+              (answer) =>
+                answer.status === "completed" &&
+                answer.answer.trim().length > 0 &&
+                !answer.error,
+            ).length ?? 0;
+          return (
+            <button
+              key={item.kind}
+              type="button"
+              role="tab"
+              aria-selected={active}
+              className={active ? "is-active" : ""}
+              onClick={() => setActivePerspective(item.kind)}
+            >
+              <span>
+                {item.kind === "product_opinion"
+                  ? "产品与舆情"
+                  : "行业排名与品牌优胜"}
+              </span>
+              <strong>{item.question?.question || "当前评估问题"}</strong>
+              <small>
+                <span>
+                  {item.kind === "industry_ranking"
+                    ? "根据企业实际情况定制"
+                    : GEO_QUESTION_CATEGORIES.find(
+                        (category) => category.id === item.question?.category,
+                      )?.title || "产品与舆情"}
+                  {" · "}
+                  {monitoringRunStatusLabel(item.monitoring?.status)}
+                  {" · "}
+                  {assessmentRunStatusLabel(item.assessment?.status)}
+                </span>
+                <em>{completed} 条有效回答</em>
+              </small>
+            </button>
+          );
+        })}
       </div>
 
-      {view === "knowledge" ? (
-        <KnowledgeComparison project={project} />
-      ) : view === "overview" ? (
-        <AssessmentOverview
-          project={project}
-          assessmentReady={assessmentReady}
-        />
-      ) : (
-        <OptimizationForecastView
-          project={project}
-          onContact={onContact}
-          onRetryForecast={onRetryForecast}
-          retryingForecast={retryingForecast}
-        />
-      )}
+      <div
+        className="geo-assessment-perspective-content"
+        role="tabpanel"
+        aria-label={isIndustry ? "行业排名与品牌优胜评估" : "产品与舆情评估"}
+      >
+        {perspective.monitoring?.status !== "completed" &&
+        !assessmentStarted ? (
+          <div className="geo-assessment-empty">
+            <Clock3 size={24} />
+            <h2>当前视角的评估正在准备</h2>
+            <p>对应问题采集完成后，将在这里生成语义资产现状与优化目标。</p>
+          </div>
+        ) : (
+          <>
+            {isIndustry && (
+              <IndustryCurrentPerformance
+                monitoring={perspective.monitoring}
+                assessment={perspective.assessment}
+              />
+            )}
 
-      {assessmentReady &&
-        isCompleteForecast(forecast) &&
-        project.serviceActivation &&
-        onStartService && (
-          <section className="geo-assessment-next-step">
-            <div>
-              <span>下一步 · 启动服务</span>
-              <p>
-                围绕当前选定问题启动 GEO
-                优化服务，开始内容建设、权威信源、平台监控与结果复测。
-              </p>
-            </div>
-            <button
-              type="button"
-              className="geo-primary-button"
-              onClick={onStartService}
-            >
-              {project.serviceActivation.status === "active"
-                ? "查看已启动服务"
-                : "进入下一步：启动服务"}
-              <ArrowRight size={17} />
-            </button>
-          </section>
+            <section className="geo-assessment-perspective-section">
+              <header>
+                <span>01</span>
+                <div>
+                  <h3>语义资产现状</h3>
+                  <p>查看本问题的总分、五维表现、平台差异与优先动作。</p>
+                </div>
+              </header>
+              <AssessmentOverview
+                project={perspectiveProject}
+                assessmentReady={assessmentReady}
+                hideScoreHero={isIndustry}
+              />
+            </section>
+
+            {!isIndustry && (
+              <section className="geo-assessment-perspective-section">
+                <header>
+                  <span>02</span>
+                  <div>
+                    <h3>舆情与知识库对照</h3>
+                    <p>
+                      以企业知识库事实核验产品与舆情回答，不混入行业排名样本。
+                    </p>
+                  </div>
+                </header>
+                <KnowledgeComparison project={perspectiveProject} />
+              </section>
+            )}
+
+            <section className="geo-assessment-perspective-section">
+              <header>
+                <span>{isIndustry ? "02" : "03"}</span>
+                <div>
+                  <h3>优化后评估</h3>
+                  <p>
+                    {isIndustry
+                      ? "同时查看语义资产目标和品牌提及率的一个月条件目标。"
+                      : "查看语义资产分数、五维目标与四周执行路径。"}
+                  </p>
+                </div>
+              </header>
+              <OptimizationForecastView
+                project={perspectiveProject}
+                onContact={onContact}
+                onRetryForecast={currentRetryForecast}
+                retryingForecast={currentRetryingForecast}
+              />
+              {isIndustry && (
+                <IndustryBrandMentionForecast forecast={perspective.forecast} />
+              )}
+            </section>
+
+            {isIndustry ? (
+              <section className="geo-industry-custom-service">
+                <div>
+                  <span>行业排名与品牌优胜</span>
+                  <h3>根据企业实际情况定制</h3>
+                  <p>结合目标行业、竞争格局和品牌资产制定专项执行方案。</p>
+                </div>
+                <button
+                  type="button"
+                  className="geo-secondary-button"
+                  onClick={onContact}
+                >
+                  联系技术人员对接 <ArrowRight size={15} />
+                </button>
+              </section>
+            ) : (
+              assessmentReady &&
+              isCompleteForecast(perspective.forecast) &&
+              project.serviceActivation &&
+              onStartService && (
+                <section className="geo-assessment-next-step">
+                  <div>
+                    <span>下一步 · 启动服务</span>
+                    <p>
+                      围绕产品与舆情问题启动 GEO
+                      优化服务，开始内容建设、权威信源、平台监控与结果复测。
+                    </p>
+                  </div>
+                  <button
+                    type="button"
+                    className="geo-primary-button"
+                    onClick={onStartService}
+                  >
+                    {project.serviceActivation.status === "active"
+                      ? "查看已启动服务"
+                      : "进入下一步：启动服务"}
+                    <ArrowRight size={17} />
+                  </button>
+                </section>
+              )
+            )}
+          </>
         )}
+      </div>
     </div>
+  );
+}
+
+function AssessmentRateRing({
+  value,
+  label,
+  detail,
+  tone = "#3d1560",
+}: {
+  value?: number;
+  label: string;
+  detail: string;
+  tone?: string;
+}) {
+  const percentage =
+    value === undefined
+      ? undefined
+      : Math.round(Math.max(0, Math.min(1, value)) * 100);
+  return (
+    <article className="geo-assessment-rate-card">
+      <div
+        className="geo-assessment-rate-ring"
+        style={{
+          background:
+            percentage === undefined
+              ? "#ebe6ed"
+              : "conic-gradient(" +
+                tone +
+                " " +
+                percentage * 3.6 +
+                "deg, #e9e4ec 0deg)",
+        }}
+        aria-label={
+          percentage === undefined
+            ? label + "暂无数据"
+            : label + percentage + "%"
+        }
+      >
+        <span>
+          <strong>{percentage === undefined ? "—" : percentage + "%"}</strong>
+          <small>{label}</small>
+        </span>
+      </div>
+      <p>{detail}</p>
+    </article>
+  );
+}
+
+function IndustryCurrentPerformance({
+  monitoring,
+  assessment,
+}: {
+  monitoring?: GeoProject["monitoring"];
+  assessment?: GeoProject["assessment"];
+}) {
+  const insights = useMemo(
+    () => buildMonitoringInsights(monitoring?.answers ?? []),
+    [monitoring?.answers],
+  );
+  const score =
+    assessment?.status === "ready" && assessment.totalScore !== undefined
+      ? assessment.totalScore / 100
+      : undefined;
+  const mentionRate =
+    insights.brand.mentionCoverage > 0
+      ? insights.brand.mentionRate / 100
+      : undefined;
+  const platformRows = (monitoring?.platforms ?? []).map((platformId) => {
+    const platformInsights = buildMonitoringInsights(
+      monitoring?.answers.filter(
+        (answer) => answer.platformId === platformId,
+      ) ?? [],
+    );
+    return {
+      platformId,
+      rate:
+        platformInsights.brand.mentionCoverage > 0
+          ? platformInsights.brand.mentionRate
+          : undefined,
+      coverage: platformInsights.brand.mentionCoverage,
+    };
+  });
+
+  return (
+    <section className="geo-industry-current-performance">
+      <header>
+        <span>当前表现</span>
+        <h3>语义资产与品牌提及率</h3>
+        <p>品牌指标仅使用行业排名问题中真实返回相应字段的回答。</p>
+      </header>
+      <div className="geo-industry-current-rings">
+        <AssessmentRateRing
+          value={score}
+          label="语义资产总分"
+          detail={
+            score === undefined
+              ? "语义资产评估尚未返回完整总分"
+              : "行业排名问题自己的五维语义资产评分"
+          }
+        />
+        <AssessmentRateRing
+          value={mentionRate}
+          label="品牌提及率"
+          tone="#9a7028"
+          detail={
+            mentionRate === undefined
+              ? "暂无具有本品提及字段的有效回答"
+              : insights.brand.mentionedCount +
+                "/" +
+                insights.brand.mentionCoverage +
+                " 条回答提及本品"
+          }
+        />
+      </div>
+      {(insights.brand.mentionCoverage > 0 ||
+        insights.brand.averagePosition !== undefined) && (
+        <div className="geo-industry-brand-detail">
+          <div>
+            <small>平均提及位置</small>
+            <strong>
+              {insights.brand.averagePosition === undefined
+                ? "暂无数据"
+                : "第 " + insights.brand.averagePosition + " 个"}
+            </strong>
+          </div>
+          <div>
+            <small>最佳提及位置</small>
+            <strong>
+              {insights.brand.bestPosition === undefined
+                ? "暂无数据"
+                : "第 " + insights.brand.bestPosition + " 个"}
+            </strong>
+          </div>
+          {platformRows.map((row) => {
+            const platform = GEO_PLATFORMS.find(
+              (item) => item.id === row.platformId,
+            );
+            return (
+              <div key={row.platformId}>
+                <small>{platform?.name ?? row.platformId}提及率</small>
+                <strong>
+                  {row.rate === undefined
+                    ? "暂无数据"
+                    : row.rate + "% · " + row.coverage + " 条"}
+                </strong>
+              </div>
+            );
+          })}
+        </div>
+      )}
+    </section>
+  );
+}
+
+function IndustryBrandMentionForecast({
+  forecast,
+}: {
+  forecast?: GeoProject["industryRankingOptimizationForecast"];
+}) {
+  const brandForecast = forecast?.brandMentionRateForecast;
+  if (!brandForecast) return null;
+  return (
+    <section className="geo-industry-mention-forecast">
+      <header>
+        <span>品牌提及率条件目标</span>
+        <h3>当前与一个月预期对比</h3>
+      </header>
+      <div className="geo-industry-current-rings">
+        <AssessmentRateRing
+          value={brandForecast.current}
+          label="当前提及率"
+          detail={"基于 " + brandForecast.observedAnswers + " 条有值回答"}
+          tone="#77667d"
+        />
+        <AssessmentRateRing
+          value={brandForecast.expected}
+          label="预期提及率"
+          detail={
+            "条件目标区间 " +
+            Math.round(brandForecast.low * 100) +
+            "%–" +
+            Math.round(brandForecast.high * 100) +
+            "%"
+          }
+          tone="#9a7028"
+        />
+      </div>
+      <p>
+        这是一个月执行条件下的目标区间，不代表效果保证；需用相同问题、平台和每平台
+        5 次回答进行复测。
+      </p>
+    </section>
   );
 }
 
@@ -7663,12 +7798,136 @@ export function MonitoringResults({
   lastRefreshedAt,
   onContact,
 }: MonitoringResultsProps) {
-  const monitoring = project.monitoring;
-  if (!monitoring?.runId) return null;
+  const dualProject = project as DualPerspectiveProject;
+  const historicalRankingOnly = isHistoricalRankingOnlyProject(project);
+  const productMonitoring = historicalRankingOnly
+    ? undefined
+    : project.monitoring;
+  const industryMonitoring =
+    dualProject.industryRankingMonitoring ??
+    (historicalRankingOnly ? project.monitoring : undefined);
+  const availablePerspectives = [
+    productMonitoring?.runId ? "product_opinion" : undefined,
+    industryMonitoring?.runId ? "industry_ranking" : undefined,
+  ].filter((value): value is MonitoringPerspective => Boolean(value));
+  const [activePerspective, setActivePerspective] =
+    useState<MonitoringPerspective>(
+      availablePerspectives[0] ?? "product_opinion",
+    );
 
+  useEffect(() => {
+    if (
+      availablePerspectives.length > 0 &&
+      !availablePerspectives.includes(activePerspective)
+    ) {
+      setActivePerspective(availablePerspectives[0]);
+    }
+  }, [activePerspective, availablePerspectives.join("|")]);
+
+  if (availablePerspectives.length === 0) return null;
+
+  const perspectives = availablePerspectives.map((kind) => {
+    const monitoring =
+      kind === "industry_ranking" ? industryMonitoring! : productMonitoring!;
+    const questionId =
+      kind === "industry_ranking"
+        ? historicalRankingOnly
+          ? project.selectedQuestionId
+          : dualProject.selectedIndustryRankingQuestionId
+        : project.selectedQuestionId;
+    const question = project.questions.find((item) => item.id === questionId);
+    const finished = monitoring.completedRecords + monitoring.failedRecords;
+    const expected = Math.max(
+      monitoring.expectedRecords,
+      (monitoring.platforms.length || project.selectedPlatformIds.length) * 5,
+    );
+    return { kind, monitoring, questionId, question, finished, expected };
+  });
+  const active =
+    perspectives.find((item) => item.kind === activePerspective) ??
+    perspectives[0];
+
+  return (
+    <div className="geo-monitor-perspectives">
+      <div
+        className="geo-monitor-perspective-tabs"
+        role="tablist"
+        aria-label="监控问题视角"
+      >
+        {perspectives.map((item) => (
+          <button
+            key={item.kind}
+            type="button"
+            role="tab"
+            aria-selected={active.kind === item.kind}
+            aria-controls={`geo-monitor-perspective-${item.kind}`}
+            className={active.kind === item.kind ? "is-active" : ""}
+            onClick={() => setActivePerspective(item.kind)}
+          >
+            <span>
+              {item.kind === "product_opinion"
+                ? "产品与舆情"
+                : "行业排名与品牌优胜"}
+            </span>
+            <strong>{item.question?.question || "当前监控问题"}</strong>
+            <small>
+              <span>
+                {item.kind === "industry_ranking"
+                  ? "行业排名"
+                  : GEO_QUESTION_CATEGORIES.find(
+                      (category) => category.id === item.question?.category,
+                    )?.title || "产品与舆情"}
+                {" · "}
+                {monitoringRunStatusLabel(item.monitoring.status)}
+              </span>
+              <em>
+                {item.finished}/{item.expected} 条
+              </em>
+            </small>
+          </button>
+        ))}
+      </div>
+      <div
+        id={`geo-monitor-perspective-${active.kind}`}
+        role="tabpanel"
+        aria-label={
+          active.kind === "product_opinion"
+            ? "产品与舆情监控答案"
+            : "行业排名与品牌优胜监控答案"
+        }
+      >
+        <MonitoringPerspectiveResults
+          project={project}
+          monitoring={active.monitoring}
+          selectedQuestionId={active.questionId}
+          perspective={active.kind}
+          onRefresh={onRefresh}
+          refreshing={refreshing}
+          lastRefreshedAt={lastRefreshedAt}
+          onContact={onContact}
+        />
+      </div>
+    </div>
+  );
+}
+
+function MonitoringPerspectiveResults({
+  project,
+  monitoring,
+  selectedQuestionId,
+  perspective,
+  onRefresh,
+  refreshing,
+  lastRefreshedAt,
+  onContact,
+}: MonitoringResultsProps & {
+  monitoring: NonNullable<GeoProject["monitoring"]>;
+  selectedQuestionId?: string;
+  perspective: MonitoringPerspective;
+}) {
   const preview = isGeoStylePreviewProject(project);
   const selectedQuestion = project.questions.find(
-    (question) => question.id === project.selectedQuestionId,
+    (question) => question.id === selectedQuestionId,
   );
   const platformIds =
     monitoring.platforms.length > 0
@@ -7890,6 +8149,7 @@ export function MonitoringResults({
           platformIds={platformIds}
           answers={monitoring.answers}
           screenshotEnabled={monitoringScreenshotEnabled}
+          perspective={perspective}
         />
       )}
     </div>
@@ -7972,9 +8232,11 @@ function AssessmentWaitingState() {
 export function AssessmentOverview({
   project,
   assessmentReady,
+  hideScoreHero = false,
 }: {
   project: GeoProject;
   assessmentReady: boolean;
+  hideScoreHero?: boolean;
 }) {
   const assessment = project.assessment;
   if (project.assessmentUpdatingToVersion2) {
@@ -8094,34 +8356,36 @@ export function AssessmentOverview({
   );
   return (
     <div className="geo-assessment-overview">
-      <section className="geo-score-hero">
-        <div
-          className="geo-score-ring"
-          style={{
-            background: `conic-gradient(#3d1560 ${score * 3.6}deg, #e9e4ec 0deg)`,
-          }}
-          aria-label={`现状得分 ${score} 分`}
-        >
-          <span>
-            <strong>{score}</strong>
-            <small>/ 100</small>
-          </span>
-        </div>
-        <div className="geo-score-copy">
-          <span>本题回答表现</span>
-          <h3>
-            当前等级 <b>{assessment.grade || "—"}</b>
-          </h3>
-          <p>{assessmentSummary}</p>
-          {!isGeoStylePreviewProject(project) && (
-            <div>
-              <span>
-                生成时间 <strong>{formatDate(assessment.generatedAt)}</strong>
-              </span>
-            </div>
-          )}
-        </div>
-      </section>
+      {!hideScoreHero && (
+        <section className="geo-score-hero">
+          <div
+            className="geo-score-ring"
+            style={{
+              background: `conic-gradient(#3d1560 ${score * 3.6}deg, #e9e4ec 0deg)`,
+            }}
+            aria-label={`现状得分 ${score} 分`}
+          >
+            <span>
+              <strong>{score}</strong>
+              <small>/ 100</small>
+            </span>
+          </div>
+          <div className="geo-score-copy">
+            <span>本题回答表现</span>
+            <h3>
+              当前等级 <b>{assessment.grade || "—"}</b>
+            </h3>
+            <p>{assessmentSummary}</p>
+            {!isGeoStylePreviewProject(project) && (
+              <div>
+                <span>
+                  生成时间 <strong>{formatDate(assessment.generatedAt)}</strong>
+                </span>
+              </div>
+            )}
+          </div>
+        </section>
+      )}
 
       <DimensionScores dimensions={assessment.dimensions} />
       <AssessmentSupportingResults assessment={assessment} />
@@ -9585,14 +9849,14 @@ function MonitoringAnswerList({
   platformIds,
   answers,
   screenshotEnabled,
+  perspective,
 }: {
   platformIds: GeoPlatformId[];
   answers: GeoMonitoringAnswer[];
   screenshotEnabled: boolean;
+  perspective: MonitoringPerspective;
 }) {
-  const [activeRuns, setActiveRuns] = useState<
-    Partial<Record<GeoPlatformId, number>>
-  >({});
+  const [activeRuns, setActiveRuns] = useState<Record<string, number>>({});
   return (
     <div className="geo-answer-platforms">
       {platformIds.map((platformId) => {
@@ -9600,7 +9864,8 @@ function MonitoringAnswerList({
         const platformAnswers = answers
           .filter((answer) => answer.platformId === platformId)
           .sort((left, right) => left.runIndex - right.runIndex);
-        const activeRun = activeRuns[platformId] ?? 1;
+        const activeRunKey = `${perspective}:${platformId}`;
+        const activeRun = activeRuns[activeRunKey] ?? 1;
         const activeAnswer = platformAnswers.find(
           (answer) => answer.runIndex === activeRun,
         );
@@ -9644,7 +9909,7 @@ function MonitoringAnswerList({
                   onClick={() =>
                     setActiveRuns((current) => ({
                       ...current,
-                      [platformId]: Math.max(1, activeRun - 1),
+                      [activeRunKey]: Math.max(1, activeRun - 1),
                     }))
                   }
                 >
@@ -9658,7 +9923,7 @@ function MonitoringAnswerList({
                   onClick={() =>
                     setActiveRuns((current) => ({
                       ...current,
-                      [platformId]: Math.min(5, activeRun + 1),
+                      [activeRunKey]: Math.min(5, activeRun + 1),
                     }))
                   }
                 >
@@ -9666,6 +9931,9 @@ function MonitoringAnswerList({
                 </button>
               </div>
             </header>
+            {perspective === "industry_ranking" && (
+              <RankingBrandPerformance answers={platformAnswers} />
+            )}
             <div className="geo-answer-current" data-active-run={activeRun}>
               {activeAnswer?.status === "completed" && activeAnswer.answer ? (
                 <>
@@ -9732,6 +10000,56 @@ function MonitoringAnswerList({
   );
 }
 
+function RankingBrandPerformance({
+  answers,
+}: {
+  answers: GeoMonitoringAnswer[];
+}) {
+  const insights = useMemo(() => buildMonitoringInsights(answers), [answers]);
+  const brand = insights.brand;
+  if (
+    brand.mentionCoverage === 0 &&
+    brand.averagePosition === undefined &&
+    brand.bestPosition === undefined
+  ) {
+    return null;
+  }
+  return (
+    <section className="geo-ranking-brand-performance" aria-label="本品表现">
+      <header>
+        <div>
+          <span>行业排名观察</span>
+          <h4>本品表现</h4>
+        </div>
+        <small>每项指标使用自身有值回答作为分母</small>
+      </header>
+      <div className="geo-insight-brand-metrics">
+        {brand.mentionCoverage > 0 && (
+          <span>
+            <small>提及率</small>
+            <strong>{brand.mentionRate}%</strong>
+            <em>
+              {brand.mentionedCount}/{brand.mentionCoverage} 条回答
+            </em>
+          </span>
+        )}
+        {brand.averagePosition !== undefined && (
+          <span>
+            <small>平均提及位置</small>
+            <strong>第 {brand.averagePosition} 个</strong>
+          </span>
+        )}
+        {brand.bestPosition !== undefined && (
+          <span>
+            <small>最佳提及位置</small>
+            <strong>第 {brand.bestPosition} 个</strong>
+          </span>
+        )}
+      </div>
+    </section>
+  );
+}
+
 const SENTIMENT_LABELS = {
   positive: "正面",
   neutral: "中性",
@@ -9756,6 +10074,17 @@ function AnswerScreenshotEntry({
 }) {
   const [screenshotOpen, setScreenshotOpen] = useState(false);
   const [screenshotFailed, setScreenshotFailed] = useState(false);
+  const [screenshotZoom, setScreenshotZoom] = useState<"fit" | number>("fit");
+  const [screenshotNaturalSize, setScreenshotNaturalSize] = useState<{
+    width: number;
+    height: number;
+  }>();
+  useEffect(() => {
+    setScreenshotOpen(false);
+    setScreenshotFailed(false);
+    setScreenshotZoom("fit");
+    setScreenshotNaturalSize(undefined);
+  }, [answer.id]);
   if (!screenshotEnabled) return null;
 
   const screenshotReady =
@@ -9782,6 +10111,10 @@ function AnswerScreenshotEntry({
         onOpenChange={(open) => {
           setScreenshotOpen(open);
           setScreenshotFailed(false);
+          if (!open) {
+            setScreenshotZoom("fit");
+            setScreenshotNaturalSize(undefined);
+          }
         }}
       >
         <DialogContent
@@ -9796,18 +10129,89 @@ function AnswerScreenshotEntry({
               用于核对采样当时的页面内容；截图可能因上游保留期限而失效。
             </DialogDescription>
           </DialogHeader>
+          <div className="geo-monitor-screenshot-toolbar" role="toolbar">
+            <button
+              type="button"
+              className={screenshotZoom === "fit" ? "is-active" : ""}
+              onClick={() => setScreenshotZoom("fit")}
+            >
+              <Maximize2 size={14} /> 适应窗口
+            </button>
+            <button
+              type="button"
+              aria-label="缩小截图"
+              disabled={screenshotZoom === 50}
+              onClick={() =>
+                setScreenshotZoom((current) =>
+                  Math.max(50, (current === "fit" ? 100 : current) - 25),
+                )
+              }
+            >
+              <Minus size={14} />
+            </button>
+            <output aria-live="polite">
+              {screenshotZoom === "fit" ? "适应" : `${screenshotZoom}%`}
+            </output>
+            <button
+              type="button"
+              aria-label="放大截图"
+              disabled={screenshotZoom === 300}
+              onClick={() =>
+                setScreenshotZoom((current) =>
+                  Math.min(300, (current === "fit" ? 75 : current) + 25),
+                )
+              }
+            >
+              <Plus size={14} />
+            </button>
+            <button type="button" onClick={() => setScreenshotZoom(100)}>
+              100%
+            </button>
+            <a
+              href={answer.screenshotUrl}
+              target="_blank"
+              rel="noopener noreferrer"
+            >
+              新窗口查看原图 <ExternalLink size={13} />
+            </a>
+          </div>
           {screenshotFailed ? (
             <div className="geo-monitor-screenshot-error" role="alert">
               <CircleAlert size={20} />
               <p>截图可能已失效，关闭后可重新尝试。</p>
             </div>
           ) : (
-            <img
-              src={answer.screenshotUrl}
-              alt={`${platformName}第 ${answer.runIndex} 次回答页面截图`}
-              referrerPolicy="no-referrer"
-              onError={() => setScreenshotFailed(true)}
-            />
+            <div
+              className={`geo-monitor-screenshot-viewport ${
+                screenshotZoom === "fit" ? "is-fit" : "is-zoomed"
+              }`}
+            >
+              <img
+                src={answer.screenshotUrl}
+                alt={`${platformName}第 ${answer.runIndex} 次回答页面截图`}
+                referrerPolicy="no-referrer"
+                style={
+                  screenshotZoom === "fit" || !screenshotNaturalSize
+                    ? undefined
+                    : {
+                        width: `${Math.round(
+                          screenshotNaturalSize.width * (screenshotZoom / 100),
+                        )}px`,
+                        height: "auto",
+                      }
+                }
+                onLoad={(event) => {
+                  const { naturalWidth, naturalHeight } = event.currentTarget;
+                  if (naturalWidth > 0 && naturalHeight > 0) {
+                    setScreenshotNaturalSize({
+                      width: naturalWidth,
+                      height: naturalHeight,
+                    });
+                  }
+                }}
+                onError={() => setScreenshotFailed(true)}
+              />
+            </div>
           )}
         </DialogContent>
       </Dialog>
@@ -9961,23 +10365,19 @@ function PlatformInsights({ answers }: { answers: GeoMonitoringAnswer[] }) {
   const hasEvaluationInsights = Object.values(insights.evaluations.groups).some(
     (rows) => rows.length > 0,
   );
-  const hasBrandInsights = insights.brand.mentionCoverage > 0;
   if (
     insights.completedCount === 0 ||
-    (!hasCitationInsights &&
-      sentiment.coverage === 0 &&
-      !hasEvaluationInsights &&
-      !hasBrandInsights)
+    (!hasCitationInsights && sentiment.coverage === 0 && !hasEvaluationInsights)
   ) {
     return null;
   }
 
   return (
-    <section className="geo-platform-insights" aria-label="引用与本品分析">
+    <section className="geo-platform-insights" aria-label="引用分析">
       <header>
         <div>
           <span>平台洞察</span>
-          <h3>引用与本品分析</h3>
+          <h3>引用分析</h3>
         </div>
         <small>描述性统计 · {insights.completedCount}/5 条有效回答</small>
       </header>
@@ -10090,39 +10490,6 @@ function PlatformInsights({ answers }: { answers: GeoMonitoringAnswer[] }) {
             </article>
           )}
         </div>
-      )}
-
-      {hasBrandInsights && (
-        <article className="geo-insight-card geo-insight-brand">
-          <header>
-            <h4>本品表现</h4>
-            <small>每项指标使用自身有值回答作为分母</small>
-          </header>
-          <div className="geo-insight-brand-metrics">
-            {insights.brand.mentionCoverage > 0 && (
-              <span>
-                <small>提及率</small>
-                <strong>{insights.brand.mentionRate}%</strong>
-                <em>
-                  {insights.brand.mentionedCount}/
-                  {insights.brand.mentionCoverage} 条回答
-                </em>
-              </span>
-            )}
-            {insights.brand.averagePosition !== undefined && (
-              <span>
-                <small>平均提及位置</small>
-                <strong>第 {insights.brand.averagePosition} 个</strong>
-              </span>
-            )}
-            {insights.brand.bestPosition !== undefined && (
-              <span>
-                <small>最佳提及位置</small>
-                <strong>第 {insights.brand.bestPosition} 个</strong>
-              </span>
-            )}
-          </div>
-        </article>
       )}
     </section>
   );

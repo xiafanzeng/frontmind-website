@@ -101,6 +101,7 @@ export class GeoBrokerError extends Error {
     public readonly status: number,
     public readonly code: string,
     public readonly details?: unknown,
+    public readonly retryable?: boolean,
   ) {
     super(message);
     this.name = "GeoBrokerError";
@@ -1067,17 +1068,24 @@ export class HttpGeoPresalesBroker implements GeoPresalesBroker {
         response.status === 401 || response.status === 403
           ? 502
           : response.status;
-      const code = FORWARDED_ERROR_CODES.has(payload.code)
+      const normalizedPayloadCode = /^[A-Z][A-Z0-9_]{2,80}$/.test(payload.code)
         ? payload.code
-        : response.status === 428
-          ? "PRESALES_CREDENTIAL_REQUIRED"
-          : response.status === 503
-            ? "AGENT_NOT_CONFIGURED"
-            : "AGENT_REQUEST_FAILED";
+        : "";
+      const code =
+        FORWARDED_ERROR_CODES.has(normalizedPayloadCode) ||
+        normalizedPayloadCode === "TASK_NOT_FOUND"
+          ? normalizedPayloadCode
+          : response.status === 428
+            ? "PRESALES_CREDENTIAL_REQUIRED"
+            : response.status === 503
+              ? "AGENT_NOT_CONFIGURED"
+              : "AGENT_REQUEST_FAILED";
       throw new GeoBrokerError(
         payload.message ? payload.message : "FrontMind 售前服务请求失败",
         status,
         code,
+        undefined,
+        payload.retryable,
       );
     }
 
@@ -1087,34 +1095,42 @@ export class HttpGeoPresalesBroker implements GeoPresalesBroker {
 
 async function readErrorPayload(response: Response) {
   const text = await response.text().catch(() => "");
-  if (!text) return { message: "", code: "" };
+  if (!text) return { message: "", code: "", retryable: undefined };
   try {
     const parsed = JSON.parse(text) as Record<string, unknown>;
     const nested = parsed.error;
     if (typeof nested === "string") {
-      return { message: nested.slice(0, 240), code: "" };
+      return {
+        message: nested.slice(0, 240),
+        code: "",
+        retryable: undefined,
+      };
     }
-    if (
-      nested &&
-      typeof nested === "object" &&
-      typeof (nested as Record<string, unknown>).message === "string"
-    ) {
+    if (nested && typeof nested === "object") {
       const error = nested as Record<string, unknown>;
       return {
-        message: String(error.message).slice(0, 240),
+        message:
+          typeof error.message === "string" ? error.message.slice(0, 240) : "",
         code: typeof error.code === "string" ? error.code : "",
+        retryable:
+          typeof error.retryable === "boolean" ? error.retryable : undefined,
       };
     }
     if (typeof parsed.message === "string") {
       return {
         message: parsed.message.slice(0, 240),
         code: typeof parsed.code === "string" ? parsed.code : "",
+        retryable:
+          typeof parsed.retryable === "boolean" ? parsed.retryable : undefined,
       };
     }
   } catch {
     // Return the short upstream text below.
   }
-  return { message: text.slice(0, 240), code: "" };
+  // An arbitrary upstream response can include internal JSON or HTML. The
+  // broker retains only allowlisted coordinates and never promotes the raw
+  // response body into a customer-visible error message.
+  return { message: "", code: "", retryable: undefined };
 }
 
 export function createGeoPresalesBrokerFromEnv(

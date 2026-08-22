@@ -73,8 +73,15 @@ const project: GeoProject = {
       question: "硅基流动作为 AI 基础设施服务商靠谱吗？",
       selectable: true,
     },
+    {
+      id: "question-ranking-01",
+      category: "industry_ranking",
+      question: "企业级大模型服务商品牌优胜如何排名？",
+      selectable: true,
+    },
   ],
   selectedQuestionId: "question-01",
+  selectedIndustryRankingQuestionId: "question-ranking-01",
   monitoringEdition: "domestic",
   selectedPlatformIds: ["doubao"],
 };
@@ -132,6 +139,14 @@ const serviceProject: GeoProject = {
     contractAuthorizationMode: "external_wechat",
     contractAuthorizedAt: "2026-08-06T09:00:00.000Z",
   },
+};
+
+const legacySingleQuestionProject: GeoProject = {
+  ...project,
+  questions: project.questions.filter(
+    (question) => question.category !== "industry_ranking",
+  ),
+  selectedIndustryRankingQuestionId: undefined,
 };
 
 type PaymentDialogProps = ComponentProps<typeof PaymentDialog>;
@@ -721,6 +736,7 @@ describe("monitoring confirmation and service-only payment boundaries", () => {
         expect.objectContaining({
           clientRequestId: expect.any(String),
           questionId: "question-01",
+          industryRankingQuestionId: "question-ranking-01",
           platformIds: ["chatgpt"],
           monitoringEdition: "overseas",
           onProcessing: expect.any(Function),
@@ -759,9 +775,11 @@ describe("monitoring confirmation and service-only payment boundaries", () => {
 
   it("migrates a cached monitoring checkout through the confirmation path", async () => {
     const initial = pendingPayment();
-    storageMocks.listGeoProjects.mockResolvedValue([project]);
+    storageMocks.listGeoProjects.mockResolvedValue([
+      legacySingleQuestionProject,
+    ]);
     apiMocks.startGeoMonitoring.mockResolvedValue({
-      ...project,
+      ...legacySingleQuestionProject,
       remoteToken: "free-migration-token",
       monitoring: {
         runId: "free-migration-run",
@@ -824,7 +842,7 @@ describe("monitoring confirmation and service-only payment boundaries", () => {
 
     await waitFor(() => {
       expect(apiMocks.startGeoMonitoring).toHaveBeenCalledWith(
-        project,
+        legacySingleQuestionProject,
         expect.objectContaining({
           clientRequestId: expect.any(String),
           questionId: "question-01",
@@ -848,7 +866,9 @@ describe("monitoring confirmation and service-only payment boundaries", () => {
 
   it("persists a 202 recovery token and resumes the same request after refresh", async () => {
     const initial = pendingPayment();
-    storageMocks.listGeoProjects.mockResolvedValue([project]);
+    storageMocks.listGeoProjects.mockResolvedValue([
+      legacySingleQuestionProject,
+    ]);
     localStorage.setItem(
       "frontmind.geo.pending-payment.v2",
       JSON.stringify(initial),
@@ -859,6 +879,7 @@ describe("monitoring confirmation and service-only payment boundaries", () => {
         input: {
           clientRequestId: string;
           questionId: string;
+          industryRankingQuestionId?: string;
           platformIds: string[];
           monitoringEdition: string;
           onProcessing?: (project: GeoProject) => void;
@@ -871,6 +892,7 @@ describe("monitoring confirmation and service-only payment boundaries", () => {
             schemaVersion: 2,
             clientRequestId: input.clientRequestId,
             questionId: input.questionId,
+            industryRankingQuestionId: input.industryRankingQuestionId,
             monitoringEdition: "domestic",
             platformIds: ["doubao"],
           },
@@ -960,7 +982,9 @@ describe("monitoring confirmation and service-only payment boundaries", () => {
 
   it("never mounts the monitoring payment dialog for a cached checkout", async () => {
     const initial = pendingPayment();
-    storageMocks.listGeoProjects.mockResolvedValue([project]);
+    storageMocks.listGeoProjects.mockResolvedValue([
+      legacySingleQuestionProject,
+    ]);
     localStorage.setItem(
       "frontmind.geo.pending-payment.v2",
       JSON.stringify(initial),

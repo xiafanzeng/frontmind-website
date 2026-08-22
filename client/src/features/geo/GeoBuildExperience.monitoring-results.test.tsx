@@ -54,7 +54,27 @@ describe("monitoring result interaction", () => {
     ).toBeNull();
   });
 
-  it("shows split references and platform insights without single-answer brand cards", () => {
+  it("preserves a separate active answer round for each perspective", () => {
+    renderResults();
+    const next = () =>
+      screen.getByRole("button", {
+        name: "查看DeepSeek下一次回答",
+      });
+
+    fireEvent.click(next());
+    expect(screen.getByText("第 2 / 5 次")).toBeTruthy();
+
+    fireEvent.click(screen.getByRole("tab", { name: /行业排名与品牌优胜/ }));
+    expect(screen.getByText("第 1 / 5 次")).toBeTruthy();
+    fireEvent.click(next());
+    fireEvent.click(next());
+    expect(screen.getByText("第 3 / 5 次")).toBeTruthy();
+
+    fireEvent.click(screen.getByRole("tab", { name: /产品与舆情/ }));
+    expect(screen.getByText("第 2 / 5 次")).toBeTruthy();
+  });
+
+  it("keeps product answers free of brand metrics and shows them only in ranking", () => {
     const view = renderResults();
 
     expect(screen.getByText("完整参考来源")).toBeTruthy();
@@ -73,7 +93,7 @@ describe("monitoring result interaction", () => {
         "华润医药具备综合医药商业能力、较广渠道覆盖和大型客户服务经验。",
       ),
     ).toBeNull();
-    expect(screen.getByText("引用与本品分析")).toBeTruthy();
+    expect(screen.getByText("引用分析")).toBeTruthy();
     expect(screen.getByText("渠道引用")).toBeTruthy();
     expect(screen.getByText("内容引用")).toBeTruthy();
     expect(screen.getByText("情感倾向")).toBeTruthy();
@@ -81,7 +101,7 @@ describe("monitoring result interaction", () => {
     expect(
       screen.getByText("情感倾向").closest(".geo-insight-analysis-grid"),
     ).toBe(screen.getByText("评价词").closest(".geo-insight-analysis-grid"));
-    expect(screen.getByText("本品表现")).toBeTruthy();
+    expect(screen.queryByText("本品表现")).toBeNull();
     expect(screen.queryByText(/最佳第 \d+ 名/)).toBeNull();
     expect(screen.queryByText(/次观测/)).toBeNull();
     expect(screen.getAllByText("4/5 条有效回答")).toHaveLength(2);
@@ -94,6 +114,15 @@ describe("monitoring result interaction", () => {
     expect(
       screenshotEntry?.compareDocumentPosition(markdown as Node) ?? 0,
     ).toBe(Node.DOCUMENT_POSITION_FOLLOWING);
+
+    fireEvent.click(screen.getByRole("tab", { name: /行业排名与品牌优胜/ }));
+    expect(screen.getByText("本品表现")).toBeTruthy();
+    expect(screen.getByText("每项指标使用自身有值回答作为分母")).toBeTruthy();
+    expect(screen.queryByText("华润医药渠道服务与公开口碑观察")).toBeNull();
+    expect(screen.getByText("国内医药流通企业选择建议")).toBeTruthy();
+    expect(view.container.querySelectorAll('[role="tabpanel"]')).toHaveLength(
+      1,
+    );
   });
 
   it("does not mount the screenshot image until the dialog opens", () => {
@@ -102,7 +131,17 @@ describe("monitoring result interaction", () => {
 
     expect(screen.queryByAltText(alt)).toBeNull();
     fireEvent.click(screen.getByRole("button", { name: "查看页面截图" }));
-    expect(screen.getByAltText(alt)).toBeTruthy();
+    const screenshot = screen.getByAltText(alt) as HTMLImageElement;
+    expect(screenshot).toBeTruthy();
+    Object.defineProperties(screenshot, {
+      naturalWidth: { configurable: true, value: 1200 },
+      naturalHeight: { configurable: true, value: 2400 },
+    });
+    fireEvent.load(screenshot);
+    fireEvent.click(screen.getByRole("button", { name: "100%" }));
+    expect(screenshot.style.width).toBe("1200px");
+    fireEvent.click(screen.getByRole("button", { name: "放大截图" }));
+    expect(screenshot.style.width).toBe("1500px");
     expect(
       document.querySelector(".geo-monitor-screenshot-overlay"),
     ).toBeTruthy();

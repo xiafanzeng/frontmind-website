@@ -10,6 +10,7 @@
     "horizonWeeks",
     "scenario",
     "dimensions",
+    "brandMentionRateTarget",
     "roadmap",
     "summary",
     "executiveSummary",
@@ -123,6 +124,21 @@
           }
         }
       }
+    },
+    "brandMentionRateTarget": {
+      "oneOf": [
+        { "type": "null" },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["low", "expected", "high"],
+          "properties": {
+            "low": { "type": "number", "minimum": 0, "maximum": 1 },
+            "expected": { "type": "number", "minimum": 0, "maximum": 1 },
+            "high": { "type": "number", "minimum": 0, "maximum": 1 }
+          }
+        }
+      ]
     },
     "roadmap": {
       "type": "array",

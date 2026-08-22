@@ -49,7 +49,6 @@ const forbiddenFileNames = new Set([
 const runtimeSkillNames = [
   "website-one-shot-kb-builder",
   "geo-question-recommender",
-  "geo-custom-question-classifier",
   "geo-current-state-evaluator",
   "geo-optimization-outcome-forecaster",
 ];

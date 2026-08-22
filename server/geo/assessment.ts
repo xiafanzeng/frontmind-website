@@ -1280,6 +1280,7 @@ export function calculateQuestionBaselineAssessment(
     raw.schemaVersion === QUESTION_BASELINE_ASSESSMENT_VERSION;
   const reputationExclusionApplied =
     !isEvidenceProfileV2 && !raw.question.rankingMetricEligible;
+  const rankingMetricsExcluded = !raw.question.rankingMetricEligible;
   let totalScore = 0;
   let availableMaxScore = 0;
   let structuralExcludedMaxScore = 0;
@@ -1436,7 +1437,7 @@ export function calculateQuestionBaselineAssessment(
     : 0;
   const rankingDiagnostics = calculateRankingDiagnostics(
     raw.rankingDiagnostics,
-    reputationExclusionApplied,
+    rankingMetricsExcluded,
   );
 
   return {
@@ -1493,9 +1494,10 @@ export function calculateQuestionBaselineAssessment(
     platformBreakdown: raw.platformBreakdown.map((platform) => ({
       ...platform,
       brandMentionRate:
-        reputationExclusionApplied || platform.brandMentionRate === null
+        rankingMetricsExcluded || platform.brandMentionRate === null
           ? null
           : clamp01(platform.brandMentionRate),
+      averageRank: rankingMetricsExcluded ? null : platform.averageRank,
       factAccuracy:
         platform.factAccuracy === null ? null : clamp01(platform.factAccuracy),
       propositionHitRate:
@@ -1523,9 +1525,9 @@ export const calculateAssessment = calculateQuestionBaselineAssessment;
 
 function calculateRankingDiagnostics(
   raw: AssessmentRawTaskOutput["rankingDiagnostics"],
-  reputationExclusionApplied: boolean,
+  rankingMetricsExcluded: boolean,
 ) {
-  if (reputationExclusionApplied || !raw.eligible) {
+  if (rankingMetricsExcluded || !raw.eligible) {
     return {
       eligible: false,
       totalObservations: 0,
@@ -1541,7 +1543,7 @@ function calculateRankingDiagnostics(
       rankQualityMaxScore: 10 as const,
       additive: false as const,
       calculationBasis:
-        "舆情/口碑类问题由题干直接点名品牌，服务端已排除全部排名指标。",
+        "非行业排名问题不计算品牌排名指标。",
     };
   }
 

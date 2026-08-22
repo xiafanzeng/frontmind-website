@@ -3,7 +3,6 @@ import { collectWebsiteRuntimeReadiness } from "./runtime-readiness";
 
 describe("Website runtime readiness", () => {
   it("reports deep dependencies and hashes the private persistence identity", async () => {
-    const assertReady = vi.fn(async () => undefined);
     const assertMonitorFreeReady = vi.fn(async () => undefined);
     const readiness = await collectWebsiteRuntimeReadiness({
       releaseChannel: "development",
@@ -14,17 +13,12 @@ describe("Website runtime readiness", () => {
       getSkills: async () => [{ name: "website-one-shot-kb-builder" }],
       getDependencies: async () => ({ agent: { ready: true } }),
       getVisitorStats: async () => ({ ready: true as const }),
-      validationStore: {
-        assertReady,
-        persistenceIdentity: async () => "private-store-identity",
-      },
       monitorFreeReservationStore: {
         assertReady: assertMonitorFreeReady,
         persistenceIdentity: async () => "monitor-free-store-identity",
       },
     });
 
-    expect(assertReady).toHaveBeenCalledOnce();
     expect(assertMonitorFreeReady).toHaveBeenCalledOnce();
     expect(readiness).toMatchObject({
       status: "ok",
@@ -37,11 +31,6 @@ describe("Website runtime readiness", () => {
       dependencies: {
         agent: { ready: true },
         visitorStats: { ready: true },
-        customQuestionValidationStore: {
-          ready: true,
-          persistenceIdentitySha256:
-            "081f96b84cfd9c324883029d8e83b40e3778cb0ee3a29c9b281c41965693eab7",
-        },
         monitorFreeReservationStore: {
           ready: true,
           persistenceIdentitySha256:
@@ -63,10 +52,6 @@ describe("Website runtime readiness", () => {
           throw new Error("agent unavailable");
         },
         getVisitorStats: async () => ({ ready: true as const }),
-        validationStore: {
-          assertReady: async () => undefined,
-          persistenceIdentity: async () => "store",
-        },
         monitorFreeReservationStore: {
           assertReady: async () => undefined,
           persistenceIdentity: async () => "monitor-store",
@@ -89,10 +74,6 @@ describe("Website runtime readiness", () => {
         getSkills: async () => [],
         getDependencies,
         getVisitorStats: async () => ({ ready: true as const }),
-        validationStore: {
-          assertReady: async () => undefined,
-          persistenceIdentity: async () => "store",
-        },
         monitorFreeReservationStore: {
           assertReady: async () => undefined,
           persistenceIdentity: async () => "monitor-store",
@@ -113,10 +94,6 @@ describe("Website runtime readiness", () => {
         getSkills: async () => [],
         getDependencies: async () => ({}),
         getVisitorStats: async () => ({ ready: true as const }),
-        validationStore: {
-          assertReady: async () => undefined,
-          persistenceIdentity: async () => "store",
-        },
         monitorFreeReservationStore: {
           assertReady: async () => undefined,
           persistenceIdentity: async () => "monitor-store",

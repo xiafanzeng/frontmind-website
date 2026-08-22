@@ -229,6 +229,8 @@ export const GeoQuestionSetSchema = z
         });
       }
 
+      // The provider contract keeps the historical ranking flag. The public
+      // product projection unlocks validated ranking questions after parsing.
       const expectedSelectable = item.category !== "industry_ranking";
       if (item.selectable !== expectedSelectable) {
         context.addIssue({
@@ -851,6 +853,7 @@ const StartMonitoringRequestV1Schema = GeoPaymentScopeSchema.safeExtend({
 export const StartMonitoringRequestV2Schema = GeoPaymentScopeSchema.safeExtend({
   schemaVersion: z.literal(2),
   clientRequestId: z.string().uuid(),
+  industryRankingQuestionId: z.string().trim().min(4).max(80).optional(),
   regionCode: z.string().trim().min(1).max(64).optional(),
   screenshotEnabled: z.boolean().optional(),
   // Unlike the cached v1 contract, v2 never guesses a market.  The edition is

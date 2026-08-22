@@ -390,6 +390,39 @@ describe("HttpGeoPresalesBroker", () => {
     },
   );
 
+  it("preserves a nested retryable code without exposing the raw Dashboard payload", async () => {
+    const secretPayload = {
+      error: {
+        code: "REGION_CATALOG_UNAVAILABLE",
+        retryable: true,
+        internalContext: "private upstream catalog trace",
+      },
+    };
+    const broker = new HttpGeoPresalesBroker({
+      baseUrl: "https://agent.example/api/internal/presales/v2",
+      serviceToken: "private-token",
+      fetchImpl: vi.fn(
+        async () =>
+          new Response(JSON.stringify(secretPayload), {
+            status: 503,
+            headers: { "content-type": "application/json" },
+          }),
+      ) as typeof fetch,
+    });
+
+    const error = await broker
+      .getMonitorRegions("domestic")
+      .catch((value) => value);
+    expect(error).toMatchObject({
+      code: "REGION_CATALOG_UNAVAILABLE",
+      status: 503,
+      retryable: true,
+      message: "FrontMind 售前服务请求失败",
+    });
+    expect(String(error.message)).not.toContain("internalContext");
+    expect(String(error.message)).not.toContain("private upstream");
+  });
+
   it("keeps recommendation Pro in the immutable server contract", async () => {
     const fetchMock = vi.fn(
       async () =>

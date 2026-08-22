@@ -1087,7 +1087,7 @@ describe("GEO custom-question classifier skill", () => {
 });
 
 describe("GEO production runtime Skill release gates", () => {
-  it("loads, copies, audits, and verifies the exact five-Skill runtime set", () => {
+  it("loads, copies, audits, and verifies the exact four-Skill runtime set", () => {
     const serverEntry = fs.readFileSync(
       path.resolve(process.cwd(), "server/index.ts"),
       "utf8",
@@ -1107,11 +1107,10 @@ describe("GEO production runtime Skill release gates", () => {
     const requiredSkills = [
       "website-one-shot-kb-builder",
       "geo-question-recommender",
-      "geo-custom-question-classifier",
       "geo-current-state-evaluator",
       "geo-optimization-outcome-forecaster",
     ];
-    expect(serverEntry).toContain("loadGeoCustomQuestionClassifierSkill");
+    expect(serverEntry).not.toContain("loadGeoCustomQuestionClassifierSkill");
     for (const skillName of requiredSkills) {
       expect(serverEntry).toContain(skillName);
       expect(skillCopier).toContain(skillName);
@@ -1119,7 +1118,7 @@ describe("GEO production runtime Skill release gates", () => {
       expect(productionVerifier).toContain(skillName);
     }
     expect(productionVerifier).toContain(
-      "Production must expose the exact five runtime Skills",
+      "Production must expose the exact four runtime Skills",
     );
     for (const runtimeSource of [
       serverEntry,
@@ -1128,6 +1127,7 @@ describe("GEO production runtime Skill release gates", () => {
       productionVerifier,
     ]) {
       expect(runtimeSource).not.toContain("geo-knowledge-answer-verifier");
+      expect(runtimeSource).not.toContain("geo-custom-question-classifier");
     }
     expect(bundleAudit).not.toContain("must contain exactly 21 files");
     expect(bundleAudit).not.toContain("legacy visitor-stat baseline");

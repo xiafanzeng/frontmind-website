@@ -1006,26 +1006,32 @@ export function createGeoMonitorFreeReservationStore(
 ) {
   const env = options.env ?? process.env;
   const explicit = env.FRONTMIND_GEO_MONITOR_FREE_RESERVATION_STORE_DIR?.trim();
-  const customQuestionDirectory =
+  // Existing deployments already mount the parent of the retired custom-
+  // question directory. Use that value only as a directory-location hint so
+  // this store remains durable during rollout; no legacy JSON file is opened.
+  const retiredStoreDirectoryHint =
     env.FRONTMIND_GEO_CUSTOM_QUESTION_STORE_DIR?.trim();
   if (explicit && !path.isAbsolute(explicit)) {
     throw new Error(
       "FRONTMIND_GEO_MONITOR_FREE_RESERVATION_STORE_DIR must be an absolute path",
     );
   }
-  if (customQuestionDirectory && !path.isAbsolute(customQuestionDirectory)) {
+  if (
+    retiredStoreDirectoryHint &&
+    !path.isAbsolute(retiredStoreDirectoryHint)
+  ) {
     throw new Error(
       "FRONTMIND_GEO_CUSTOM_QUESTION_STORE_DIR must be an absolute path",
     );
   }
-  if (env.NODE_ENV === "test" && !explicit && !customQuestionDirectory) {
+  if (env.NODE_ENV === "test" && !explicit && !retiredStoreDirectoryHint) {
     return new MemoryGeoMonitorFreeReservationStore();
   }
   const directory = explicit
     ? path.resolve(explicit)
-    : customQuestionDirectory
+    : retiredStoreDirectoryHint
       ? path.join(
-          path.dirname(path.resolve(customQuestionDirectory)),
+          path.dirname(path.resolve(retiredStoreDirectoryHint)),
           "monitor-free-reservations",
         )
       : path.resolve(

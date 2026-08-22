@@ -6,6 +6,7 @@ import {
 } from "./assessment";
 import {
   buildGeoOptimizationOutcomeForecastTemplate,
+  buildBrandMentionRateForecast,
   buildForecastDisplayOnlyProjection,
   FORECAST_SKILL_ARCHIVE_FILENAME,
   FORECAST_OUTPUT_RESULT_FILENAME,
@@ -443,6 +444,68 @@ describe("GEO optimization forecast schema and parser", () => {
     expect(parsed.roadmap.every((phase) => phase.actions.length <= 3)).toBe(
       true,
     );
+  });
+
+  it("accepts an independent ordered brand-mention target while preserving old outputs", () => {
+    const legacyCompatible = rawV2Forecast();
+    expect(
+      ForecastRawTaskOutputSchema.parse(legacyCompatible)
+        .brandMentionRateTarget,
+    ).toBeUndefined();
+
+    const productForecast = {
+      ...rawV2Forecast(),
+      brandMentionRateTarget: null,
+    };
+    expect(
+      ForecastRawTaskOutputSchema.parse(productForecast).brandMentionRateTarget,
+    ).toBeNull();
+
+    const industryForecast = {
+      ...rawV2Forecast(),
+      brandMentionRateTarget: { low: 0.6, expected: 0.75, high: 0.9 },
+    };
+    expect(
+      ForecastRawTaskOutputSchema.parse(industryForecast)
+        .brandMentionRateTarget,
+    ).toEqual({ low: 0.6, expected: 0.75, high: 0.9 });
+
+    expect(
+      ForecastRawTaskOutputSchema.safeParse({
+        ...rawV2Forecast(),
+        brandMentionRateTarget: { low: 0.8, expected: 0.7, high: 0.9 },
+      }).success,
+    ).toBe(false);
+    expect(
+      ForecastRawTaskOutputSchema.safeParse({
+        ...rawV2Forecast(),
+        brandMentionRateTarget: { low: 0.6, expected: 0.75, high: 1.1 },
+      }).success,
+    ).toBe(false);
+  });
+
+  it("uses the monitor observation as the brand target floor", () => {
+    expect(
+      buildBrandMentionRateForecast(
+        { current: 0.8, observedAnswers: 4 },
+        { low: 0.5, expected: 0.7, high: 0.75 },
+      ),
+    ).toEqual({
+      current: 0.8,
+      low: 0.8,
+      expected: 0.8,
+      high: 0.8,
+      observedAnswers: 4,
+    });
+    expect(
+      buildBrandMentionRateForecast(
+        { current: 0.4, observedAnswers: 0 },
+        { low: 0.5, expected: 0.7, high: 0.8 },
+      ),
+    ).toBeUndefined();
+    expect(
+      buildBrandMentionRateForecast({ current: 0.4, observedAnswers: 4 }, null),
+    ).toBeUndefined();
   });
 
   it("keeps safe narratives and roadmap fragments as a display-only partial", () => {
@@ -1171,6 +1234,23 @@ describe("forecast Base prompt and audited skill loader", () => {
       currentAssessmentAttachment: "FrontMind-current-assessment.json",
       knowledgeBaseArchive: "FrontMind-kb.zip",
       executionScenarioAttachment: "FrontMind-full-execution-scenario.json",
+      brandMentionRateObservation: null,
+    });
+    const industryTaskInput = JSON.parse(
+      buildOptimizationOutcomeForecastTaskInput({
+        currentAssessmentFilename: "FrontMind-industry-assessment.json",
+        knowledgeBaseArchiveFilename: "FrontMind-kb.zip",
+        executionScenarioFilename: "FrontMind-full-execution-scenario.json",
+        scenarioName: "full_execution",
+        brandMentionRateObservation: {
+          current: 0.4,
+          observedAnswers: 5,
+        },
+      }).body.toString("utf8"),
+    );
+    expect(industryTaskInput.data.brandMentionRateObservation).toEqual({
+      current: 0.4,
+      observedAnswers: 5,
     });
     expect(prompt).toContain(FORECAST_SKILL_ARCHIVE_FILENAME);
     expect(prompt).toContain(FORECAST_OUTPUT_TEMPLATE_FILENAME);
@@ -1200,6 +1280,7 @@ describe("forecast Base prompt and audited skill loader", () => {
       (await buildGeoOptimizationOutcomeForecastTemplate()).toString("utf8"),
     );
     expect(directTemplate).toEqual(archivedTemplate);
+    expect(directTemplate.brandMentionRateTarget).toBeNull();
     expect(ForecastRawTaskOutputSchema.safeParse(directTemplate).success).toBe(
       false,
     );
@@ -1217,6 +1298,10 @@ describe("forecast Base prompt and audited skill loader", () => {
         maxItems: 6,
       },
     );
+    expect(outputSchema.properties.brandMentionRateTarget.oneOf).toEqual(
+      expect.arrayContaining([expect.objectContaining({ type: "null" })]),
+    );
+    expect(outputSchema.required).toContain("brandMentionRateTarget");
     expect(
       outputSchema.$defs.indicatorForecast.properties.measurementStatus,
     ).toEqual({ const: "projectable" });

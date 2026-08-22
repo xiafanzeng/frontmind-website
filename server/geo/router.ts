@@ -36,6 +36,7 @@ import {
 import {
   buildGeoOptimizationOutcomeForecastTemplate,
   buildGeoOptimizationOutcomeForecasterSkillArchive,
+  buildBrandMentionRateForecast,
   buildOptimizationOutcomeForecastPrompt,
   buildOptimizationOutcomeForecastTaskInput,
   calculateOptimizationOutcomeForecast,
@@ -68,6 +69,7 @@ import {
 } from "./broker";
 import {
   GeoMonitorContractError,
+  monitorBrandMentionRate,
   normalizeMonitorRun,
   toPublicMonitorView,
 } from "./monitoring";
@@ -117,7 +119,6 @@ import {
   validateAcceptedCustomQuestionGrounding,
 } from "./custom-question-classifier";
 import {
-  createGeoCustomQuestionValidationStore,
   geoCustomQuestionHash,
   geoCustomQuestionOperationKey,
   geoCustomQuestionOwnerSessionHash,
@@ -417,6 +418,7 @@ type ProjectTokenValue = {
   previousQuestionTaskIds?: string[];
   customQuestion?: GeoQuestion;
   monitorRunId?: string;
+  industryRankingMonitorRunId?: string;
   monitoringEdition?: GeoMonitoringEdition;
   monitorRegion?: {
     edition: GeoMonitoringEdition;
@@ -425,6 +427,7 @@ type ProjectTokenValue = {
   };
   monitorScreenshotEnabled?: boolean;
   monitorQuestionId?: string;
+  industryRankingQuestionId?: string;
   monitorPlatformIds?: GeoMonitorPlatformId[];
   monitorOrderId?: string;
   monitorAmountFen?: number;
@@ -432,6 +435,15 @@ type ProjectTokenValue = {
   monitorCheckoutExpiresAt?: string;
   monitorPaidAt?: string;
   monitorFreeReservation?: {
+    schemaVersion: 2;
+    clientRequestId: string;
+    scopeHash: string;
+    createdAt: string;
+    monitoringEdition?: GeoMonitoringEdition;
+    regionCode?: string;
+    screenshotEnabled?: boolean;
+  };
+  industryRankingMonitorFreeReservation?: {
     schemaVersion: 2;
     clientRequestId: string;
     scopeHash: string;
@@ -451,6 +463,16 @@ type ProjectTokenValue = {
   optimizationForecastAttempt?: number;
   optimizationForecastVersion?: 2;
   previousOptimizationForecastTaskIds?: string[];
+  industryRankingAssessmentTaskId?: string;
+  industryRankingAssessmentSubmittedAt?: string;
+  industryRankingAssessmentAttempt?: number;
+  industryRankingAssessmentVersion?: 2;
+  previousIndustryRankingAssessmentTaskIds?: string[];
+  industryRankingOptimizationForecastTaskId?: string;
+  industryRankingOptimizationForecastSubmittedAt?: string;
+  industryRankingOptimizationForecastAttempt?: number;
+  industryRankingOptimizationForecastVersion?: 2;
+  previousIndustryRankingOptimizationForecastTaskIds?: string[];
   serviceOrderId?: string;
   serviceQuestionId?: string;
   serviceCategory?: GeoServiceCategory;
@@ -515,6 +537,7 @@ type GeoRouterOptions = {
   adminNotifier?: GeoAdminNotifier;
   knowledgeImporter?: GeoKnowledgeImporter;
   projectOrderRegistry?: GeoProjectOrderRegistry;
+  /** Retained only so older embedders can upgrade without a constructor break. */
   customQuestionValidationStore?: GeoCustomQuestionValidationStore;
   monitorFreeReservationStore?: GeoMonitorFreeReservationStore;
   knowledgeBaseFinalizer?: typeof finalizeKnowledgeBaseCandidate;
@@ -679,9 +702,6 @@ export function createGeoRouter(options: GeoRouterOptions = {}): Router {
     options.knowledgeImporter ?? createGeoKnowledgeImporter({ env });
   const projectOrderRegistry =
     options.projectOrderRegistry ?? createGeoProjectOrderRegistry({ env });
-  const customQuestionValidationStore =
-    options.customQuestionValidationStore ??
-    createGeoCustomQuestionValidationStore({ env });
   const monitorFreeReservationStore =
     options.monitorFreeReservationStore ??
     createGeoMonitorFreeReservationStore({ env });
@@ -1822,6 +1842,7 @@ export function createGeoRouter(options: GeoRouterOptions = {}): Router {
   const resolveMonitorQuestion = async (
     value: ProjectTokenValue,
     questionId: string,
+    perspective: "product_opinion" | "industry_ranking" = "product_opinion",
   ) => {
     if (!value.questionTaskId) {
       throw new GeoHttpError(
@@ -1847,18 +1868,283 @@ export function createGeoRouter(options: GeoRouterOptions = {}): Router {
         "QUESTION_NOT_OWNED",
       );
     }
-    if (
-      !question.selectable ||
-      question.category === "industry_ranking" ||
-      isIndustryRankingQuestion(question.question)
-    ) {
+    const categoryAllowed =
+      perspective === "industry_ranking"
+        ? question.category === "industry_ranking"
+        : ["reputation", "product_scenario", "competitor_comparison"].includes(
+            question.category,
+          );
+    if (perspective === "product_opinion" && !question.selectable) {
       throw new GeoHttpError(
-        "行业排名类问题需要全域营销权限，不能在当前流程中购买监控",
+        "该问题当前不可用于监控",
         403,
         "QUESTION_NOT_SELECTABLE",
       );
     }
+    if (!categoryAllowed) {
+      throw new GeoHttpError(
+        perspective === "industry_ranking"
+          ? "请选择当前项目中的行业排名问题"
+          : "请选择产品与舆情范围内的问题",
+        400,
+        "QUESTION_SCOPE_MISMATCH",
+      );
+    }
     return { knowledgeBaseTask, questionTask, question };
+  };
+
+  const industryRankingReservationProjectId = (projectId: string) =>
+    `geo-industry-${crypto
+      .createHash("sha256")
+      .update(projectId, "utf8")
+      .digest("hex")}`;
+
+  const ensureIndustryRankingMonitorRun = async (input: {
+    value: ProjectTokenValue;
+    clientRequestId: string;
+    question: GeoQuestion;
+    monitorQuestion: string;
+    platforms: GeoMonitorPlatformId[];
+    monitoringEdition: GeoMonitoringEdition;
+    regionCode?: string;
+    screenshotEnabled: boolean;
+  }): Promise<
+    | {
+        state: "started";
+        run: BrokerMonitorRun;
+        scopeHash: string;
+        reservation?: GeoMonitorFreeReservationRecord;
+      }
+    | {
+        state: "processing";
+        scopeHash: string;
+        reservation: GeoMonitorFreeReservationRecord;
+      }
+  > => {
+    const sortedPlatforms = [...input.platforms].sort();
+    const reservationProjectId = industryRankingReservationProjectId(
+      input.value.projectId,
+    );
+    const scopeHash = crypto
+      .createHash("sha256")
+      .update(
+        JSON.stringify({
+          projectId: input.value.projectId,
+          knowledgeBaseTaskId: input.value.knowledgeBaseTaskId,
+          perspective: "industry_ranking",
+          questionId: input.question.id,
+          monitoringEdition: input.monitoringEdition,
+          platformIds: sortedPlatforms,
+          ...(input.regionCode ? { regionCode: input.regionCode } : {}),
+          ...(input.screenshotEnabled ? { screenshotEnabled: true } : {}),
+        }),
+      )
+      .digest("hex");
+    const idempotencyKey = `geo-monitor-free:v2:${scopeHash}`;
+
+    if (input.value.industryRankingMonitorRunId) {
+      const run = await getResolvedMonitorRun(
+        broker,
+        input.value.industryRankingMonitorRunId,
+        { question: input.monitorQuestion, platforms: input.platforms },
+      );
+      return {
+        state: "started",
+        run,
+        scopeHash,
+      };
+    }
+
+    let reserved: Awaited<
+      ReturnType<GeoMonitorFreeReservationStore["reserve"]>
+    >;
+    try {
+      reserved = await monitorFreeReservationStore.reserve({
+        projectId: reservationProjectId,
+        scopeHash,
+        clientRequestId: input.clientRequestId,
+        idempotencyKey,
+      });
+    } catch (error) {
+      if (
+        error instanceof GeoMonitorFreeReservationStoreError &&
+        error.code === "SCOPE_CONFLICT"
+      ) {
+        throw new GeoHttpError(
+          "该项目已有一项不同范围的行业排名监控任务",
+          409,
+          "MONITOR_SCOPE_CONFLICT",
+        );
+      }
+      if (
+        error instanceof GeoMonitorFreeReservationStoreError &&
+        error.code === "CLIENT_REQUEST_CONFLICT"
+      ) {
+        throw new GeoHttpError(
+          error.message,
+          409,
+          "MONITOR_CLIENT_REQUEST_CONFLICT",
+        );
+      }
+      throw error;
+    }
+    let reservation = reserved.record;
+    const flightKey = reservationProjectId;
+    let freeStart = freeMonitoringStarts.get(flightKey);
+    if (!freeStart) {
+      freeStart = {
+        clientRequestId: reservation.clientRequestId,
+        scopeHash,
+        idempotencyKey,
+        expiresAt: Date.now() + FREE_MONITOR_START_FLIGHT_TTL_MS,
+      };
+      freeMonitoringStarts.set(flightKey, freeStart);
+    } else if (
+      freeStart.scopeHash !== scopeHash ||
+      freeStart.clientRequestId !== reservation.clientRequestId
+    ) {
+      throw new GeoHttpError(
+        "行业排名监控进程状态与持久 reservation 不一致",
+        503,
+        "MONITOR_RESERVATION_STATE_CONFLICT",
+      );
+    }
+
+    let run: BrokerMonitorRun;
+    if (reservation.runId) {
+      run = await getResolvedMonitorRun(broker, reservation.runId, {
+        question: input.monitorQuestion,
+        platforms: input.platforms,
+      });
+    } else {
+      reservation = await monitorFreeReservationStore.markSubmitting({
+        projectId: reservationProjectId,
+        scopeHash,
+        idempotencyKey,
+        submissionKey: idempotencyKey,
+      });
+      if (!freeStart.promise) {
+        freeStart.promise = broker
+          .createMonitorRun({
+            projectId: input.value.projectId,
+            question: input.monitorQuestion,
+            platforms: input.platforms,
+            idempotencyKey,
+            monitorKeyword: input.value.companyName,
+            ...(input.screenshotEnabled ? { screenshot: 1 } : {}),
+            ...(input.regionCode
+              ? {
+                  region: {
+                    scope: input.monitoringEdition,
+                    code: input.regionCode,
+                  },
+                }
+              : {}),
+          })
+          .then((candidate) =>
+            normalizeMonitorRun(candidate, {
+              question: input.monitorQuestion,
+              platforms: input.platforms,
+            }),
+          );
+      }
+      try {
+        run = await freeStart.promise;
+        freeStart.run = run;
+      } catch (error) {
+        freeStart.promise = undefined;
+        if (
+          error instanceof GeoBrokerError &&
+          error.code === "MONITOR_SUBMISSION_UNKNOWN"
+        ) {
+          return { state: "processing", scopeHash, reservation };
+        }
+        if (
+          error instanceof GeoBrokerError &&
+          ["REGION_UNAVAILABLE", "MONITOR_SUBMISSION_REJECTED"].includes(
+            error.code,
+          )
+        ) {
+          freeMonitoringStarts.delete(flightKey);
+          await monitorFreeReservationStore.releaseConfirmedRejected({
+            projectId: reservationProjectId,
+            scopeHash,
+            idempotencyKey,
+            submissionKey: idempotencyKey,
+          });
+          if (error.code === "REGION_UNAVAILABLE") {
+            throw new GeoHttpError(
+              "所选监控地区已不可用，请刷新列表后重新选择",
+              422,
+              "REGION_UNAVAILABLE",
+            );
+          }
+        }
+        throw error;
+      }
+    }
+
+    if (input.regionCode) {
+      if (
+        !run.region ||
+        run.region.edition !== input.monitoringEdition ||
+        run.region.code !== input.regionCode
+      ) {
+        throw new GeoMonitorContractError(
+          "行业排名监控地区快照与提交范围不匹配",
+        );
+      }
+    } else if (run.region) {
+      throw new GeoMonitorContractError("行业排名监控返回了未请求的地区快照");
+    }
+    if (Boolean(run.screenshotEnabled) !== input.screenshotEnabled) {
+      throw new GeoMonitorContractError("行业排名监控截图设置与提交范围不匹配");
+    }
+    if (
+      run.status === "submission_in_progress" ||
+      run.status === "submission_unknown"
+    ) {
+      reservation = await monitorFreeReservationStore.markRun({
+        projectId: reservationProjectId,
+        scopeHash,
+        idempotencyKey,
+        submissionKey: reservation.submissionKey || idempotencyKey,
+        runId: run.runId,
+        runStatus: run.status,
+        state: "submitted",
+      });
+      freeStart.promise = undefined;
+      freeStart.run = undefined;
+      return { state: "processing", scopeHash, reservation };
+    }
+    if (run.status === "remote_failed" || run.status === "shape_mismatch") {
+      await monitorFreeReservationStore.markRun({
+        projectId: reservationProjectId,
+        scopeHash,
+        idempotencyKey,
+        submissionKey: reservation.submissionKey || idempotencyKey,
+        runId: run.runId,
+        runStatus: run.status,
+        state: "failed",
+      });
+      freeMonitoringStarts.delete(flightKey);
+      throw new GeoHttpError(
+        "行业排名监控服务已明确拒绝或无法校验本次任务",
+        502,
+        "MONITOR_SUBMISSION_REJECTED",
+      );
+    }
+    reservation = await monitorFreeReservationStore.markRun({
+      projectId: reservationProjectId,
+      scopeHash,
+      idempotencyKey,
+      submissionKey: reservation.submissionKey || idempotencyKey,
+      runId: run.runId,
+      runStatus: run.status,
+      state: "started",
+    });
+    freeMonitoringStarts.delete(flightKey);
+    return { state: "started", run, scopeHash, reservation };
   };
 
   const resolveServiceScope = async (value: ProjectTokenValue) => {
@@ -3335,12 +3621,25 @@ export function createGeoRouter(options: GeoRouterOptions = {}): Router {
     knowledgeBaseTask: BrokerTask,
     questionTask: BrokerTask,
     monitorRun: BrokerMonitorRun,
+    perspective: "product_opinion" | "industry_ranking" = "product_opinion",
   ) => {
-    const question = value.monitorQuestionId
+    const questionId =
+      perspective === "industry_ranking"
+        ? value.industryRankingQuestionId
+        : value.monitorQuestionId;
+    const monitorRunId =
+      perspective === "industry_ranking"
+        ? value.industryRankingMonitorRunId
+        : value.monitorRunId;
+    const assessmentAttempt =
+      perspective === "industry_ranking"
+        ? value.industryRankingAssessmentAttempt
+        : value.assessmentAttempt;
+    const question = questionId
       ? findOwnedQuestion(
           value,
           parseQuestionSetFromTask(questionTask)?.questions,
-          value.monitorQuestionId,
+          questionId,
         )
       : undefined;
     if (!question) {
@@ -3380,7 +3679,7 @@ export function createGeoRouter(options: GeoRouterOptions = {}): Router {
         id: question.id,
         text: question.question,
         category: question.category,
-        rankingMetricEligible: question.category !== "reputation",
+        rankingMetricEligible: question.category === "industry_ranking",
       },
       platforms: [...monitorRun.platforms].sort(compareCanonicalText),
       repeatPerPlatform: 5,
@@ -3405,8 +3704,8 @@ export function createGeoRouter(options: GeoRouterOptions = {}): Router {
     const monitoringFilename = `${sanitizeFilename(
       value.companyName,
       "company",
-    )}-monitoring-records.json`;
-    const assessmentTaskOperationKey = `geo:${value.projectId}:assessment:v3-top10:${value.monitorRunId}:${value.assessmentAttempt || 1}`;
+    )}-${perspective === "industry_ranking" ? "industry-ranking-" : ""}monitoring-records.json`;
+    const assessmentTaskOperationKey = `geo:${value.projectId}:assessment:${perspective}:v3-top10:${monitorRunId}:${assessmentAttempt || 1}`;
     const temporaryFiles: string[] = [];
     try {
       const monitoringFile = await createGeoTaskEvidenceFile(broker, {
@@ -3481,14 +3780,25 @@ export function createGeoRouter(options: GeoRouterOptions = {}): Router {
           "TASK_ID_MISSING",
         );
       }
+      const submittedAt = new Date().toISOString();
       return {
         task: created.task,
         value: {
           ...value,
-          assessmentTaskId,
-          assessmentSubmittedAt: new Date().toISOString(),
-          assessmentAttempt: value.assessmentAttempt || 1,
-          assessmentVersion: 2 as const,
+          ...(perspective === "industry_ranking"
+            ? {
+                industryRankingAssessmentTaskId: assessmentTaskId,
+                industryRankingAssessmentSubmittedAt: submittedAt,
+                industryRankingAssessmentAttempt:
+                  value.industryRankingAssessmentAttempt || 1,
+                industryRankingAssessmentVersion: 2 as const,
+              }
+            : {
+                assessmentTaskId,
+                assessmentSubmittedAt: submittedAt,
+                assessmentAttempt: value.assessmentAttempt || 1,
+                assessmentVersion: 2 as const,
+              }),
           temporaryFileIds: Array.from(
             new Set([...(value.temporaryFileIds || []), ...temporaryFiles]),
           ),
@@ -3509,7 +3819,21 @@ export function createGeoRouter(options: GeoRouterOptions = {}): Router {
     knowledgeBaseTask: BrokerTask,
     scoredAssessment: ReturnType<typeof calculateQuestionBaselineAssessment>,
     retryReason?: string,
+    perspective: "product_opinion" | "industry_ranking" = "product_opinion",
+    monitorRun?: BrokerMonitorRun,
   ) => {
+    const assessmentTaskId =
+      perspective === "industry_ranking"
+        ? value.industryRankingAssessmentTaskId
+        : value.assessmentTaskId;
+    const assessmentSubmittedAt =
+      perspective === "industry_ranking"
+        ? value.industryRankingAssessmentSubmittedAt
+        : value.assessmentSubmittedAt;
+    const forecastAttempt =
+      perspective === "industry_ranking"
+        ? value.industryRankingOptimizationForecastAttempt
+        : value.optimizationForecastAttempt;
     const archive = resolveKnowledgeBaseArtifact(value, knowledgeBaseTask);
     if (!archive) {
       throw new GeoHttpError(
@@ -3529,12 +3853,12 @@ export function createGeoRouter(options: GeoRouterOptions = {}): Router {
     const assessmentFilename = `${sanitizeFilename(
       value.companyName,
       "company",
-    )}-current-assessment.json`;
+    )}-${perspective === "industry_ranking" ? "industry-ranking-" : ""}current-assessment.json`;
     const assessmentBytes = Buffer.from(
       JSON.stringify({
         schemaVersion: 2,
-        generatedAt: value.assessmentSubmittedAt || new Date(0).toISOString(),
-        sourceAssessmentTaskId: value.assessmentTaskId,
+        generatedAt: assessmentSubmittedAt || new Date(0).toISOString(),
+        sourceAssessmentTaskId: assessmentTaskId,
         assessment: scoredAssessment,
       }),
       "utf8",
@@ -3573,7 +3897,7 @@ export function createGeoRouter(options: GeoRouterOptions = {}): Router {
       );
     }
 
-    const forecastTaskOperationKey = `geo:${value.projectId}:optimization-forecast:${value.assessmentTaskId}:planning-target-4w-v5:${value.optimizationForecastAttempt || 1}`;
+    const forecastTaskOperationKey = `geo:${value.projectId}:optimization-forecast:${perspective}:${assessmentTaskId}:planning-target-4w-v5:${forecastAttempt || 1}`;
     const temporaryFiles: string[] = [];
     try {
       const assessmentFile = await createGeoTaskEvidenceFile(broker, {
@@ -3612,6 +3936,11 @@ export function createGeoRouter(options: GeoRouterOptions = {}): Router {
         knowledgeBaseArchiveFilename: archiveAttachment.filename,
         executionScenarioFilename: scenarioFile.filename || scenarioFilename,
         scenarioName: "full_execution" as const,
+        brandMentionRateObservation:
+          scoredAssessment.question.category === "industry_ranking" &&
+          monitorRun
+            ? monitorBrandMentionRate(monitorRun)
+            : undefined,
         retryReason,
       };
       const created = await createGeoTaskWithSkillPackages(
@@ -3661,14 +3990,26 @@ export function createGeoRouter(options: GeoRouterOptions = {}): Router {
           "TASK_ID_MISSING",
         );
       }
+      const submittedAt = new Date().toISOString();
       return {
         task: created.task,
         value: {
           ...value,
-          optimizationForecastTaskId: forecastTaskId,
-          optimizationForecastSubmittedAt: new Date().toISOString(),
-          optimizationForecastAttempt: value.optimizationForecastAttempt || 1,
-          optimizationForecastVersion: 2 as const,
+          ...(perspective === "industry_ranking"
+            ? {
+                industryRankingOptimizationForecastTaskId: forecastTaskId,
+                industryRankingOptimizationForecastSubmittedAt: submittedAt,
+                industryRankingOptimizationForecastAttempt:
+                  value.industryRankingOptimizationForecastAttempt || 1,
+                industryRankingOptimizationForecastVersion: 2 as const,
+              }
+            : {
+                optimizationForecastTaskId: forecastTaskId,
+                optimizationForecastSubmittedAt: submittedAt,
+                optimizationForecastAttempt:
+                  value.optimizationForecastAttempt || 1,
+                optimizationForecastVersion: 2 as const,
+              }),
           temporaryFileIds: Array.from(
             new Set([...(value.temporaryFileIds || []), ...temporaryFiles]),
           ),
@@ -3695,20 +4036,16 @@ export function createGeoRouter(options: GeoRouterOptions = {}): Router {
       }
       const value = openOwnedProject(req, res);
       if (
-        await customQuestionValidationStore.isProjectDeletionFenced(
-          value.projectId,
-        )
-      ) {
-        throw new GeoHttpError(
-          "该项目已删除，不能继续访问或创建新任务",
-          410,
-          "PROJECT_DELETED",
-        );
-      }
-      if (
-        await monitorFreeReservationStore.isProjectDeletionFenced(
-          value.projectId,
-        )
+        (
+          await Promise.all([
+            monitorFreeReservationStore.isProjectDeletionFenced(
+              value.projectId,
+            ),
+            monitorFreeReservationStore.isProjectDeletionFenced(
+              industryRankingReservationProjectId(value.projectId),
+            ),
+          ])
+        ).some(Boolean)
       ) {
         throw new GeoHttpError(
           "该项目已删除，不能继续访问或创建新任务",
@@ -3733,6 +4070,9 @@ export function createGeoRouter(options: GeoRouterOptions = {}): Router {
         rawMonitorRun,
         initialAssessmentTask,
         initialOptimizationForecastTask,
+        rawIndustryRankingMonitorRun,
+        initialIndustryRankingAssessmentTask,
+        initialIndustryRankingOptimizationForecastTask,
       ] = await Promise.all([
         getResolvedTask(broker, value.knowledgeBaseTaskId),
         value.questionTaskId
@@ -3751,6 +4091,22 @@ export function createGeoRouter(options: GeoRouterOptions = {}): Router {
         value.optimizationForecastTaskId
           ? getResolvedTask(broker, value.optimizationForecastTaskId)
           : Promise.resolve(undefined),
+        value.industryRankingMonitorRunId
+          ? getResolvedMonitorRun(
+              broker,
+              value.industryRankingMonitorRunId,
+              monitorRunExpectation(value),
+            )
+          : Promise.resolve(undefined),
+        value.industryRankingAssessmentTaskId
+          ? getResolvedTask(broker, value.industryRankingAssessmentTaskId)
+          : Promise.resolve(undefined),
+        value.industryRankingOptimizationForecastTaskId
+          ? getResolvedTask(
+              broker,
+              value.industryRankingOptimizationForecastTaskId,
+            )
+          : Promise.resolve(undefined),
       ]);
       const previousFinalFileId = value.knowledgeBaseArtifact?.final.artifactId;
       const finalizedKnowledgeBase = await ensureFinalizedKnowledgeBase(
@@ -3768,10 +4124,20 @@ export function createGeoRouter(options: GeoRouterOptions = {}): Router {
       currentValue = await syncServiceOrder(currentValue);
       let currentAssessmentTask = initialAssessmentTask;
       let currentOptimizationForecastTask = initialOptimizationForecastTask;
+      let currentIndustryRankingAssessmentTask =
+        initialIndustryRankingAssessmentTask;
+      let currentIndustryRankingOptimizationForecastTask =
+        initialIndustryRankingOptimizationForecastTask;
       let currentAssessmentOutputPromise:
         | ReturnType<typeof resolveAssessmentTaskOutput>
         | undefined;
       let currentForecastOutputPromise:
+        | ReturnType<typeof resolveOptimizationOutcomeForecastTaskOutput>
+        | undefined;
+      let currentIndustryRankingAssessmentOutputPromise:
+        | ReturnType<typeof resolveAssessmentTaskOutput>
+        | undefined;
+      let currentIndustryRankingForecastOutputPromise:
         | ReturnType<typeof resolveOptimizationOutcomeForecastTaskOutput>
         | undefined;
       const question =
@@ -3964,6 +4330,8 @@ export function createGeoRouter(options: GeoRouterOptions = {}): Router {
                 currentKnowledgeBaseTask,
                 scoredAssessment,
                 forecastRetryReason,
+                "product_opinion",
+                rawMonitorRun,
               );
               currentValue = created.value;
               currentOptimizationForecastTask = created.task;
@@ -3978,6 +4346,173 @@ export function createGeoRouter(options: GeoRouterOptions = {}): Router {
                       ? error.code
                       : "FORECAST_AUTOMATION_FAILED",
               });
+            }
+          }
+        }
+      }
+
+      const industryRankingQuestion =
+        initialQuestionTask && currentValue.industryRankingQuestionId
+          ? findOwnedQuestion(
+              currentValue,
+              parseQuestionSetFromTask(initialQuestionTask)?.questions,
+              currentValue.industryRankingQuestionId,
+            )
+          : undefined;
+      const industryAutomationReady = Boolean(
+        initialQuestionTask &&
+          industryRankingQuestion?.category === "industry_ranking" &&
+          rawIndustryRankingMonitorRun?.status === "completed" &&
+          rawIndustryRankingMonitorRun.records,
+      );
+      if (
+        industryAutomationReady &&
+        initialQuestionTask &&
+        rawIndustryRankingMonitorRun &&
+        industryRankingQuestion
+      ) {
+        if (!currentValue.industryRankingAssessmentTaskId) {
+          try {
+            const created = await createAutomaticAssessmentTask(
+              currentValue,
+              currentKnowledgeBaseTask,
+              initialQuestionTask,
+              rawIndustryRankingMonitorRun,
+              "industry_ranking",
+            );
+            currentValue = created.value;
+            currentIndustryRankingAssessmentTask = created.task;
+          } catch (error) {
+            console.warn(
+              "[GEO industry ranking assessment automation] Task start deferred",
+              {
+                projectId: currentValue.projectId,
+                error:
+                  error instanceof GeoHttpError
+                    ? error.code
+                    : error instanceof GeoBrokerError
+                      ? error.code
+                      : "ASSESSMENT_AUTOMATION_FAILED",
+              },
+            );
+          }
+        }
+
+        let industryScoredAssessment:
+          | ReturnType<typeof calculateQuestionBaselineAssessment>
+          | undefined;
+        if (
+          currentIndustryRankingAssessmentTask &&
+          normalizeTaskStatus(currentIndustryRankingAssessmentTask.status) ===
+            "completed"
+        ) {
+          try {
+            currentIndustryRankingAssessmentOutputPromise ??=
+              parseScopedAssessmentTaskOutput(
+                broker,
+                currentIndustryRankingAssessmentTask,
+                industryRankingQuestion,
+                rawIndustryRankingMonitorRun.platforms,
+                rawIndustryRankingMonitorRun,
+              );
+            industryScoredAssessment = calculateCompleteAssessment(
+              await currentIndustryRankingAssessmentOutputPromise,
+            );
+          } catch {
+            industryScoredAssessment = undefined;
+          }
+        }
+
+        if (industryScoredAssessment) {
+          let forecastRetryReason: string | undefined;
+          if (
+            currentValue.industryRankingOptimizationForecastTaskId &&
+            currentIndustryRankingOptimizationForecastTask
+          ) {
+            const forecastStatus = normalizeTaskStatus(
+              currentIndustryRankingOptimizationForecastTask.status,
+            );
+            if (["failed", "cancelled"].includes(forecastStatus)) {
+              forecastRetryReason =
+                forecastStatus === "cancelled"
+                  ? "上一次行业排名优化效果评估任务已取消"
+                  : normalizeTask(
+                      currentIndustryRankingOptimizationForecastTask,
+                      "optimization-forecast",
+                    ).failure?.code || "上一次行业排名优化效果评估任务执行失败";
+            } else if (forecastStatus === "completed") {
+              try {
+                currentIndustryRankingForecastOutputPromise ??=
+                  resolveOptimizationOutcomeForecastTaskOutput(
+                    broker,
+                    currentIndustryRankingOptimizationForecastTask,
+                    {
+                      taskId: taskIdFrom(
+                        currentIndustryRankingOptimizationForecastTask,
+                      ),
+                    },
+                  );
+                calculateCompleteForecast(
+                  industryScoredAssessment,
+                  await currentIndustryRankingForecastOutputPromise,
+                );
+              } catch (error) {
+                logAssessmentOutputValidation(
+                  error,
+                  currentIndustryRankingOptimizationForecastTask,
+                );
+              }
+            }
+            if (
+              forecastRetryReason &&
+              (currentValue.industryRankingOptimizationForecastAttempt || 1) < 2
+            ) {
+              const previousTaskId =
+                currentValue.industryRankingOptimizationForecastTaskId;
+              currentValue = {
+                ...currentValue,
+                industryRankingOptimizationForecastTaskId: undefined,
+                industryRankingOptimizationForecastSubmittedAt: undefined,
+                industryRankingOptimizationForecastAttempt: 2,
+                industryRankingOptimizationForecastVersion: 2,
+                previousIndustryRankingOptimizationForecastTaskIds: Array.from(
+                  new Set([
+                    ...(currentValue.previousIndustryRankingOptimizationForecastTaskIds ||
+                      []),
+                    previousTaskId,
+                  ]),
+                ),
+              };
+              currentIndustryRankingOptimizationForecastTask = undefined;
+              currentIndustryRankingForecastOutputPromise = undefined;
+            }
+          }
+          if (!currentValue.industryRankingOptimizationForecastTaskId) {
+            try {
+              const created = await createAutomaticOptimizationForecastTask(
+                currentValue,
+                currentKnowledgeBaseTask,
+                industryScoredAssessment,
+                forecastRetryReason,
+                "industry_ranking",
+                rawIndustryRankingMonitorRun,
+              );
+              currentValue = created.value;
+              currentIndustryRankingOptimizationForecastTask = created.task;
+              currentIndustryRankingForecastOutputPromise = undefined;
+            } catch (error) {
+              console.warn(
+                "[GEO industry ranking forecast automation] Task start deferred",
+                {
+                  projectId: currentValue.projectId,
+                  error:
+                    error instanceof GeoHttpError
+                      ? error.code
+                      : error instanceof GeoBrokerError
+                        ? error.code
+                        : "FORECAST_AUTOMATION_FAILED",
+                },
+              );
             }
           }
         }
@@ -4008,6 +4543,13 @@ export function createGeoRouter(options: GeoRouterOptions = {}): Router {
         {
           assessment: currentAssessmentOutputPromise,
           forecast: currentForecastOutputPromise,
+        },
+        rawIndustryRankingMonitorRun,
+        currentIndustryRankingAssessmentTask,
+        currentIndustryRankingOptimizationForecastTask,
+        {
+          assessment: currentIndustryRankingAssessmentOutputPromise,
+          forecast: currentIndustryRankingForecastOutputPromise,
         },
       );
       res.json({ projectToken: currentToken, project });
@@ -4302,507 +4844,9 @@ export function createGeoRouter(options: GeoRouterOptions = {}): Router {
     };
   };
 
-  router.post(
-    "/projects/:projectToken/questions/custom",
-    requireConfiguration,
-    requireSession,
-    requireCostRate("custom-question-create", 12),
-    asyncHandler(async (req, res) => {
-      const value = openOwnedProject(req, res);
-      const input = CreateCustomQuestionRequestSchema.parse(req.body);
-      const {
-        knowledgeBaseTask,
-        questionTask,
-        trackedValue,
-        generatedQuestions,
-      } = await loadCustomQuestionContext(value);
-      if (isIndustryRankingQuestion(input.question)) {
-        throw new GeoHttpError(
-          "该问题属于行业排名或品牌推荐类问题，需要全域营销权限",
-          422,
-          "INDUSTRY_RANKING_QUESTION",
-        );
-      }
-
-      const duplicate = generatedQuestions.find(
-        (candidate) =>
-          normalizeQuestionIdentity(candidate.question) ===
-          normalizeQuestionIdentity(input.question),
-      );
-      const ownerSessionHash = geoCustomQuestionOwnerSessionHash(
-        String(res.locals.geoSessionId || ""),
-      );
-      const questionHash = geoCustomQuestionHash(input.question);
-      const legacyClient = !input.clientRequestId;
-      const clientRequestId =
-        input.clientRequestId ??
-        legacyGeoCustomQuestionClientRequestId({
-          projectId: trackedValue.projectId,
-          ownerSessionHash,
-          questionHash,
-        });
-      if (duplicate && legacyClient) {
-        const project = await buildProjectView(
-          broker,
-          trackedValue,
-          req.params.projectToken,
-          knowledgeBaseTask,
-          questionTask,
-        );
-        res.json({
-          validation: {
-            schemaVersion: 1,
-            clientRequestId: input.clientRequestId,
-            question: input.question,
-            state: "completed",
-            acknowledgement: "not_required",
-            completionMode: "existing_recommended_question",
-          },
-          projectToken: req.params.projectToken,
-          question: duplicate,
-          project,
-        });
-        return;
-      }
-
-      const archive = resolveKnowledgeBaseArtifact(
-        trackedValue,
-        knowledgeBaseTask,
-      );
-      if (!archive?.artifactId) {
-        throw new GeoHttpError(
-          "企业知识库准备完成后才能验证自定义问题",
-          409,
-          "ARCHIVE_NOT_READY",
-        );
-      }
-      const archiveArtifactId = archive.artifactId;
-      const reservationInput = (expiresAt: string) => ({
-        projectId: trackedValue.projectId,
-        ownerSessionHash,
-        clientRequestId,
-        requestHash: geoCustomQuestionRequestHash({
-          projectId: trackedValue.projectId,
-          knowledgeBaseTaskId: trackedValue.knowledgeBaseTaskId,
-          question: input.question,
-        }),
-        question: input.question,
-        questionHash,
-        companyName: trackedValue.companyName,
-        knowledgeBaseTaskId: trackedValue.knowledgeBaseTaskId,
-        knowledgeBaseValidationProfile:
-          trackedValue.knowledgeBaseValidationProfile,
-        knowledgeBaseArtifact: {
-          artifactId: archiveArtifactId,
-          filename: archive.filename,
-          sha256: archive.sha256,
-          packageManifestSha256: archive.packageManifestSha256,
-        },
-        expiresAt,
-      });
-      if (duplicate) {
-        const receipt =
-          await customQuestionValidationStore.reserveCompletedReceipt(
-            reservationInput(
-              new Date(
-                Date.now() + CUSTOM_QUESTION_TERMINAL_RETENTION_MS,
-              ).toISOString(),
-            ),
-            duplicate,
-          );
-        await sendCustomQuestionValidationObservation({
-          res,
-          projectToken: req.params.projectToken,
-          value: trackedValue,
-          context: { trackedValue, knowledgeBaseTask, questionTask },
-          record: receipt.record,
-        });
-        return;
-      }
-      const retainedInvalid =
-        await customQuestionValidationStore.findReplayableInvalid(
-          trackedValue.projectId,
-          ownerSessionHash,
-          questionHash,
-        );
-      if (retainedInvalid?.localTaskId) {
-        try {
-          const retainedTask = await getResolvedTask(
-            broker,
-            retainedInvalid.localTaskId,
-          );
-          const retainedClassification =
-            await resolveCustomQuestionClassificationTaskOutput(
-              broker,
-              retainedTask,
-              { taskId: retainedInvalid.localTaskId },
-            );
-          if (retainedClassification?.decision === "reject") {
-            const rejected = rejectedCustomQuestionError(
-              retainedClassification.category,
-              trackedValue.companyName,
-            );
-            throw new GeoHttpError(
-              rejected.message,
-              rejected.status,
-              rejected.code,
-            );
-          }
-          if (retainedClassification?.decision === "accept") {
-            const retainedManifest = await loadKnowledgeBaseManifest(
-              broker,
-              trackedValue.knowledgeBaseTaskId,
-              knowledgeBaseTask,
-              trackedValue.companyName,
-              archive,
-              trackedValue.knowledgeBaseValidationProfile,
-            );
-            const retainedGrounding = validateAcceptedCustomQuestionGrounding(
-              retainedClassification,
-              {
-                question: input.question,
-                companyName: trackedValue.companyName,
-                manifest: retainedManifest,
-              },
-            );
-            if (retainedGrounding.ok) {
-              const retainedResult = GeoQuestionSchema.parse({
-                id: customQuestionId(input.question),
-                category: retainedClassification.category,
-                question: input.question,
-                rationale: retainedClassification.reason,
-                ...(retainedClassification.enterpriseAnchor
-                  ? {
-                      enterpriseAnchor: retainedClassification.enterpriseAnchor,
-                    }
-                  : {}),
-                ...(retainedClassification.offeringAnchor
-                  ? { offeringAnchor: retainedClassification.offeringAnchor }
-                  : {}),
-                evidenceRefs: retainedClassification.evidenceRefs,
-                selectable: true,
-              });
-              const replayReservation =
-                await customQuestionValidationStore.reserve(
-                  reservationInput(
-                    new Date(
-                      Date.now() + CUSTOM_QUESTION_TERMINAL_RETENTION_MS,
-                    ).toISOString(),
-                  ),
-                );
-              const replayLease =
-                await customQuestionValidationStore.tryAcquireLease(
-                  trackedValue.projectId,
-                  clientRequestId,
-                  CUSTOM_QUESTION_CLASSIFIER_LEASE_MS,
-                );
-              if (replayLease) {
-                let replayRecord: GeoCustomQuestionValidationRecord;
-                try {
-                  replayRecord = await customQuestionValidationStore.update(
-                    {
-                      ...replayReservation.record,
-                      state: "completed",
-                      result: retainedResult,
-                      expiresAt: new Date(
-                        Date.now() + CUSTOM_QUESTION_TERMINAL_RETENTION_MS,
-                      ).toISOString(),
-                      lastObservedStatus: "completed",
-                      cleanupCompleted: true,
-                    },
-                    replayLease,
-                  );
-                } finally {
-                  await customQuestionValidationStore
-                    .releaseLease(replayLease)
-                    .catch(() => undefined);
-                }
-                await sendCustomQuestionValidationObservation({
-                  res,
-                  projectToken: req.params.projectToken,
-                  value: trackedValue,
-                  context: {
-                    trackedValue,
-                    knowledgeBaseTask,
-                    questionTask,
-                  },
-                  record: replayRecord,
-                  completedStatus: 201,
-                });
-                return;
-              }
-            }
-          }
-        } catch (error) {
-          if (error instanceof GeoHttpError && error.status === 422)
-            throw error;
-          console.warn("[GEO custom question]", {
-            event: "retained_classifier_replay_deferred",
-            projectId: trackedValue.projectId,
-            taskId: retainedInvalid.localTaskId,
-            diagnosticCode:
-              error instanceof GeoBrokerError
-                ? error.code
-                : "RETAINED_REPLAY_DEFERRED",
-          });
-        }
-      }
-      const reservation = await customQuestionValidationStore.reserve(
-        reservationInput(
-          new Date(
-            Date.now() + CUSTOM_QUESTION_VALIDATION_TTL_MS,
-          ).toISOString(),
-        ),
-      );
-      let record = await advanceCustomQuestionValidation({
-        broker,
-        store: customQuestionValidationStore,
-        record: reservation.record,
-        knowledgeBaseTask,
-        now: customQuestionValidationNow,
-      });
-      if (legacyClient && !isTerminalCustomQuestionValidation(record)) {
-        const deadline = Date.now() + legacyCustomQuestionCompatibilityWaitMs;
-        while (
-          !isTerminalCustomQuestionValidation(record) &&
-          Date.now() < deadline
-        ) {
-          await waitForCustomQuestionRecovery(
-            legacyCustomQuestionCompatibilityPollMs,
-          );
-          const current = await customQuestionValidationStore.get(
-            trackedValue.projectId,
-            clientRequestId,
-          );
-          if (!current) break;
-          record = await advanceCustomQuestionValidation({
-            broker,
-            store: customQuestionValidationStore,
-            record: current,
-            knowledgeBaseTask,
-            now: customQuestionValidationNow,
-          });
-        }
-        if (!isTerminalCustomQuestionValidation(record)) {
-          throw new GeoHttpError(
-            "问题验证仍在后台继续；请刷新页面，系统会恢复同一请求",
-            504,
-            "CUSTOM_QUESTION_LEGACY_CLIENT_REFRESH_REQUIRED",
-          );
-        }
-      }
-      await sendCustomQuestionValidationObservation({
-        res,
-        projectToken: req.params.projectToken,
-        value: trackedValue,
-        context: { trackedValue, knowledgeBaseTask, questionTask },
-        record,
-        completedStatus: 201,
-      });
-    }),
-  );
-
-  router.get(
-    "/projects/:projectToken/questions/custom/:clientRequestId([0-9a-fA-F-]{36})",
-    requireConfiguration,
-    requireSession,
-    requireSessionRate("custom-question-status", 120, 60 * 1000),
-    asyncHandler(async (req, res) => {
-      const value = openOwnedProject(req, res);
-      const clientRequestId = z
-        .string()
-        .uuid()
-        .parse(req.params.clientRequestId);
-      const stored = await customQuestionValidationStore.get(
-        value.projectId,
-        clientRequestId,
-      );
-      if (!stored) {
-        throw new GeoHttpError(
-          "自定义问题验证请求不存在",
-          404,
-          "CUSTOM_QUESTION_VALIDATION_NOT_FOUND",
-        );
-      }
-      const ownerSessionHash = geoCustomQuestionOwnerSessionHash(
-        String(res.locals.geoSessionId || ""),
-      );
-      if (
-        stored.projectId !== value.projectId ||
-        stored.ownerSessionHash !== ownerSessionHash
-      ) {
-        throw new GeoHttpError(
-          "自定义问题验证请求不属于当前项目",
-          403,
-          "CUSTOM_QUESTION_VALIDATION_FORBIDDEN",
-        );
-      }
-      const expectedRequestHash = geoCustomQuestionRequestHash({
-        projectId: value.projectId,
-        knowledgeBaseTaskId: value.knowledgeBaseTaskId,
-        question: stored.question,
-      });
-      if (
-        stored.knowledgeBaseTaskId !== value.knowledgeBaseTaskId ||
-        stored.requestHash !== expectedRequestHash
-      ) {
-        throw new GeoHttpError(
-          "项目状态已变化，不能继续旧的问题验证请求",
-          409,
-          "CUSTOM_QUESTION_VALIDATION_PROJECT_CHANGED",
-        );
-      }
-      const authoritative = await customQuestionValidationStore.ensureActive(
-        value.projectId,
-        clientRequestId,
-      );
-      const record = await advanceCustomQuestionValidation({
-        broker,
-        store: customQuestionValidationStore,
-        record: authoritative,
-        // v1 reservations freeze a durable knowledge-base artifact. This is
-        // the same context used by the recovery worker and avoids two remote
-        // task-result reads on every browser poll.
-        knowledgeBaseTask: {
-          localTaskId: authoritative.knowledgeBaseTaskId,
-          operationId: `stored:${authoritative.knowledgeBaseTaskId}`,
-          status: "succeeded",
-          safeEvents: [],
-        },
-        now: customQuestionValidationNow,
-      });
-      await sendCustomQuestionValidationObservation({
-        res,
-        projectToken: req.params.projectToken,
-        value,
-        record,
-      });
-    }),
-  );
-
-  router.post(
-    "/projects/:projectToken/questions/custom/:clientRequestId([0-9a-fA-F-]{36})/ack",
-    requireConfiguration,
-    requireSession,
-    requireSessionRate("custom-question-ack", 120, 60 * 1000),
-    asyncHandler(async (req, res) => {
-      const value = openOwnedProject(req, res);
-      const clientRequestId = z
-        .string()
-        .uuid()
-        .parse(req.params.clientRequestId);
-      const ownerSessionHash = geoCustomQuestionOwnerSessionHash(
-        String(res.locals.geoSessionId || ""),
-      );
-      const stored = await customQuestionValidationStore.get(
-        value.projectId,
-        clientRequestId,
-      );
-      if (!stored) {
-        throw new GeoHttpError(
-          "自定义问题验证请求不存在",
-          404,
-          "CUSTOM_QUESTION_VALIDATION_NOT_FOUND",
-        );
-      }
-      if (
-        stored.projectId !== value.projectId ||
-        stored.ownerSessionHash !== ownerSessionHash
-      ) {
-        throw new GeoHttpError(
-          "自定义问题验证请求不属于当前项目",
-          403,
-          "CUSTOM_QUESTION_VALIDATION_FORBIDDEN",
-        );
-      }
-      if (!isTerminalCustomQuestionValidation(stored)) {
-        throw new GeoHttpError(
-          "问题验证尚未完成，不能确认持久化",
-          409,
-          "CUSTOM_QUESTION_VALIDATION_NOT_TERMINAL",
-        );
-      }
-      const acknowledged =
-        await customQuestionValidationStore.acknowledgeTerminal(
-          value.projectId,
-          clientRequestId,
-          ownerSessionHash,
-        );
-      res.json({
-        ok: true,
-        validation: {
-          schemaVersion: 1,
-          clientRequestId,
-          state: acknowledged.state,
-          acknowledged: true,
-        },
-      });
-    }),
-  );
-
-  router.get(
-    "/projects/:projectToken/questions/custom/active",
-    requireConfiguration,
-    requireSession,
-    requireSessionRate("custom-question-active", 120, 60 * 1000),
-    asyncHandler(async (req, res) => {
-      const value = openOwnedProject(req, res);
-      const stored = await customQuestionValidationStore.getActive(
-        value.projectId,
-      );
-      if (!stored) {
-        throw new GeoHttpError(
-          "当前项目没有待恢复的问题验证",
-          404,
-          "CUSTOM_QUESTION_VALIDATION_NOT_FOUND",
-        );
-      }
-      const ownerSessionHash = geoCustomQuestionOwnerSessionHash(
-        String(res.locals.geoSessionId || ""),
-      );
-      if (stored.ownerSessionHash !== ownerSessionHash) {
-        throw new GeoHttpError(
-          "自定义问题验证请求不属于当前项目",
-          403,
-          "CUSTOM_QUESTION_VALIDATION_FORBIDDEN",
-        );
-      }
-      const expectedRequestHash = geoCustomQuestionRequestHash({
-        projectId: value.projectId,
-        knowledgeBaseTaskId: value.knowledgeBaseTaskId,
-        question: stored.question,
-      });
-      if (
-        stored.knowledgeBaseTaskId !== value.knowledgeBaseTaskId ||
-        stored.requestHash !== expectedRequestHash
-      ) {
-        throw new GeoHttpError(
-          "项目状态已变化，不能继续旧的问题验证请求",
-          409,
-          "CUSTOM_QUESTION_VALIDATION_PROJECT_CHANGED",
-        );
-      }
-      const record = await advanceCustomQuestionValidation({
-        broker,
-        store: customQuestionValidationStore,
-        record: stored,
-        knowledgeBaseTask: {
-          localTaskId: stored.knowledgeBaseTaskId,
-          operationId: `stored:${stored.knowledgeBaseTaskId}`,
-          status: "succeeded",
-          safeEvents: [],
-        },
-        now: customQuestionValidationNow,
-      });
-      await sendCustomQuestionValidationObservation({
-        res,
-        projectToken: req.params.projectToken,
-        value,
-        record,
-      });
-    }),
-  );
-
+  // Self-service custom-question endpoints are retired. Historical project
+  // tokens remain readable, but no mutation, polling, retry, or ACK route is
+  // registered and the legacy reservation directory is never consulted.
   router.post(
     "/projects/:projectToken/payments",
     requireConfiguration,
@@ -4953,13 +4997,24 @@ export function createGeoRouter(options: GeoRouterOptions = {}): Router {
   );
 
   router.get(
-    "/projects/:projectToken/monitoring/records/:recordId/screenshot",
+    [
+      "/projects/:projectToken/monitoring/records/:recordId/screenshot",
+      "/projects/:projectToken/monitoring/:perspective(product-opinion|industry-ranking)/records/:recordId/screenshot",
+    ],
     requireConfiguration,
     requireSession,
     requireSessionRate("monitor-screenshot", 60),
     asyncHandler(async (req, res, next) => {
       const value = openOwnedProject(req, res);
-      if (!value.monitorRunId || !value.monitorScreenshotEnabled) {
+      const perspective =
+        req.params.perspective === "industry-ranking"
+          ? "industry-ranking"
+          : "product-opinion";
+      const monitorRunId =
+        perspective === "industry-ranking"
+          ? value.industryRankingMonitorRunId
+          : value.monitorRunId;
+      if (!monitorRunId || !value.monitorScreenshotEnabled) {
         throw new GeoHttpError(
           "当前监控任务没有可查看的页面截图",
           404,
@@ -4969,7 +5024,7 @@ export function createGeoRouter(options: GeoRouterOptions = {}): Router {
       const recordId = String(req.params.recordId || "");
       const run = await getResolvedMonitorRun(
         broker,
-        value.monitorRunId,
+        monitorRunId,
         monitorRunExpectation(value),
       );
       const record = run.records?.find(
@@ -4988,7 +5043,7 @@ export function createGeoRouter(options: GeoRouterOptions = {}): Router {
       >;
       try {
         upstream = await broker.downloadMonitorScreenshot(
-          value.monitorRunId,
+          monitorRunId,
           recordId,
         );
       } catch (error) {
@@ -5086,6 +5141,8 @@ export function createGeoRouter(options: GeoRouterOptions = {}): Router {
       if ("schemaVersion" in input && input.schemaVersion === 2) {
         const requestedPlatforms = input.platformIds as GeoMonitorPlatformId[];
         const sortedPlatforms = [...requestedPlatforms].sort();
+        const requestedIndustryRankingQuestionId =
+          input.industryRankingQuestionId?.trim();
         const requestedRegionCode = input.regionCode?.trim();
         const requestedScreenshotEnabled = input.screenshotEnabled === true;
         const scopeHash = crypto
@@ -5095,6 +5152,12 @@ export function createGeoRouter(options: GeoRouterOptions = {}): Router {
               projectId: value.projectId,
               knowledgeBaseTaskId: value.knowledgeBaseTaskId,
               questionId: input.questionId,
+              ...(requestedIndustryRankingQuestionId
+                ? {
+                    industryRankingQuestionId:
+                      requestedIndustryRankingQuestionId,
+                  }
+                : {}),
               monitoringEdition: input.monitoringEdition,
               platformIds: sortedPlatforms,
               ...(requestedRegionCode
@@ -5111,6 +5174,10 @@ export function createGeoRouter(options: GeoRouterOptions = {}): Router {
         if (value.monitorRunId) {
           if (
             value.monitorQuestionId !== input.questionId ||
+            (requestedIndustryRankingQuestionId &&
+              value.industryRankingQuestionId &&
+              value.industryRankingQuestionId !==
+                requestedIndustryRankingQuestionId) ||
             normalizedGeoMonitoringEdition(value.monitoringEdition) !==
               input.monitoringEdition ||
             (value.monitorRegion?.code ?? undefined) !== requestedRegionCode ||
@@ -5135,20 +5202,95 @@ export function createGeoRouter(options: GeoRouterOptions = {}): Router {
               ? getResolvedQuestionTask(broker, value.questionTaskId)
               : Promise.resolve(undefined),
           ]);
+          let nextValue = value;
+          let industryRankingRun: BrokerMonitorRun | undefined;
+          if (requestedIndustryRankingQuestionId) {
+            const resolvedIndustryQuestion = await resolveMonitorQuestion(
+              value,
+              requestedIndustryRankingQuestionId,
+              "industry_ranking",
+            );
+            const translatedIndustryQuestion =
+              await resolveMonitorQuestionForEdition(
+                broker,
+                value,
+                resolvedIndustryQuestion.question,
+                input.monitoringEdition,
+                {
+                  waitMs: monitorQuestionTranslationWaitMs,
+                  pollMs: monitorQuestionTranslationPollMs,
+                },
+              );
+            const ensuredIndustryRun = await ensureIndustryRankingMonitorRun({
+              value,
+              clientRequestId: input.clientRequestId,
+              question: resolvedIndustryQuestion.question,
+              monitorQuestion: translatedIndustryQuestion,
+              platforms: requestedPlatforms,
+              monitoringEdition: input.monitoringEdition,
+              regionCode: requestedRegionCode,
+              screenshotEnabled: requestedScreenshotEnabled,
+            });
+            if (ensuredIndustryRun.state === "processing") {
+              const projectToken = codec.seal(
+                "project",
+                {
+                  ...value,
+                  industryRankingQuestionId: requestedIndustryRankingQuestionId,
+                  industryRankingMonitorFreeReservation: {
+                    schemaVersion: 2,
+                    clientRequestId:
+                      ensuredIndustryRun.reservation.clientRequestId,
+                    scopeHash: ensuredIndustryRun.scopeHash,
+                    createdAt: ensuredIndustryRun.reservation.createdAt,
+                    monitoringEdition: input.monitoringEdition,
+                    ...(requestedRegionCode
+                      ? { regionCode: requestedRegionCode }
+                      : {}),
+                    ...(requestedScreenshotEnabled
+                      ? { screenshotEnabled: true }
+                      : {}),
+                  },
+                },
+                PROJECT_TTL_MS,
+              );
+              res.setHeader("Retry-After", "3");
+              res.status(202).json({
+                state: "processing",
+                retryAfterMs: 3_000,
+                clientRequestId: input.clientRequestId,
+                projectToken,
+              });
+              return;
+            }
+            industryRankingRun = ensuredIndustryRun.run;
+            nextValue = {
+              ...value,
+              industryRankingQuestionId: requestedIndustryRankingQuestionId,
+              industryRankingMonitorRunId: industryRankingRun.runId,
+              industryRankingMonitorFreeReservation: undefined,
+            };
+          }
+          const nextProjectToken =
+            nextValue === value
+              ? req.params.projectToken
+              : codec.seal("project", nextValue, PROJECT_TTL_MS);
           const project = await buildProjectView(
             broker,
-            value,
-            req.params.projectToken,
+            nextValue,
+            nextProjectToken,
             knowledgeBaseTask,
             questionTask,
             run,
             undefined,
             undefined,
+            undefined,
+            industryRankingRun,
           );
           res.status(200).json({
             state: "started",
             replayed: true,
-            projectToken: req.params.projectToken,
+            projectToken: nextProjectToken,
             project,
           });
           return;
@@ -5269,6 +5411,12 @@ export function createGeoRouter(options: GeoRouterOptions = {}): Router {
             "project",
             {
               ...value,
+              ...(requestedIndustryRankingQuestionId
+                ? {
+                    industryRankingQuestionId:
+                      requestedIndustryRankingQuestionId,
+                  }
+                : {}),
               monitorFreeReservation: {
                 schemaVersion: 2 as const,
                 clientRequestId: durableReservation.clientRequestId,
@@ -5449,11 +5597,21 @@ export function createGeoRouter(options: GeoRouterOptions = {}): Router {
         let resolvedQuestion: Awaited<
           ReturnType<typeof resolveMonitorQuestion>
         >;
+        let resolvedIndustryRankingQuestion:
+          | Awaited<ReturnType<typeof resolveMonitorQuestion>>
+          | undefined;
         try {
           resolvedQuestion = await resolveMonitorQuestion(
             value,
             input.questionId,
           );
+          resolvedIndustryRankingQuestion = requestedIndustryRankingQuestionId
+            ? await resolveMonitorQuestion(
+                value,
+                requestedIndustryRankingQuestionId,
+                "industry_ranking",
+              )
+            : undefined;
         } catch (error) {
           if (error instanceof GeoHttpError && error.status < 500) {
             await releasePristineFreeStart();
@@ -5463,6 +5621,7 @@ export function createGeoRouter(options: GeoRouterOptions = {}): Router {
         const { knowledgeBaseTask, questionTask, question } = resolvedQuestion;
         await assertMonitorProviderReady();
         let monitorQuestion: string;
+        let industryRankingMonitorQuestion: string | undefined;
         try {
           monitorQuestion = await resolveMonitorQuestionForEdition(
             broker,
@@ -5474,6 +5633,18 @@ export function createGeoRouter(options: GeoRouterOptions = {}): Router {
               pollMs: monitorQuestionTranslationPollMs,
             },
           );
+          industryRankingMonitorQuestion = resolvedIndustryRankingQuestion
+            ? await resolveMonitorQuestionForEdition(
+                broker,
+                value,
+                resolvedIndustryRankingQuestion.question,
+                input.monitoringEdition,
+                {
+                  waitMs: monitorQuestionTranslationWaitMs,
+                  pollMs: monitorQuestionTranslationPollMs,
+                },
+              )
+            : undefined;
         } catch (error) {
           if (
             error instanceof GeoHttpError &&
@@ -5690,6 +5861,31 @@ export function createGeoRouter(options: GeoRouterOptions = {}): Router {
           state: "started",
         });
 
+        let industryRankingRun: BrokerMonitorRun | undefined;
+        if (
+          requestedIndustryRankingQuestionId &&
+          resolvedIndustryRankingQuestion &&
+          industryRankingMonitorQuestion
+        ) {
+          const ensuredIndustryRun = await ensureIndustryRankingMonitorRun({
+            value,
+            clientRequestId: input.clientRequestId,
+            question: resolvedIndustryRankingQuestion.question,
+            monitorQuestion: industryRankingMonitorQuestion,
+            platforms: requestedPlatforms,
+            monitoringEdition: input.monitoringEdition,
+            regionCode: requestedRegionCode,
+            screenshotEnabled: requestedScreenshotEnabled,
+          });
+          if (ensuredIndustryRun.state === "processing") {
+            freeStart.run = undefined;
+            freeStart.promise = undefined;
+            sendProcessing();
+            return;
+          }
+          industryRankingRun = ensuredIndustryRun.run;
+        }
+
         let fulfillingOrder: GeoProjectOrder | undefined;
         if (legacyOrder) {
           fulfillingOrder = await transitionProjectOrder(
@@ -5706,6 +5902,13 @@ export function createGeoRouter(options: GeoRouterOptions = {}): Router {
           monitorRunId: run.runId,
           monitoringEdition: input.monitoringEdition,
           monitorQuestionId: question.id,
+          ...(requestedIndustryRankingQuestionId && industryRankingRun
+            ? {
+                industryRankingQuestionId: requestedIndustryRankingQuestionId,
+                industryRankingMonitorRunId: industryRankingRun.runId,
+                industryRankingMonitorFreeReservation: undefined,
+              }
+            : {}),
           monitorPlatformIds: requestedPlatforms,
           ...(resolvedRegion ? { monitorRegion: resolvedRegion } : {}),
           ...(requestedScreenshotEnabled
@@ -5731,6 +5934,8 @@ export function createGeoRouter(options: GeoRouterOptions = {}): Router {
           run,
           undefined,
           undefined,
+          undefined,
+          industryRankingRun,
         );
         res.status(recovering ? 200 : 201).json({
           state: "started",
@@ -6157,7 +6362,7 @@ export function createGeoRouter(options: GeoRouterOptions = {}): Router {
           id: question.id,
           text: question.question,
           category: question.category,
-          rankingMetricEligible: question.category !== "reputation",
+          rankingMetricEligible: question.category === "industry_ranking",
         },
         platforms: [...monitorRun.platforms].sort(compareCanonicalText),
         repeatPerPlatform: 5,
@@ -6603,6 +6808,10 @@ export function createGeoRouter(options: GeoRouterOptions = {}): Router {
             executionScenarioFilename:
               scenarioFile.filename || scenarioFilename,
             scenarioName: "full_execution" as const,
+            brandMentionRateObservation:
+              question.category === "industry_ranking"
+                ? monitorBrandMentionRate(monitorRun)
+                : undefined,
             retryReason: forecastRetryReason,
           };
           const created = await createGeoTaskWithSkillPackages(
@@ -6686,6 +6895,359 @@ export function createGeoRouter(options: GeoRouterOptions = {}): Router {
         monitorRun,
         assessmentTask,
         forecastTask,
+        { assessment: assessmentOutputPromise },
+      );
+      res.status(201).json({ projectToken, project });
+    }),
+  );
+
+  router.post(
+    "/projects/:projectToken/industry-ranking/assessment",
+    requireConfiguration,
+    requireSession,
+    requireCostRate("industry-ranking-assessment-create", 8),
+    asyncHandler(async (req, res) => {
+      let value = openOwnedProject(req, res);
+      if (
+        !value.industryRankingMonitorRunId ||
+        !value.industryRankingQuestionId
+      ) {
+        throw new GeoHttpError(
+          "行业排名监控任务提交后才能生成现状评估",
+          409,
+          "MONITOR_NOT_STARTED",
+        );
+      }
+      const [knowledgeBaseTask, questionTask, monitorRun] = await Promise.all([
+        getResolvedTask(broker, value.knowledgeBaseTaskId),
+        value.questionTaskId
+          ? getResolvedQuestionTask(broker, value.questionTaskId)
+          : Promise.resolve(undefined),
+        getResolvedMonitorRun(
+          broker,
+          value.industryRankingMonitorRunId,
+          monitorRunExpectation(value),
+        ),
+      ]);
+      if (!questionTask) {
+        throw new GeoHttpError(
+          "推荐问题记录不存在",
+          409,
+          "QUESTIONS_NOT_READY",
+        );
+      }
+      const question = findOwnedQuestion(
+        value,
+        parseQuestionSetFromTask(questionTask)?.questions,
+        value.industryRankingQuestionId,
+      );
+      if (question?.category !== "industry_ranking") {
+        throw new GeoHttpError(
+          "行业排名监控问题与当前项目不匹配",
+          409,
+          "MONITOR_QUESTION_MISMATCH",
+        );
+      }
+
+      if (value.industryRankingAssessmentTaskId) {
+        const [assessmentTask, forecastTask] = await Promise.all([
+          getResolvedTask(broker, value.industryRankingAssessmentTaskId),
+          value.industryRankingOptimizationForecastTaskId
+            ? getResolvedTask(
+                broker,
+                value.industryRankingOptimizationForecastTaskId,
+              )
+            : Promise.resolve(undefined),
+        ]);
+        const assessmentStatus = normalizeTaskStatus(assessmentTask.status);
+        let restart = ["failed", "cancelled"].includes(assessmentStatus);
+        let assessmentOutputPromise:
+          | ReturnType<typeof resolveAssessmentTaskOutput>
+          | undefined;
+        if (assessmentStatus === "completed") {
+          try {
+            assessmentOutputPromise = parseScopedAssessmentTaskOutput(
+              broker,
+              assessmentTask,
+              question,
+              monitorRun.platforms,
+              monitorRun,
+            );
+            calculateCompleteAssessment(await assessmentOutputPromise);
+          } catch (error) {
+            logAssessmentOutputValidation(error, assessmentTask);
+            restart = true;
+          }
+        }
+        if (!restart) {
+          const project = await buildProjectView(
+            broker,
+            value,
+            req.params.projectToken,
+            knowledgeBaseTask,
+            questionTask,
+            undefined,
+            undefined,
+            undefined,
+            undefined,
+            monitorRun,
+            assessmentTask,
+            forecastTask,
+            { assessment: assessmentOutputPromise },
+          );
+          res.json({ projectToken: req.params.projectToken, project });
+          return;
+        }
+
+        const previousAssessmentTaskId = value.industryRankingAssessmentTaskId;
+        const previousForecastTaskId =
+          value.industryRankingOptimizationForecastTaskId;
+        value = {
+          ...value,
+          industryRankingAssessmentTaskId: undefined,
+          industryRankingAssessmentSubmittedAt: undefined,
+          industryRankingAssessmentAttempt: Math.max(
+            2,
+            Math.floor(value.industryRankingAssessmentAttempt || 1) + 1,
+          ),
+          industryRankingAssessmentVersion: 2,
+          industryRankingOptimizationForecastTaskId: undefined,
+          industryRankingOptimizationForecastSubmittedAt: undefined,
+          industryRankingOptimizationForecastAttempt: 1,
+          industryRankingOptimizationForecastVersion: 2,
+          previousIndustryRankingAssessmentTaskIds: Array.from(
+            new Set([
+              ...(value.previousIndustryRankingAssessmentTaskIds || []),
+              previousAssessmentTaskId,
+            ]),
+          ),
+          previousIndustryRankingOptimizationForecastTaskIds:
+            previousForecastTaskId
+              ? Array.from(
+                  new Set([
+                    ...(value.previousIndustryRankingOptimizationForecastTaskIds ||
+                      []),
+                    previousForecastTaskId,
+                  ]),
+                )
+              : value.previousIndustryRankingOptimizationForecastTaskIds,
+        };
+      }
+
+      const created = await createAutomaticAssessmentTask(
+        value,
+        knowledgeBaseTask,
+        questionTask,
+        monitorRun,
+        "industry_ranking",
+      );
+      value = created.value;
+      const projectToken = codec.seal("project", value, PROJECT_TTL_MS);
+      const project = await buildProjectView(
+        broker,
+        value,
+        projectToken,
+        knowledgeBaseTask,
+        questionTask,
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        monitorRun,
+        created.task,
+      );
+      res.status(201).json({ projectToken, project });
+    }),
+  );
+
+  router.post(
+    "/projects/:projectToken/industry-ranking/optimization-forecast",
+    requireConfiguration,
+    requireSession,
+    requireCostRate("industry-ranking-forecast-create", 6),
+    asyncHandler(async (req, res) => {
+      let value = openOwnedProject(req, res);
+      if (
+        !value.industryRankingMonitorRunId ||
+        !value.industryRankingQuestionId ||
+        !value.industryRankingAssessmentTaskId
+      ) {
+        throw new GeoHttpError(
+          "行业排名现状评估完成后才能生成优化效果评估",
+          409,
+          "ASSESSMENT_NOT_READY",
+        );
+      }
+      const [knowledgeBaseTask, questionTask, monitorRun, assessmentTask] =
+        await Promise.all([
+          getResolvedTask(broker, value.knowledgeBaseTaskId),
+          value.questionTaskId
+            ? getResolvedQuestionTask(broker, value.questionTaskId)
+            : Promise.resolve(undefined),
+          getResolvedMonitorRun(
+            broker,
+            value.industryRankingMonitorRunId,
+            monitorRunExpectation(value),
+          ),
+          getResolvedTask(broker, value.industryRankingAssessmentTaskId),
+        ]);
+      const question =
+        questionTask && value.industryRankingQuestionId
+          ? findOwnedQuestion(
+              value,
+              parseQuestionSetFromTask(questionTask)?.questions,
+              value.industryRankingQuestionId,
+            )
+          : undefined;
+      if (question?.category !== "industry_ranking") {
+        throw new GeoHttpError(
+          "行业排名评估与监控问题范围不匹配",
+          409,
+          "ASSESSMENT_SCOPE_MISMATCH",
+        );
+      }
+      if (normalizeTaskStatus(assessmentTask.status) !== "completed") {
+        throw new GeoHttpError(
+          "行业排名现状评估仍在生成",
+          409,
+          "ASSESSMENT_NOT_READY",
+        );
+      }
+
+      const assessmentOutputPromise = parseScopedAssessmentTaskOutput(
+        broker,
+        assessmentTask,
+        question,
+        monitorRun.platforms,
+        monitorRun,
+      );
+      let scoredAssessment: ReturnType<
+        typeof calculateQuestionBaselineAssessment
+      >;
+      try {
+        scoredAssessment = calculateCompleteAssessment(
+          await assessmentOutputPromise,
+        );
+      } catch (error) {
+        logAssessmentOutputValidation(error, assessmentTask);
+        throw new GeoHttpError(
+          publicAssessmentValidationMessage(error),
+          409,
+          "ASSESSMENT_INVALID",
+        );
+      }
+
+      let forecastRetryReason: string | undefined;
+      if (value.industryRankingOptimizationForecastTaskId) {
+        const forecastTask = await getResolvedTask(
+          broker,
+          value.industryRankingOptimizationForecastTaskId,
+        );
+        const forecastStatus = normalizeTaskStatus(forecastTask.status);
+        let forecastOutputPromise:
+          | ReturnType<typeof resolveOptimizationOutcomeForecastTaskOutput>
+          | undefined;
+        if (["failed", "cancelled"].includes(forecastStatus)) {
+          forecastRetryReason =
+            forecastStatus === "cancelled"
+              ? "上一次行业排名优化效果评估任务已取消"
+              : normalizeTask(forecastTask, "optimization-forecast").failure
+                  ?.code || "上一次行业排名优化效果评估任务执行失败";
+        } else if (forecastStatus === "completed") {
+          try {
+            forecastOutputPromise =
+              resolveOptimizationOutcomeForecastTaskOutput(
+                broker,
+                forecastTask,
+                {
+                  taskId: taskIdFrom(forecastTask),
+                },
+              );
+            calculateCompleteForecast(
+              scoredAssessment,
+              await forecastOutputPromise,
+            );
+          } catch (error) {
+            logAssessmentOutputValidation(error, forecastTask);
+            forecastRetryReason = publicForecastValidationMessage(error);
+          }
+        }
+        if (!forecastRetryReason) {
+          const project = await buildProjectView(
+            broker,
+            value,
+            req.params.projectToken,
+            knowledgeBaseTask,
+            questionTask,
+            undefined,
+            undefined,
+            undefined,
+            undefined,
+            monitorRun,
+            assessmentTask,
+            forecastTask,
+            {
+              assessment: assessmentOutputPromise,
+              forecast: forecastOutputPromise,
+            },
+          );
+          res.json({ projectToken: req.params.projectToken, project });
+          return;
+        }
+        if (
+          (value.industryRankingOptimizationForecastAttempt || 1) >=
+          MAX_OPTIMIZATION_FORECAST_ATTEMPTS
+        ) {
+          throw new GeoHttpError(
+            "行业排名优化效果评估重新评估次数已用完，请联系技术支持",
+            409,
+            "FORECAST_RETRY_EXHAUSTED",
+          );
+        }
+        const previousTaskId = value.industryRankingOptimizationForecastTaskId;
+        value = {
+          ...value,
+          industryRankingOptimizationForecastTaskId: undefined,
+          industryRankingOptimizationForecastSubmittedAt: undefined,
+          industryRankingOptimizationForecastAttempt: Math.max(
+            2,
+            Math.floor(value.industryRankingOptimizationForecastAttempt || 1) +
+              1,
+          ),
+          industryRankingOptimizationForecastVersion: 2,
+          previousIndustryRankingOptimizationForecastTaskIds: Array.from(
+            new Set([
+              ...(value.previousIndustryRankingOptimizationForecastTaskIds ||
+                []),
+              previousTaskId,
+            ]),
+          ),
+        };
+      }
+
+      const created = await createAutomaticOptimizationForecastTask(
+        value,
+        knowledgeBaseTask,
+        scoredAssessment,
+        forecastRetryReason,
+        "industry_ranking",
+        monitorRun,
+      );
+      value = created.value;
+      const projectToken = codec.seal("project", value, PROJECT_TTL_MS);
+      const project = await buildProjectView(
+        broker,
+        value,
+        projectToken,
+        knowledgeBaseTask,
+        questionTask,
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        monitorRun,
+        assessmentTask,
+        created.task,
         { assessment: assessmentOutputPromise },
       );
       res.status(201).json({ projectToken, project });
@@ -8346,15 +8908,45 @@ export function createGeoRouter(options: GeoRouterOptions = {}): Router {
     requireSessionRate("project-delete", 150, 10 * 60 * 1000),
     asyncHandler(async (req, res) => {
       const value = openOwnedProject(req, res);
-      // Cached clients from older Website builds can still call this route
-      // before removing their IndexedDB copy. Treat it as a compatibility
-      // acknowledgement only: a Website project deletion must never stop or
-      // delete Manus tasks, provider records, uploaded assets, orders, or
-      // recovery reservations.
+      const reservationProjectIds = [
+        value.projectId,
+        industryRankingReservationProjectId(value.projectId),
+      ];
+      const reservations = await Promise.all(
+        reservationProjectIds.map((projectId) =>
+          monitorFreeReservationStore.get(projectId),
+        ),
+      );
+      if (
+        reservations.some(
+          (reservation) =>
+            reservation?.state === "submitting" && !reservation.runId,
+        )
+      ) {
+        throw new GeoHttpError(
+          "监控创建结果仍在确认，确认完成前不能删除项目",
+          409,
+          "PROJECT_DELETION_BLOCKED",
+        );
+      }
+      await Promise.all(
+        reservationProjectIds.map((projectId) =>
+          monitorFreeReservationStore.fenceProjectDeletion(projectId),
+        ),
+      );
+      await Promise.all(
+        reservationProjectIds.map((projectId) =>
+          monitorFreeReservationStore.purgeProject(projectId),
+        ),
+      );
+      // Provider tasks, answers and uploaded evidence remain retained. Only
+      // the two local free-monitor reservation identities are fenced and
+      // released so neither perspective can be resumed after deletion.
       res.json({
         ok: true,
         projectId: value.projectId,
         retention: "provider_records_retained",
+        reservationState: "released",
       });
     }),
   );
@@ -8367,7 +8959,14 @@ export function createGeoRouter(options: GeoRouterOptions = {}): Router {
       const normalized = normalizeError(error);
       res.status(normalized.status).json({
         ok: false,
-        error: { code: normalized.code, message: normalized.message },
+        error: {
+          code: normalized.code,
+          message: normalized.message,
+          ...(normalized instanceof GeoBrokerError &&
+          typeof normalized.retryable === "boolean"
+            ? { retryable: normalized.retryable }
+            : {}),
+        },
         ...(error instanceof GeoCustomQuestionValidationStoreError &&
         error.activeOperation
           ? { activeOperation: error.activeOperation }
@@ -8475,24 +9074,54 @@ async function parseScopedAssessmentTaskOutput(
   platforms: GeoMonitorPlatformId[],
   monitorRun?: BrokerMonitorRun,
 ) {
-  const scoped = await resolveAssessmentTaskOutput(broker, task, {
+  const raw = await resolveAssessmentTaskOutput(broker, task, {
     taskId: taskIdFrom(task),
-    validate: (output) =>
-      assertAssessmentOutputScope(output, {
-        question: {
-          id: question.id,
-          text: question.question,
-          category: question.category,
-          rankingMetricEligible: question.category !== "reputation",
-        },
-        platforms,
-        ...(monitorRun
-          ? {
-              successfulResponses: monitorRun.completedItems,
-              failedResponses: monitorRun.failedItems,
-            }
-          : {}),
-      }),
+  });
+  // The selected Website question is authoritative for ranking eligibility.
+  // A provider may echo a broader flag or ranking values for another question
+  // type; normalize those fields away instead of rejecting the whole semantic
+  // asset assessment.
+  const scoped =
+    question.category === "industry_ranking"
+      ? raw
+      : {
+          ...raw,
+          question: {
+            ...raw.question,
+            rankingMetricEligible: false,
+          },
+          platformBreakdown: raw.platformBreakdown.map((platform) => ({
+            ...platform,
+            brandMentionRate: null,
+            averageRank: null,
+          })),
+          rankingDiagnostics: {
+            eligible: false,
+            totalObservations: 0,
+            rankedObservations: 0,
+            unmentionedObservations: 0,
+            averageRank: null,
+            firstPlaceRate: null,
+            top3Rate: null,
+            top5Rate: null,
+            competitorRankGap: null,
+            calculationBasis: "非行业排名问题不计算品牌排名指标。",
+          },
+        };
+  assertAssessmentOutputScope(scoped, {
+    question: {
+      id: question.id,
+      text: question.question,
+      category: question.category,
+      rankingMetricEligible: question.category === "industry_ranking",
+    },
+    platforms,
+    ...(monitorRun
+      ? {
+          successfulResponses: monitorRun.completedItems,
+          failedResponses: monitorRun.failedItems,
+        }
+      : {}),
   });
   if (!monitorRun) return scoped;
 
@@ -8625,6 +9254,13 @@ async function buildProjectView(
     assessment?: ReturnType<typeof resolveAssessmentTaskOutput>;
     forecast?: ReturnType<typeof resolveOptimizationOutcomeForecastTaskOutput>;
   },
+  industryRankingMonitorRun?: BrokerMonitorRun,
+  industryRankingAssessmentTask?: BrokerTask,
+  industryRankingOptimizationForecastTask?: BrokerTask,
+  industryRankingPreResolvedOutputs?: {
+    assessment?: ReturnType<typeof resolveAssessmentTaskOutput>;
+    forecast?: ReturnType<typeof resolveOptimizationOutcomeForecastTaskOutput>;
+  },
 ) {
   const knowledgeBase = normalizeTask(knowledgeBaseTask, "knowledge-base");
   const questionsTaskView = questionTask
@@ -8636,6 +9272,16 @@ async function buildProjectView(
   const optimizationForecastTaskView = optimizationForecastTask
     ? normalizeTask(optimizationForecastTask, "optimization-forecast")
     : undefined;
+  const industryRankingAssessmentTaskView = industryRankingAssessmentTask
+    ? normalizeTask(industryRankingAssessmentTask, "assessment")
+    : undefined;
+  const industryRankingOptimizationForecastTaskView =
+    industryRankingOptimizationForecastTask
+      ? normalizeTask(
+          industryRankingOptimizationForecastTask,
+          "optimization-forecast",
+        )
+      : undefined;
   const statusSyncPending = (status: string | undefined) =>
     status === "unknown" || status === "waiting";
   const publicQuestionsTaskView = statusSyncPending(questionsTaskView?.status)
@@ -8776,6 +9422,14 @@ async function buildProjectView(
     questions && value.monitorQuestionId
       ? questions.find((question) => question.id === value.monitorQuestionId)
       : undefined;
+  const industryRankingQuestion =
+    questions && value.industryRankingQuestionId
+      ? questions.find(
+          (question) =>
+            question.id === value.industryRankingQuestionId &&
+            question.category === "industry_ranking",
+        )
+      : undefined;
   const serviceCategory =
     serviceQuestion?.category === "reputation" ||
     serviceQuestion?.category === "product_scenario" ||
@@ -8813,6 +9467,44 @@ async function buildProjectView(
               { taskId: taskIdFrom(optimizationForecastTask) },
             );
           return forecastOutputPromise;
+        }
+      : undefined;
+  let industryRankingAssessmentOutputPromise =
+    industryRankingPreResolvedOutputs?.assessment;
+  const resolveIndustryRankingAssessmentOutputForView =
+    industryRankingAssessmentTask &&
+    industryRankingAssessmentTaskView?.status === "completed"
+      ? () => {
+          industryRankingAssessmentOutputPromise ??=
+            industryRankingQuestion && industryRankingMonitorRun
+              ? parseScopedAssessmentTaskOutput(
+                  broker,
+                  industryRankingAssessmentTask,
+                  industryRankingQuestion,
+                  industryRankingMonitorRun.platforms,
+                  industryRankingMonitorRun,
+                )
+              : resolveAssessmentTaskOutput(
+                  broker,
+                  industryRankingAssessmentTask,
+                  { taskId: taskIdFrom(industryRankingAssessmentTask) },
+                );
+          return industryRankingAssessmentOutputPromise;
+        }
+      : undefined;
+  let industryRankingForecastOutputPromise =
+    industryRankingPreResolvedOutputs?.forecast;
+  const resolveIndustryRankingForecastOutputForView =
+    industryRankingOptimizationForecastTask &&
+    industryRankingOptimizationForecastTaskView?.status === "completed"
+      ? () => {
+          industryRankingForecastOutputPromise ??=
+            resolveOptimizationOutcomeForecastTaskOutput(
+              broker,
+              industryRankingOptimizationForecastTask,
+              { taskId: taskIdFrom(industryRankingOptimizationForecastTask) },
+            );
+          return industryRankingForecastOutputPromise;
         }
       : undefined;
   let serviceAssessmentReady = false;
@@ -8923,68 +9615,141 @@ async function buildProjectView(
     ["failed", "cancelled"].includes(publicKnowledgeBaseTask.status) ||
     (questionsTaskView &&
       ["failed", "cancelled"].includes(questionsTaskView.status)) ||
-    (assessmentTaskView &&
-      ["failed", "cancelled"].includes(assessmentTaskView.status)) ||
-    (optimizationForecastTaskView &&
-      ["failed", "cancelled"].includes(optimizationForecastTaskView.status)) ||
-    (monitorRun &&
-      ["remote_failed", "shape_mismatch"].includes(monitorRun.status)) ||
+    (() => {
+      const productExists = Boolean(
+        value.monitorQuestionId ||
+          monitorRun ||
+          assessmentTaskView ||
+          optimizationForecastTaskView,
+      );
+      const industryExists = Boolean(
+        value.industryRankingQuestionId ||
+          industryRankingMonitorRun ||
+          industryRankingAssessmentTaskView ||
+          industryRankingOptimizationForecastTaskView,
+      );
+      const productFailed = Boolean(
+        (assessmentTaskView &&
+          ["failed", "cancelled"].includes(assessmentTaskView.status)) ||
+          (optimizationForecastTaskView &&
+            ["failed", "cancelled"].includes(
+              optimizationForecastTaskView.status,
+            )) ||
+          (monitorRun &&
+            ["remote_failed", "shape_mismatch"].includes(monitorRun.status)),
+      );
+      const industryFailed = Boolean(
+        (industryRankingAssessmentTaskView &&
+          ["failed", "cancelled"].includes(
+            industryRankingAssessmentTaskView.status,
+          )) ||
+          (industryRankingOptimizationForecastTaskView &&
+            ["failed", "cancelled"].includes(
+              industryRankingOptimizationForecastTaskView.status,
+            )) ||
+          (industryRankingMonitorRun &&
+            ["remote_failed", "shape_mismatch"].includes(
+              industryRankingMonitorRun.status,
+            )),
+      );
+      const activeFailures = [
+        ...(productExists ? [productFailed] : []),
+        ...(industryExists ? [industryFailed] : []),
+      ];
+      return activeFailures.length > 0 && activeFailures.every(Boolean);
+    })() ||
     invalidQuestionResult;
   const taskProjectStatus = (taskStatus: string) =>
     statusSyncPending(taskStatus) ? "running" : taskStatus;
+  const perspectiveProjectStatus = (
+    run: BrokerMonitorRun | undefined,
+    assessmentView: ReturnType<typeof normalizeTask> | undefined,
+    forecastView: ReturnType<typeof normalizeTask> | undefined,
+  ) => {
+    if (forecastView) return taskProjectStatus(forecastView.status);
+    if (assessmentView) return taskProjectStatus(assessmentView.status);
+    if (
+      run &&
+      [
+        "submission_in_progress",
+        "submission_unknown",
+        "submitted",
+        "polling",
+      ].includes(run.status)
+    ) {
+      return "running";
+    }
+    if (run) {
+      return ["remote_failed", "shape_mismatch"].includes(run.status)
+        ? "failed"
+        : "completed";
+    }
+    return undefined;
+  };
+  const perspectiveStatuses = [
+    perspectiveProjectStatus(
+      monitorRun,
+      assessmentTaskView,
+      optimizationForecastTaskView,
+    ),
+    perspectiveProjectStatus(
+      industryRankingMonitorRun,
+      industryRankingAssessmentTaskView,
+      industryRankingOptimizationForecastTaskView,
+    ),
+  ].filter((candidate): candidate is string => Boolean(candidate));
   const status = failed
     ? "failed"
-    : optimizationForecastTaskView
-      ? taskProjectStatus(optimizationForecastTaskView.status)
-      : assessmentTaskView
-        ? taskProjectStatus(assessmentTaskView.status)
-        : monitorRun &&
-            [
-              "submission_in_progress",
-              "submission_unknown",
-              "submitted",
-              "polling",
-            ].includes(monitorRun.status)
-          ? "running"
-          : questions
-            ? "completed"
-            : publicQuestionsTaskView
-              ? taskProjectStatus(publicQuestionsTaskView.status)
-              : knowledgeBaseManifest
-                ? "ready_for_questions"
-                : taskProjectStatus(publicKnowledgeBaseTask.status);
+    : perspectiveStatuses.includes("running")
+      ? "running"
+      : perspectiveStatuses.some((candidate) => candidate !== "failed")
+        ? "completed"
+        : questions
+          ? "completed"
+          : publicQuestionsTaskView
+            ? taskProjectStatus(publicQuestionsTaskView.status)
+            : knowledgeBaseManifest
+              ? "ready_for_questions"
+              : taskProjectStatus(publicKnowledgeBaseTask.status);
   const stage =
     servicePaid || manualServiceOrder
       ? "service_activation"
-      : assessmentTask
+      : assessmentTask || industryRankingAssessmentTask
         ? "current_assessment"
-        : monitorRun
+        : monitorRun || industryRankingMonitorRun
           ? "monitoring"
           : knowledgeBaseManifest
             ? "question_recommendation"
             : "enterprise_analysis";
-  const publicMonitoring = monitorRun
-    ? (() => {
-        const view = toPublicMonitorView(monitorRun);
-        return {
-          ...view,
-          ...(value.monitorRegion ? { region: value.monitorRegion } : {}),
-          screenshotEnabled: Boolean(value.monitorScreenshotEnabled),
-          records: view.records?.map((record) => ({
-            ...record,
-            ...(value.monitorScreenshotEnabled && record.screenshotAvailable
-              ? {
-                  screenshotUrl: `/api/geo/projects/${encodeURIComponent(
-                    projectToken,
-                  )}/monitoring/records/${encodeURIComponent(
-                    record.recordId,
-                  )}/screenshot`,
-                }
-              : {}),
-          })),
-        };
-      })()
-    : undefined;
+  const publicMonitoringFor = (
+    run: BrokerMonitorRun | undefined,
+    perspective: "product-opinion" | "industry-ranking",
+  ) => {
+    if (!run) return undefined;
+    const view = toPublicMonitorView(run);
+    return {
+      ...view,
+      ...(value.monitorRegion ? { region: value.monitorRegion } : {}),
+      screenshotEnabled: Boolean(value.monitorScreenshotEnabled),
+      records: view.records?.map((record) => ({
+        ...record,
+        ...(value.monitorScreenshotEnabled && record.screenshotAvailable
+          ? {
+              screenshotUrl: `/api/geo/projects/${encodeURIComponent(
+                projectToken,
+              )}/monitoring/${perspective}/records/${encodeURIComponent(
+                record.recordId,
+              )}/screenshot`,
+            }
+          : {}),
+      })),
+    };
+  };
+  const publicMonitoring = publicMonitoringFor(monitorRun, "product-opinion");
+  const publicIndustryRankingMonitoring = publicMonitoringFor(
+    industryRankingMonitorRun,
+    "industry-ranking",
+  );
   const publicAssessment = assessmentTask
     ? await toPublicAssessmentView(
         broker,
@@ -9004,6 +9769,27 @@ async function buildProjectView(
           monitorRun,
           resolveAssessmentOutputForView,
           resolveForecastOutputForView,
+        )
+      : undefined;
+  const publicIndustryRankingAssessment = industryRankingAssessmentTask
+    ? await toPublicAssessmentView(
+        broker,
+        industryRankingAssessmentTask,
+        industryRankingQuestion,
+        industryRankingMonitorRun,
+        resolveIndustryRankingAssessmentOutputForView,
+      )
+    : undefined;
+  const publicIndustryRankingOptimizationForecast =
+    industryRankingOptimizationForecastTask && industryRankingAssessmentTask
+      ? await toPublicOptimizationForecastView(
+          broker,
+          industryRankingOptimizationForecastTask,
+          industryRankingAssessmentTask,
+          industryRankingQuestion,
+          industryRankingMonitorRun,
+          resolveIndustryRankingAssessmentOutputForView,
+          resolveIndustryRankingForecastOutputForView,
         )
       : undefined;
   const isCompleteAssessmentView =
@@ -9031,6 +9817,25 @@ async function buildProjectView(
       publicOptimizationForecast?.quality?.completeness === "partial" ||
       ["failed", "cancelled"].includes(
         optimizationForecastTaskView?.status || "",
+      ));
+  const industryRankingAssessmentRetryAvailable =
+    Boolean(industryRankingAssessmentTask) &&
+    industryRankingAssessmentTaskView?.status !== "unknown" &&
+    (publicIndustryRankingAssessment?.status === "failed" ||
+      publicIndustryRankingAssessment?.quality?.completeness === "partial" ||
+      ["failed", "cancelled"].includes(
+        industryRankingAssessmentTaskView?.status || "",
+      ));
+  const industryRankingOptimizationForecastRetryAvailable =
+    Boolean(industryRankingOptimizationForecastTask) &&
+    (value.industryRankingOptimizationForecastAttempt || 1) <
+      MAX_OPTIMIZATION_FORECAST_ATTEMPTS &&
+    industryRankingOptimizationForecastTaskView?.status !== "unknown" &&
+    (publicIndustryRankingOptimizationForecast?.status === "failed" ||
+      publicIndustryRankingOptimizationForecast?.quality?.completeness ===
+        "partial" ||
+      ["failed", "cancelled"].includes(
+        industryRankingOptimizationForecastTaskView?.status || "",
       ));
   const executionLog = buildGeoExecutionLog({
     knowledgeBaseTask: executionKnowledgeBaseTask,
@@ -9151,6 +9956,13 @@ async function buildProjectView(
     optimizationForecastTask: optimizationForecastTaskView
       ? { ...optimizationForecastTaskView, output: [] }
       : undefined,
+    industryRankingAssessmentTask: industryRankingAssessmentTaskView
+      ? { ...industryRankingAssessmentTaskView, output: [] }
+      : undefined,
+    industryRankingOptimizationForecastTask:
+      industryRankingOptimizationForecastTaskView
+        ? { ...industryRankingOptimizationForecastTaskView, output: [] }
+        : undefined,
     archive:
       archiveDescriptor && knowledgeBaseManifest
         ? {
@@ -9178,6 +9990,7 @@ async function buildProjectView(
     questionRecommendation,
     questions: questions?.map(publicGeoQuestion),
     selectedQuestionId: value.monitorQuestionId,
+    selectedIndustryRankingQuestionId: value.industryRankingQuestionId,
     selectedPlatformIds: value.monitorPlatformIds || [],
     knowledgeBaseValidationCategory: knowledgeBaseValidationFailure?.category,
     knowledgeBaseSupportRequired:
@@ -9210,12 +10023,18 @@ async function buildProjectView(
     questionRetryAvailable,
     assessmentRetryAvailable,
     optimizationForecastRetryAvailable,
+    industryRankingAssessmentRetryAvailable,
+    industryRankingOptimizationForecastRetryAvailable,
     assessmentUpdatingToVersion2: Boolean(
       value.assessmentUpgradeFromV1 && publicAssessment?.status !== "ready",
     ),
     monitoring: publicMonitoring,
+    industryRankingMonitoring: publicIndustryRankingMonitoring,
     assessment: publicAssessment,
+    industryRankingAssessment: publicIndustryRankingAssessment,
     optimizationForecast: publicOptimizationForecast,
+    industryRankingOptimizationForecast:
+      publicIndustryRankingOptimizationForecast,
     executionLog,
     serviceActivation:
       manualServiceOrder &&
@@ -9517,8 +10336,12 @@ async function toPublicAssessmentView(
         platform: platform.platform,
         responseCount: platform.responseCount,
         successfulResponses: platform.successfulResponses,
-        brandMentionRate: platform.brandMentionRate,
-        averageRank: platform.averageRank,
+        ...(question?.category === "industry_ranking"
+          ? {
+              brandMentionRate: platform.brandMentionRate,
+              averageRank: platform.averageRank,
+            }
+          : {}),
         factAccuracy: platform.factAccuracy,
         propositionHitRate: platform.propositionHitRate,
         sourceCount: platform.sourceCount,
@@ -9550,7 +10373,7 @@ async function toPublicAssessmentView(
               id: question.id,
               text: question.question,
               category: question.category,
-              rankingMetricEligible: question.category !== "reputation",
+              rankingMetricEligible: question.category === "industry_ranking",
             },
             platforms: monitorRun.platforms,
             successfulResponses: monitorRun.completedItems,
@@ -9641,13 +10464,26 @@ async function toPublicAssessmentView(
               ? [comparison.platform]
               : [],
         })),
-        platformBreakdown: partial.platformBreakdown.map((platform) => ({
-          ...platform,
-          verdict: publicAssessmentText(
-            platform.verdict,
-            "当前平台已返回可展示的观察结论。",
-          ),
-        })),
+        platformBreakdown: partial.platformBreakdown.map((platform) => {
+          const {
+            brandMentionRate: _brandMentionRate,
+            averageRank: _averageRank,
+            ...basePlatform
+          } = platform;
+          return {
+            ...basePlatform,
+            ...(question?.category === "industry_ranking"
+              ? {
+                  brandMentionRate: platform.brandMentionRate,
+                  averageRank: platform.averageRank,
+                }
+              : {}),
+            verdict: publicAssessmentText(
+              platform.verdict,
+              "当前平台已返回可展示的观察结论。",
+            ),
+          };
+        }),
         priorityActions: partial.priorityActions.map((action) => ({
           priority: action.priority,
           dimension: action.dimension,
@@ -9752,7 +10588,15 @@ async function toPublicOptimizationForecastView(
       semantic_authority: "semanticAuthority",
       competitive_advantage: "competitiveAdvantage",
     } as const;
-
+    const brandMentionRateObservation =
+      question?.category === "industry_ranking" && monitorRun
+        ? monitorBrandMentionRate(monitorRun)
+        : undefined;
+    const rawBrandMentionRateTarget = rawForecast.brandMentionRateTarget;
+    const brandMentionRateForecast = buildBrandMentionRateForecast(
+      brandMentionRateObservation,
+      rawBrandMentionRateTarget,
+    );
     return {
       status: "ready",
       schemaVersion: 2 as const,
@@ -9775,6 +10619,7 @@ async function toPublicOptimizationForecastView(
       ),
       targetCondition:
         "本区间是完成四周路线后的规划目标，不是效果承诺；第 4 周将按相同问题、平台和采样次数复测确认。",
+      ...(brandMentionRateForecast ? { brandMentionRateForecast } : {}),
       dimensions: dimensionEntries.flatMap(([id, dimension]) => {
         const projected = Object.values(dimension.indicators).filter(
           (indicator) => indicator.measurementStatus === "projectable",
@@ -11215,126 +12060,6 @@ async function cleanupCustomQuestionValidation(
 
 function isAlreadyDeletedGeoResource(error: unknown) {
   return error instanceof GeoBrokerError && error.status === 404;
-}
-
-export function createGeoCustomQuestionRecoveryWorker(input: {
-  broker: GeoPresalesBroker;
-  store: GeoCustomQuestionValidationStore;
-  intervalMs?: number;
-  batchSize?: number;
-  now?: () => number;
-}) {
-  const intervalMs = Math.max(1_000, input.intervalMs ?? 5_000);
-  const batchSize = Math.max(1, Math.min(100, input.batchSize ?? 20));
-  let timer: NodeJS.Timeout | undefined;
-  let inFlight: Promise<void> | undefined;
-
-  const runOnce = () => {
-    if (inFlight) return inFlight;
-    inFlight = (async () => {
-      // listActive is intentionally unbounded here: batchSize limits concurrent
-      // upstream work, not candidate discovery. Taking a fixed sorted prefix on
-      // every cycle permanently starves later reservations whenever the prefix
-      // remains active. Store leases and upstream idempotency keys make the full
-      // scan safe across overlapping Website processes.
-      const records = await input.store.listActive(Number.MAX_SAFE_INTEGER);
-      let nextRecordIndex = 0;
-      const recoverNext = async () => {
-        while (nextRecordIndex < records.length) {
-          const record = records[nextRecordIndex++];
-          if (!record) continue;
-          try {
-            await advanceCustomQuestionValidation({
-              broker: input.broker,
-              store: input.store,
-              record,
-              // The persisted immutable artifact is authoritative. The manifest
-              // loader only needs this task object for URL-only legacy archives;
-              // v1 reservations always freeze a Dashboard fileId.
-              knowledgeBaseTask: {
-                localTaskId: record.knowledgeBaseTaskId,
-                operationId: `stored:${record.knowledgeBaseTaskId}`,
-                status: "succeeded",
-                safeEvents: [],
-              },
-              now: input.now,
-            });
-          } catch (error) {
-            console.warn("[GEO custom question recovery]", {
-              event: "reservation_recovery_deferred",
-              projectId: record.projectId,
-              clientRequestId: record.clientRequestId,
-              diagnosticCode:
-                error instanceof GeoCustomQuestionValidationStoreError
-                  ? error.code
-                  : error instanceof GeoBrokerError
-                    ? error.code
-                    : "RECOVERY_DEFERRED",
-            });
-          }
-        }
-      };
-      await Promise.all(
-        Array.from(
-          { length: Math.min(batchSize, records.length) },
-          recoverNext,
-        ),
-      );
-
-      await input.store.collectGarbage({
-        // Recovery and retention must observe the same clock. Tests inject a
-        // deterministic clock, and production uses Date.now for both paths.
-        // Falling back to the store's/system clock here can retire a terminal
-        // receipt immediately after its temporary resources were cleaned.
-        now: new Date(input.now?.() ?? Date.now()),
-        cleanup: async (target) => {
-          const results = await Promise.allSettled([
-            ...target.temporaryLocalAssetIds.map((localAssetId) =>
-              input.broker.deleteAsset(localAssetId),
-            ),
-          ]);
-          const failed = results.filter(
-            (result) =>
-              result.status === "rejected" &&
-              !isAlreadyDeletedGeoResource(result.reason),
-          );
-          if (failed.length > 0) {
-            throw new Error(
-              `custom-question cleanup incomplete (${failed.length}/${results.length})`,
-            );
-          }
-        },
-      });
-    })().finally(() => {
-      inFlight = undefined;
-    });
-    // Attach the handler in the same turn so an interval-triggered rejection
-    // can never become an unhandled rejection.
-    void inFlight.catch((error) => {
-      console.warn("[GEO custom question recovery]", {
-        event: "worker_cycle_deferred",
-        diagnosticCode:
-          error instanceof GeoCustomQuestionValidationStoreError
-            ? error.code
-            : "RECOVERY_CYCLE_DEFERRED",
-      });
-    });
-    return inFlight;
-  };
-
-  return {
-    runOnce,
-    start() {
-      if (timer) return;
-      void runOnce();
-      timer = setInterval(() => void runOnce(), intervalMs);
-      timer.unref?.();
-    },
-    stop() {
-      if (timer) clearInterval(timer);
-      timer = undefined;
-    },
-  };
 }
 
 function rejectedCustomQuestionError(category: string, companyName: string) {

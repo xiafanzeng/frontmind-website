@@ -7,16 +7,36 @@ export function geoAutoRefreshDelayMs(
   project: GeoProject,
   nowMs = Date.now(),
 ): number {
+  const backgroundTaskActive = [
+    project.assessment?.status,
+    project.industryRankingAssessment?.status,
+    project.optimizationForecast?.status,
+    project.industryRankingOptimizationForecast?.status,
+  ].some((status) => status === "queued" || status === "running");
+  if (backgroundTaskActive) {
+    return GEO_AUTO_REFRESH_INTERVAL_MS;
+  }
+
+  const activeMonitoringRuns = [
+    project.monitoring,
+    project.industryRankingMonitoring,
+  ].filter(
+    (monitoring) =>
+      monitoring && ["submitted", "capturing"].includes(monitoring.status),
+  );
   if (
-    !["submitted", "capturing"].includes(project.monitoring?.status ?? "") ||
-    !project.monitoring?.nextPollAt
+    activeMonitoringRuns.length === 0 ||
+    activeMonitoringRuns.some((monitoring) => !monitoring?.nextPollAt)
   ) {
     return GEO_AUTO_REFRESH_INTERVAL_MS;
   }
-  const nextPollAt = Date.parse(project.monitoring.nextPollAt);
-  if (!Number.isFinite(nextPollAt) || nextPollAt <= nowMs) {
+  const nextPollAt = Math.min(
+    ...activeMonitoringRuns.map((monitoring) =>
+      Date.parse(monitoring!.nextPollAt!),
+    ),
+  );
+  if (!Number.isFinite(nextPollAt) || nextPollAt <= nowMs)
     return GEO_AUTO_REFRESH_INTERVAL_MS;
-  }
   return Math.min(
     GEO_AUTO_REFRESH_MAX_INTERVAL_MS,
     Math.max(GEO_AUTO_REFRESH_INTERVAL_MS, nextPollAt - nowMs + 250),
@@ -49,24 +69,25 @@ export function shouldAutoRefreshGeoProject(project: GeoProject): boolean {
     )
   )
     return true;
-  if (project.status === "failed") return false;
-
+  const perspectiveStatuses = [
+    project.optimizationForecast?.status,
+    project.industryRankingOptimizationForecast?.status,
+    project.assessment?.status,
+    project.industryRankingAssessment?.status,
+    project.monitoring?.status,
+    project.industryRankingMonitoring?.status,
+  ];
   if (
-    ["queued", "running"].includes(project.optimizationForecast?.status ?? "")
+    perspectiveStatuses.some((status) =>
+      ["submitted", "capturing", "queued", "running"].includes(status ?? ""),
+    )
   )
     return true;
-  if (["ready", "failed"].includes(project.optimizationForecast?.status ?? ""))
-    return false;
-  if (["queued", "running"].includes(project.assessment?.status ?? ""))
-    return true;
-  if (["ready", "failed"].includes(project.assessment?.status ?? ""))
-    return false;
 
-  if (["failed", "partial_review"].includes(project.monitoring?.status ?? ""))
-    return false;
-  if (["submitted", "capturing"].includes(project.monitoring?.status ?? ""))
-    return true;
-  if (project.monitoring?.status === "completed") return false;
+  if (project.status === "failed") return false;
+
+  const hasPerspectiveTask = perspectiveStatuses.some(Boolean);
+  if (hasPerspectiveTask) return false;
 
   if (!project.knowledgeBase) return true;
   if (project.questionRecommendation) {
