@@ -67,6 +67,9 @@ describe("dual question and assessment perspectives", () => {
     const reputation = screen.getByRole("button", {
       name: /验收企业的公开口碑如何核验？/,
     });
+    const competitor = screen.getByRole("button", {
+      name: /验收企业与同类方案 A 的差异是什么？/,
+    });
     const ranking = screen.getByRole("button", {
       name: /该行业有哪些值得关注的服务方案？/,
     }) as HTMLButtonElement;
@@ -81,6 +84,10 @@ describe("dual question and assessment perspectives", () => {
     expect(reputation.getAttribute("aria-pressed")).toBe("true");
     expect(ranking.disabled).toBe(false);
 
+    fireEvent.click(competitor);
+    expect(reputation.getAttribute("aria-pressed")).toBe("false");
+    expect(competitor.getAttribute("aria-pressed")).toBe("true");
+
     fireEvent.click(ranking);
     expect(ranking.getAttribute("aria-pressed")).toBe("true");
     expect(continueButton.disabled).toBe(false);
@@ -88,7 +95,7 @@ describe("dual question and assessment perspectives", () => {
     expect(onContinue).toHaveBeenCalledOnce();
   });
 
-  it("uses only two top-level assessment tabs and scopes their long content", () => {
+  it("keeps independent section tabs under the two assessment perspectives", () => {
     const view = render(
       <CurrentAssessment
         project={createGeoStylePreviewProject("assessment")}
@@ -107,24 +114,108 @@ describe("dual question and assessment perspectives", () => {
     expect(
       within(tablist).getByRole("tab", { name: /行业排名与品牌优胜/ }),
     ).toBeTruthy();
-    expect(screen.getByText("舆情与知识库对照")).toBeTruthy();
-    expect(screen.queryByText("当前表现")).toBeNull();
+    const productSections = screen.getByRole("tablist", {
+      name: "产品与舆情评估内容",
+    });
+    expect(within(productSections).getAllByRole("tab")).toHaveLength(3);
+    expect(
+      within(productSections)
+        .getByRole("tab", { name: /语义资产现状/ })
+        .getAttribute("aria-selected"),
+    ).toBe("true");
+    expect(screen.getByRole("heading", { name: "语义资产现状" })).toBeTruthy();
+    expect(
+      screen.queryByRole("heading", { name: "舆情与知识库对照" }),
+    ).toBeNull();
+    expect(screen.queryByRole("heading", { name: "当前表现" })).toBeNull();
+    expect(
+      screen.queryByRole("button", { name: /进入下一步：启动服务/ }),
+    ).toBeNull();
     expect(view.container.querySelectorAll('[role="tabpanel"]')).toHaveLength(
-      1,
+      2,
     );
+    expect(
+      view.container.querySelectorAll(".geo-assessment-perspective-section"),
+    ).toHaveLength(1);
+
+    fireEvent.click(
+      within(productSections).getByRole("tab", {
+        name: /舆情与知识库对照/,
+      }),
+    );
+    expect(
+      screen.getByRole("heading", { name: "舆情与知识库对照" }),
+    ).toBeTruthy();
+    expect(screen.queryByRole("heading", { name: "语义资产现状" })).toBeNull();
+
+    fireEvent.click(
+      within(productSections).getByRole("tab", { name: /优化后评估/ }),
+    );
+    expect(screen.getByRole("heading", { name: "优化后评估" })).toBeTruthy();
+    expect(
+      screen.getByRole("button", { name: /进入下一步：启动服务/ }),
+    ).toBeTruthy();
+    expect(
+      screen.queryByRole("heading", { name: "舆情与知识库对照" }),
+    ).toBeNull();
 
     fireEvent.click(
       within(tablist).getByRole("tab", { name: /行业排名与品牌优胜/ }),
     );
-    expect(screen.queryByText("舆情与知识库对照")).toBeNull();
-    expect(screen.getByText("当前表现")).toBeTruthy();
+    const industrySections = screen.getByRole("tablist", {
+      name: "行业排名与品牌优胜评估内容",
+    });
+    expect(within(industrySections).getAllByRole("tab")).toHaveLength(3);
+    expect(
+      within(industrySections)
+        .getByRole("tab", { name: /当前表现/ })
+        .getAttribute("aria-selected"),
+    ).toBe("true");
+    expect(
+      view.container.querySelector(".geo-industry-current-performance"),
+    ).toBeTruthy();
     expect(screen.getByLabelText("品牌提及率75%")).toBeTruthy();
-    expect(screen.getByLabelText("预期提及率90%")).toBeTruthy();
-    expect(screen.getAllByText("根据企业实际情况定制").length).toBeGreaterThan(
-      0,
+    expect(screen.queryByLabelText("预期提及率90%")).toBeNull();
+    expect(
+      screen.queryByRole("button", { name: /联系技术人员对接/ }),
+    ).toBeNull();
+
+    fireEvent.click(
+      within(industrySections).getByRole("tab", { name: /语义资产现状/ }),
     );
+    expect(screen.getByRole("heading", { name: "语义资产现状" })).toBeTruthy();
+    expect(screen.queryByLabelText("品牌提及率75%")).toBeNull();
+
+    fireEvent.click(within(tablist).getByRole("tab", { name: /产品与舆情/ }));
+    expect(
+      screen
+        .getByRole("tab", { name: /优化后评估/ })
+        .getAttribute("aria-selected"),
+    ).toBe("true");
+    expect(screen.getByRole("heading", { name: "优化后评估" })).toBeTruthy();
+
+    fireEvent.click(
+      within(tablist).getByRole("tab", { name: /行业排名与品牌优胜/ }),
+    );
+    expect(
+      screen
+        .getByRole("tab", { name: /语义资产现状/ })
+        .getAttribute("aria-selected"),
+    ).toBe("true");
+    const restoredIndustrySections = screen.getByRole("tablist", {
+      name: "行业排名与品牌优胜评估内容",
+    });
+    fireEvent.click(
+      within(restoredIndustrySections).getByRole("tab", {
+        name: /优化后评估/,
+      }),
+    );
+    expect(screen.getByLabelText("预期提及率90%")).toBeTruthy();
+    expect(
+      screen.getByRole("button", { name: /联系技术人员对接/ }),
+    ).toBeTruthy();
     expect(view.container.querySelectorAll('[role="tabpanel"]')).toHaveLength(
-      1,
+      2,
     );
   });
 
@@ -182,6 +273,14 @@ describe("dual question and assessment perspectives", () => {
     );
 
     fireEvent.click(screen.getByRole("tab", { name: /行业排名与品牌优胜/ }));
+    const sectionTabs = screen.getByRole("tablist", {
+      name: "行业排名与品牌优胜评估内容",
+    });
+    const forecastTab = within(sectionTabs).getByRole("tab", {
+      name: /优化后评估.*需重新评估/,
+    });
+    expect(forecastTab).toBeTruthy();
+    fireEvent.click(forecastTab);
     fireEvent.click(screen.getByRole("button", { name: "重新评估" }));
     expect(onRetryIndustryForecast).toHaveBeenCalledOnce();
     expect(onRetryForecast).not.toHaveBeenCalled();

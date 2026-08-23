@@ -35,6 +35,36 @@ describe("GEO assessment and onboarding responsive contracts", () => {
     );
   });
 
+  it("keeps product question cards compact across the three acceptance widths", () => {
+    expect(stylesheet).toMatch(
+      /\.geo-question-group\.is-product \.geo-question-categories\s*\{[^}]*grid-template-columns:\s*repeat\(auto-fit,\s*minmax\(260px,\s*1fr\)\)/s,
+    );
+    expect(stylesheet).toMatch(
+      /@media \(max-width: 980px\)[\s\S]*?\.geo-question-group\.is-product \.geo-question-categories\s*\{[^}]*grid-template-columns:\s*repeat\(2,\s*minmax\(0,\s*1fr\)\)/s,
+    );
+    expect(stylesheet).toMatch(
+      /@media \(max-width: 520px\)[\s\S]*?\.geo-question-group\.is-product \.geo-question-categories\s*\{[^}]*grid-template-columns:\s*minmax\(0,\s*1fr\)/s,
+    );
+    expect(stylesheet).toMatch(
+      /@media \(min-width: 840px\)[\s\S]*?\.geo-question-group\.is-product \.geo-question-list > button\s*\{[^}]*min-height:\s*52px/s,
+    );
+    expect(stylesheet).toMatch(
+      /\.geo-question-categories\.is-ranking\s*\{[^}]*grid-template-columns:\s*minmax\(0,\s*1fr\)/s,
+    );
+  });
+
+  it("keeps the assessment section cards in three columns without mobile overflow", () => {
+    expect(stylesheet).toMatch(
+      /\.geo-assessment-section-tabs\s*\{[^}]*display:\s*grid[^}]*grid-template-columns:\s*repeat\(3,\s*minmax\(0,\s*1fr\)\)/s,
+    );
+    expect(stylesheet).toMatch(
+      /\.geo-assessment-section-tabs button\s*\{[^}]*min-width:\s*0[^}]*min-height:\s*78px/s,
+    );
+    expect(stylesheet).toMatch(
+      /@media \(max-width: 520px\)[\s\S]*?\.geo-assessment-section-tab-description\s*\{[^}]*display:\s*none/s,
+    );
+  });
+
   it("keeps the contract-code dialog usable on a 520px or short viewport", () => {
     expect(stylesheet).toMatch(
       /\.geo-contract-code-dialog\s*\{[^}]*max-height:\s*calc\(100dvh - 2rem\)[^}]*overflow-y:\s*auto/s,

@@ -44,7 +44,7 @@ export const PRESALES_CONTRACTS = {
     name: "website.optimization-forecast",
     revision: 2,
     schemaHash:
-      "96bdf3df50dbabaca2618e198c7599c2fc53b3e41bff9076b21efcc2a79886b2",
+      "6bcc46978c9b7a60cc7a3b782d9d678bea5573bc130fbe8f89b370aa0d3044ea",
   },
   monitorQuestionTranslation: {
     name: "website.monitor-question-translation",

@@ -5935,21 +5935,80 @@ describe("GEO API", () => {
       completed.body.projectToken,
       "project",
     ).value;
-    broker.tasks.set(completeValue.optimizationForecastTaskId, {
-      id: completeValue.optimizationForecastTaskId,
+    const originalProductForecastTaskId =
+      completeValue.optimizationForecastTaskId;
+    const originalIndustryForecastTaskId =
+      completeValue.industryRankingOptimizationForecastTaskId;
+    const emptySkeleton = productionRestrictedForecastSkeleton();
+    broker.tasks.set(originalProductForecastTaskId, {
+      id: originalProductForecastTaskId,
+      status: "completed",
+      output: [
+        {
+          role: "assistant",
+          content: [{ text: JSON.stringify(emptySkeleton) }],
+        },
+      ],
+    });
+    broker.tasks.set(originalIndustryForecastTaskId, {
+      id: originalIndustryForecastTaskId,
+      status: "completed",
+      output: [
+        {
+          role: "assistant",
+          content: [{ text: JSON.stringify(emptySkeleton) }],
+        },
+      ],
+    });
+    const assessmentTaskCountBeforeRecovery = broker.assessmentTaskCount;
+    const recovered = await jsonRequest(
+      `/projects/${encodeURIComponent(completed.body.projectToken)}`,
+      ready.cookie,
+    );
+    expect(recovered.response.status).toBe(200);
+    expect(recovered.body).toMatchObject({
+      project: {
+        optimizationForecast: { status: "ready" },
+        industryRankingOptimizationForecast: { status: "ready" },
+      },
+    });
+    expect(broker.monitorCreates).toBe(2);
+    expect(broker.assessmentTaskCount).toBe(assessmentTaskCountBeforeRecovery);
+    expect(broker.forecastTaskCount).toBe(4);
+    const recoveredValue = codec.open<Record<string, any>>(
+      recovered.body.projectToken,
+      "project",
+    ).value;
+    expect(recoveredValue).toMatchObject({
+      optimizationForecastTaskId: "forecast-3",
+      optimizationForecastAttempt: 2,
+      previousOptimizationForecastTaskIds: [originalProductForecastTaskId],
+      industryRankingOptimizationForecastTaskId: "forecast-4",
+      industryRankingOptimizationForecastAttempt: 2,
+      previousIndustryRankingOptimizationForecastTaskIds: [
+        originalIndustryForecastTaskId,
+      ],
+    });
+    const retryReasons = Array.from(broker.taskInputUploads.values())
+      .map((bytes) => JSON.parse(bytes.toString("utf8")))
+      .map((input) => input.data?.retryReason)
+      .filter(Boolean);
+    expect(retryReasons.slice(-2)).toEqual([
+      "优化效果评估结果字段未通过校验，请重新评估",
+      "优化效果评估结果字段未通过校验，请重新评估",
+    ]);
+
+    broker.tasks.set(recoveredValue.optimizationForecastTaskId, {
+      id: recoveredValue.optimizationForecastTaskId,
       status: "failed",
       error: "product forecast failed",
     });
-    const oneSideFailedToken = codec.seal(
-      "project",
-      { ...completeValue, optimizationForecastAttempt: 2 },
-      60 * 60 * 1000,
-    );
     const oneSideFailed = await jsonRequest(
-      `/projects/${encodeURIComponent(oneSideFailedToken)}`,
+      `/projects/${encodeURIComponent(recovered.body.projectToken)}`,
       ready.cookie,
     );
     expect(oneSideFailed.response.status).toBe(200);
+    expect(broker.forecastTaskCount).toBe(4);
     expect(oneSideFailed.body).toMatchObject({
       project: {
         status: "completed",
@@ -7628,7 +7687,7 @@ describe("GEO API", () => {
     ).toBe(4);
   });
 
-  it("shows a safe partial forecast and creates a fresh task on explicit retry", async () => {
+  it("automatically retries a completed partial forecast once and then keeps the safe partial", async () => {
     const ready = await createReadyProject();
     const monitored = await startOnePlatformMonitor(ready);
     const run = broker.monitorRuns.get("monitor-1")!;
@@ -7665,6 +7724,37 @@ describe("GEO API", () => {
       ready.cookie,
     );
     expect((viewed.body as any).project.optimizationForecast).toMatchObject({
+      status: "running",
+    });
+    expect((viewed.body as any).project.serviceActivation).toBeUndefined();
+    expect(viewed.response.status).toBe(200);
+    expect(broker.forecastTaskCount).toBe(2);
+    expect(broker.repairCalls).toHaveLength(0);
+    expect(
+      (viewed.body as any).project.executionLog.currentEntryId,
+    ).toBe("optimization-forecast");
+    const retryValue = new GeoTokenCodec(
+      "test-session-secret-at-least-16-characters",
+    ).open<Record<string, unknown>>(
+      (viewed.body as any).projectToken,
+      "project",
+    ).value;
+    expect(retryValue).toMatchObject({
+      optimizationForecastTaskId: "forecast-2",
+      optimizationForecastAttempt: 2,
+      previousOptimizationForecastTaskIds: ["forecast-1"],
+    });
+
+    broker.tasks.set("forecast-2", {
+      id: "forecast-2",
+      status: "completed",
+      output: [{ content: [{ text: JSON.stringify(partialForecast) }] }],
+    });
+    const exhausted = await jsonRequest(
+      `/projects/${encodeURIComponent((viewed.body as any).projectToken)}`,
+      ready.cookie,
+    );
+    expect((exhausted.body as any).project.optimizationForecast).toMatchObject({
       status: "ready",
       quality: {
         completeness: "partial",
@@ -7672,25 +7762,11 @@ describe("GEO API", () => {
       },
     });
     expect(
-      (viewed.body as any).project.optimizationForecast.targetLow,
+      (exhausted.body as any).project.optimizationForecast.targetLow,
     ).toBeUndefined();
-    expect((viewed.body as any).project.serviceActivation).toBeUndefined();
-    expect(viewed.response.status).toBe(200);
-    expect(broker.forecastTaskCount).toBe(1);
-    expect(broker.repairCalls).toHaveLength(0);
     expect(
-      (viewed.body as any).project.executionLog.currentEntryId,
-    ).toBeUndefined();
-
-    const retried = await jsonRequest(
-      `/projects/${encodeURIComponent((viewed.body as any).projectToken)}/optimization-forecast`,
-      ready.cookie,
-      { method: "POST", body: {} },
-    );
-    expect(retried.response.status).toBe(201);
-    expect((retried.body as any).project.optimizationForecast).toMatchObject({
-      status: "running",
-    });
+      (exhausted.body as any).project.optimizationForecastRetryAvailable,
+    ).toBe(true);
     expect(broker.forecastTaskCount).toBe(2);
   });
 
@@ -11419,6 +11495,44 @@ function validForecastOutput(includeBrandMentionRateTarget = false) {
       requiresSameScopeRemeasurement: true,
     },
   };
+}
+
+function productionRestrictedForecastSkeleton() {
+  const value = structuredClone(validForecastOutput()) as Record<string, any>;
+  value.scenario.actionIds = [];
+  value.scenario.assumptions = [];
+  value.scenario.verificationWeeks = [];
+  for (const dimension of Object.values(value.dimensions) as Array<
+    Record<string, Record<string, unknown>>
+  >) {
+    for (const indicator of Object.values(dimension)) {
+      Object.assign(indicator, {
+        measurementStatus: "projectable",
+        gapClosureLow: 0,
+        gapClosureHigh: 0,
+        effectType: "direct_asset",
+        confidence: 0,
+        actionIds: [],
+        rationale: "",
+        dependencies: [],
+        evidenceRefs: [],
+        timeToSignalWeeks: 0,
+        verificationMetric: "",
+      });
+    }
+  }
+  value.roadmap = [];
+  value.summary = "";
+  value.executiveSummary = "";
+  for (const narrative of Object.values(value.dimensionNarratives) as Array<
+    Record<string, unknown>
+  >) {
+    narrative.currentFinding = "";
+    narrative.nextAction = "";
+  }
+  value.limitations = [];
+  delete value.brandMentionRateTarget;
+  return value;
 }
 
 async function fixtureCandidateArchive() {

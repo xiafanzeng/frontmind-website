@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import JSZip from "jszip";
 import { describe, expect, it } from "vitest";
 import {
@@ -435,7 +436,69 @@ function rawV2Forecast(): ForecastRawTaskOutput {
   };
 }
 
+function productionRestrictedForecastSkeleton() {
+  const value = structuredClone(rawV2Forecast()) as Record<string, any>;
+  value.scenario.actionIds = [];
+  value.scenario.assumptions = [];
+  value.scenario.verificationWeeks = [];
+  for (const dimension of Object.values(value.dimensions) as Array<
+    Record<string, Record<string, unknown>>
+  >) {
+    for (const indicator of Object.values(dimension)) {
+      Object.assign(indicator, {
+        measurementStatus: "projectable",
+        gapClosureLow: 0,
+        gapClosureHigh: 0,
+        effectType: "direct_asset",
+        confidence: 0,
+        actionIds: [],
+        rationale: "",
+        dependencies: [],
+        evidenceRefs: [],
+        timeToSignalWeeks: 0,
+        verificationMetric: "",
+      });
+    }
+  }
+  value.roadmap = [];
+  value.summary = "";
+  value.executiveSummary = "";
+  for (const narrative of Object.values(value.dimensionNarratives) as Array<
+    Record<string, unknown>
+  >) {
+    narrative.currentFinding = "";
+    narrative.nextAction = "";
+  }
+  value.limitations = [];
+  delete value.brandMentionRateTarget;
+  return value;
+}
+
+function canonicalJson(value: unknown): string {
+  if (Array.isArray(value)) {
+    return `[${value.map((item) => canonicalJson(item)).join(",")}]`;
+  }
+  if (value && typeof value === "object") {
+    return `{${Object.entries(value)
+      .sort(([left], [right]) => left.localeCompare(right))
+      .map(([key, item]) => `${JSON.stringify(key)}:${canonicalJson(item)}`)
+      .join(",")}}`;
+  }
+  return JSON.stringify(value);
+}
+
 describe("GEO optimization forecast schema and parser", () => {
+  it("rejects the exact restricted-output empty skeleton observed in production", () => {
+    const skeleton = productionRestrictedForecastSkeleton();
+    const canonical = canonicalJson(skeleton);
+
+    expect(Buffer.byteLength(canonical, "utf8")).toBe(4_047);
+    expect(createHash("sha256").update(canonical).digest("hex")).toBe(
+      "29e03f5d2ba2c7fd327090db388167c8f24840953c041cbd00e9388a4dc80ddd",
+    );
+    expect(ForecastRawTaskOutputSchema.safeParse(skeleton).success).toBe(false);
+  });
+
   it("accepts v2 customer narratives and keeps the roadmap concise", () => {
     const raw = rawV2Forecast();
     const parsed = ForecastRawTaskOutputSchema.parse(raw);

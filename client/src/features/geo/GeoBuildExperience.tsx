@@ -7212,6 +7212,13 @@ type MonitoringResultsProps = {
 
 type MonitoringPerspective = "product_opinion" | "industry_ranking";
 
+type AssessmentSectionId = "current" | "semantic" | "knowledge" | "forecast";
+
+type AssessmentSectionStatus = {
+  label: "已生成" | "生成中" | "需重新评估";
+  tone: "ready" | "loading" | "attention";
+};
+
 function monitoringRunStatusLabel(
   status?: NonNullable<GeoProject["monitoring"]>["status"],
 ) {
@@ -7229,6 +7236,53 @@ function assessmentRunStatusLabel(
   if (status === "failed") return "评估失败";
   if (status === "queued" || status === "running") return "评估生成中";
   return "等待评估";
+}
+
+function assessmentSectionStatus(
+  assessment?: GeoProject["assessment"],
+): AssessmentSectionStatus {
+  if (isCompleteAssessment(assessment)) {
+    return { label: "已生成", tone: "ready" };
+  }
+  if (assessment?.status === "failed" || assessment?.status === "ready") {
+    return { label: "需重新评估", tone: "attention" };
+  }
+  return { label: "生成中", tone: "loading" };
+}
+
+function forecastSectionStatus(
+  forecast?: GeoProject["optimizationForecast"],
+): AssessmentSectionStatus {
+  if (isCompleteForecast(forecast)) {
+    return { label: "已生成", tone: "ready" };
+  }
+  if (forecast?.status === "failed" || forecast?.status === "ready") {
+    return { label: "需重新评估", tone: "attention" };
+  }
+  return { label: "生成中", tone: "loading" };
+}
+
+function industryCurrentSectionStatus(
+  monitoring?: GeoProject["monitoring"],
+): AssessmentSectionStatus {
+  const completedAnswers =
+    monitoring?.answers.filter(
+      (answer) =>
+        answer.status === "completed" &&
+        answer.answer.trim().length > 0 &&
+        !answer.error,
+    ).length ?? 0;
+  if (completedAnswers > 0) {
+    return { label: "已生成", tone: "ready" };
+  }
+  if (
+    monitoring?.status === "failed" ||
+    monitoring?.status === "completed" ||
+    monitoring?.status === "partial_review"
+  ) {
+    return { label: "需重新评估", tone: "attention" };
+  }
+  return { label: "生成中", tone: "loading" };
 }
 
 type DualPerspectiveProject = GeoProject & {
@@ -7312,6 +7366,12 @@ export function CurrentAssessment({
   );
   const [activePerspective, setActivePerspective] =
     useState<MonitoringPerspective>(perspectives[0]?.kind ?? "product_opinion");
+  const [activeSections, setActiveSections] = useState<
+    Record<MonitoringPerspective, AssessmentSectionId>
+  >({
+    product_opinion: "semantic",
+    industry_ranking: "current",
+  });
 
   useEffect(() => {
     if (
@@ -7367,6 +7427,69 @@ export function CurrentAssessment({
     ? onRetryIndustryForecast
     : onRetryForecast;
   const preview = isGeoStylePreviewProject(project);
+  const currentAssessmentStatus = assessmentSectionStatus(
+    perspective.assessment,
+  );
+  const currentForecastStatus = forecastSectionStatus(perspective.forecast);
+  const assessmentSections: Array<{
+    id: AssessmentSectionId;
+    order: string;
+    title: string;
+    description: string;
+    status: AssessmentSectionStatus;
+  }> = isIndustry
+    ? [
+        {
+          id: "current",
+          order: "01",
+          title: "当前表现",
+          description: "查看语义资产总分与品牌提及率。",
+          status: industryCurrentSectionStatus(perspective.monitoring),
+        },
+        {
+          id: "semantic",
+          order: "02",
+          title: "语义资产现状",
+          description: "查看五维表现、平台差异与优先动作。",
+          status: currentAssessmentStatus,
+        },
+        {
+          id: "forecast",
+          order: "03",
+          title: "优化后评估",
+          description: "查看语义资产与品牌提及率条件目标。",
+          status: currentForecastStatus,
+        },
+      ]
+    : [
+        {
+          id: "semantic",
+          order: "01",
+          title: "语义资产现状",
+          description: "查看总分、五维表现与优先动作。",
+          status: currentAssessmentStatus,
+        },
+        {
+          id: "knowledge",
+          order: "02",
+          title: "舆情与知识库对照",
+          description: "核验回答与企业知识事实的一致性。",
+          status: currentAssessmentStatus,
+        },
+        {
+          id: "forecast",
+          order: "03",
+          title: "优化后评估",
+          description: "查看五维目标与四周执行路径。",
+          status: currentForecastStatus,
+        },
+      ];
+  const activeSection =
+    assessmentSections.find(
+      (section) => section.id === activeSections[perspective.kind],
+    ) ?? assessmentSections[0];
+  const perspectiveTabId = `geo-assessment-perspective-tab-${perspective.kind}`;
+  const sectionPanelId = `geo-assessment-section-panel-${perspective.kind}`;
 
   return (
     <div className="geo-assessment-view">
@@ -7446,9 +7569,11 @@ export function CurrentAssessment({
           return (
             <button
               key={item.kind}
+              id={`geo-assessment-perspective-tab-${item.kind}`}
               type="button"
               role="tab"
               aria-selected={active}
+              aria-controls="geo-assessment-perspective-panel"
               className={active ? "is-active" : ""}
               onClick={() => setActivePerspective(item.kind)}
             >
@@ -7478,29 +7603,75 @@ export function CurrentAssessment({
       </div>
 
       <div
+        id="geo-assessment-perspective-panel"
         className="geo-assessment-perspective-content"
         role="tabpanel"
+        aria-labelledby={perspectiveTabId}
         aria-label={isIndustry ? "行业排名与品牌优胜评估" : "产品与舆情评估"}
       >
-        {perspective.monitoring?.status !== "completed" &&
-        !assessmentStarted ? (
-          <div className="geo-assessment-empty">
-            <Clock3 size={24} />
-            <h2>当前视角的评估正在准备</h2>
-            <p>对应问题采集完成后，将在这里生成语义资产现状与优化目标。</p>
-          </div>
-        ) : (
-          <>
-            {isIndustry && (
-              <IndustryCurrentPerformance
-                monitoring={perspective.monitoring}
-                assessment={perspective.assessment}
-              />
-            )}
+        <div
+          className="geo-assessment-section-tabs"
+          role="tablist"
+          aria-label={`${isIndustry ? "行业排名与品牌优胜" : "产品与舆情"}评估内容`}
+        >
+          {assessmentSections.map((section) => {
+            const active = section.id === activeSection.id;
+            return (
+              <button
+                key={section.id}
+                id={`geo-assessment-section-tab-${perspective.kind}-${section.id}`}
+                type="button"
+                role="tab"
+                aria-selected={active}
+                aria-controls={sectionPanelId}
+                aria-label={`${section.title}，${section.description}${section.status.label}`}
+                className={active ? "active" : ""}
+                onClick={() =>
+                  setActiveSections((current) => ({
+                    ...current,
+                    [perspective.kind]: section.id,
+                  }))
+                }
+              >
+                <span className="geo-assessment-section-tab-heading">
+                  <em>{section.order}</em>
+                  <strong>{section.title}</strong>
+                </span>
+                <small className="geo-assessment-section-tab-description">
+                  {section.description}
+                </small>
+                <span
+                  className={`geo-assessment-section-tab-status is-${section.status.tone}`}
+                >
+                  {section.status.label}
+                </span>
+              </button>
+            );
+          })}
+        </div>
 
+        <div
+          id={sectionPanelId}
+          className="geo-assessment-section-panel"
+          role="tabpanel"
+          aria-labelledby={`geo-assessment-section-tab-${perspective.kind}-${activeSection.id}`}
+        >
+          {perspective.monitoring?.status !== "completed" &&
+          !assessmentStarted ? (
+            <div className="geo-assessment-empty">
+              <Clock3 size={24} />
+              <h2>当前视角的评估正在准备</h2>
+              <p>对应问题采集完成后，将在这里生成语义资产现状与优化目标。</p>
+            </div>
+          ) : activeSection.id === "current" && isIndustry ? (
+            <IndustryCurrentPerformance
+              monitoring={perspective.monitoring}
+              assessment={perspective.assessment}
+            />
+          ) : activeSection.id === "semantic" ? (
             <section className="geo-assessment-perspective-section">
               <header>
-                <span>01</span>
+                <span>{isIndustry ? "02" : "01"}</span>
                 <div>
                   <h3>语义资产现状</h3>
                   <p>查看本问题的总分、五维表现、平台差异与优先动作。</p>
@@ -7512,88 +7683,90 @@ export function CurrentAssessment({
                 hideScoreHero={isIndustry}
               />
             </section>
-
-            {!isIndustry && (
-              <section className="geo-assessment-perspective-section">
-                <header>
-                  <span>02</span>
-                  <div>
-                    <h3>舆情与知识库对照</h3>
-                    <p>
-                      以企业知识库事实核验产品与舆情回答，不混入行业排名样本。
-                    </p>
-                  </div>
-                </header>
-                <KnowledgeComparison project={perspectiveProject} />
-              </section>
-            )}
-
+          ) : activeSection.id === "knowledge" && !isIndustry ? (
             <section className="geo-assessment-perspective-section">
               <header>
-                <span>{isIndustry ? "02" : "03"}</span>
+                <span>02</span>
                 <div>
-                  <h3>优化后评估</h3>
+                  <h3>舆情与知识库对照</h3>
                   <p>
-                    {isIndustry
-                      ? "同时查看语义资产目标和品牌提及率的一个月条件目标。"
-                      : "查看语义资产分数、五维目标与四周执行路径。"}
+                    以企业知识库事实核验产品与舆情回答，不混入行业排名样本。
                   </p>
                 </div>
               </header>
-              <OptimizationForecastView
-                project={perspectiveProject}
-                onContact={onContact}
-                onRetryForecast={currentRetryForecast}
-                retryingForecast={currentRetryingForecast}
-              />
-              {isIndustry && (
-                <IndustryBrandMentionForecast forecast={perspective.forecast} />
-              )}
+              <KnowledgeComparison project={perspectiveProject} />
             </section>
-
-            {isIndustry ? (
-              <section className="geo-industry-custom-service">
-                <div>
-                  <span>行业排名与品牌优胜</span>
-                  <h3>根据企业实际情况定制</h3>
-                  <p>结合目标行业、竞争格局和品牌资产制定专项执行方案。</p>
-                </div>
-                <button
-                  type="button"
-                  className="geo-secondary-button"
-                  onClick={onContact}
-                >
-                  联系技术人员对接 <ArrowRight size={15} />
-                </button>
-              </section>
-            ) : (
-              assessmentReady &&
-              isCompleteForecast(perspective.forecast) &&
-              project.serviceActivation &&
-              onStartService && (
-                <section className="geo-assessment-next-step">
+          ) : activeSection.id === "forecast" ? (
+            <>
+              <section className="geo-assessment-perspective-section">
+                <header>
+                  <span>03</span>
                   <div>
-                    <span>下一步 · 启动服务</span>
+                    <h3>优化后评估</h3>
                     <p>
-                      围绕产品与舆情问题启动 GEO
-                      优化服务，开始内容建设、权威信源、平台监控与结果复测。
+                      {isIndustry
+                        ? "同时查看语义资产目标和品牌提及率的一个月条件目标。"
+                        : "查看语义资产分数、五维目标与四周执行路径。"}
                     </p>
+                  </div>
+                </header>
+                <OptimizationForecastView
+                  project={perspectiveProject}
+                  onContact={onContact}
+                  onRetryForecast={currentRetryForecast}
+                  retryingForecast={currentRetryingForecast}
+                />
+                {isIndustry && (
+                  <IndustryBrandMentionForecast
+                    forecast={perspective.forecast}
+                  />
+                )}
+              </section>
+
+              {isIndustry ? (
+                <section className="geo-industry-custom-service">
+                  <div>
+                    <span>行业排名与品牌优胜</span>
+                    <h3>根据企业实际情况定制</h3>
+                    <p>结合目标行业、竞争格局和品牌资产制定专项执行方案。</p>
                   </div>
                   <button
                     type="button"
-                    className="geo-primary-button"
-                    onClick={onStartService}
+                    className="geo-secondary-button"
+                    onClick={onContact}
                   >
-                    {project.serviceActivation.status === "active"
-                      ? "查看已启动服务"
-                      : "进入下一步：启动服务"}
-                    <ArrowRight size={17} />
+                    联系技术人员对接 <ArrowRight size={15} />
                   </button>
                 </section>
-              )
-            )}
-          </>
-        )}
+              ) : (
+                assessmentReady &&
+                isCompleteForecast(perspective.forecast) &&
+                project.serviceActivation &&
+                onStartService && (
+                  <section className="geo-assessment-next-step">
+                    <div>
+                      <span>下一步 · 启动服务</span>
+                      <p>
+                        围绕产品与舆情问题启动 GEO
+                        优化服务，开始内容建设、权威信源、平台监控与结果复测。
+                      </p>
+                    </div>
+                    <button
+                      type="button"
+                      className="geo-primary-button"
+                      onClick={onStartService}
+                    >
+                      {project.serviceActivation.status === "active"
+                        ? "查看已启动服务"
+                        : "进入下一步：启动服务"}
+                      <ArrowRight size={17} />
+                    </button>
+                  </section>
+                )
+              )}
+            </>
+          ) : null}
+        </div>
       </div>
     </div>
   );

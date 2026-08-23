@@ -261,6 +261,23 @@ describe("GEO style preview rendering", () => {
     expect(html).not.toContain("全域营销权限");
   });
 
+  it("renders the assessment preview with compact section navigation and one long section", () => {
+    const html = renderToStaticMarkup(
+      <CurrentAssessment
+        project={createGeoStylePreviewProject("assessment")}
+        onContact={vi.fn()}
+        onStartService={vi.fn()}
+      />,
+    );
+
+    expect(html).toContain('aria-label="产品与舆情评估内容"');
+    expect(html).toContain("geo-assessment-section-tabs");
+    expect(html).toContain("geo-assessment-section-panel");
+    expect(html.match(/geo-assessment-perspective-section/g)).toHaveLength(1);
+    expect(html).not.toContain("geo-knowledge-comparison");
+    expect(html).not.toContain("geo-forecast-view");
+  });
+
   it("does not render partial recommendations as selectable categories", () => {
     const fixture = createGeoStylePreviewProject();
     const project = {

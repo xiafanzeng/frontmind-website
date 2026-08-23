@@ -4291,13 +4291,11 @@ export function createGeoRouter(options: GeoRouterOptions = {}): Router {
                   await currentForecastOutputPromise,
                 );
               } catch (error) {
-                // A completed-but-invalid forecast is displayable as a failed
-                // attempt. It is never continued on the same Provider task;
-                // an explicit retry creates a fresh task below.
                 logAssessmentOutputValidation(
                   error,
                   currentOptimizationForecastTask,
                 );
+                forecastRetryReason = publicForecastValidationMessage(error);
               }
             }
             if (
@@ -4461,6 +4459,7 @@ export function createGeoRouter(options: GeoRouterOptions = {}): Router {
                   error,
                   currentIndustryRankingOptimizationForecastTask,
                 );
+                forecastRetryReason = publicForecastValidationMessage(error);
               }
             }
             if (

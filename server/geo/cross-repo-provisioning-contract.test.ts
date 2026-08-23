@@ -44,6 +44,24 @@ const dashboardPresalesHashesPath = path.resolve(
 const dashboardPresalesHashesAvailable = existsSync(
   dashboardPresalesHashesPath,
 );
+const OPTIMIZATION_FORECAST_ROOT_FIELDS = [
+  "brandMentionRateTarget",
+  "claimGuardrails",
+  "dimensionNarratives",
+  "dimensions",
+  "executiveSummary",
+  "forecastType",
+  "horizonWeeks",
+  "limitations",
+  "roadmap",
+  "scenario",
+  "schemaVersion",
+  "summary",
+] as const;
+const localForecastOutputSchemaPath = path.resolve(
+  process.cwd(),
+  "server/skills/geo-optimization-outcome-forecaster/references/output-schema.json",
+);
 
 async function fixture(filePath: string) {
   return JSON.parse(await readFile(filePath, "utf8")) as Record<
@@ -59,7 +77,19 @@ describe("Website ↔ Agent provisioning and archive shared contract", () => {
       presalesContractVersion: PRESALES_CONTRACT_VERSION,
       capabilities: PRESALES_CAPABILITIES,
       contractHashes: expectedContractHashes(),
+      contractRootFields: {
+        "website.optimization-forecast": OPTIMIZATION_FORECAST_ROOT_FIELDS,
+      },
     });
+    expect(
+      (value.contractRootFields as Record<string, readonly string[]>)[
+        "website.optimization-forecast"
+      ],
+    ).toContain("brandMentionRateTarget");
+    const forecastOutputSchema = await fixture(localForecastOutputSchemaPath);
+    expect([...(forecastOutputSchema.required as string[])].sort()).toEqual(
+      OPTIMIZATION_FORECAST_ROOT_FIELDS,
+    );
   });
 
   it.skipIf(!dashboardPresalesHashesAvailable)(
