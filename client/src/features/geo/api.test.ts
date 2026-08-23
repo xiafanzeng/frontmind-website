@@ -1913,7 +1913,8 @@ describe("uploadGeoFile", () => {
     );
   });
 
-  it("accepts an uploaded status after response loss without replaying the body", async () => {
+  it("retries transient status failures with bounded backoff before replaying the same reserved body", async () => {
+    vi.useFakeTimers();
     installControlledXhr();
     const fetchMock = vi
       .fn<typeof fetch>()
@@ -1928,6 +1929,128 @@ describe("uploadGeoFile", () => {
           { status: 201, headers: { "content-type": "application/json" } },
         ),
       )
+      .mockRejectedValueOnce(new TypeError("status network unavailable"))
+      .mockRejectedValueOnce(new TypeError("status network unavailable"))
+      .mockRejectedValueOnce(new TypeError("status network unavailable"))
+      .mockResolvedValueOnce(
+        new Response(
+          JSON.stringify({
+            fileId: "file-1",
+            assetStatus: "pending",
+            transferState: "idle",
+            declaredBytes: 8,
+            receivedBytes: 0,
+          }),
+          { status: 200, headers: { "content-type": "application/json" } },
+        ),
+      );
+    vi.stubGlobal("fetch", fetchMock);
+    const file = new File(["12345678"], "企业资料.pdf", {
+      type: "application/pdf",
+    });
+
+    const outcome = uploadGeoFile(file, {
+      inviteContextToken: "invite-context-token-at-least-32-characters",
+      clientRequestId: "11111111-1111-4111-8111-111111111111",
+      attachmentIndex: 0,
+    });
+    const firstXhr = await nextXhr(0);
+    firstXhr.failNetwork();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+
+    await vi.advanceTimersByTimeAsync(999);
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    await vi.advanceTimersByTimeAsync(1);
+    expect(fetchMock).toHaveBeenCalledTimes(3);
+    await vi.advanceTimersByTimeAsync(2_999);
+    expect(fetchMock).toHaveBeenCalledTimes(3);
+    await vi.advanceTimersByTimeAsync(1);
+    expect(fetchMock).toHaveBeenCalledTimes(4);
+    await vi.advanceTimersByTimeAsync(4_999);
+    expect(fetchMock).toHaveBeenCalledTimes(4);
+    await vi.advanceTimersByTimeAsync(1);
+    expect(fetchMock).toHaveBeenCalledTimes(5);
+
+    expect(ControlledXmlHttpRequest.instances).toHaveLength(1);
+    await vi.advanceTimersByTimeAsync(1_000);
+    const retriedXhr = await nextXhr(1);
+    retriedXhr.finishUpload();
+    retriedXhr.respond();
+
+    await expect(outcome).resolves.toMatchObject({ id: "file-1" });
+    expect(retriedXhr.body).toBe(file);
+    expect(retriedXhr.headers.get("x-geo-upload-token")).toBe(
+      "signed-upload-token",
+    );
+    expect(retriedXhr.headers.get("x-geo-upload-attempt")).toBe("2");
+    expect(fetchMock.mock.calls.map(([url]) => url)).toEqual([
+      "/api/geo/uploads/init",
+      "/api/geo/uploads/status",
+      "/api/geo/uploads/status",
+      "/api/geo/uploads/status",
+      "/api/geo/uploads/status",
+    ]);
+  });
+
+  it("cancels a pending status retry without polling or replaying again", async () => {
+    vi.useFakeTimers();
+    installControlledXhr();
+    const fetchMock = vi
+      .fn<typeof fetch>()
+      .mockResolvedValueOnce(
+        new Response(
+          JSON.stringify({
+            fileId: "file-1",
+            filename: "企业资料.pdf",
+            uploadToken: "signed-upload-token",
+            status: "pending",
+          }),
+          { status: 201, headers: { "content-type": "application/json" } },
+        ),
+      )
+      .mockRejectedValueOnce(new TypeError("status network unavailable"));
+    vi.stubGlobal("fetch", fetchMock);
+    const controller = new AbortController();
+    const reason = new DOMException("draft removed", "AbortError");
+    const file = new File(["12345678"], "企业资料.pdf", {
+      type: "application/pdf",
+    });
+
+    const outcome = uploadGeoFile(file, {
+      inviteContextToken: "invite-context-token-at-least-32-characters",
+      clientRequestId: "11111111-1111-4111-8111-111111111111",
+      attachmentIndex: 0,
+      signal: controller.signal,
+    }).catch((error: unknown) => error);
+    (await nextXhr()).failNetwork();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    controller.abort(reason);
+    await vi.advanceTimersByTimeAsync(10_000);
+
+    await expect(outcome).resolves.toBe(reason);
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(ControlledXmlHttpRequest.instances).toHaveLength(1);
+  });
+
+  it("accepts an uploaded status after response loss without replaying the body", async () => {
+    vi.useFakeTimers();
+    installControlledXhr();
+    const fetchMock = vi
+      .fn<typeof fetch>()
+      .mockResolvedValueOnce(
+        new Response(
+          JSON.stringify({
+            fileId: "file-1",
+            filename: "企业资料.pdf",
+            uploadToken: "signed-upload-token",
+            status: "pending",
+          }),
+          { status: 201, headers: { "content-type": "application/json" } },
+        ),
+      )
+      .mockRejectedValueOnce(new TypeError("status temporarily unavailable"))
       .mockResolvedValueOnce(
         new Response(
           JSON.stringify({
@@ -1955,11 +2078,13 @@ describe("uploadGeoFile", () => {
     xhr.progress(8, 8);
     xhr.finishUpload();
     xhr.failNetwork();
+    await vi.advanceTimersByTimeAsync(1_000);
 
     await expect(outcome).resolves.toMatchObject({ id: "file-1" });
     expect(ControlledXmlHttpRequest.instances).toHaveLength(1);
     expect(fetchMock.mock.calls.map(([url]) => url)).toEqual([
       "/api/geo/uploads/init",
+      "/api/geo/uploads/status",
       "/api/geo/uploads/status",
     ]);
   });
@@ -1995,6 +2120,7 @@ describe("uploadGeoFile", () => {
           { status: 201, headers: { "content-type": "application/json" } },
         ),
       )
+      .mockRejectedValueOnce(new TypeError("status temporarily unavailable"))
       .mockResolvedValueOnce(statusResponse("pending", "uploading", 2))
       .mockResolvedValueOnce(statusResponse("pending", "uploading", 6))
       .mockResolvedValueOnce(statusResponse("uploaded", "idle", 8));
@@ -2018,6 +2144,7 @@ describe("uploadGeoFile", () => {
     xhr.failNetwork();
     await vi.advanceTimersByTimeAsync(1_000);
     await vi.advanceTimersByTimeAsync(1_000);
+    await vi.advanceTimersByTimeAsync(1_000);
 
     await expect(outcome).resolves.toMatchObject({ id: "file-1" });
     expect(ControlledXmlHttpRequest.instances).toHaveLength(1);
@@ -2026,7 +2153,7 @@ describe("uploadGeoFile", () => {
       fetchMock.mock.calls.filter(([url]) =>
         String(url).endsWith("/uploads/status"),
       ),
-    ).toHaveLength(3);
+    ).toHaveLength(4);
   });
 
   it("treats UPLOAD_IN_PROGRESS as an ambiguous 409 and follows the existing flight", async () => {
@@ -2174,7 +2301,7 @@ describe("uploadGeoFile", () => {
     ]);
   });
 
-  it.each(["missing", "deleted", "size_mismatch"])(
+  it.each(["missing", "expired", "deleted", "size_mismatch"])(
     "requires a fresh upload reset for a %s reserved asset",
     async (scenario) => {
       installControlledXhr();
@@ -2190,33 +2317,43 @@ describe("uploadGeoFile", () => {
               }),
               { status: 404, headers: { "content-type": "application/json" } },
             )
-          : scenario === "deleted"
+          : scenario === "expired"
             ? new Response(
                 JSON.stringify({
-                  fileId: "file-1",
-                  assetStatus: "deleted",
-                  transferState: "idle",
-                  declaredBytes: file.size,
-                  receivedBytes: 0,
+                  error: { code: "UPLOAD_TOKEN_EXPIRED", message: "expired" },
                 }),
                 {
-                  status: 200,
+                  status: 410,
                   headers: { "content-type": "application/json" },
                 },
               )
-            : new Response(
-                JSON.stringify({
-                  fileId: "file-1",
-                  assetStatus: "uploaded",
-                  transferState: "idle",
-                  declaredBytes: file.size,
-                  receivedBytes: file.size - 1,
-                }),
-                {
-                  status: 200,
-                  headers: { "content-type": "application/json" },
-                },
-              );
+            : scenario === "deleted"
+              ? new Response(
+                  JSON.stringify({
+                    fileId: "file-1",
+                    assetStatus: "deleted",
+                    transferState: "idle",
+                    declaredBytes: file.size,
+                    receivedBytes: 0,
+                  }),
+                  {
+                    status: 200,
+                    headers: { "content-type": "application/json" },
+                  },
+                )
+              : new Response(
+                  JSON.stringify({
+                    fileId: "file-1",
+                    assetStatus: "uploaded",
+                    transferState: "idle",
+                    declaredBytes: file.size,
+                    receivedBytes: file.size - 1,
+                  }),
+                  {
+                    status: 200,
+                    headers: { "content-type": "application/json" },
+                  },
+                );
       const fetchMock = vi.fn<typeof fetch>().mockResolvedValueOnce(response);
       vi.stubGlobal("fetch", fetchMock);
 
@@ -2241,6 +2378,45 @@ describe("uploadGeoFile", () => {
       });
       expect(ControlledXmlHttpRequest.instances).toHaveLength(0);
       expect(fetchMock.mock.calls[0]?.[0]).toBe("/api/geo/uploads/status");
+    },
+  );
+
+  it.each([401, 403])(
+    "stops reserved-upload reconciliation immediately on status %s",
+    async (status) => {
+      installControlledXhr();
+      const file = new File(["12345678"], "企业资料.pdf", {
+        type: "application/pdf",
+        lastModified: 1_786_861_871_000,
+      });
+      const fetchMock = vi.fn<typeof fetch>().mockResolvedValueOnce(
+        new Response(
+          JSON.stringify({
+            error: { code: "UPLOAD_TOKEN_REJECTED", message: "rejected" },
+          }),
+          { status, headers: { "content-type": "application/json" } },
+        ),
+      );
+      vi.stubGlobal("fetch", fetchMock);
+
+      await expect(
+        uploadGeoFile(file, {
+          inviteContextToken: "invite-context-token-at-least-32-characters",
+          clientRequestId: "11111111-1111-4111-8111-111111111111",
+          attachmentIndex: 0,
+          reservation: {
+            id: "file-1",
+            name: file.name,
+            size: file.size,
+            type: file.type,
+            uploadToken: "signed-upload-token",
+            sourceName: file.name,
+            sourceLastModified: file.lastModified,
+          },
+        }),
+      ).rejects.toMatchObject({ status });
+      expect(fetchMock).toHaveBeenCalledTimes(1);
+      expect(ControlledXmlHttpRequest.instances).toHaveLength(0);
     },
   );
 
@@ -3380,7 +3556,7 @@ describe("uploadGeoFile", () => {
     expect(fetchMock.mock.calls[1][1]?.signal?.aborted).toBe(true);
   });
 
-  it("does not blindly resend when proxy timeout reconciliation is unavailable", async () => {
+  it("keeps the reservation without blindly resending when status stays unavailable for the recovery window", async () => {
     vi.useFakeTimers();
     const fetchMock = vi
       .fn<typeof fetch>()
@@ -3404,7 +3580,7 @@ describe("uploadGeoFile", () => {
             );
           }),
       )
-      .mockRejectedValueOnce(new TypeError("Failed to fetch"));
+      .mockRejectedValue(new TypeError("Failed to fetch"));
     vi.stubGlobal("fetch", fetchMock);
 
     const file = new File(["brochure"], "企业资料.pdf", {
@@ -3415,17 +3591,23 @@ describe("uploadGeoFile", () => {
       clientRequestId: "11111111-1111-4111-8111-111111111111",
       attachmentIndex: 0,
     }).catch((reason: unknown) => reason);
-    await vi.advanceTimersByTimeAsync(5 * 60_000);
+    await vi.advanceTimersByTimeAsync(11 * 60_000);
 
     await expect(result).resolves.toMatchObject({
       code: "UPLOAD_STATUS_UNKNOWN",
       status: 503,
     });
-    expect(fetchMock.mock.calls.map(([url]) => url)).toEqual([
+    expect(fetchMock.mock.calls.slice(0, 2).map(([url]) => url)).toEqual([
       "/api/geo/uploads/init",
       "/api/geo/uploads/proxy",
-      "/api/geo/uploads/status",
     ]);
+    const statusCalls = fetchMock.mock.calls
+      .slice(2)
+      .map(([url]) => String(url));
+    expect(statusCalls.length).toBeGreaterThan(3);
+    expect(statusCalls.every((url) => url.endsWith("/uploads/status"))).toBe(
+      true,
+    );
   });
 
   it("uploads only through the authenticated Website proxy", async () => {

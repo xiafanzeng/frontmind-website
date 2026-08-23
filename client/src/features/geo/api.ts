@@ -53,6 +53,7 @@ const UPLOAD_SERVER_RESPONSE_TIMEOUT_MS = 6 * 60_000;
 const UPLOAD_INIT_RETRY_DELAY_MS = 1_000;
 const UPLOAD_TRANSFER_RETRY_DELAYS_MS = [1_000, 3_000] as const;
 const UPLOAD_STATUS_POLL_INTERVAL_MS = 1_000;
+const UPLOAD_STATUS_RETRY_DELAYS_MS = [1_000, 3_000, 5_000] as const;
 
 type JsonRecord = Record<string, unknown>;
 type TimedRequestInit = RequestInit & { timeoutMs?: number };
@@ -4351,7 +4352,7 @@ async function reconcileGeoUpload(
 ): Promise<GeoUploadReconcileState> {
   const reconcileStartedAt = Date.now();
   const deadline = Date.now() + UPLOAD_SERVER_RESPONSE_TIMEOUT_MS;
-  let observedUploading = false;
+  let statusErrorCount = 0;
   while (true) {
     let status: GeoUploadStatusResponse;
     try {
@@ -4366,13 +4367,14 @@ async function reconcileGeoUpload(
       ) {
         throw freshUploadResetRequired(error);
       }
-      if (
-        (observedUploading || settings.statusOnly) &&
-        retryableUploadTransportError(error) &&
-        Date.now() < deadline
-      ) {
+      if (retryableUploadTransportError(error) && Date.now() < deadline) {
+        const retryDelayMs =
+          UPLOAD_STATUS_RETRY_DELAYS_MS[
+            Math.min(statusErrorCount, UPLOAD_STATUS_RETRY_DELAYS_MS.length - 1)
+          ]!;
+        statusErrorCount += 1;
         await waitForGeoUploadDelay(
-          UPLOAD_STATUS_POLL_INTERVAL_MS,
+          Math.min(retryDelayMs, deadline - Date.now()),
           options.signal,
         );
         continue;
@@ -4388,6 +4390,7 @@ async function reconcileGeoUpload(
         },
       );
     }
+    statusErrorCount = 0;
     emitGeoUploadTelemetry("status_observed", {
       attachmentIndex: options.attachmentIndex,
       declaredBytes: file.size,
@@ -4405,7 +4408,6 @@ async function reconcileGeoUpload(
       return "pending";
     }
 
-    observedUploading = status.transferState === "uploading";
     options.onProgress?.({
       phase: "reconciling",
       fileLoadedBytes: status.receivedBytes,
