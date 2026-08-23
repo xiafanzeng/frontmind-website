@@ -313,6 +313,8 @@ class MockBroker implements GeoPresalesBroker {
   taskProjectIds = new Map<string, string>();
   monitorCredentialConfigured = true;
   monitorCredentialAuthenticated = true;
+  statusOk = true;
+  credentialConfigured = true;
   freshMonitorCredentialChecks: boolean[] = [];
   publicUrlConfigured = true;
   omitNextKnowledgeTaskStatus = false;
@@ -408,8 +410,8 @@ class MockBroker implements GeoPresalesBroker {
       options.freshMonitorCredential === true,
     );
     return {
-      ok: true,
-      credentialConfigured: true,
+      ok: this.statusOk,
+      credentialConfigured: this.credentialConfigured,
       monitorCredentialConfigured: this.monitorCredentialConfigured,
       monitorCredentialAuthenticated: this.monitorCredentialAuthenticated,
       publicUrlConfigured: this.publicUrlConfigured,
@@ -2478,6 +2480,7 @@ describe("GEO API", () => {
       headers: { cookie, "x-geo-upload-token": ticket.uploadToken },
     });
     expect(headerOnly.status).toBe(200);
+    expect(headerOnly.headers.get("cache-control")).toBe("private, no-store");
   });
 
   it("supports proxy upload and attachment-only project creation with opaque task ids", async () => {
@@ -7730,9 +7733,9 @@ describe("GEO API", () => {
     expect(viewed.response.status).toBe(200);
     expect(broker.forecastTaskCount).toBe(2);
     expect(broker.repairCalls).toHaveLength(0);
-    expect(
-      (viewed.body as any).project.executionLog.currentEntryId,
-    ).toBe("optimization-forecast");
+    expect((viewed.body as any).project.executionLog.currentEntryId).toBe(
+      "optimization-forecast",
+    );
     const retryValue = new GeoTokenCodec(
       "test-session-secret-at-least-16-characters",
     ).open<Record<string, unknown>>(
@@ -9213,6 +9216,81 @@ describe("GEO API", () => {
       error: { code: "SERVICE_WORKSPACE_NOT_READY" },
     });
     expect(servicePaymentCheckoutCalls).toHaveLength(0);
+  });
+
+  it("blocks service checkout before charging when the ordinary workspace credential is missing", async () => {
+    const ready = await createServiceReadyProject();
+    const payable = await advanceManualOrder(ready);
+    broker.credentialConfigured = false;
+
+    const response = await jsonRequest(
+      `/projects/${encodeURIComponent(payable.projectToken)}/services/payments`,
+      payable.cookie,
+      { method: "POST", body: { method: "alipay" } },
+    );
+
+    expect(response.response.status).toBe(503);
+    expect(response.body).toMatchObject({
+      error: { code: "SERVICE_WORKSPACE_NOT_READY" },
+    });
+    expect(servicePaymentCheckoutCalls).toHaveLength(0);
+  });
+
+  it("keeps checkout, payment switching, bank confirmation, and service start independent from monitor readiness", async () => {
+    const onlineReady = await createServiceReadyProject();
+    const bankReady = await createServiceReadyProject(
+      "reputation-01",
+      "overseas",
+    );
+    const onlinePayable = await advanceManualOrder(onlineReady);
+    broker.statusOk = false;
+    broker.monitorCredentialConfigured = false;
+    broker.monitorCredentialAuthenticated = false;
+
+    const checkout = await jsonRequest(
+      `/projects/${encodeURIComponent(onlinePayable.projectToken)}/services/payments`,
+      onlinePayable.cookie,
+      { method: "POST", body: { method: "alipay" } },
+    );
+    expect(checkout.response.status).toBe(201);
+    const payment = (checkout.body as any).payment;
+
+    paymentAccepted = false;
+    const switched = await jsonRequest(
+      `/projects/${encodeURIComponent(onlinePayable.projectToken)}/services/payments/switch`,
+      onlinePayable.cookie,
+      {
+        method: "POST",
+        body: { authorization: payment.authorization, method: "wxpay" },
+      },
+    );
+    expect(switched.response.status).toBe(200);
+
+    paymentAccepted = true;
+    const started = await jsonRequest(
+      `/projects/${encodeURIComponent(onlinePayable.projectToken)}/services/start`,
+      onlinePayable.cookie,
+      {
+        method: "POST",
+        body: { authorization: payment.authorization },
+      },
+    );
+    expect(started.response.status).toBe(201);
+
+    const bankPayable = await advanceManualOrder(bankReady);
+    const confirmed = await jsonRequest(
+      `/projects/${encodeURIComponent(bankPayable.projectToken)}/services/payments/bank-transfer/confirm`,
+      bankPayable.cookie,
+      {
+        method: "POST",
+        body: { confirmationCode: BANK_TRANSFER_CONFIRMATION_CODE },
+      },
+    );
+    expect(confirmed.response.status).toBe(201);
+    expect(servicePaymentCheckoutCalls).toHaveLength(1);
+    expect(servicePaymentSwitchCalls).toHaveLength(1);
+    expect(servicePaymentCalls).toHaveLength(1);
+    expect(serviceBankTransferCalls).toHaveLength(1);
   });
 
   it("accepts customer credentials only after manual-order payment and never seals the password", async () => {

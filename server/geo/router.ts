@@ -2495,11 +2495,7 @@ export function createGeoRouter(options: GeoRouterOptions = {}): Router {
 
   const assertServiceWorkspaceReady = async () => {
     const status = await broker.getStatus();
-    if (
-      !status.ok ||
-      !status.credentialConfigured ||
-      status.publicUrlConfigured !== true
-    ) {
+    if (!status.credentialConfigured || status.publicUrlConfigured !== true) {
       throw new GeoHttpError(
         "企业工作台尚未通过上线就绪检查，请稍后再支付",
         503,
@@ -3197,6 +3193,7 @@ export function createGeoRouter(options: GeoRouterOptions = {}): Router {
     requireSessionRate("upload-status", 120, 60 * 1000),
     requireUploadToken,
     asyncHandler(async (_req, res) => {
+      res.setHeader("Cache-Control", "private, no-store");
       const payload = res.locals.geoUpload as UploadTokenValue;
       const asset = await broker.getAsset(payload.fileId);
       assertUploadAssetMatches(asset, payload);
