@@ -20,6 +20,51 @@ function renderResults() {
 }
 
 describe("monitoring result interaction", () => {
+  it("shows progressive 2/5 answers and their screenshot while polling continues", () => {
+    const project = createGeoStylePreviewProject("monitoring");
+    const monitoring = project.monitoring!;
+    project.monitoring = {
+      ...monitoring,
+      status: "capturing",
+      completedRecords: 2,
+      failedRecords: 1,
+      quality: undefined,
+      answers: monitoring.answers.map((answer, index) =>
+        index < 2
+          ? answer
+          : index === 2
+            ? {
+                ...answer,
+                status: "failed",
+                answer: "",
+                error: "本轮采样暂未完成",
+              }
+            : {
+                ...answer,
+                status: "processing",
+                answer: "",
+                error: undefined,
+              },
+      ),
+    };
+
+    render(
+      <MonitoringResults
+        project={project}
+        onRefresh={vi.fn(async () => undefined)}
+        refreshing={false}
+        onContact={vi.fn()}
+      />,
+    );
+
+    expect(screen.getByText("2 / 5 条有效回答")).toBeTruthy();
+    expect(screen.getByText("平台回答正在自动补齐采样")).toBeTruthy();
+    expect(screen.getByText("2 条有效回答 · 3 条正在自动补齐")).toBeTruthy();
+    expect(screen.getByRole("button", { name: "查看页面截图" })).toBeTruthy();
+    expect(screen.queryByText(/补采结束/)).toBeNull();
+    expect(screen.queryByText(/已停止自动评估/)).toBeNull();
+  });
+
   it("shows failed polling slots as automatic recovery and counts only valid answers", () => {
     const project = createGeoStylePreviewProject("monitoring");
     const monitoring = project.monitoring!;

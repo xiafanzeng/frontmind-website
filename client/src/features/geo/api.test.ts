@@ -1509,6 +1509,221 @@ describe("normalizeGeoProject", () => {
     });
   });
 
+  it("preserves normalized answers for same-run progressive summaries without answer fields", () => {
+    const fallback = normalizeGeoProject({
+      project: {
+        id: "progressive-summary-project",
+        monitoring: {
+          runId: "product-progressive-run",
+          status: "polling",
+          platforms: ["chatgpt"],
+          expectedRecords: 5,
+          completedRecords: 1,
+          failedRecords: 0,
+          records: [
+            {
+              recordId: "product-answer-1",
+              platform: "chatgpt",
+              runIndex: 1,
+              status: "completed",
+              answerText: "已经规范化的产品回答",
+              screenshotAvailable: true,
+              screenshotUrl:
+                "/api/geo/projects/token/monitoring/product-opinion/records/product-answer-1/screenshot",
+              media: [],
+              sources: [],
+            },
+          ],
+        },
+        industryRankingMonitoring: {
+          runId: "industry-progressive-run",
+          status: "polling",
+          platforms: ["chatgpt"],
+          expectedRecords: 5,
+          completedRecords: 1,
+          failedRecords: 0,
+          records: [
+            {
+              recordId: "industry-answer-1",
+              platform: "chatgpt",
+              runIndex: 1,
+              status: "completed",
+              answerText: "已经规范化的行业回答",
+              media: [],
+              sources: [],
+            },
+          ],
+        },
+      },
+    });
+
+    const project = normalizeGeoProject(
+      {
+        project: {
+          id: "progressive-summary-project",
+          monitoring: {
+            runId: "product-progressive-run",
+            status: "submitted",
+            platforms: ["chatgpt"],
+            expectedRecords: 5,
+            completedRecords: 2,
+            failedRecords: 0,
+          },
+          industryRankingMonitoring: {
+            runId: "industry-progressive-run",
+            status: "polling",
+            platforms: ["chatgpt"],
+            expectedRecords: 5,
+            completedRecords: 3,
+            failedRecords: 0,
+          },
+        },
+      },
+      fallback,
+    );
+
+    expect(project.monitoring).toMatchObject({
+      runId: "product-progressive-run",
+      status: "submitted",
+      completedRecords: 2,
+    });
+    expect(project.monitoring?.answers).toEqual([
+      expect.objectContaining({
+        id: "product-answer-1",
+        answer: "已经规范化的产品回答",
+        screenshotAvailable: true,
+        screenshotUrl:
+          "/api/geo/projects/token/monitoring/product-opinion/records/product-answer-1/screenshot",
+      }),
+    ]);
+    expect(project.industryRankingMonitoring).toMatchObject({
+      runId: "industry-progressive-run",
+      status: "capturing",
+      completedRecords: 3,
+    });
+    expect(project.industryRankingMonitoring?.answers).toEqual([
+      expect.objectContaining({
+        id: "industry-answer-1",
+        answer: "已经规范化的行业回答",
+      }),
+    ]);
+  });
+
+  it.each([
+    [
+      "the run changes",
+      {
+        runId: "replacement-run",
+        status: "polling",
+        platforms: ["chatgpt"],
+        expectedRecords: 5,
+        completedRecords: 0,
+        failedRecords: 0,
+      },
+      [],
+    ],
+    [
+      "the run becomes terminal",
+      {
+        runId: "progressive-run",
+        status: "completed",
+        platforms: ["chatgpt"],
+        expectedRecords: 1,
+        completedRecords: 1,
+        failedRecords: 0,
+      },
+      [],
+    ],
+    [
+      "records are explicitly empty",
+      {
+        runId: "progressive-run",
+        status: "polling",
+        platforms: ["chatgpt"],
+        expectedRecords: 5,
+        completedRecords: 0,
+        failedRecords: 0,
+        records: [],
+      },
+      [],
+    ],
+    [
+      "answers are explicitly empty",
+      {
+        runId: "progressive-run",
+        status: "polling",
+        platforms: ["chatgpt"],
+        expectedRecords: 5,
+        completedRecords: 0,
+        failedRecords: 0,
+        answers: [],
+      },
+      [],
+    ],
+    [
+      "new records are present",
+      {
+        runId: "progressive-run",
+        status: "polling",
+        platforms: ["chatgpt"],
+        expectedRecords: 5,
+        completedRecords: 1,
+        failedRecords: 0,
+        records: [
+          {
+            recordId: "fresh-answer",
+            platform: "chatgpt",
+            runIndex: 2,
+            status: "completed",
+            answerText: "本次响应中的新回答",
+            media: [],
+            sources: [],
+          },
+        ],
+      },
+      ["fresh-answer"],
+    ],
+  ])("does not preserve stale answers when %s", (_, monitoring, answerIds) => {
+    const fallback = normalizeGeoProject({
+      project: {
+        id: "progressive-authority-project",
+        monitoring: {
+          runId: "progressive-run",
+          status: "polling",
+          platforms: ["chatgpt"],
+          expectedRecords: 5,
+          completedRecords: 1,
+          failedRecords: 0,
+          records: [
+            {
+              recordId: "stale-answer",
+              platform: "chatgpt",
+              runIndex: 1,
+              status: "completed",
+              answerText: "只存在于上一轮的回答",
+              media: [],
+              sources: [],
+            },
+          ],
+        },
+      },
+    });
+
+    const project = normalizeGeoProject(
+      {
+        project: {
+          id: "progressive-authority-project",
+          monitoring,
+        },
+      },
+      fallback,
+    );
+
+    expect(
+      project.monitoring?.answers.map((answer) => answer.id) ?? [],
+    ).toEqual(answerIds);
+  });
+
   it("preserves v1.19 source separation and missing-versus-null brand fields", () => {
     const project = normalizeGeoProject({
       project: {

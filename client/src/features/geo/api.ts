@@ -1889,6 +1889,37 @@ function normalizeMonitoring(value: unknown): GeoMonitoringResult | undefined {
   };
 }
 
+function hasMonitoringAnswerPayload(value: unknown): boolean {
+  const root = asRecord(value);
+  const result = asRecord(root.result ?? root.data);
+  const source = Object.keys(result).length > 0 ? { ...root, ...result } : root;
+  return (
+    hasOwnField(source, "answers", "records") ||
+    hasOwnField(asRecord(source.output), "answers", "records")
+  );
+}
+
+function preserveProgressiveMonitoringAnswers(
+  value: unknown,
+  monitoring: GeoMonitoringResult | undefined,
+  fallback: GeoMonitoringResult | undefined,
+): GeoMonitoringResult | undefined {
+  if (
+    !monitoring ||
+    !fallback ||
+    monitoring.runId !== fallback.runId ||
+    !["submitted", "capturing"].includes(monitoring.status) ||
+    hasMonitoringAnswerPayload(value)
+  ) {
+    return monitoring;
+  }
+
+  return {
+    ...monitoring,
+    answers: [...fallback.answers],
+  };
+}
+
 function normalizeAssessmentStatus(value: unknown): GeoAssessmentStatus {
   const raw = String(value ?? "")
     .trim()
@@ -3455,8 +3486,12 @@ export function normalizeGeoProject(
   )
     ? normalizedKnowledgeBase
     : (normalizedKnowledgeBase ?? fallback?.knowledgeBase);
-  const normalizedMonitoring = normalizeMonitoring(
-    project.monitoring ?? project.monitorRun ?? project.monitor_run,
+  const rawMonitoring =
+    project.monitoring ?? project.monitorRun ?? project.monitor_run;
+  const normalizedMonitoring = preserveProgressiveMonitoringAnswers(
+    rawMonitoring,
+    normalizeMonitoring(rawMonitoring),
+    fallback?.monitoring,
   );
   const monitoring = hasOwnField(
     project,
@@ -3466,12 +3501,17 @@ export function normalizeGeoProject(
   )
     ? normalizedMonitoring
     : (normalizedMonitoring ?? fallback?.monitoring);
-  const normalizedIndustryRankingMonitoring = normalizeMonitoring(
+  const rawIndustryRankingMonitoring =
     project.industryRankingMonitoring ??
-      project.industry_ranking_monitoring ??
-      project.industryRankingMonitorRun ??
-      project.industry_ranking_monitor_run,
-  );
+    project.industry_ranking_monitoring ??
+    project.industryRankingMonitorRun ??
+    project.industry_ranking_monitor_run;
+  const normalizedIndustryRankingMonitoring =
+    preserveProgressiveMonitoringAnswers(
+      rawIndustryRankingMonitoring,
+      normalizeMonitoring(rawIndustryRankingMonitoring),
+      fallback?.industryRankingMonitoring,
+    );
   const industryRankingMonitoring = hasOwnField(
     project,
     "industryRankingMonitoring",

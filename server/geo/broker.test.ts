@@ -854,8 +854,8 @@ describe("HttpGeoPresalesBroker", () => {
             platforms: ["doubao"],
             repeatPerPlatform: 5,
             expectedItems: 5,
-            completedItems: 1,
-            failedItems: 0,
+            completedItems: 2,
+            failedItems: 1,
             records: [
               {
                 recordId: "record-1",
@@ -866,11 +866,32 @@ describe("HttpGeoPresalesBroker", () => {
                 media: [],
                 citations: [],
                 references: [],
+                screenshot: { available: true },
+              },
+              {
+                recordId: "record-2",
+                platform: "doubao",
+                runIndex: 2,
+                status: "completed",
+                answerText: "第二条回答",
+                media: [],
+                citations: [],
+                references: [],
+              },
+              {
+                recordId: "record-3",
+                platform: "doubao",
+                runIndex: 3,
+                status: "failed",
+                media: [],
+                citations: [],
+                references: [],
+                error: "本次采集暂未完成",
               },
             ],
           }),
           {
-            status: 200,
+            status: 202,
             headers: { "content-type": "application/json" },
           },
         ),
@@ -883,7 +904,19 @@ describe("HttpGeoPresalesBroker", () => {
 
     const result = await broker.getMonitorResult("monitor-run-1");
 
-    expect(result.records).toHaveLength(1);
+    expect(result).toMatchObject({
+      status: "polling",
+      completedItems: 2,
+      failedItems: 1,
+      records: [
+        {
+          recordId: "record-1",
+          screenshot: { available: true },
+        },
+        { recordId: "record-2", status: "completed" },
+        { recordId: "record-3", status: "failed" },
+      ],
+    });
     const [url, init] = fetchMock.mock.calls[0];
     expect(String(url)).toBe(
       "https://agent.example/api/internal/presales/v2/monitor-runs/monitor-run-1/result",
@@ -909,6 +942,66 @@ describe("HttpGeoPresalesBroker", () => {
       code: "MONITOR_RESULT_PENDING",
       status: 502,
       details: { upstreamStatus: 202 },
+    });
+  });
+
+  it.each([
+    {
+      label: "a non-JSON response",
+      body: "monitor result is pending",
+      contentType: "text/plain",
+    },
+    {
+      label: "malformed JSON",
+      body: '{"runId":"monitor-run-1"',
+      contentType: "application/json",
+    },
+  ])(
+    "rejects HTTP 202 monitor results containing $label",
+    async ({ body, contentType }) => {
+      const broker = new HttpGeoPresalesBroker({
+        baseUrl: "https://agent.example/api/internal/presales/v2",
+        serviceToken: "private-token",
+        fetchImpl: vi.fn(
+          async () =>
+            new Response(body, {
+              status: 202,
+              headers: { "content-type": contentType },
+            }),
+        ) as typeof fetch,
+      });
+
+      await expect(
+        broker.getMonitorResult("monitor-run-1"),
+      ).rejects.toMatchObject({
+        code: "AGENT_INVALID_RESPONSE",
+        status: 502,
+      });
+    },
+  );
+
+  it("keeps JSON HTTP 202 handling unchanged for non-result endpoints", async () => {
+    const broker = new HttpGeoPresalesBroker({
+      baseUrl: "https://agent.example/api/internal/presales/v2",
+      serviceToken: "private-token",
+      fetchImpl: vi.fn(
+        async () =>
+          new Response(
+            JSON.stringify({
+              runId: "monitor-run-1",
+              status: "polling",
+            }),
+            {
+              status: 202,
+              headers: { "content-type": "application/json" },
+            },
+          ),
+      ) as typeof fetch,
+    });
+
+    await expect(broker.getMonitorRun("monitor-run-1")).resolves.toEqual({
+      runId: "monitor-run-1",
+      status: "polling",
     });
   });
 

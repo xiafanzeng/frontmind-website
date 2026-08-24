@@ -968,11 +968,48 @@ export class HttpGeoPresalesBroker implements GeoPresalesBroker {
   }
 
   async getMonitorResult(runId: string) {
-    return this.requestJson<BrokerMonitorRawRun>(
+    const response = await this.request(
       `/monitor-runs/${encodeURIComponent(runId)}/result`,
-      {},
-      { rejectAccepted: true },
     );
+    if (response.status !== 202) {
+      return this.readJsonResponse<BrokerMonitorRawRun>(response);
+    }
+
+    const body = await response.text().catch(() => null);
+    if (body === null) {
+      throw new GeoBrokerError(
+        "Agent 返回了无法识别的数据",
+        502,
+        "AGENT_INVALID_RESPONSE",
+      );
+    }
+    if (body.trim() === "") {
+      throw new GeoBrokerError(
+        "监控结果仍在生成",
+        502,
+        "MONITOR_RESULT_PENDING",
+        { upstreamStatus: 202 },
+      );
+    }
+
+    const contentType = response.headers.get("content-type") || "";
+    if (!contentType.toLowerCase().includes("application/json")) {
+      throw new GeoBrokerError(
+        "Agent 返回了无法识别的数据",
+        502,
+        "AGENT_INVALID_RESPONSE",
+      );
+    }
+
+    try {
+      return JSON.parse(body) as BrokerMonitorRawRun;
+    } catch {
+      throw new GeoBrokerError(
+        "Agent 返回了无法识别的数据",
+        502,
+        "AGENT_INVALID_RESPONSE",
+      );
+    }
   }
 
   async downloadMonitorScreenshot(runId: string, recordId: string) {
@@ -997,28 +1034,12 @@ export class HttpGeoPresalesBroker implements GeoPresalesBroker {
     }
   }
 
-  private async requestJson<T>(
-    pathname: string,
-    init: RequestInit = {},
-    responseOptions: { rejectAccepted?: boolean } = {},
-  ) {
+  private async requestJson<T>(pathname: string, init: RequestInit = {}) {
     const response = await this.request(pathname, init);
-    return this.readJsonResponse<T>(response, responseOptions);
+    return this.readJsonResponse<T>(response);
   }
 
-  private async readJsonResponse<T>(
-    response: Response,
-    responseOptions: { rejectAccepted?: boolean } = {},
-  ) {
-    if (responseOptions.rejectAccepted && response.status === 202) {
-      if (response.body) await response.body.cancel().catch(() => undefined);
-      throw new GeoBrokerError(
-        "监控结果仍在生成",
-        502,
-        "MONITOR_RESULT_PENDING",
-        { upstreamStatus: 202 },
-      );
-    }
+  private async readJsonResponse<T>(response: Response) {
     const contentType = response.headers.get("content-type") || "";
     if (!contentType.toLowerCase().includes("application/json")) {
       throw new GeoBrokerError(

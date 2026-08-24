@@ -11,6 +11,7 @@ import JSZip from "jszip";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   GeoBrokerError,
+  HttpGeoPresalesBroker,
   PRESALES_CAPABILITIES,
   PRESALES_CONTRACTS,
   PRESALES_CONTRACT_VERSION,
@@ -6568,6 +6569,177 @@ describe("GEO API", () => {
     });
     expect(broker.monitorResultReads).toBe(1);
     expect(broker.monitorCreates).toBe(1);
+  });
+
+  it("preserves Dashboard HTTP 202 progressive records through the real HTTP broker boundary", async () => {
+    const ready = await createReadyProject();
+    const started = await jsonRequest(
+      `/projects/${encodeURIComponent(ready.projectToken)}/monitoring`,
+      ready.cookie,
+      {
+        method: "POST",
+        body: {
+          schemaVersion: 2,
+          clientRequestId: "53535353-5353-4353-8353-535353535353",
+          questionId: "product-scenario-01",
+          monitoringEdition: "domestic",
+          screenshotEnabled: true,
+          platformIds: ["deepseek"],
+        },
+      },
+    );
+    expect(started.response.status).toBe(201);
+
+    const sourceBroker = broker;
+    const submitted = sourceBroker.monitorRuns.get("monitor-1")!;
+    const progressiveResult: BrokerMonitorRawRun = {
+      ...submitted,
+      status: "polling",
+      completedItems: 2,
+      failedItems: 1,
+      records: [
+        {
+          ...monitorRecord(1, "HTTP 202 渐进返回的第一条回答", "deepseek"),
+          screenshot: {
+            available: true,
+            url: "https://private-dashboard.example/raw-screenshot.png",
+          },
+        },
+        monitorRecord(2, "HTTP 202 渐进返回的第二条回答", "deepseek"),
+        {
+          recordId: "record-3",
+          platform: "deepseek",
+          runIndex: 3,
+          status: "failed",
+          media: [],
+          sources: [],
+          error: "本轮采集暂未完成",
+        },
+      ],
+    };
+    const jsonResponse = (payload: unknown, status = 200) =>
+      new Response(JSON.stringify(payload), {
+        status,
+        headers: { "content-type": "application/json" },
+      });
+    const dashboardFetch = vi.fn(
+      async (input: Parameters<typeof fetch>[0], init?: RequestInit) => {
+        const url = new URL(String(input));
+        const pathname = url.pathname;
+        if (pathname.endsWith("/monitor-runs/monitor-1/result")) {
+          return jsonResponse(progressiveResult, 202);
+        }
+        if (pathname.endsWith("/monitor-runs/monitor-1")) {
+          const { records: _records, ...status } = progressiveResult;
+          return jsonResponse(status);
+        }
+        const taskMatch = pathname.match(/\/tasks\/([^/]+)(\/result)?$/);
+        if (taskMatch) {
+          const taskId = decodeURIComponent(taskMatch[1]!);
+          const task = taskMatch[2]
+            ? await sourceBroker.getTaskResult(taskId)
+            : await sourceBroker.getTask(taskId);
+          return jsonResponse(task);
+        }
+        const artifactMatch = pathname.match(/\/artifacts\/([^/]+)\/content$/);
+        if (artifactMatch) {
+          return sourceBroker.downloadArtifact(
+            decodeURIComponent(artifactMatch[1]!),
+          );
+        }
+        throw new Error(
+          `Unexpected Dashboard request: ${init?.method || "GET"} ${pathname}`,
+        );
+      },
+    );
+    const httpBroker = new HttpGeoPresalesBroker({
+      baseUrl: "https://agent.example/api/internal/presales/v2",
+      serviceToken: "private-token",
+      fetchImpl: dashboardFetch as typeof fetch,
+    });
+
+    await new Promise<void>((resolve, reject) =>
+      server.close((error) => (error ? reject(error) : resolve())),
+    );
+    const app = express();
+    app.use(
+      "/api/geo",
+      createGeoRouter({
+        broker: httpBroker,
+        customQuestionValidationStore,
+        monitorFreeReservationStore,
+        projectOrderRegistry,
+        paymentGateway,
+        env: {
+          NODE_ENV: "test",
+          FRONTMIND_GEO_INVITE_CODE: "frontmind666",
+          FRONTMIND_GEO_SESSION_SECRET:
+            "test-session-secret-at-least-16-characters",
+        },
+      }),
+    );
+    server = app.listen(0);
+    await new Promise<void>((resolve) => server.once("listening", resolve));
+    baseUrl = `http://127.0.0.1:${
+      (server.address() as AddressInfo).port
+    }/api/geo`;
+
+    const refreshed = await jsonRequest(
+      `/projects/${encodeURIComponent(started.body.projectToken)}`,
+      ready.cookie,
+    );
+
+    expect(refreshed.response.status).toBe(200);
+    expect(refreshed.body).toMatchObject({
+      project: {
+        status: "running",
+        stage: "monitoring",
+        monitoring: {
+          status: "polling",
+          completedRecords: 2,
+          failedRecords: 1,
+          screenshotEnabled: true,
+          records: [
+            {
+              recordId: "record-1",
+              status: "completed",
+              answerText: "HTTP 202 渐进返回的第一条回答",
+              screenshotAvailable: true,
+              screenshotUrl: expect.stringMatching(
+                /^\/api\/geo\/projects\/.+\/monitoring\/product-opinion\/records\/record-1\/screenshot$/,
+              ),
+            },
+            {
+              recordId: "record-2",
+              status: "completed",
+              answerText: "HTTP 202 渐进返回的第二条回答",
+            },
+            {
+              recordId: "record-3",
+              status: "failed",
+              error: "本轮采集暂未完成",
+            },
+          ],
+        },
+      },
+    });
+    expect(JSON.stringify(refreshed.body)).not.toContain(
+      "private-dashboard.example",
+    );
+    expect((refreshed.body as any).project).not.toHaveProperty("assessment");
+    expect(
+      dashboardFetch.mock.calls.some(([input, init]) => {
+        const pathname = new URL(String(input)).pathname;
+        return pathname.endsWith("/tasks") && init?.method === "POST";
+      }),
+    ).toBe(false);
+    expect(
+      dashboardFetch.mock.calls.some(([input]) =>
+        new URL(String(input)).pathname.endsWith(
+          "/monitor-runs/monitor-1/result",
+        ),
+      ),
+    ).toBe(true);
   });
 
   it("falls back to the normalized status when a running result is not ready", async () => {
