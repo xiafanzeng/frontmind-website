@@ -1825,7 +1825,7 @@ function normalizeMonitoring(value: unknown): GeoMonitoringResult | undefined {
   const providedQuality = normalizeResultQuality(source.quality);
   const qualityPartial =
     adapterPartial || providedQuality?.completeness === "partial";
-  if (status === "completed" && qualityPartial) status = "partial_review";
+  if (status === "completed" && adapterPartial) status = "partial_review";
   const effectiveDroppedCount = Math.max(
     clientDroppedCount,
     providedQuality?.stats?.droppedCount ?? 0,
@@ -1856,7 +1856,7 @@ function normalizeMonitoring(value: unknown): GeoMonitoringResult | undefined {
               }
             : {}),
         downstreamEligible:
-          !qualityPartial && providedQuality?.downstreamEligible !== false,
+          providedQuality?.downstreamEligible ?? !qualityPartial,
       }
     : undefined;
 

@@ -1124,8 +1124,9 @@ function canOpenStage(project: GeoProject, stage: GeoStage): boolean {
     );
   if (stage === "current_assessment")
     return (
-      project.monitoring?.status === "completed" ||
-      project.industryRankingMonitoring?.status === "completed" ||
+      monitoringAssessmentCoverage(project.monitoring).assessmentEligible ||
+      monitoringAssessmentCoverage(project.industryRankingMonitoring)
+        .assessmentEligible ||
       Boolean(
         project.assessment && project.assessment.status !== "not_started",
       ) ||
@@ -1147,8 +1148,9 @@ function projectDefaultStage(project: GeoProject): GeoStage {
   )
     return "service_activation";
   if (
-    project.monitoring?.status === "completed" ||
-    project.industryRankingMonitoring?.status === "completed" ||
+    monitoringAssessmentCoverage(project.monitoring).assessmentEligible ||
+    monitoringAssessmentCoverage(project.industryRankingMonitoring)
+      .assessmentEligible ||
     (project.assessment && project.assessment.status !== "not_started") ||
     (project.industryRankingAssessment &&
       project.industryRankingAssessment.status !== "not_started")
@@ -1179,9 +1181,11 @@ function isStageComplete(project: GeoProject, stage: GeoStage): boolean {
           project.selectedIndustryRankingQuestionId),
     );
   if (stage === "monitoring") {
-    if (project.monitoring?.status !== "completed") return false;
+    if (!monitoringAssessmentCoverage(project.monitoring).assessmentEligible)
+      return false;
     return project.selectedIndustryRankingQuestionId
-      ? project.industryRankingMonitoring?.status === "completed"
+      ? monitoringAssessmentCoverage(project.industryRankingMonitoring)
+          .assessmentEligible
       : true;
   }
   if (stage === "current_assessment") {
@@ -2448,8 +2452,10 @@ function GeoBuildExperienceZh() {
   useEffect(() => {
     if (isGeoStylePreviewProject(activeProject)) return;
     if (!activeProject?.monitoring?.runId) return;
-    if (activeProject.monitoring.status !== "completed") return;
-    if (activeProject.monitoring.quality?.downstreamEligible === false) return;
+    if (
+      !monitoringAssessmentCoverage(activeProject.monitoring).assessmentEligible
+    )
+      return;
     if (
       activeProject.assessment &&
       activeProject.assessment.status !== "not_started"
@@ -2483,10 +2489,9 @@ function GeoBuildExperienceZh() {
   useEffect(() => {
     if (isGeoStylePreviewProject(activeProject)) return;
     if (!activeProject?.industryRankingMonitoring?.runId) return;
-    if (activeProject.industryRankingMonitoring.status !== "completed") return;
     if (
-      activeProject.industryRankingMonitoring.quality?.downstreamEligible ===
-      false
+      !monitoringAssessmentCoverage(activeProject.industryRankingMonitoring)
+        .assessmentEligible
     )
       return;
     if (
@@ -7219,6 +7224,44 @@ type AssessmentSectionStatus = {
   tone: "ready" | "loading" | "attention";
 };
 
+function monitoringAssessmentCoverage(monitoring?: GeoProject["monitoring"]) {
+  const successfulByPlatform = new Map<GeoPlatformId, number>(
+    (monitoring?.platforms || []).map((platform) => [platform, 0]),
+  );
+  for (const answer of monitoring?.answers || []) {
+    if (
+      answer.status !== "completed" ||
+      !answer.answer.trim() ||
+      answer.error
+    ) {
+      continue;
+    }
+    successfulByPlatform.set(
+      answer.platformId,
+      (successfulByPlatform.get(answer.platformId) || 0) + 1,
+    );
+  }
+  const successfulResponses = Array.from(successfulByPlatform.values()).reduce(
+    (total, count) => total + count,
+    0,
+  );
+  const fullSample =
+    monitoring?.status === "completed" &&
+    successfulByPlatform.size > 0 &&
+    Array.from(successfulByPlatform.values()).every((count) => count === 5);
+  const terminalPartialEligible =
+    monitoring?.status === "partial_review" &&
+    monitoring.quality?.downstreamEligible === true &&
+    successfulByPlatform.size > 0 &&
+    Array.from(successfulByPlatform.values()).every((count) => count >= 3);
+  return {
+    successfulResponses,
+    fullSample,
+    terminalPartialEligible,
+    assessmentEligible: fullSample || terminalPartialEligible,
+  };
+}
+
 function monitoringRunStatusLabel(
   status?: NonNullable<GeoProject["monitoring"]>["status"],
 ) {
@@ -8009,7 +8052,8 @@ export function MonitoringResults({
           : dualProject.selectedIndustryRankingQuestionId
         : project.selectedQuestionId;
     const question = project.questions.find((item) => item.id === questionId);
-    const finished = monitoring.completedRecords + monitoring.failedRecords;
+    const finished =
+      monitoringAssessmentCoverage(monitoring).successfulResponses;
     const expected = Math.max(
       monitoring.expectedRecords,
       (monitoring.platforms.length || project.selectedPlatformIds.length) * 5,
@@ -8106,20 +8150,34 @@ function MonitoringPerspectiveResults({
     monitoring.platforms.length > 0
       ? monitoring.platforms
       : project.selectedPlatformIds;
-  const finishedRecords =
-    monitoring.completedRecords + monitoring.failedRecords;
   const expectedRecords = Math.max(
     monitoring.expectedRecords,
     platformIds.length * 5,
   );
+  const monitoringCoverage = monitoringAssessmentCoverage(monitoring);
+  const completedAnswerCount = monitoringCoverage.successfulResponses;
+  const remainingAnswerCount = Math.max(
+    0,
+    expectedRecords - completedAnswerCount,
+  );
   const progress =
     expectedRecords > 0
-      ? Math.min(100, Math.round((finishedRecords / expectedRecords) * 100))
+      ? Math.min(
+          100,
+          Math.round((completedAnswerCount / expectedRecords) * 100),
+        )
       : 0;
   const answersAvailable = monitoring.answers.length > 0;
   const monitoringFailed = monitoring.status === "failed";
   const partialReview = monitoring.status === "partial_review";
+  const partialAssessmentEligible =
+    partialReview && monitoringCoverage.assessmentEligible;
   const monitoringCompleted = monitoring.status === "completed";
+  const recoveringSamples =
+    !monitoringCompleted &&
+    !partialReview &&
+    !monitoringFailed &&
+    monitoring.failedRecords > 0;
   const autoRefreshActive = !preview && shouldAutoRefreshGeoProject(project);
   const autoRefreshDelay = geoAutoRefreshDelayLabel(project);
   const selectedQuestionCategory = selectedQuestion
@@ -8132,13 +8190,6 @@ function MonitoringPerspectiveResults({
     monitoring.screenshotEnabled ??
     project.monitoringScreenshotEnabled ??
     false;
-  const completedAnswerCount = monitoring.answers.filter(
-    (answer) =>
-      answer.status === "completed" &&
-      answer.answer.trim().length > 0 &&
-      !answer.error,
-  ).length;
-
   return (
     <div className="geo-monitor-view geo-monitor-results">
       <header className="geo-assessment-header">
@@ -8150,10 +8201,14 @@ function MonitoringPerspectiveResults({
             {monitoringCompleted
               ? "平台回答采集完成"
               : partialReview
-                ? "平台回答采集未完整结束"
+                ? partialAssessmentEligible
+                  ? "平台回答已按实际样本完成评估准备"
+                  : "平台回答有效样本不足"
                 : monitoringFailed
                   ? "平台回答采集异常"
-                  : "平台回答正在采集"}
+                  : recoveringSamples
+                    ? "平台回答正在自动补齐采样"
+                    : "平台回答正在采集"}
           </h2>
           <p>
             平台采样结果按回答轮次独立归档，可逐条查看正文、相关媒体与来源信息。
@@ -8167,8 +8222,12 @@ function MonitoringPerspectiveResults({
               : monitoringFailed
                 ? "采集异常"
                 : partialReview
-                  ? "部分结果已返回"
-                  : "采集中"}
+                  ? partialAssessmentEligible
+                    ? "部分样本可评估"
+                    : "有效样本不足"
+                  : recoveringSamples
+                    ? "自动补采中"
+                    : "采集中"}
           </span>
           <button
             type="button"
@@ -8196,8 +8255,10 @@ function MonitoringPerspectiveResults({
               </>
             ) : autoRefreshActive ? (
               `预计 ${autoRefreshDelay}后自动刷新`
+            ) : partialAssessmentEligible ? (
+              "补采已结束，现状评估将基于实际样本生成"
             ) : partialReview ? (
-              "结果不完整，自动刷新与后续评估已停止"
+              "补采已结束，当前有效样本不足"
             ) : monitoringFailed ? (
               "采集已停止，请根据错误信息处理"
             ) : (
@@ -8241,7 +8302,7 @@ function MonitoringPerspectiveResults({
           <div>
             <span>回答采集进度</span>
             <strong>
-              {finishedRecords} / {expectedRecords} 条已完成采集
+              {completedAnswerCount} / {expectedRecords} 条有效回答
             </strong>
           </div>
           <b>{progress}%</b>
@@ -8254,7 +8315,9 @@ function MonitoringPerspectiveResults({
           <span>
             {autoRefreshActive
               ? `下次刷新预计在 ${autoRefreshDelay}后 · 页面进入后台时暂停`
-              : "每次回答均按平台与采集轮次独立留档"}
+              : partialAssessmentEligible
+                ? `补采结束 · 基于 ${completedAnswerCount}/${expectedRecords} 条实际样本继续评估`
+                : "每次回答均按平台与采集轮次独立留档"}
           </span>
         </div>
       </section>
@@ -8285,17 +8348,25 @@ function MonitoringPerspectiveResults({
         <div className="geo-assessment-alert warning" role="status">
           <CircleAlert size={17} />
           <div>
-            <strong>本次采集结果不完整，已停止自动评估</strong>
+            <strong>
+              {partialAssessmentEligible
+                ? "补采结束，已基于实际样本继续评估"
+                : "本次有效样本不足，无法生成可靠评估"}
+            </strong>
             <p>
-              已返回内容可以先行查阅；请刷新确认最终状态，仍缺少采样时请联系技术支持重新发起采集。
+              {partialAssessmentEligible
+                ? `本次共获得 ${completedAnswerCount}/${expectedRecords} 条有效回答，现状评估会保留实际样本覆盖度。`
+                : `本次仅获得 ${completedAnswerCount}/${expectedRecords} 条有效回答；每个平台至少需要 3 条有效回答。`}
             </p>
-            <button
-              type="button"
-              className="geo-secondary-button"
-              onClick={onContact}
-            >
-              联系技术支持
-            </button>
+            {!partialAssessmentEligible && (
+              <button
+                type="button"
+                className="geo-secondary-button"
+                onClick={onContact}
+              >
+                联系技术支持
+              </button>
+            )}
           </div>
         </div>
       )}
@@ -8308,9 +8379,11 @@ function MonitoringPerspectiveResults({
           </div>
           <small>
             {completedAnswerCount} 条有效回答
-            {monitoring.failedRecords > 0
-              ? ` · ${monitoring.failedRecords} 次未返回`
-              : ""}
+            {recoveringSamples
+              ? ` · ${remainingAnswerCount} 条正在自动补齐`
+              : monitoring.failedRecords > 0
+                ? ` · ${monitoring.failedRecords} 次未返回`
+                : ""}
           </small>
         </section>
       )}

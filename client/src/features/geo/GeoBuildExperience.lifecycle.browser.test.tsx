@@ -89,6 +89,20 @@ function monitoringProject(overrides: Partial<GeoProject> = {}): GeoProject {
   };
 }
 
+function completedAnswers(runId: string) {
+  return Array.from({ length: 5 }, (_, index) => ({
+    id: `${runId}-answer-${index + 1}`,
+    platformId: "deepseek" as const,
+    runIndex: index + 1,
+    status: "completed" as const,
+    answer: `有效回答 ${index + 1}`,
+    media: [],
+    sources: [],
+    citations: [],
+    references: [],
+  }));
+}
+
 async function flushEffects() {
   await act(async () => {
     await Promise.resolve();
@@ -234,7 +248,7 @@ describe("GEO notice lifecycle and independent assessment starts", () => {
         expectedRecords: 5,
         completedRecords: 5,
         failedRecords: 0,
-        answers: [],
+        answers: completedAnswers("product-run"),
       },
       industryRankingMonitoring: {
         runId: "industry-run",
@@ -243,7 +257,7 @@ describe("GEO notice lifecycle and independent assessment starts", () => {
         expectedRecords: 5,
         completedRecords: 5,
         failedRecords: 0,
-        answers: [],
+        answers: completedAnswers("industry-run"),
       },
       assessment: {
         status: "not_started",
@@ -267,5 +281,42 @@ describe("GEO notice lifecycle and independent assessment starts", () => {
         project,
       );
     });
+  });
+
+  it("does not start either assessment while five visible answers are still polling", async () => {
+    const project = monitoringProject({
+      monitoring: {
+        runId: "product-run",
+        status: "capturing",
+        platforms: ["deepseek"],
+        expectedRecords: 5,
+        completedRecords: 5,
+        failedRecords: 0,
+        answers: completedAnswers("product-run"),
+      },
+      industryRankingMonitoring: {
+        runId: "industry-run",
+        status: "capturing",
+        platforms: ["deepseek"],
+        expectedRecords: 5,
+        completedRecords: 5,
+        failedRecords: 0,
+        answers: completedAnswers("industry-run"),
+      },
+      assessment: {
+        status: "not_started",
+        dimensions: [],
+        comparisons: [],
+      },
+      industryRankingAssessment: undefined,
+    });
+    storageMocks.listGeoProjects.mockResolvedValue([project]);
+
+    renderExperience();
+    await screen.findByRole("button", { name: /继续项目：示例企业/ });
+    await flushEffects();
+
+    expect(apiMocks.startGeoCurrentAssessment).not.toHaveBeenCalled();
+    expect(apiMocks.retryIndustryRankingAssessment).not.toHaveBeenCalled();
   });
 });

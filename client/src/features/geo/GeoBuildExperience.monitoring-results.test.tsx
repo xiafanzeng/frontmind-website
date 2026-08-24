@@ -20,6 +20,104 @@ function renderResults() {
 }
 
 describe("monitoring result interaction", () => {
+  it("shows failed polling slots as automatic recovery and counts only valid answers", () => {
+    const project = createGeoStylePreviewProject("monitoring");
+    const monitoring = project.monitoring!;
+    project.monitoring = {
+      ...monitoring,
+      status: "capturing",
+      completedRecords: 3,
+      failedRecords: 2,
+      quality: undefined,
+      answers: monitoring.answers.map((answer, index) =>
+        index < 3
+          ? answer
+          : {
+              ...answer,
+              status: "failed",
+              answer: "",
+              error: "本轮采样暂未返回",
+            },
+      ),
+    };
+
+    render(
+      <MonitoringResults
+        project={project}
+        onRefresh={vi.fn(async () => undefined)}
+        refreshing={false}
+        onContact={vi.fn()}
+      />,
+    );
+
+    expect(screen.getByText("平台回答正在自动补齐采样")).toBeTruthy();
+    expect(screen.getByText("自动补采中")).toBeTruthy();
+    expect(screen.getByText("3 / 5 条有效回答")).toBeTruthy();
+    expect(screen.getByText("3 条有效回答 · 2 条正在自动补齐")).toBeTruthy();
+    expect(screen.queryByText(/已停止自动评估/)).toBeNull();
+  });
+
+  it("continues assessment for terminal 3/5 but fails closed below the threshold", () => {
+    const project = createGeoStylePreviewProject("monitoring");
+    const monitoring = project.monitoring!;
+    const partialAnswers = monitoring.answers.map((answer, index) =>
+      index < 3
+        ? answer
+        : {
+            ...answer,
+            status: "failed" as const,
+            answer: "",
+            error: "本轮采样未完成",
+          },
+    );
+    project.monitoring = {
+      ...monitoring,
+      status: "partial_review",
+      completedRecords: 3,
+      failedRecords: 2,
+      quality: {
+        completeness: "partial",
+        downstreamEligible: true,
+      },
+      answers: partialAnswers,
+    };
+    const view = render(
+      <MonitoringResults
+        project={project}
+        onRefresh={vi.fn(async () => undefined)}
+        refreshing={false}
+        onContact={vi.fn()}
+      />,
+    );
+
+    expect(screen.getByText("补采结束，已基于实际样本继续评估")).toBeTruthy();
+    expect(
+      screen.getByText(
+        "本次共获得 3/5 条有效回答，现状评估会保留实际样本覆盖度。",
+      ),
+    ).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "联系技术支持" })).toBeNull();
+
+    project.monitoring = {
+      ...project.monitoring,
+      completedRecords: 2,
+      failedRecords: 3,
+      answers: partialAnswers.map((answer, index) =>
+        index < 2 ? answer : { ...answer, status: "failed", answer: "" },
+      ),
+    };
+    view.rerender(
+      <MonitoringResults
+        project={project}
+        onRefresh={vi.fn(async () => undefined)}
+        refreshing={false}
+        onContact={vi.fn()}
+      />,
+    );
+    expect(screen.getByText("本次有效样本不足，无法生成可靠评估")).toBeTruthy();
+    expect(screen.getByRole("button", { name: "联系技术支持" })).toBeTruthy();
+  });
+
   it("mounts one of five slots and keeps the failed slot selectable", () => {
     const view = renderResults();
     const previous = screen.getByRole("button", {

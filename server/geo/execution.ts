@@ -381,10 +381,9 @@ function monitorEntry(run: BrokerMonitorRun): GeoExecutionLogEntry {
     0,
     Math.min(Math.max(0, total - completed), run.failedItems),
   );
-  const finished = Math.min(total, completed + failed);
   const progress =
     total > 0
-      ? clampPercent((finished / total) * 100)
+      ? clampPercent((completed / total) * 100)
       : status === "completed"
         ? 100
         : 0;
