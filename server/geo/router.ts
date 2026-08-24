@@ -69,6 +69,7 @@ import {
 } from "./broker";
 import {
   GeoMonitorContractError,
+  monitorAssessmentEligibility,
   monitorBrandMentionRate,
   normalizeMonitorRun,
   toPublicMonitorView,
@@ -1791,8 +1792,11 @@ export function createGeoRouter(options: GeoRouterOptions = {}): Router {
     run?: BrokerMonitorRun,
   ) => {
     if (!value.monitorOrderId || !run) return value;
+    const partialAssessmentEligible =
+      run.status === "partial_review_required" &&
+      monitorAssessmentEligibility(run).assessmentEligible;
     const state =
-      run.status === "completed"
+      run.status === "completed" || partialAssessmentEligible
         ? "fulfilled"
         : run.status === "remote_failed"
           ? "terminal_failed"
@@ -3646,9 +3650,12 @@ export function createGeoRouter(options: GeoRouterOptions = {}): Router {
         "MONITOR_QUESTION_MISMATCH",
       );
     }
-    if (monitorRun.status !== "completed" || !monitorRun.records) {
+    const monitorSample = monitorAssessmentEligibility(monitorRun);
+    if (!monitorSample.assessmentEligible || !monitorRun.records) {
       throw new GeoHttpError(
-        "监控仍在采集中，完成后将自动生成现状评估",
+        monitorRun.status === "partial_review_required"
+          ? "监控有效样本不足，每个平台至少需要 3 条有效回答"
+          : "监控仍在采集中，完成后将自动生成现状评估",
         409,
         "MONITOR_NOT_COMPLETE",
       );
@@ -3681,9 +3688,7 @@ export function createGeoRouter(options: GeoRouterOptions = {}): Router {
       platforms: [...monitorRun.platforms].sort(compareCanonicalText),
       repeatPerPlatform: 5,
       expectedResponses: monitorRun.expectedItems,
-      successfulResponses: monitorRun.records.filter(
-        (record) => record.status === "completed" && Boolean(record.answerText),
-      ).length,
+      successfulResponses: monitorSample.successfulResponses,
       records: canonicalAssessmentMonitorRecords(monitorRun.records),
     };
     const monitoringBytes = Buffer.from(
@@ -4148,8 +4153,8 @@ export function createGeoRouter(options: GeoRouterOptions = {}): Router {
       const automationReady = Boolean(
         initialQuestionTask &&
           question &&
-          rawMonitorRun?.status === "completed" &&
-          rawMonitorRun.records,
+          rawMonitorRun &&
+          monitorAssessmentEligibility(rawMonitorRun).assessmentEligible,
       );
       if (automationReady && initialQuestionTask && rawMonitorRun && question) {
         if (
@@ -4357,8 +4362,9 @@ export function createGeoRouter(options: GeoRouterOptions = {}): Router {
       const industryAutomationReady = Boolean(
         initialQuestionTask &&
           industryRankingQuestion?.category === "industry_ranking" &&
-          rawIndustryRankingMonitorRun?.status === "completed" &&
-          rawIndustryRankingMonitorRun.records,
+          rawIndustryRankingMonitorRun &&
+          monitorAssessmentEligibility(rawIndustryRankingMonitorRun)
+            .assessmentEligible,
       );
       if (
         industryAutomationReady &&
@@ -6325,10 +6331,11 @@ export function createGeoRouter(options: GeoRouterOptions = {}): Router {
           return;
         }
       }
-      if (monitorRun.status !== "completed" || !monitorRun.records) {
+      const monitorSample = monitorAssessmentEligibility(monitorRun);
+      if (!monitorSample.assessmentEligible || !monitorRun.records) {
         throw new GeoHttpError(
           monitorRun.status === "partial_review_required"
-            ? "监控结果不完整，需由技术人员确认后才能生成评估"
+            ? "监控有效样本不足，每个平台至少需要 3 条有效回答"
             : "监控仍在采集中，完成后将自动生成现状评估",
           409,
           "MONITOR_NOT_COMPLETE",
@@ -6363,10 +6370,7 @@ export function createGeoRouter(options: GeoRouterOptions = {}): Router {
         platforms: [...monitorRun.platforms].sort(compareCanonicalText),
         repeatPerPlatform: 5,
         expectedResponses: monitorRun.expectedItems,
-        successfulResponses: monitorRun.records.filter(
-          (record) =>
-            record.status === "completed" && Boolean(record.answerText),
-        ).length,
+        successfulResponses: monitorSample.successfulResponses,
         // The assessment remains text/evidence based. Structured media is
         // returned to the customer UI but is not sent to the evaluator, and
         // page screenshots/reasoning never enter the monitor contract.
@@ -9113,10 +9117,13 @@ async function parseScopedAssessmentTaskOutput(
     },
     platforms,
     ...(monitorRun
-      ? {
-          successfulResponses: monitorRun.completedItems,
-          failedResponses: monitorRun.failedItems,
-        }
+      ? (() => {
+          const sample = monitorAssessmentEligibility(monitorRun);
+          return {
+            successfulResponses: sample.successfulResponses,
+            failedResponses: sample.failedResponses,
+          };
+        })()
       : {}),
   });
   if (!monitorRun) return scoped;
@@ -10362,8 +10369,11 @@ async function toPublicAssessmentView(
     };
   } catch (error) {
     logAssessmentOutputValidation(error, task);
+    const monitorSample = monitorRun
+      ? monitorAssessmentEligibility(monitorRun)
+      : undefined;
     const partial =
-      question && monitorRun
+      question && monitorRun && monitorSample
         ? buildAssessmentDisplayOnlyProjection(task, {
             question: {
               id: question.id,
@@ -10372,8 +10382,8 @@ async function toPublicAssessmentView(
               rankingMetricEligible: question.category === "industry_ranking",
             },
             platforms: monitorRun.platforms,
-            successfulResponses: monitorRun.completedItems,
-            failedResponses: monitorRun.failedItems,
+            successfulResponses: monitorSample.successfulResponses,
+            failedResponses: monitorSample.failedResponses,
             sourceCountByPlatform: monitorSourceCountsByPlatform(monitorRun),
           })
         : undefined;

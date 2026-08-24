@@ -6810,6 +6810,114 @@ describe("GEO API", () => {
     expect(parsedMonitoring.records[0].media).toBeUndefined();
   });
 
+  it("starts manual and automatic assessment from a terminal 3/5 sample", async () => {
+    const partialRun = (run: BrokerMonitorRawRun) => ({
+      ...run,
+      status: "partial_review_required" as const,
+      completedItems: 3,
+      failedItems: 2,
+      records: Array.from({ length: 5 }, (_, index) =>
+        index < 3
+          ? monitorRecord(index + 1, `Acme 回答 ${index + 1}`)
+          : {
+              ...monitorRecord(index + 1, ""),
+              status: "failed" as const,
+              answerText: undefined,
+              media: [],
+              sources: [],
+            },
+      ),
+    });
+
+    const manualReady = await createReadyProject();
+    const manualMonitor = await startOnePlatformMonitor(manualReady);
+    broker.monitorRuns.set(
+      "monitor-1",
+      partialRun(broker.monitorRuns.get("monitor-1")!),
+    );
+    const manuallyAssessed = await jsonRequest(
+      `/projects/${encodeURIComponent(manualMonitor.projectToken)}/assessment`,
+      manualReady.cookie,
+      { method: "POST", body: {} },
+    );
+    expect(manuallyAssessed.response.status).toBe(201);
+    expect((manuallyAssessed.body as any).project.monitoring).toMatchObject({
+      status: "partial_review_required",
+      completedRecords: 3,
+      failedRecords: 2,
+      quality: { downstreamEligible: true },
+    });
+    const manualInputAttachment = broker.taskAttachments
+      .at(-1)!
+      .find((attachment) => attachment.filename.endsWith("-task-input.json"))!;
+    expect(
+      JSON.parse(
+        broker.taskInputUploads
+          .get(manualInputAttachment.file_id)!
+          .toString("utf8"),
+      ).data.monitoringScope,
+    ).toMatchObject({
+      expectedResponses: 5,
+      successfulResponses: 3,
+      failedResponses: 2,
+    });
+
+    const automaticReady = await createReadyProject();
+    const automaticMonitor = await startOnePlatformMonitor(automaticReady);
+    const automaticRunId = `monitor-${broker.monitorCreates}`;
+    broker.monitorRuns.set(
+      automaticRunId,
+      partialRun(broker.monitorRuns.get(automaticRunId)!),
+    );
+    const taskCountBeforeRefresh = broker.assessmentTaskCount;
+    const automaticallyAssessed = await jsonRequest(
+      `/projects/${encodeURIComponent(automaticMonitor.projectToken)}`,
+      automaticReady.cookie,
+    );
+    expect(automaticallyAssessed.response.status).toBe(200);
+    expect(
+      (automaticallyAssessed.body as any).project.assessment,
+    ).toMatchObject({ status: "running" });
+    expect(broker.assessmentTaskCount).toBe(taskCountBeforeRefresh + 1);
+  });
+
+  it("rejects assessment when a terminal platform has fewer than 3 answers", async () => {
+    const ready = await createReadyProject();
+    const monitored = await startOnePlatformMonitor(ready);
+    const run = broker.monitorRuns.get("monitor-1")!;
+    broker.monitorRuns.set("monitor-1", {
+      ...run,
+      status: "partial_review_required",
+      completedItems: 2,
+      failedItems: 3,
+      records: Array.from({ length: 5 }, (_, index) =>
+        index < 2
+          ? monitorRecord(index + 1, `Acme 回答 ${index + 1}`)
+          : {
+              ...monitorRecord(index + 1, ""),
+              status: "failed" as const,
+              answerText: undefined,
+              media: [],
+              sources: [],
+            },
+      ),
+    });
+
+    const response = await jsonRequest(
+      `/projects/${encodeURIComponent(monitored.projectToken)}/assessment`,
+      ready.cookie,
+      { method: "POST", body: {} },
+    );
+    expect(response.response.status).toBe(409);
+    expect(response.body).toMatchObject({
+      error: {
+        code: "MONITOR_NOT_COMPLETE",
+        message: "监控有效样本不足，每个平台至少需要 3 条有效回答",
+      },
+    });
+    expect(broker.assessmentTaskCount).toBe(0);
+  });
+
   it("replays one accepted assessment with the same generated evidence file ids after its response is lost", async () => {
     const ready = await createReadyProject();
     const monitored = await startOnePlatformMonitor(ready);

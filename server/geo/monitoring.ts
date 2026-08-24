@@ -13,6 +13,59 @@ type NormalizedMonitorRun = BrokerMonitorRun & {
   quality?: ResultQuality;
 };
 
+export const MIN_MONITOR_ASSESSMENT_RESPONSES_PER_PLATFORM = 3;
+
+export function monitorAssessmentEligibility(monitorRun: BrokerMonitorRun) {
+  const successfulByPlatform = new Map<GeoMonitorPlatformId, number>(
+    monitorRun.platforms.map((platform) => [platform, 0]),
+  );
+  for (const record of monitorRun.records || []) {
+    if (
+      record.status !== "completed" ||
+      !record.answerText?.trim() ||
+      record.error
+    ) {
+      continue;
+    }
+    successfulByPlatform.set(
+      record.platform,
+      (successfulByPlatform.get(record.platform) || 0) + 1,
+    );
+  }
+  const successfulResponses = Array.from(successfulByPlatform.values()).reduce(
+    (total, count) => total + count,
+    0,
+  );
+  const failedResponses = Math.max(
+    0,
+    monitorRun.expectedItems - successfulResponses,
+  );
+  const recordsAvailable = Array.isArray(monitorRun.records);
+  const fullSample =
+    recordsAvailable &&
+    monitorRun.status === "completed" &&
+    monitorRun.platforms.every(
+      (platform) =>
+        successfulByPlatform.get(platform) === monitorRun.repeatPerPlatform,
+    );
+  const terminalPartialEligible =
+    recordsAvailable &&
+    monitorRun.status === "partial_review_required" &&
+    monitorRun.platforms.every(
+      (platform) =>
+        (successfulByPlatform.get(platform) || 0) >=
+        MIN_MONITOR_ASSESSMENT_RESPONSES_PER_PLATFORM,
+    );
+  return {
+    successfulByPlatform,
+    successfulResponses,
+    failedResponses,
+    fullSample,
+    terminalPartialEligible,
+    assessmentEligible: fullSample || terminalPartialEligible,
+  };
+}
+
 export function monitorBrandMentionRate(monitorRun: BrokerMonitorRun) {
   const observed = (monitorRun.records || []).filter(
     (record) =>
@@ -380,15 +433,17 @@ export function normalizeMonitorRun(
     records !== undefined &&
     (observedCompleted !== run.completedItems ||
       observedFailed !== run.failedItems);
-  const partial =
+  const samplePartial =
     run.status === "partial_review_required" ||
-    incompleteTerminalRecords ||
-    summaryMismatch ||
-    droppedRecords > 0 ||
-    droppedOptionalItems > 0 ||
-    observedFailed > 0 ||
-    (terminal && observedCompleted !== run.expectedItems);
-  const publicStatus = partial ? "partial_review_required" : run.status;
+    (terminal &&
+      (incompleteTerminalRecords ||
+        summaryMismatch ||
+        droppedRecords > 0 ||
+        observedFailed > 0 ||
+        observedCompleted !== run.expectedItems));
+  const evidencePartial = terminal && droppedOptionalItems > 0;
+  const qualityPartial = samplePartial || evidencePartial;
+  const publicStatus = samplePartial ? "partial_review_required" : run.status;
   const retainedRecordCount =
     records?.length ??
     (summaryOnlyAccepted ? observedCompleted + observedFailed : 0);
@@ -397,18 +452,52 @@ export function normalizeMonitorRun(
     run.expectedItems - retainedRecordCount,
     0,
   );
+  const normalizedRun: BrokerMonitorRun = {
+    runId: run.runId,
+    status: publicStatus,
+    question: run.question,
+    platforms: uniquePlatforms,
+    repeatPerPlatform: 5,
+    expectedItems: run.expectedItems,
+    completedItems: observedCompleted,
+    failedItems: terminal
+      ? Math.max(0, run.expectedItems - observedCompleted)
+      : observedFailed,
+    submittedAt: run.submittedAt,
+    nextPollAt: run.nextPollAt,
+    ...(run.region
+      ? {
+          region: {
+            edition: run.region.scope,
+            code: run.region.code,
+            label: run.region.label,
+          },
+        }
+      : {}),
+    screenshotEnabled: run.screenshot === 1,
+    records,
+    error: run.error,
+  };
+  const assessmentEligibility = monitorAssessmentEligibility(normalizedRun);
   const quality: ResultQuality | undefined = terminal
     ? {
-        completeness: partial ? "partial" : "complete",
+        completeness: qualityPartial ? "partial" : "complete",
         stats: {
           acceptedCount: retainedRecordCount,
           expectedCount: run.expectedItems,
           droppedCount,
         },
-        ...(partial
+        ...(qualityPartial
           ? {
               warnings: [
-                { code: "RESULT_INCOMPLETE" as const, area: "monitoring" },
+                ...(samplePartial
+                  ? [
+                      {
+                        code: "RESULT_INCOMPLETE" as const,
+                        area: "monitoring",
+                      },
+                    ]
+                  : []),
                 ...(droppedCount > 0
                   ? [
                       {
@@ -428,33 +517,12 @@ export function normalizeMonitorRun(
               ],
             }
           : {}),
-        downstreamEligible: !partial,
+        downstreamEligible: assessmentEligibility.assessmentEligible,
       }
     : undefined;
 
   return {
-    runId: run.runId,
-    status: publicStatus,
-    question: run.question,
-    platforms: uniquePlatforms,
-    repeatPerPlatform: 5,
-    expectedItems: run.expectedItems,
-    completedItems: observedCompleted,
-    failedItems: observedFailed,
-    submittedAt: run.submittedAt,
-    nextPollAt: run.nextPollAt,
-    ...(run.region
-      ? {
-          region: {
-            edition: run.region.scope,
-            code: run.region.code,
-            label: run.region.label,
-          },
-        }
-      : {}),
-    screenshotEnabled: run.screenshot === 1,
-    records,
-    error: run.error,
+    ...normalizedRun,
     ...(quality ? { quality } : {}),
   };
 }

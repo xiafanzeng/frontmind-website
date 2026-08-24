@@ -172,7 +172,7 @@ describe("GEO v2 safe execution log", () => {
       stage: "monitoring",
       status: "running",
       counters: { completed: 2, failed: 1, total: 5 },
-      progress: 60,
+      progress: 40,
       nextPollAt: "2026-07-23T03:05:00.000Z",
     });
     expect(JSON.stringify(log)).not.toContain("monitor-private");

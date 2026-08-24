@@ -1656,6 +1656,50 @@ describe("normalizeGeoProject", () => {
     });
   });
 
+  it("preserves server-approved terminal 3/5 assessment eligibility", () => {
+    const project = normalizeGeoProject({
+      project: {
+        id: "client-terminal-partial-monitor",
+        monitoring: {
+          runId: "client-terminal-partial-monitor-run",
+          status: "partial_review_required",
+          platforms: ["doubao"],
+          expectedRecords: 5,
+          completedRecords: 3,
+          failedRecords: 2,
+          quality: {
+            completeness: "partial",
+            downstreamEligible: true,
+            stats: {
+              acceptedCount: 5,
+              expectedCount: 5,
+              droppedCount: 0,
+            },
+          },
+          records: Array.from({ length: 5 }, (_, index) => ({
+            recordId: `partial-${index + 1}`,
+            platform: "doubao",
+            runIndex: index + 1,
+            status: index < 3 ? "completed" : "failed",
+            ...(index < 3 ? { answerText: `有效回答 ${index + 1}` } : {}),
+            media: [],
+            sources: [],
+          })),
+        },
+      },
+    });
+
+    expect(project.monitoring).toMatchObject({
+      status: "partial_review",
+      completedRecords: 3,
+      failedRecords: 2,
+      quality: {
+        completeness: "partial",
+        downstreamEligible: true,
+      },
+    });
+  });
+
   it.each([
     ["submission_in_progress", "submitted"],
     ["submitted", "submitted"],

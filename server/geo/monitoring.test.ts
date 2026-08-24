@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { BrokerMonitorRun } from "./broker";
 import {
+  monitorAssessmentEligibility,
   monitorBrandMentionRate,
   normalizeMonitorRun,
   normalizeMonitorSources,
@@ -134,14 +135,14 @@ describe("monitor result adapter", () => {
       sources: [{ title: "实际引用" }, { title: "检索参考" }],
     });
     expect(run.records).toHaveLength(5);
-    expect(run.status).toBe("partial_review_required");
+    expect(run.status).toBe("completed");
     expect(run.quality).toMatchObject({
       completeness: "partial",
       stats: { acceptedCount: 5, expectedCount: 5, droppedCount: 0 },
       warnings: expect.arrayContaining([
         { code: "EVIDENCE_INCOMPLETE", area: "monitoring.sources_media" },
       ]),
-      downstreamEligible: false,
+      downstreamEligible: true,
     });
     expect(JSON.stringify(toPublicMonitorView(run))).not.toContain(
       "reasoningProcess",
@@ -371,11 +372,11 @@ describe("monitor result adapter", () => {
     expect(normalizeMonitorRun(payload)).toMatchObject({
       status: "partial_review_required",
       completedItems: 4,
-      failedItems: 0,
+      failedItems: 1,
       quality: {
         completeness: "partial",
         stats: { acceptedCount: 4, expectedCount: 5, droppedCount: 1 },
-        downstreamEligible: false,
+        downstreamEligible: true,
       },
       records: expect.arrayContaining([
         expect.objectContaining({ recordId: "record-1" }),
@@ -485,14 +486,14 @@ describe("monitor result adapter", () => {
       sources: [{ title: "可核验来源" }],
     });
     expect(run.records).toHaveLength(5);
-    expect(run.status).toBe("partial_review_required");
+    expect(run.status).toBe("completed");
     expect(run.quality).toMatchObject({
       completeness: "partial",
       stats: { acceptedCount: 5, droppedCount: 0 },
       warnings: expect.arrayContaining([
         { code: "EVIDENCE_INCOMPLETE", area: "monitoring.sources_media" },
       ]),
-      downstreamEligible: false,
+      downstreamEligible: true,
     });
   });
 
@@ -510,5 +511,128 @@ describe("monitor result adapter", () => {
     };
 
     expect(normalizeMonitorRun(payload).status).toBe("partial_review_required");
+  });
+
+  it("keeps failed attempts recoverable while Dashboard is still polling", () => {
+    const payload = cleanCompletedRun();
+    payload.status = "polling";
+    payload.completedItems = 3;
+    payload.failedItems = 2;
+    payload.records = payload.records.map((record, index) =>
+      index < 3
+        ? record
+        : {
+            ...record,
+            status: "failed",
+            answerText: undefined,
+            media: [],
+            citations: [],
+            references: [],
+          },
+    );
+
+    const run = normalizeMonitorRun(payload);
+    expect(run).toMatchObject({
+      status: "polling",
+      completedItems: 3,
+      failedItems: 2,
+    });
+    expect(run).not.toHaveProperty("quality");
+  });
+
+  it("does not start assessment from polling even when all five answers are visible", () => {
+    const payload = cleanCompletedRun();
+    payload.status = "polling";
+
+    const run = normalizeMonitorRun(payload);
+
+    expect(run).toMatchObject({
+      status: "polling",
+      completedItems: 5,
+      failedItems: 0,
+    });
+    expect(monitorAssessmentEligibility(run)).toMatchObject({
+      successfulResponses: 5,
+      failedResponses: 0,
+      fullSample: false,
+      terminalPartialEligible: false,
+      assessmentEligible: false,
+    });
+  });
+
+  it("allows a terminal 3/5 sample to continue assessment", () => {
+    const payload = cleanCompletedRun();
+    payload.status = "partial_review_required";
+    payload.completedItems = 3;
+    payload.failedItems = 2;
+    payload.records = payload.records.map((record, index) =>
+      index < 3
+        ? record
+        : {
+            ...record,
+            status: "failed",
+            answerText: undefined,
+            media: [],
+            citations: [],
+            references: [],
+          },
+    );
+
+    const run = normalizeMonitorRun(payload);
+    expect(run).toMatchObject({
+      status: "partial_review_required",
+      completedItems: 3,
+      failedItems: 2,
+      quality: { downstreamEligible: true },
+    });
+    expect(monitorAssessmentEligibility(run)).toMatchObject({
+      successfulResponses: 3,
+      failedResponses: 2,
+      fullSample: false,
+      terminalPartialEligible: true,
+      assessmentEligible: true,
+    });
+  });
+
+  it("blocks a terminal sample when any platform has fewer than 3 answers", () => {
+    const records: BrokerMonitorRun["records"] = [
+      ...Array.from({ length: 5 }, (_, index) => ({
+        recordId: `doubao-${index + 1}`,
+        platform: "doubao" as const,
+        runIndex: index + 1,
+        status: "completed" as const,
+        answerText: `豆包回答 ${index + 1}`,
+        media: [],
+        sources: [],
+      })),
+      ...Array.from({ length: 2 }, (_, index) => ({
+        recordId: `kimi-${index + 1}`,
+        platform: "kimi" as const,
+        runIndex: index + 1,
+        status: "completed" as const,
+        answerText: `Kimi 回答 ${index + 1}`,
+        media: [],
+        sources: [],
+      })),
+    ];
+    const run = {
+      runId: "partial-two-platforms",
+      status: "partial_review_required",
+      question: "Acme 怎么样？",
+      platforms: ["doubao", "kimi"],
+      repeatPerPlatform: 5,
+      expectedItems: 10,
+      completedItems: 7,
+      failedItems: 3,
+      records,
+    } satisfies BrokerMonitorRun;
+
+    expect(monitorAssessmentEligibility(run)).toMatchObject({
+      successfulResponses: 7,
+      failedResponses: 3,
+      fullSample: false,
+      terminalPartialEligible: false,
+      assessmentEligible: false,
+    });
   });
 });
