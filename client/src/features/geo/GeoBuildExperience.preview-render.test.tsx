@@ -254,11 +254,13 @@ describe("GEO style preview rendering", () => {
 
     expect(html).toContain("产品与舆情");
     expect(html).toContain("行业排名与品牌优胜");
-    expect(html).toContain("国内版 ¥1,500/月");
-    expect(html).toContain("海外版 ¥4,000/月");
-    expect(html).toContain("根据企业实际情况定制");
-    expect(html).not.toContain("自定义优化问题");
-    expect(html).not.toContain("全域营销权限");
+    expect(html).toContain("自定义产品侧优化问题");
+    expect(html).toContain("行业排名为什么需要全域营销协同");
+    expect(html).toContain("行业内容矩阵");
+    expect(html).toContain("商品与服务矩阵");
+    expect(html).toContain("自有阵地与权威信源");
+    expect(html).toContain("观看视频演示");
+    expect(html).not.toMatch(/¥|￥|元\s*\/\s*月|报价|服务价格/);
   });
 
   it("renders the assessment preview with compact section navigation and one long section", () => {
@@ -740,7 +742,7 @@ describe("GEO style preview rendering", () => {
 
     expect(html).toContain("状态同步延迟");
     expect(html).toContain("联系技术支持");
-    expect(html).toContain("不会重复创建任务");
+    expect(html).toContain("不会重复创建");
     expect(html).not.toContain("重新生成知识库");
   });
 
@@ -1204,7 +1206,7 @@ describe("GEO style preview rendering", () => {
     expect(overview).not.toContain("当前等级");
     expect(overview).not.toContain("/ 100");
     expect(comparison).toContain("知识事实与平台回答逐项核验");
-    expect(current).not.toContain("进入下一步：启动服务");
+    expect(current).not.toContain("进入服务演示");
   });
 
   it("replaces internal assessment tokens and run identifiers in customer copy", () => {
@@ -1416,27 +1418,19 @@ describe("GEO style preview rendering", () => {
   it("keeps the user dashboard tab available in the local preview fixture", () => {
     const project = createGeoStylePreviewProject();
     const html = renderToStaticMarkup(
-      <ServiceActivation
-        project={project}
-        paymentPending={false}
-        onCheckout={vi.fn()}
-        onSubmitProfile={vi.fn(async () => undefined)}
-        onCreateAccount={vi.fn(async () => undefined)}
-        onCheckStatus={vi.fn(async () => undefined)}
-        onBack={vi.fn()}
-      />,
+      <ServiceActivation project={project} onBack={vi.fn()} />,
     );
-    const labelIndex = html.indexOf("企业服务工作台");
+    const labelIndex = html.indexOf("工作台演示");
     const buttonStart = html.lastIndexOf("<button", labelIndex);
     const buttonEnd = html.indexOf(">", buttonStart);
     const dashboardButton = html.slice(buttonStart, buttonEnd + 1);
 
     expect(labelIndex).toBeGreaterThan(-1);
     expect(dashboardButton).not.toContain("disabled");
-    expect(html).toContain("查看用户端内容骨架");
+    expect(html).toContain("查看只读样例数据");
   });
 
-  it("offers a clearly labelled luxury workspace sample before service activation", () => {
+  it("offers a clearly labelled service demo without a commercial workflow", () => {
     const fixture = createGeoStylePreviewProject();
     const project = {
       ...fixture,
@@ -1447,25 +1441,44 @@ describe("GEO style preview rendering", () => {
       },
     };
     const html = renderToStaticMarkup(
-      <ServiceActivation
-        project={project}
-        paymentPending={false}
-        onCheckout={vi.fn()}
-        onSubmitProfile={vi.fn(async () => undefined)}
-        onCreateAccount={vi.fn(async () => undefined)}
-        onCheckStatus={vi.fn(async () => undefined)}
-        onBack={vi.fn()}
-      />,
+      <ServiceActivation project={project} onBack={vi.fn()} />,
     );
-    const labelIndex = html.indexOf("企业服务工作台");
+    const labelIndex = html.indexOf("工作台演示");
     const buttonStart = html.lastIndexOf("<button", labelIndex);
     const buttonEnd = html.indexOf(">", buttonStart);
     const dashboardButton = html.slice(buttonStart, buttonEnd + 1);
 
     expect(labelIndex).toBeGreaterThan(-1);
     expect(dashboardButton).not.toContain("disabled");
-    expect(html).toContain("查看豪华版工作台样例");
-    expect(html).not.toContain("完成合同、付款和账号创建后开放");
+    expect(html).toContain("服务范围");
+    expect(html).toContain("本页仅演示工作台结构、服务范围与交付路径");
+    expect(html).not.toMatch(
+      /¥|￥|元\s*\/\s*月|报价|价格|合同|签约|付款|支付|开户|设置账号/,
+    );
+  });
+
+  it("renders an active historical service as a read-only workspace", () => {
+    const fixture = createGeoStylePreviewProject();
+    const html = renderToStaticMarkup(
+      <ServiceActivation
+        project={{
+          ...fixture,
+          preview: undefined,
+          serviceActivation: {
+            ...fixture.serviceActivation!,
+            status: "active",
+            activatedAt: "2026-08-29T08:00:00.000Z",
+          },
+        }}
+        onBack={vi.fn()}
+      />,
+    );
+
+    expect(html).toContain("已开通项目只读查看");
+    expect(html).toContain("本页仅供查看，不提供状态变更操作");
+    expect(html).not.toMatch(
+      /¥|￥|元\s*\/\s*月|报价|价格|合同|签约|付款|支付|开户|创建账号|确认并支付/,
+    );
   });
 
   it("opens the workspace sample when the assessment is ready but the forecast failed", () => {
@@ -1488,7 +1501,7 @@ describe("GEO style preview rendering", () => {
       />,
     );
     const stageLabelIndex = navigation.indexOf(
-      "步骤 5：启动服务，预览企业服务工作台",
+      "步骤 5：服务演示，查看工作台与服务范围",
     );
     const buttonStart = navigation.lastIndexOf("<button", stageLabelIndex);
     const buttonEnd = navigation.indexOf(">", buttonStart);
@@ -1498,21 +1511,15 @@ describe("GEO style preview rendering", () => {
     expect(serviceStageButton).not.toContain("disabled");
 
     const activation = renderToStaticMarkup(
-      <ServiceActivation
-        project={project}
-        paymentPending={false}
-        onCheckout={vi.fn()}
-        onSubmitProfile={vi.fn(async () => undefined)}
-        onCreateAccount={vi.fn(async () => undefined)}
-        onCheckStatus={vi.fn(async () => undefined)}
-        onBack={vi.fn()}
-      />,
+      <ServiceActivation project={project} onBack={vi.fn()} />,
     );
 
-    expect(activation).toContain("企业服务工作台样例");
-    expect(activation).toContain("豪华版企业服务工作台样例");
-    expect(activation).toContain("预览不会触发签约、付款或真实交付");
-    expect(activation).not.toContain("提交合同主体与签约经办人");
+    expect(activation).toContain("服务演示");
+    expect(activation).toContain("全域企业服务工作台演示");
+    expect(activation).toContain("本页仅演示工作台结构、服务范围与交付路径");
+    expect(activation).not.toMatch(
+      /¥|￥|元\s*\/\s*月|报价|价格|合同|签约|付款|支付|开户|设置账号/,
+    );
   });
 
   it("hands an active customer off only to the URL returned for that service", () => {
@@ -1924,9 +1931,9 @@ describe("GEO style preview rendering", () => {
 
     expect(html).toContain("服务概览");
     expect(html).toContain("当前服务版本");
-    expect(html).toContain("基础版");
+    expect(html).toContain("标准服务");
     expect(html).toContain("当前知识库");
-    expect(html).toContain("套餐配额");
+    expect(html).toContain("演示配置");
     expect(html).toContain("智能服务路径");
     expect(html).toContain(companyName);
     expect(html).toContain(questionText);
@@ -1938,7 +1945,7 @@ describe("GEO style preview rendering", () => {
     expect(html).not.toContain("内容制作体系");
   });
 
-  it("renders the luxury workspace sample with service scope and demo disclosure", () => {
+  it("renders the workspace sample with service scope and demo disclosure", () => {
     const project = createGeoStylePreviewProject();
     const question = project.questions.find(
       (item) => item.id === project.serviceActivation?.questionId,
@@ -1955,9 +1962,9 @@ describe("GEO style preview rendering", () => {
       />,
     );
 
-    expect(html).toContain('aria-label="豪华版企业服务工作台样例"');
-    expect(html).toContain("豪华版工作台样例");
-    expect(html).toContain("下列进度与数量为界面演示");
+    expect(html).toContain('aria-label="全域企业服务工作台演示"');
+    expect(html).toContain("全域服务演示");
+    expect(html).toContain("下列进度与数量均为演示数据");
     expect(html).toContain("32 个品牌问题");
     expect(html).toContain("6 个主流 AI 平台");
     expect(html).toContain("行业排名");
@@ -1990,7 +1997,7 @@ describe("GEO style preview rendering", () => {
     expect(html).toContain('aria-label="应答逻辑预填"');
     expect(html).toContain(question!.question);
     expect(html).toContain("当前知识调用");
-    expect(html).toContain("官网基础版展示已同步的流程骨架");
+    expect(html).toContain("官网只读页展示已同步的流程骨架");
     expect(html).not.toContain("<textarea");
     expect(html).not.toContain("提交企业资料");
   });
@@ -2021,7 +2028,7 @@ describe("GEO style preview rendering", () => {
     );
 
     expect(html).toContain("知识库待接入");
-    expect(html).toContain("开通后由 Agent 同步");
+    expect(html).toContain("本页演示");
     expect(html).toContain("当前服务问题");
     expect(html).toContain("待选择");
     expect(html).not.toContain("1 个已选问题");

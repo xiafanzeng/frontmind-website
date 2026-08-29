@@ -35,6 +35,7 @@ import {
   Minus,
   Paperclip,
   PackageOpen,
+  Play,
   Plus,
   Quote,
   RadioTower,
@@ -62,6 +63,9 @@ import {
 import { createPortal, flushSync } from "react-dom";
 import { useLang } from "@/contexts/LanguageContext";
 import { FRONTMIND_WECHAT_QR_PATH } from "@/lib/frontmind-contact";
+import permissionVideoUrl from "@/assets/geo/industry-ranking-permission-demo-66s.mp4";
+import permissionVideoPosterUrl from "@/assets/geo/industry-ranking-permission-demo-poster.jpg";
+import permissionVideoCaptionsUrl from "@/assets/geo/industry-ranking-permission-demo-zh-CN.vtt?url";
 import {
   Dialog,
   DialogClose,
@@ -80,17 +84,26 @@ import {
 } from "@/components/ui/select";
 import { Switch } from "@/components/ui/switch";
 import {
+  authoritativeGeoCustomQuestionValidationTerminal,
+  clearPendingGeoCustomQuestionValidation,
   confirmGeoServiceBankTransfer,
+  createGeoCustomQuestion,
   createGeoServiceAccount,
   createGeoProject,
   createGeoServicePaymentCheckout,
   downloadGeoArchive,
+  expiredGeoCustomQuestionValidation,
   getGeoProject,
   getGeoMonitoringRegions,
   getGeoServiceContractStatus,
   getGeoServicePaymentStatus,
   getGeoServiceProvisioningStatus,
   GeoApiError,
+  persistGeoCustomQuestionResultAndAcknowledge,
+  readPendingGeoCustomQuestionValidation,
+  retryableGeoCustomQuestionValidation,
+  retryGeoCustomQuestionValidation,
+  resumeGeoCustomQuestionValidation,
   type GeoPaymentCheckout,
   type GeoPaymentMethod,
   type GeoServicePaymentCheckout,
@@ -107,10 +120,7 @@ import {
   verifyGeoInvitation,
 } from "./api";
 import { normalizeBusinessOwnerName } from "@shared/business-owner-name";
-import {
-  geoServiceMonthlyPriceFen,
-  type GeoPricedServiceCategory,
-} from "@shared/geo-pricing";
+import { geoServiceMonthlyPriceFen } from "@shared/geo-pricing";
 import {
   createGeoDraftProject,
   isGeoDraftProject,
@@ -237,15 +247,6 @@ function monitoringEditionLabel(edition: GeoMonitoringEdition) {
   return edition === "overseas" ? "海外版" : "国内版";
 }
 
-function formatGeoMonthlyPrice(
-  category: GeoPricedServiceCategory,
-  edition: GeoMonitoringEdition,
-) {
-  return `¥${(
-    geoServiceMonthlyPriceFen(category, edition) / 100
-  ).toLocaleString("zh-CN")}/月`;
-}
-
 function monitoringPlatformsForEdition(edition: GeoMonitoringEdition) {
   return GEO_PLATFORMS.filter((platform) =>
     edition === "overseas"
@@ -357,8 +358,8 @@ const STAGES: Array<{ id: GeoStage; title: string; subtitle: string }> = [
   },
   {
     id: "service_activation",
-    title: "启动服务",
-    subtitle: "开启一个月优化",
+    title: "服务演示",
+    subtitle: "查看工作台与服务范围",
   },
 ];
 
@@ -807,6 +808,11 @@ function restorePendingGeoPayment(): PendingGeoPayment | undefined {
   }
 }
 
+function restorePendingGeoMonitoringMigration(): PendingGeoPayment | undefined {
+  const pending = restorePendingGeoPayment();
+  return pending?.kind === "monitoring" ? pending : undefined;
+}
+
 type KnowledgeView = "overview" | "sources";
 const FIXED_KNOWLEDGE_SECTIONS = [
   ["company-identity", "企业与品牌"],
@@ -955,6 +961,28 @@ function isExecutionEntryPending(entry: GeoExecutionLogEntry | undefined) {
 
 function errorMessage(error: unknown): string {
   return localizedUserFacingError(error);
+}
+
+function looksLikeIndustryRankingQuestion(value: string) {
+  return /(?:(?:行业|品类|领域|赛道).{0,10}(?:排名|排行|榜单|top\s*\d*|最好|最佳|第一|领先)|(?:哪家|哪个|哪些).{0,10}(?:最好|最佳|领先|值得推荐)|(?:推荐).{0,8}(?:品牌|公司|厂商|产品)|(?:品牌|公司|企业|平台|机构|服务商|供应商|厂商|工具|方案).{0,12}(?:推荐|排行|排名|有哪些|有哪(?:些|几)家|怎么选|如何选)|(?:有哪些|有哪(?:些|几)家).{0,12}(?:品牌|公司|企业|平台|机构|服务商|供应商|厂商|工具|方案))/i.test(
+    value,
+  );
+}
+
+function explicitlyReferencesProjectCompany(
+  question: string,
+  companyName: string,
+) {
+  const normalize = (value: string) =>
+    value
+      .normalize("NFKC")
+      .toLocaleLowerCase("zh-CN")
+      .replace(/[\s，。！？、；：“”‘’（）【】《》?.,!()[\]{}'"]/g, "");
+  const normalizedCompanyName = normalize(companyName);
+  return (
+    normalizedCompanyName.length >= 2 &&
+    normalize(question).includes(normalizedCompanyName)
+  );
 }
 
 function preparePaymentWindow() {
@@ -1559,6 +1587,23 @@ function KnowledgeBuildTree({
   );
 }
 
+function PermissionChannel({
+  name,
+  logo,
+  tone,
+}: {
+  name: string;
+  logo: string;
+  tone: string;
+}) {
+  return (
+    <span className={`geo-permission-channel ${tone}`}>
+      <img src={logo} alt="" draggable={false} />
+      {name}
+    </span>
+  );
+}
+
 export default function GeoBuildExperience() {
   const { lang } = useLang();
   if (lang !== "zh") return null;
@@ -1631,18 +1676,13 @@ function GeoBuildExperienceZh() {
   const [paymentDialogOpen, setPaymentDialogOpen] = useState(false);
   const [pendingPayment, setPendingPayment] = useState<
     PendingGeoPayment | undefined
-  >(restorePendingGeoPayment);
+  >(restorePendingGeoMonitoringMigration);
   const [paymentCreating, setPaymentCreating] = useState(false);
   const [paymentError, setPaymentError] = useState("");
   const [paymentCheckNonce, setPaymentCheckNonce] = useState(0);
   const [bankConfirmationActive, setBankConfirmationActive] = useState(false);
   const [storageNotice, setStorageNotice] = useState("");
-  const [purchaseIntent, setPurchaseIntent] = useState<string | undefined>(
-    () => {
-      if (typeof window === "undefined") return undefined;
-      return readGeoPurchaseIntentFromUrl(window.location.href);
-    },
-  );
+  const [purchaseIntent, setPurchaseIntent] = useState<string | undefined>();
   const [lastRefreshedAtByProject, setLastRefreshedAtByProject] = useState<
     Record<string, string>
   >({});
@@ -1712,6 +1752,16 @@ function GeoBuildExperienceZh() {
     );
     setQuestionConfirmOpen(false);
   }, [activeProject?.id]);
+
+  useEffect(() => {
+    // The public GEO flow no longer restores service purchases. Remove only
+    // the retired purchase-intent coordinate; cached monitoring confirmation
+    // remains available through its separate free migration path.
+    const nextUrl = clearGeoPurchaseIntentFromUrl(window.location.href);
+    if (nextUrl.href !== window.location.href) {
+      window.history.replaceState(window.history.state, "", nextUrl.href);
+    }
+  }, []);
 
   useEffect(() => {
     // Legacy monitoring payment state is read-only migration input. Do not
@@ -2810,7 +2860,7 @@ function GeoBuildExperienceZh() {
         activeProject?.monitoring?.runId ||
           activeProject?.industryRankingMonitoring?.runId
           ? "本次监控范围已经确认，不能再更换问题。"
-          : "当前问题已有待核对的支付订单，请先完成订单处理。",
+          : "当前监控范围正在恢复，请完成处理后再更换问题。",
       );
       return;
     }
@@ -2826,6 +2876,171 @@ function GeoBuildExperienceZh() {
     }
   };
 
+  const createCustomQuestion = async (
+    questionText: string,
+    signal?: AbortSignal,
+  ) => {
+    if (!activeProject) throw new Error("当前项目不可用，请刷新后重试。");
+    const operationProject = activeProject;
+    if (activeQuestionSelectionLocked) {
+      throw new Error("本次问题范围已经确认，不能再创建或更换问题。");
+    }
+    if (isGeoStylePreviewProject(activeProject)) {
+      if (looksLikeIndustryRankingQuestion(questionText)) {
+        throw new Error(
+          "该问题属于行业排名或品牌推荐方向，请改用行业侧推荐问题。",
+        );
+      }
+      const companyName =
+        activeProject.knowledgeBase?.companyName || activeProject.title;
+      if (!explicitlyReferencesProjectCompany(questionText, companyName)) {
+        throw new Error(
+          `该问题与「${companyName}」没有明确关系，请重新输入与当前企业相关的产品或舆情问题。`,
+        );
+      }
+      const normalized = `${questionText.trim().replace(/[?？]+$/, "")}？`;
+      const question: GeoQuestion = {
+        id: `custom-preview-${Date.now()}`,
+        category: "product_scenario",
+        question: normalized,
+        rationale: "您自定义的产品与舆情问题",
+        evidenceRefs: [],
+        selectable: true,
+      };
+      commitProject({
+        ...activeProject,
+        questions: [
+          ...activeProject.questions.filter(
+            (item) => !item.id.startsWith("custom-preview-"),
+          ),
+          question,
+        ],
+        updatedAt: new Date().toISOString(),
+      });
+      return question;
+    }
+
+    const result = await createGeoCustomQuestion(
+      operationProject,
+      questionText,
+      { signal },
+    );
+    try {
+      await persistGeoCustomQuestionResultAndAcknowledge(
+        result,
+        async (nextProject: GeoProject) => {
+          if (signal?.aborted) {
+            throw (
+              signal.reason ?? new DOMException("请求已取消。", "AbortError")
+            );
+          }
+          const saved = await saveGeoProjectObservationIfCurrent(
+            nextProject,
+            operationProject.remoteToken,
+          );
+          if (!saved) {
+            throw new Error(
+              "项目已被删除或已由更新的操作推进，已忽略本次迟到结果。",
+            );
+          }
+        },
+        { signal },
+      );
+    } catch (error) {
+      setStorageNotice(
+        "问题已验证，但项目令牌尚未持久保存；系统会保留同一请求并在刷新后继续恢复。",
+      );
+      throw error;
+    }
+    commitProject(result.project, {
+      expectedRemoteToken: operationProject.remoteToken,
+      skipPersistence: true,
+    });
+    return result.question;
+  };
+
+  const resumeCustomQuestion = async (signal?: AbortSignal) => {
+    if (
+      !activeProject ||
+      activeQuestionSelectionLocked ||
+      isGeoStylePreviewProject(activeProject)
+    )
+      return undefined;
+    const operationProject = activeProject;
+    const result = await resumeGeoCustomQuestionValidation(operationProject, {
+      signal,
+    });
+    if (!result) return undefined;
+    await persistGeoCustomQuestionResultAndAcknowledge(
+      result,
+      async (nextProject: GeoProject) => {
+        if (signal?.aborted) {
+          throw signal.reason ?? new DOMException("请求已取消。", "AbortError");
+        }
+        const saved = await saveGeoProjectObservationIfCurrent(
+          nextProject,
+          operationProject.remoteToken,
+        );
+        if (!saved) {
+          throw new Error(
+            "项目已被删除或已由更新的操作推进，已忽略本次迟到结果。",
+          );
+        }
+      },
+      { signal },
+    );
+    commitProject(result.project, {
+      expectedRemoteToken: operationProject.remoteToken,
+      skipPersistence: true,
+    });
+    return result.question;
+  };
+
+  const retryCustomQuestion = async (
+    terminalError: unknown,
+    signal?: AbortSignal,
+  ) => {
+    if (!activeProject) throw new Error("当前项目不可用，请刷新后重试。");
+    const operationProject = activeProject;
+    const result = await retryGeoCustomQuestionValidation(
+      operationProject,
+      terminalError,
+      { signal },
+    );
+    try {
+      await persistGeoCustomQuestionResultAndAcknowledge(
+        result,
+        async (nextProject: GeoProject) => {
+          if (signal?.aborted) {
+            throw (
+              signal.reason ?? new DOMException("请求已取消。", "AbortError")
+            );
+          }
+          const saved = await saveGeoProjectObservationIfCurrent(
+            nextProject,
+            operationProject.remoteToken,
+          );
+          if (!saved) {
+            throw new Error(
+              "项目已被删除或已由更新的操作推进，已忽略本次迟到结果。",
+            );
+          }
+        },
+        { signal },
+      );
+    } catch (error) {
+      setStorageNotice(
+        "问题已验证，但项目令牌尚未持久保存；系统会保留同一请求并在刷新后继续恢复。",
+      );
+      throw error;
+    }
+    commitProject(result.project, {
+      expectedRemoteToken: operationProject.remoteToken,
+      skipPersistence: true,
+    });
+    return result.question;
+  };
+
   const confirmQuestionSelection = () => {
     if (!activeProject || !pendingProductQuestion || !pendingIndustryQuestion)
       return;
@@ -2835,7 +3050,7 @@ function GeoBuildExperienceZh() {
         activeProject.monitoring?.runId ||
           activeProject.industryRankingMonitoring?.runId
           ? "本次监控范围已经确认，不能再更换问题。"
-          : "当前问题已有待核对的支付订单，请先完成订单处理。",
+          : "当前监控范围正在恢复，请完成处理后再更换问题。",
       );
       return;
     }
@@ -2950,7 +3165,7 @@ function GeoBuildExperienceZh() {
     });
   };
 
-  const openPaymentDialog = () => {
+  const openMonitoringConfirmation = () => {
     if (!activeProject) return;
     const dualProject = activeProject as GeoProject & {
       selectedIndustryRankingQuestionId?: string;
@@ -2991,14 +3206,6 @@ function GeoBuildExperienceZh() {
       setStorageNotice(GEO_MONITORING_PLATFORM_SELECTION_MESSAGE);
       return;
     }
-    if (
-      pendingPayment?.kind === "service" &&
-      pendingPayment.projectId !== activeProject.id
-    ) {
-      setStorageNotice("另一个项目仍有待确认的服务订单，请先完成该订单。");
-      return;
-    }
-    closeOwnedCashierWindows();
     setMonitoringStartError("");
     const recoveryClientRequestId = matchingMonitoringRecoveryClientRequestId(
       activeProject,
@@ -3023,7 +3230,7 @@ function GeoBuildExperienceZh() {
     setMonitoringConfirmOpen(true);
   };
 
-  const confirmFreeMonitoring = async () => {
+  const confirmMonitoringStart = async () => {
     const project = activeProject;
     if (!project || monitoringStarting) return;
     if (isGeoStylePreviewProject(project)) {
@@ -3883,6 +4090,7 @@ function GeoBuildExperienceZh() {
     for (const question of project.questions) {
       clearGeoServiceContractProfile(contractCompanyName, question.question);
     }
+    clearPendingGeoCustomQuestionValidation(project.id);
     if (pendingPayment?.projectId === project.id) {
       setPendingPayment(undefined);
       setPaymentDialogOpen(false);
@@ -4401,32 +4609,7 @@ function GeoBuildExperienceZh() {
         starting={monitoringStarting}
         error={monitoringStartError}
         onOpenChange={setMonitoringConfirmOpen}
-        onConfirm={confirmFreeMonitoring}
-      />
-
-      <PaymentDialog
-        open={paymentDialogOpen && pendingPayment?.kind !== "monitoring"}
-        project={
-          pendingPayment?.kind === "service"
-            ? paymentDialogProject
-            : activeProject
-        }
-        pending={
-          pendingPayment?.kind === "service" ? pendingPayment : undefined
-        }
-        creating={paymentCreating}
-        error={paymentError}
-        onOpenChange={setPaymentDialogOpen}
-        onStart={startPaymentCheckout}
-        onSwitch={switchPaymentCheckout}
-        onConfirmBank={confirmServiceBankPayment}
-        onBankConfirmationOpenChange={setBankConfirmationActive}
-        onReopen={reopenPaymentCheckout}
-        onCheck={recheckPaymentStatus}
-        onContact={() => {
-          setPaymentDialogOpen(false);
-          setContactOpen(true);
-        }}
+        onConfirm={confirmMonitoringStart}
       />
 
       {activeProject && (
@@ -4726,6 +4909,9 @@ function GeoBuildExperienceZh() {
                       pendingIndustryQuestion?.id
                     }
                     onSelect={selectQuestion}
+                    onCreateCustom={createCustomQuestion}
+                    onResumeCustom={resumeCustomQuestion}
+                    onRetryCustom={retryCustomQuestion}
                     onContinue={() => setQuestionConfirmOpen(true)}
                   />
                 )}
@@ -4737,8 +4923,10 @@ function GeoBuildExperienceZh() {
                     onToggleScreenshot={toggleMonitoringScreenshot}
                     onTogglePlatform={togglePlatform}
                     onBack={() => setActiveStage("question_recommendation")}
-                    onCheckout={openPaymentDialog}
-                    paymentPending={Boolean(activePendingPayment)}
+                    onStartMonitoring={openMonitoringConfirmation}
+                    recoveryPending={
+                      activePendingPayment?.kind === "monitoring"
+                    }
                     onRefresh={refreshActiveProject}
                     refreshing={Boolean(refreshingProjectIds[activeProject.id])}
                     lastRefreshedAt={lastRefreshedAtByProject[activeProject.id]}
@@ -4774,11 +4962,6 @@ function GeoBuildExperienceZh() {
                   <ServiceActivation
                     key={activeProject.id}
                     project={activeProject}
-                    paymentPending={Boolean(activePendingPayment)}
-                    onCheckout={openServicePaymentDialog}
-                    onSubmitProfile={submitServiceContractProfile}
-                    onCreateAccount={submitServiceAccount}
-                    onCheckStatus={checkServiceContractStatus}
                     onBack={() => setActiveStage("current_assessment")}
                   />
                 )}
@@ -4857,11 +5040,7 @@ export function StageNavigation({
             stage.id === "question_recommendation" && questionSelectionLocked;
           const enabled = canOpenStage(project, stage.id);
           const complete = isStageComplete(project, stage.id);
-          const sampleOnly =
-            stage.id === "service_activation" &&
-            enabled &&
-            !canStartService(project);
-          const subtitle = sampleOnly ? "预览企业服务工作台" : stage.subtitle;
+          const subtitle = stage.subtitle;
           return (
             <div key={stage.id} className="geo-stage-item-wrap">
               <button
@@ -5553,8 +5732,8 @@ function AnalysisProgress({
           正在建立 {project.title} 的企业知识基建
         </h2>
         <p>
-          FrontMind
-          正在按业务分支进行资料采集。此阶段无需逐项确认，完成后将直接生成可核验知识库。
+          FrontMind 正在按业务分支进行资料采集，最长可能运行约 60 分钟；页面每
+          30 秒同步一次同一任务，完成后将直接生成可核验知识库。
         </p>
         <div className="geo-progress-meta">
           <span>{project.progressLabel || "正在调度企业信息采集任务"}</span>
@@ -5565,7 +5744,8 @@ function AnalysisProgress({
             <div>
               <strong>状态同步延迟</strong>
               <p>
-                任务仍在后台执行并会继续每 30 秒同步；当前不会重复创建任务。
+                任务最长可能运行约 60 分钟；页面会每 30
+                秒同步同一任务，不会重复创建。
               </p>
               <button type="button" onClick={onContact}>
                 联系技术支持
@@ -5621,8 +5801,8 @@ function AnalysisProgress({
       </div>
       <div className="geo-progress-footnote">
         <ShieldCheck size={14} />{" "}
-        可关闭或最小化工作台，任务将在后台继续；完成后项目与 ZIP
-        会保存在本机浏览器。
+        刷新页面、关闭或最小化工作台都不会重复提交；任务会在后台继续，完成后项目与
+        ZIP 会保存在本机浏览器。
       </div>
     </div>
   );
@@ -5652,6 +5832,9 @@ export function QuestionRecommendation({
   selectedProductQuestionId,
   selectedIndustryRankingQuestionId,
   onSelect,
+  onCreateCustom,
+  onResumeCustom,
+  onRetryCustom,
   onContinue,
 }: {
   project: GeoProject;
@@ -5659,8 +5842,34 @@ export function QuestionRecommendation({
   selectedProductQuestionId?: string;
   selectedIndustryRankingQuestionId?: string;
   onSelect: (question: GeoQuestion) => void;
+  onCreateCustom?: (
+    question: string,
+    signal?: AbortSignal,
+  ) => Promise<GeoQuestion>;
+  onResumeCustom?: (signal?: AbortSignal) => Promise<GeoQuestion | undefined>;
+  onRetryCustom?: (
+    terminalError: unknown,
+    signal?: AbortSignal,
+  ) => Promise<GeoQuestion>;
   onContinue?: () => void;
 }) {
+  const [customQuestion, setCustomQuestion] = useState("");
+  const [customSubmitting, setCustomSubmitting] = useState(false);
+  const [customError, setCustomError] = useState("");
+  const [customRetryable, setCustomRetryable] = useState(false);
+  const [customRetryTerminalError, setCustomRetryTerminalError] =
+    useState<unknown>();
+  const [customRestartAfterExpiration, setCustomRestartAfterExpiration] =
+    useState(false);
+  const [validatedCustomQuestion, setValidatedCustomQuestion] =
+    useState<GeoQuestion>();
+  const [customStartedAt, setCustomStartedAt] = useState<number>();
+  const [customClock, setCustomClock] = useState(() => Date.now());
+  const customRequestInFlight = useRef(false);
+  const customAbortController = useRef<AbortController | undefined>(undefined);
+  const [permissionVideoOpen, setPermissionVideoOpen] = useState(false);
+  const [permissionVideoLoading, setPermissionVideoLoading] = useState(false);
+  const [permissionVideoError, setPermissionVideoError] = useState("");
   const recommendationStatus = questionRecommendationStatus(project);
   const recommendedQuestions = project.questions.filter(
     (question) => !question.id.startsWith("custom-"),
@@ -5685,6 +5894,485 @@ export function QuestionRecommendation({
   const industryQuestionId =
     selectedIndustryRankingQuestionId ?? storedIndustryQuestionId;
   const readyToContinue = Boolean(productQuestionId && industryQuestionId);
+
+  useEffect(() => {
+    const pending = readPendingGeoCustomQuestionValidation(project.id);
+    const controller = new AbortController();
+    let cancelled = false;
+    customAbortController.current?.abort();
+    customAbortController.current = controller;
+    const shouldProbe =
+      recommendationStatus === "ready" && Boolean(onResumeCustom);
+    customRequestInFlight.current = shouldProbe;
+    setCustomQuestion(pending?.question ?? "");
+    setCustomSubmitting(Boolean(pending) || shouldProbe);
+    setCustomError("");
+    setCustomRetryable(false);
+    setCustomRetryTerminalError(undefined);
+    setCustomRestartAfterExpiration(false);
+    setValidatedCustomQuestion(undefined);
+    setCustomStartedAt(pending || shouldProbe ? Date.now() : undefined);
+    void (
+      shouldProbe
+        ? onResumeCustom!(controller.signal)
+        : Promise.resolve(undefined)
+    )
+      .then((question) => {
+        if (cancelled || !question) return;
+        setCustomQuestion(question.question);
+        setValidatedCustomQuestion(question);
+        setCustomRetryable(false);
+        setCustomRestartAfterExpiration(false);
+      })
+      .catch((error) => {
+        if (cancelled) return;
+        const expired = expiredGeoCustomQuestionValidation(error);
+        setCustomError(
+          expired
+            ? "原问题验证已过期，本地请求锁定已解除。"
+            : errorMessage(error),
+        );
+        const authoritativeTerminal =
+          authoritativeGeoCustomQuestionValidationTerminal(error);
+        const retryableTerminal = retryableGeoCustomQuestionValidation(error);
+        setCustomRetryTerminalError(retryableTerminal ? error : undefined);
+        setCustomRestartAfterExpiration(expired);
+        setCustomRetryable(
+          Boolean(
+            expired ||
+              retryableTerminal ||
+              (!authoritativeTerminal &&
+                readPendingGeoCustomQuestionValidation(project.id)),
+          ),
+        );
+      })
+      .finally(() => {
+        if (cancelled) return;
+        if (customAbortController.current === controller)
+          customAbortController.current = undefined;
+        customRequestInFlight.current = false;
+        setCustomSubmitting(false);
+        setCustomStartedAt(undefined);
+      });
+    return () => {
+      cancelled = true;
+      controller.abort();
+      customAbortController.current?.abort();
+      customAbortController.current = undefined;
+      customRequestInFlight.current = false;
+    };
+    // Recovery is keyed by the durable project id and starts only after the
+    // authoritative recommendation set becomes ready.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [project.id, recommendationStatus]);
+
+  useEffect(() => {
+    if (!customSubmitting || customStartedAt === undefined) return;
+    setCustomClock(Date.now());
+    const timer = window.setInterval(() => setCustomClock(Date.now()), 1_000);
+    return () => window.clearInterval(timer);
+  }, [customStartedAt, customSubmitting]);
+
+  const customElapsed =
+    customStartedAt === undefined
+      ? "00:00:00"
+      : formatExecutionElapsed(
+          new Date(customStartedAt).toISOString(),
+          undefined,
+          customClock,
+        );
+
+  const setVideoOpen = (open: boolean) => {
+    setPermissionVideoOpen(open);
+    setPermissionVideoLoading(open);
+    setPermissionVideoError("");
+  };
+
+  const customQuestionCard = (
+    <section className="geo-custom-question-card">
+      <div className="geo-custom-question-copy">
+        <span aria-hidden="true">
+          <MessageSquareText size={20} />
+        </span>
+        <div>
+          <small>产品侧自定义问题</small>
+          <h3>已有明确的 GEO 优化问题？</h3>
+          <p>
+            输入一个与当前企业明确相关的产品、竞品或舆情问题；行业侧仍需从推荐列表中选择。
+          </p>
+        </div>
+      </div>
+      <form
+        aria-busy={customSubmitting}
+        onSubmit={(event) => {
+          event.preventDefault();
+          if (customRequestInFlight.current) return;
+          if (selectionLocked) {
+            setCustomError("本次问题范围已经锁定，不能再创建或更换问题。");
+            return;
+          }
+          if (validatedCustomQuestion) {
+            onSelect(validatedCustomQuestion);
+            return;
+          }
+          const question = customQuestion.trim();
+          if (question.length < 4) {
+            setCustomError("请输入一个完整的问题。");
+            return;
+          }
+          if (!onCreateCustom) {
+            setCustomError("当前环境暂不可验证自定义问题，请稍后重试。");
+            return;
+          }
+          customRequestInFlight.current = true;
+          const controller = new AbortController();
+          customAbortController.current?.abort();
+          customAbortController.current = controller;
+          const startedAt = Date.now();
+          setCustomSubmitting(true);
+          setCustomStartedAt(startedAt);
+          setCustomClock(startedAt);
+          setCustomError("");
+          setCustomRetryable(false);
+          setCustomRestartAfterExpiration(false);
+          const retryTerminalError = customRetryTerminalError;
+          setCustomRetryTerminalError(undefined);
+          const resumablePending = readPendingGeoCustomQuestionValidation(
+            project.id,
+          );
+          const operation =
+            retryTerminalError && onRetryCustom
+              ? onRetryCustom(retryTerminalError, controller.signal)
+              : resumablePending && onResumeCustom
+                ? onResumeCustom(controller.signal).then((result) => {
+                    if (!result) {
+                      throw new Error("原问题验证已结束，请重新提交当前问题。");
+                    }
+                    return result;
+                  })
+                : onCreateCustom(question, controller.signal);
+          void operation
+            .then((validatedQuestion) => {
+              if (
+                controller.signal.aborted ||
+                customAbortController.current !== controller
+              )
+                return;
+              setValidatedCustomQuestion(validatedQuestion);
+              setCustomQuestion(validatedQuestion.question);
+              setCustomRetryable(false);
+              setCustomRetryTerminalError(undefined);
+            })
+            .catch((error) => {
+              if (
+                controller.signal.aborted ||
+                customAbortController.current !== controller
+              )
+                return;
+              const expired = expiredGeoCustomQuestionValidation(error);
+              setCustomError(
+                expired
+                  ? "原问题验证已过期，本地请求锁定已解除。"
+                  : errorMessage(error),
+              );
+              const directTerminal =
+                retryableGeoCustomQuestionValidation(error);
+              const authoritativeTerminal =
+                authoritativeGeoCustomQuestionValidationTerminal(error);
+              const priorTerminal = retryTerminalError
+                ? retryableGeoCustomQuestionValidation(retryTerminalError)
+                : undefined;
+              const pending = readPendingGeoCustomQuestionValidation(
+                project.id,
+              );
+              const retainedTerminalError = directTerminal
+                ? error
+                : priorTerminal &&
+                    pending?.clientRequestId === priorTerminal.clientRequestId
+                  ? retryTerminalError
+                  : undefined;
+              setCustomRetryTerminalError(retainedTerminalError);
+              setCustomRestartAfterExpiration(expired);
+              setCustomRetryable(
+                Boolean(
+                  expired ||
+                    retainedTerminalError ||
+                    (!authoritativeTerminal && pending?.question === question),
+                ),
+              );
+            })
+            .finally(() => {
+              if (customAbortController.current !== controller) return;
+              customAbortController.current = undefined;
+              customRequestInFlight.current = false;
+              setCustomSubmitting(false);
+              setCustomStartedAt(undefined);
+            });
+        }}
+      >
+        <label htmlFor={`geo-custom-question-${project.id}`}>
+          自定义产品侧优化问题
+        </label>
+        <div>
+          <input
+            id={`geo-custom-question-${project.id}`}
+            value={customQuestion}
+            maxLength={120}
+            disabled={selectionLocked || customSubmitting}
+            onChange={(event) => {
+              setCustomQuestion(event.target.value);
+              setCustomError("");
+              setCustomRetryable(false);
+              setCustomRetryTerminalError(undefined);
+              setCustomRestartAfterExpiration(false);
+              setValidatedCustomQuestion(undefined);
+            }}
+            placeholder={`例如：${project.knowledgeBase?.companyName || project.title}有哪些值得重点了解的优势？`}
+          />
+          <button
+            type="submit"
+            className={validatedCustomQuestion ? "is-validated" : undefined}
+            disabled={
+              selectionLocked ||
+              customSubmitting ||
+              (Boolean(customError) && !customRetryable) ||
+              customQuestion.trim().length < 4
+            }
+          >
+            {customSubmitting ? (
+              <>
+                <LoaderCircle size={15} className="is-spinning" />
+                {customElapsed} · 等待返回
+              </>
+            ) : validatedCustomQuestion ? (
+              <>
+                <Check size={15} /> 设为产品侧问题
+                <ArrowRight size={15} />
+              </>
+            ) : customError ? (
+              customRetryable ? (
+                <>
+                  <RotateCw size={15} />{" "}
+                  {customRestartAfterExpiration
+                    ? "重新提交验证"
+                    : customRetryTerminalError
+                      ? "重新发起验证"
+                      : "恢复同一验证"}
+                </>
+              ) : (
+                <>请修改问题</>
+              )
+            ) : (
+              <>
+                验证问题 <ArrowRight size={15} />
+              </>
+            )}
+          </button>
+        </div>
+        <small>
+          问题需明确包含当前企业、品牌或具体产品/服务；行业排名、榜单、开放式品牌推荐及企业无关问题不会通过。
+        </small>
+        {customSubmitting && (
+          <p className="geo-custom-question-pending" role="status">
+            <Clock3 size={14} />
+            验证请求已锁定，上游返回前将持续等待并自动更新结果，请勿重复提交。
+          </p>
+        )}
+        {customError && (
+          <p className="geo-custom-question-error" role="alert">
+            <CircleAlert size={14} /> {customError}{" "}
+            {customRetryable
+              ? customRestartAfterExpiration
+                ? "可使用新的请求重新提交同一问题。"
+                : customRetryTerminalError
+                  ? "可确认旧终态后，以新的请求重新发起一次验证。"
+                  : "可恢复同一验证任务。"
+              : null}
+          </p>
+        )}
+      </form>
+    </section>
+  );
+
+  const permissionCard = (
+    <section className="geo-permission-card">
+      <div className="geo-permission-heading">
+        <span aria-hidden="true">
+          <Globe2 size={18} />
+        </span>
+        <div>
+          <h3>行业排名为什么需要全域营销协同</h3>
+          <p>
+            行业排名不是优化一句答案，而是建设长期一致、可核验的品牌信号系统。
+          </p>
+        </div>
+        <button
+          type="button"
+          className="geo-permission-video-trigger"
+          onClick={() => setVideoOpen(true)}
+          aria-haspopup="dialog"
+          aria-label="观看行业排名全域营销视频演示，时长 66 秒"
+        >
+          <Play size={15} fill="currentColor" aria-hidden="true" />
+          观看视频演示
+          <span>01:06</span>
+        </button>
+      </div>
+      <ul>
+        <li>
+          <span className="geo-permission-number" aria-hidden="true">
+            1
+          </span>
+          <div>
+            <strong>行业内容矩阵</strong>
+            <p>
+              建立小红书、微信视频号、抖音企业号与百度百科等公开内容阵地，让品牌主体、专业观点与行业内容相互印证。
+            </p>
+            <div className="geo-permission-channels">
+              <PermissionChannel
+                name="小红书"
+                logo="/geo-builder/channels/xiaohongshu.svg"
+                tone="is-red"
+              />
+              <PermissionChannel
+                name="视频号"
+                logo="/geo-builder/channels/wechat-channels.svg"
+                tone="is-green"
+              />
+              <PermissionChannel
+                name="抖音"
+                logo="/geo-builder/channels/douyin.svg"
+                tone="is-dark"
+              />
+              <PermissionChannel
+                name="百度百科"
+                logo="/geo-builder/channels/baidu-baike.svg"
+                tone="is-blue"
+              />
+            </div>
+          </div>
+        </li>
+        <li>
+          <span className="geo-permission-number" aria-hidden="true">
+            2
+          </span>
+          <div>
+            <strong>商品与服务矩阵</strong>
+            <p>
+              让商品与服务货架保持一致的产品参数、适用场景和服务入口，并让主流
+              AI 平台读取到同一套事实。
+            </p>
+            <div
+              className="geo-permission-platform-pairs"
+              aria-label="商品与服务货架和 AI 平台的对应关系"
+            >
+              <div className="geo-permission-platform-pair">
+                <PermissionChannel
+                  name="抖音"
+                  logo="/geo-builder/channels/douyin.svg"
+                  tone="is-dark"
+                />
+                <span aria-hidden="true">↔</span>
+                <PermissionChannel
+                  name="豆包"
+                  logo="/geo-builder/platforms/doubao.png"
+                  tone="is-blue"
+                />
+              </div>
+              <div className="geo-permission-platform-pair">
+                <PermissionChannel
+                  name="美团"
+                  logo="/geo-builder/channels/meituan.svg"
+                  tone="is-yellow"
+                />
+                <span aria-hidden="true">↔</span>
+                <PermissionChannel
+                  name="元宝"
+                  logo="/geo-builder/platforms/yuanbao.png"
+                  tone="is-blue"
+                />
+              </div>
+              <div className="geo-permission-platform-pair">
+                <PermissionChannel
+                  name="淘宝"
+                  logo="/geo-builder/channels/taobao.svg"
+                  tone="is-red"
+                />
+                <span aria-hidden="true">↔</span>
+                <PermissionChannel
+                  name="千问"
+                  logo="/geo-builder/platforms/qianwen.png"
+                  tone="is-blue"
+                />
+              </div>
+            </div>
+          </div>
+        </li>
+        <li>
+          <span className="geo-permission-number" aria-hidden="true">
+            3
+          </span>
+          <div>
+            <strong>自有阵地与权威信源</strong>
+            <p>
+              用 AI
+              专用官网承载结构化事实，联动百科、公众号、知乎与权威媒体，沉淀可核验来源。
+            </p>
+            <div className="geo-permission-channels">
+              <PermissionChannel
+                name="AI 专用官网"
+                logo="/geo-builder/channels/frontmind.svg"
+                tone="is-purple"
+              />
+              <PermissionChannel
+                name="微信公众号"
+                logo="/geo-builder/channels/wechat.svg"
+                tone="is-green"
+              />
+              <PermissionChannel
+                name="知乎"
+                logo="/geo-builder/channels/zhihu.svg"
+                tone="is-blue"
+              />
+            </div>
+            <div className="geo-authority-sources" aria-label="权威信源">
+              <div className="geo-authority-sources-title">
+                <BadgeCheck size={14} aria-hidden="true" />
+                <span>权威信源</span>
+              </div>
+              <div className="geo-authority-source-channels">
+                <PermissionChannel
+                  name="搜狐"
+                  logo="/geo-builder/channels/sohu.png"
+                  tone="is-red"
+                />
+                <PermissionChannel
+                  name="新浪"
+                  logo="/geo-builder/channels/sina.png"
+                  tone="is-red"
+                />
+                <PermissionChannel
+                  name="今日头条"
+                  logo="/geo-builder/channels/toutiao.png"
+                  tone="is-red"
+                />
+                <PermissionChannel
+                  name="网易"
+                  logo="/geo-builder/channels/netease.png"
+                  tone="is-red"
+                />
+                <PermissionChannel
+                  name="腾讯新闻"
+                  logo="/geo-builder/channels/tencent-news.png"
+                  tone="is-blue"
+                />
+              </div>
+            </div>
+          </div>
+        </li>
+      </ul>
+    </section>
+  );
 
   if (recommendationStatus === "pending") {
     return (
@@ -5781,13 +6469,6 @@ export function QuestionRecommendation({
             : Search;
     const isIndustry = categoryId === "industry_ranking";
     const selectedId = isIndustry ? industryQuestionId : productQuestionId;
-    const pricedCategory: GeoPricedServiceCategory | undefined =
-      categoryId === "product_scenario" ||
-      categoryId === "reputation" ||
-      categoryId === "competitor_comparison"
-        ? categoryId
-        : undefined;
-
     return (
       <section
         key={categoryId}
@@ -5803,18 +6484,7 @@ export function QuestionRecommendation({
             <p>{category.description}</p>
           </div>
           <div className="geo-question-category-meta">
-            {isIndustry ? (
-              <strong>根据企业实际情况定制</strong>
-            ) : pricedCategory ? (
-              <span>
-                <small>
-                  国内版 {formatGeoMonthlyPrice(pricedCategory, "domestic")}
-                </small>
-                <small>
-                  海外版 {formatGeoMonthlyPrice(pricedCategory, "overseas")}
-                </small>
-              </span>
-            ) : null}
+            {isIndustry && <strong>从推荐问题中选择</strong>}
             <em>
               {String(order).padStart(2, "0")} · {questions.length} 题
             </em>
@@ -5905,6 +6575,7 @@ export function QuestionRecommendation({
             {renderCategory("reputation", 2)}
             {renderCategory("competitor_comparison", 3)}
           </div>
+          {customQuestionCard}
         </section>
 
         <section className="geo-question-group is-ranking">
@@ -5923,8 +6594,73 @@ export function QuestionRecommendation({
           <div className="geo-question-categories is-ranking">
             {renderCategory("industry_ranking", 4)}
           </div>
+          {permissionCard}
         </section>
       </div>
+
+      <Dialog open={permissionVideoOpen} onOpenChange={setVideoOpen}>
+        <DialogContent
+          className="geo-permission-video-dialog"
+          overlayClassName="geo-permission-video-overlay"
+        >
+          <DialogHeader className="geo-permission-video-dialog-header">
+            <span className="geo-permission-video-kicker">
+              <Play size={13} fill="currentColor" aria-hidden="true" />
+              66 秒视频演示
+            </span>
+            <DialogTitle>行业排名为什么需要全域营销？</DialogTitle>
+            <DialogDescription>
+              从行业内容、商品与服务、自有阵地和权威信源三个层面，理解 AI
+              推荐背后的品牌信号系统。
+            </DialogDescription>
+          </DialogHeader>
+          <div className="geo-permission-video-frame">
+            {permissionVideoOpen && (
+              <video
+                controls
+                autoPlay
+                playsInline
+                preload="metadata"
+                poster={permissionVideoPosterUrl}
+                aria-label="行业排名为什么需要全域营销视频演示"
+                onLoadStart={() => setPermissionVideoLoading(true)}
+                onWaiting={() => setPermissionVideoLoading(true)}
+                onCanPlay={() => setPermissionVideoLoading(false)}
+                onPlaying={() => setPermissionVideoLoading(false)}
+                onError={() => {
+                  setPermissionVideoLoading(false);
+                  setPermissionVideoError("视频暂时无法加载，请稍后重试。");
+                }}
+              >
+                <source src={permissionVideoUrl} type="video/mp4" />
+                <track
+                  kind="captions"
+                  src={permissionVideoCaptionsUrl}
+                  srcLang="zh-CN"
+                  label="简体中文"
+                  default
+                />
+                当前浏览器暂不支持 HTML5 视频播放。
+              </video>
+            )}
+            {permissionVideoLoading && !permissionVideoError && (
+              <div className="geo-permission-video-status" role="status">
+                <LoaderCircle size={24} className="is-spinning" />
+                正在加载视频…
+              </div>
+            )}
+            {permissionVideoError && (
+              <div
+                className="geo-permission-video-status is-error"
+                role="alert"
+              >
+                <CircleAlert size={24} />
+                {permissionVideoError}
+              </div>
+            )}
+          </div>
+        </DialogContent>
+      </Dialog>
 
       <footer className="geo-question-selection-footer">
         <div>
@@ -6743,8 +7479,8 @@ type QuestionMonitoringProps = {
   onToggleScreenshot: (enabled: boolean) => void;
   onTogglePlatform: (platformId: GeoPlatformId) => void;
   onBack: () => void;
-  onCheckout: () => void;
-  paymentPending: boolean;
+  onStartMonitoring: () => void;
+  recoveryPending: boolean;
   onRefresh: () => Promise<void>;
   refreshing: boolean;
   lastRefreshedAt?: string;
@@ -6758,8 +7494,8 @@ function QuestionMonitoring({
   onToggleScreenshot = () => undefined,
   onTogglePlatform,
   onBack,
-  onCheckout,
-  paymentPending,
+  onStartMonitoring,
+  recoveryPending,
   onRefresh,
   refreshing,
   lastRefreshedAt,
@@ -6778,8 +7514,8 @@ function QuestionMonitoring({
         onToggleScreenshot={onToggleScreenshot}
         onTogglePlatform={onTogglePlatform}
         onBack={onBack}
-        onCheckout={onCheckout}
-        paymentPending={paymentPending}
+        onStartMonitoring={onStartMonitoring}
+        recoveryPending={recoveryPending}
         locked={monitoringStarted}
       />
       {monitoringStarted && (
@@ -6802,8 +7538,8 @@ export function MonitoringSetup({
   onToggleScreenshot = () => undefined,
   onTogglePlatform,
   onBack,
-  onCheckout,
-  paymentPending,
+  onStartMonitoring,
+  recoveryPending,
   locked,
 }: {
   project: GeoProject;
@@ -6812,8 +7548,8 @@ export function MonitoringSetup({
   onToggleScreenshot?: (enabled: boolean) => void;
   onTogglePlatform: (platformId: GeoPlatformId) => void;
   onBack: () => void;
-  onCheckout: () => void;
-  paymentPending: boolean;
+  onStartMonitoring: () => void;
+  recoveryPending: boolean;
   locked: boolean;
 }) {
   const monitoringEdition = resolveGeoMonitoringEdition(
@@ -6939,7 +7675,7 @@ export function MonitoringSetup({
         <button
           type="button"
           onClick={onBack}
-          disabled={paymentPending || locked}
+          disabled={recoveryPending || locked}
           title={locked ? "本次监控范围已确认" : undefined}
         >
           {locked ? "范围已确认" : "更换问题"}
@@ -6959,7 +7695,7 @@ export function MonitoringSetup({
               className={monitoringEdition === edition ? "is-active" : ""}
               aria-pressed={monitoringEdition === edition}
               onClick={() => onChangeEdition(edition)}
-              disabled={paymentPending || locked}
+              disabled={recoveryPending || locked}
             >
               {monitoringEditionLabel(edition)}
             </button>
@@ -6992,7 +7728,7 @@ export function MonitoringSetup({
               if (!region) return;
               onChangeRegion({ edition: monitoringEdition, ...region });
             }}
-            disabled={paymentPending || locked}
+            disabled={recoveryPending || locked}
           >
             <SelectTrigger className="geo-monitor-region-trigger">
               <SelectValue
@@ -7040,7 +7776,7 @@ export function MonitoringSetup({
           <Switch
             checked={project.monitoringScreenshotEnabled === true}
             onCheckedChange={onToggleScreenshot}
-            disabled={paymentPending || locked}
+            disabled={recoveryPending || locked}
             aria-label="采集并展示原始页面截图"
           />
         </div>
@@ -7090,7 +7826,7 @@ export function MonitoringSetup({
               className={selected ? "selected" : ""}
               onClick={() => onTogglePlatform(platform.id)}
               aria-pressed={selected}
-              disabled={paymentPending || locked}
+              disabled={recoveryPending || locked}
             >
               <span
                 className="geo-platform-icon"
@@ -7162,7 +7898,7 @@ export function MonitoringSetup({
         </div>
         <button
           type="button"
-          onClick={onCheckout}
+          onClick={onStartMonitoring}
           disabled={
             selectedCount === 0 ||
             !validSelection ||
@@ -7175,7 +7911,7 @@ export function MonitoringSetup({
                 ? "继续恢复尚未启动的监控问题"
                 : selectedCount === 0
                   ? "请先选择至少一个监控平台"
-                  : paymentPending
+                  : recoveryPending
                     ? "核对此前监控状态并继续"
                     : "确认范围并获取监控答案"
           }
@@ -7184,7 +7920,7 @@ export function MonitoringSetup({
             ? "继续启动剩余问题"
             : locked
               ? "监控已开始"
-              : paymentPending
+              : recoveryPending
                 ? "获取监控答案"
                 : "获取监控答案"}
         </button>
@@ -7770,16 +8506,11 @@ export function CurrentAssessment({
                 <section className="geo-industry-custom-service">
                   <div>
                     <span>行业排名与品牌优胜</span>
-                    <h3>根据企业实际情况定制</h3>
-                    <p>结合目标行业、竞争格局和品牌资产制定专项执行方案。</p>
+                    <h3>查看全域协同服务演示</h3>
+                    <p>
+                      了解目标行业、竞争格局和品牌资产如何形成专项执行路径。
+                    </p>
                   </div>
-                  <button
-                    type="button"
-                    className="geo-secondary-button"
-                    onClick={onContact}
-                  >
-                    联系技术人员对接 <ArrowRight size={15} />
-                  </button>
                 </section>
               ) : (
                 assessmentReady &&
@@ -7788,10 +8519,9 @@ export function CurrentAssessment({
                 onStartService && (
                   <section className="geo-assessment-next-step">
                     <div>
-                      <span>下一步 · 启动服务</span>
+                      <span>下一步 · 服务演示</span>
                       <p>
-                        围绕产品与舆情问题启动 GEO
-                        优化服务，开始内容建设、权威信源、平台监控与结果复测。
+                        围绕产品与舆情问题查看内容建设、权威信源、平台监控与结果复测的演示路径。
                       </p>
                     </div>
                     <button
@@ -7800,8 +8530,8 @@ export function CurrentAssessment({
                       onClick={onStartService}
                     >
                       {project.serviceActivation.status === "active"
-                        ? "查看已启动服务"
-                        : "进入下一步：启动服务"}
+                        ? "查看历史只读工作台"
+                        : "进入服务演示"}
                       <ArrowRight size={17} />
                     </button>
                   </section>
@@ -9581,7 +10311,255 @@ export function GeoWorkspaceHandoff({
   );
 }
 
-export function ServiceActivation({
+type ServiceActivationProps = {
+  project: GeoProject;
+  onBack: () => void;
+};
+
+export function ServiceActivation({ project, onBack }: ServiceActivationProps) {
+  const [pathView, setPathView] = useState<"services" | "dashboard">(
+    "dashboard",
+  );
+  const activation = project.serviceActivation;
+  const active = activation?.status === "active";
+  const question =
+    project.questions.find(
+      (item) =>
+        item.id === (activation?.questionId ?? project.selectedQuestionId),
+    ) ?? project.questions.find((item) => item.category !== "industry_ranking");
+  const categoryLabel =
+    GEO_QUESTION_CATEGORIES.find((item) => item.id === question?.category)
+      ?.title ?? "GEO 优化";
+
+  if (!question) {
+    return (
+      <div className="geo-service-activation">
+        <div className="geo-assessment-empty">
+          <Sparkles size={24} />
+          <h2>服务演示正在准备</h2>
+          <p>选择产品侧问题后，即可查看服务工作台与执行范围演示。</p>
+          <button type="button" onClick={onBack}>
+            返回现状评估
+          </button>
+        </div>
+      </div>
+    );
+  }
+
+  if (active) {
+    return (
+      <div className="geo-service-activation">
+        <header className="geo-service-header">
+          <div>
+            <span className="geo-kb-kicker">
+              <ShieldCheck size={14} /> 历史服务工作台
+            </span>
+            <h2 className="geo-stage-title">已开通项目只读查看</h2>
+            <p>
+              保留历史项目的知识库、问题、监控与执行记录；本页仅供查看，不提供状态变更操作。
+            </p>
+          </div>
+          <button type="button" onClick={onBack}>
+            返回现状评估
+          </button>
+        </header>
+        <div className="geo-agent-dashboard-frame is-readonly">
+          <GeoAgentUserDashboard
+            project={project}
+            question={question}
+            categoryLabel={categoryLabel}
+            active
+          />
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <div className="geo-service-activation">
+      <header className="geo-service-header">
+        <div>
+          <span className="geo-kb-kicker">
+            <Sparkles size={14} /> 服务演示
+          </span>
+          <h2 className="geo-stage-title">查看 GEO 服务如何持续推进</h2>
+          <p>
+            本页仅演示工作台结构、服务范围与交付路径，不会发起任何外部流程。
+          </p>
+        </div>
+        <button type="button" onClick={onBack}>
+          返回现状评估
+        </button>
+      </header>
+
+      <section className="geo-service-path is-demo">
+        <div
+          className="geo-service-path-tabs"
+          role="tablist"
+          aria-label="服务演示内容"
+        >
+          <button
+            id="geo-service-demo-tab-dashboard"
+            type="button"
+            role="tab"
+            aria-selected={pathView === "dashboard"}
+            aria-controls="geo-service-demo-dashboard"
+            tabIndex={pathView === "dashboard" ? 0 : -1}
+            className={pathView === "dashboard" ? "is-active" : ""}
+            onClick={() => setPathView("dashboard")}
+          >
+            <Users size={17} />
+            <span>
+              <strong>工作台演示</strong>
+              <small>查看只读样例数据</small>
+            </span>
+          </button>
+          <button
+            id="geo-service-demo-tab-services"
+            type="button"
+            role="tab"
+            aria-selected={pathView === "services"}
+            aria-controls="geo-service-demo-map"
+            tabIndex={pathView === "services" ? 0 : -1}
+            className={pathView === "services" ? "is-active" : ""}
+            onClick={() => setPathView("services")}
+          >
+            <Layers3 size={17} />
+            <span>
+              <strong>服务范围</strong>
+              <small>查看执行与交付路径</small>
+            </span>
+          </button>
+        </div>
+
+        {pathView === "dashboard" ? (
+          <div
+            className="geo-agent-dashboard-frame is-standalone-sample"
+            id="geo-service-demo-dashboard"
+            role="tabpanel"
+            aria-labelledby="geo-service-demo-tab-dashboard"
+            tabIndex={0}
+          >
+            <GeoAgentUserDashboard
+              project={project}
+              question={question}
+              categoryLabel={categoryLabel}
+              active={false}
+              sampleMode="luxury"
+            />
+          </div>
+        ) : (
+          <div
+            className="geo-service-map-scroll"
+            id="geo-service-demo-map"
+            role="tabpanel"
+            aria-labelledby="geo-service-demo-tab-services"
+            tabIndex={0}
+          >
+            <div
+              className="geo-service-map"
+              aria-label="FrontMind 服务范围演示路线图"
+            >
+              <aside className="geo-service-map-origin">
+                <span aria-hidden="true">
+                  <FolderKanban size={22} />
+                </span>
+                <small>演示起点</small>
+                <strong>{categoryLabel}</strong>
+                <p>围绕已选问题展示服务路径</p>
+                <em>不触发真实交付</em>
+              </aside>
+              <span className="geo-service-map-entry" aria-hidden="true">
+                <i />
+                <ArrowRight size={15} />
+              </span>
+              {GEO_SERVICE_STAGES.map((stage, stageIndex) => (
+                <div className="geo-service-stage-unit" key={stage.id}>
+                  <article className={`geo-service-stage tone-${stage.tone}`}>
+                    <header className="geo-service-stage-header">
+                      <div>
+                        <span>
+                          {String(stageIndex + 1).padStart(2, "0")} /{" "}
+                          {stage.line}
+                        </span>
+                        <small>
+                          {stageIndex === 0 ? "演示起点" : "按需衔接"}
+                        </small>
+                      </div>
+                      <h4>{stage.title}</h4>
+                      <p>{stage.summary}</p>
+                    </header>
+                    <div className="geo-service-branches">
+                      {stage.services.map((service) => {
+                        const Icon = service.icon;
+                        return (
+                          <section
+                            className="geo-service-branch"
+                            key={service.id}
+                          >
+                            <span
+                              className="geo-service-branch-icon"
+                              aria-hidden="true"
+                            >
+                              <Icon size={18} />
+                            </span>
+                            <div className="geo-service-branch-body">
+                              <div className="geo-service-branch-heading">
+                                <h5>{service.title}</h5>
+                              </div>
+                              <p>{service.description}</p>
+                              <ol>
+                                {service.actions.map((action, actionIndex) => (
+                                  <li key={action}>
+                                    <span>{actionIndex + 1}</span>
+                                    {action}
+                                  </li>
+                                ))}
+                              </ol>
+                              <small>
+                                <PackageOpen size={12} />
+                                {service.output}
+                              </small>
+                            </div>
+                          </section>
+                        );
+                      })}
+                    </div>
+                    <footer className="geo-service-stage-footer">
+                      <div>
+                        <span>阶段交付物</span>
+                        <p>
+                          {stage.deliverables.map((deliverable) => (
+                            <small key={deliverable}>{deliverable}</small>
+                          ))}
+                        </p>
+                      </div>
+                      <div>
+                        <ShieldCheck size={14} />
+                        <p>
+                          <span>验收标准</span>
+                          {stage.checkpoint}
+                        </p>
+                      </div>
+                    </footer>
+                  </article>
+                  {stageIndex < GEO_SERVICE_STAGES.length - 1 && (
+                    <span className="geo-service-stage-gate" aria-hidden="true">
+                      <small>阶段验收</small>
+                      <ArrowRight size={15} />
+                    </span>
+                  )}
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
+      </section>
+    </div>
+  );
+}
+
+function LegacyServiceActivation({
   project,
   paymentPending,
   onCheckout,

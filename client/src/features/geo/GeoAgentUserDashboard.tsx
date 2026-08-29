@@ -233,7 +233,7 @@ type ServiceJourneyState =
 
 const WEBSITE_SERVICE_PLAN = {
   code: "basic",
-  label: "基础版",
+  label: "标准服务",
   serviceDays: 30,
 } as const;
 
@@ -241,16 +241,16 @@ const SERVICE_STATUS_LABELS: Record<
   NonNullable<GeoProject["serviceActivation"]>["status"],
   string
 > = {
-  not_started: "尚未开通",
-  profile_required: "待完善签约信息",
-  contract_preparing: "待联系管理员确认",
-  signature_required: "待输入合同码",
-  payment_required: "待完成付款",
-  activation_pending: "等待开通",
-  account_setup_required: "待设置账号",
+  not_started: "服务演示",
+  profile_required: "历史状态待确认",
+  contract_preparing: "历史状态待确认",
+  signature_required: "历史状态待确认",
+  payment_required: "历史状态待确认",
+  activation_pending: "服务准备中",
+  account_setup_required: "配置待完善",
   provisioning: "服务配置中",
   active: "已生效",
-  failed: "开通需处理",
+  failed: "状态需处理",
 };
 
 const SERVICE_JOURNEY_STATUS: Record<ServiceJourneyState, string> = {
@@ -263,7 +263,7 @@ const SERVICE_JOURNEY_STATUS: Record<ServiceJourneyState, string> = {
 
 function getServiceValidity(project: GeoProject): string {
   const activation = project.serviceActivation;
-  if (!activation?.activatedAt) return "开通后由 Agent 同步";
+  if (!activation?.activatedAt) return "本页演示";
   return `${formatDashboardDate(activation.activatedAt)} 起 · ${
     activation.serviceDays ?? WEBSITE_SERVICE_PLAN.serviceDays
   } 天`;
@@ -316,7 +316,7 @@ function ServiceOverviewPanel({
         activation?.status === "active"),
   );
   const planName = isLuxurySample
-    ? "豪华版"
+    ? "全域服务演示"
     : activation?.planCode === WEBSITE_SERVICE_PLAN.code || project.preview
       ? WEBSITE_SERVICE_PLAN.label
       : "待同步";
@@ -372,7 +372,8 @@ function ServiceOverviewPanel({
         : knowledgeImport?.status === "ready"
           ? `${companyName} 的企业知识库已同步到服务工作台。`
           : knowledgeImport?.status === "failed"
-            ? knowledgeImport.message || "知识库导入未完成，请检查开通状态。"
+            ? knowledgeImport.message ||
+              "知识库导入未完成，请检查历史同步状态。"
             : knowledgeImport
               ? `${companyName} 的知识库正在同步到服务工作台。`
               : project.knowledgeBase
@@ -384,7 +385,7 @@ function ServiceOverviewPanel({
     },
     {
       id: "question",
-      title: hasPurchasedQuestion ? "已购服务问题" : "当前服务问题",
+      title: hasPurchasedQuestion ? "已纳入服务的问题" : "当前服务问题",
       description: isLuxurySample
         ? `32 个品牌问题池按行业、竞品、美誉与产品场景管理；当前示例：${question.question}`
         : hasSelectedQuestion
@@ -439,10 +440,10 @@ function ServiceOverviewPanel({
         <div className="geo-agent-sample-notice" role="note">
           <span>
             <Sparkles size={16} />
-            豪华版工作台样例
+            服务工作台演示
           </span>
           <p>
-            用于预览完整服务开通后的工作方式；下列进度与数量为界面演示，不代表当前项目已开通或已经交付。
+            本页演示完整服务的工作方式；下列进度与数量均为演示数据，不代表当前项目状态或实际交付。
           </p>
           <strong>演示数据</strong>
         </div>
@@ -487,7 +488,7 @@ function ServiceOverviewPanel({
             <div>
               <span>
                 <Sparkles size={15} />
-                套餐范围
+                服务范围
               </span>
               <strong>
                 {isLuxurySample
@@ -496,7 +497,7 @@ function ServiceOverviewPanel({
                     ? `${activation.billingMonths} 个月 · ${
                         hasSelectedQuestion ? "1 个服务问题" : "问题待选择"
                       }`
-                    : "开通后由 Agent 同步"}
+                    : "本页演示"}
               </strong>
             </div>
           </div>
@@ -528,7 +529,7 @@ function ServiceOverviewPanel({
                 ? `${companyName} 的品牌事实与素材已同步到服务工作台。`
                 : knowledgeImport?.status === "failed"
                   ? knowledgeImport.message ||
-                    "知识库同步未完成，请按开通流程处理后再查看。"
+                    "知识库同步未完成，请检查历史同步状态后再查看。"
                   : knowledgeImport
                     ? "项目知识底稿正在导入，完成后会同步企业事实、信源与素材状态。"
                     : project.knowledgeBase
@@ -564,7 +565,7 @@ function ServiceOverviewPanel({
           <article className="geo-agent-service-summary-card geo-agent-quota-card">
             <header>
               <div>
-                <span>套餐配额</span>
+                <span>演示配置</span>
                 <h3>{isLuxurySample ? "品牌问题矩阵" : "本次服务配置"}</h3>
               </div>
             </header>
@@ -612,10 +613,7 @@ function ServiceOverviewPanel({
       </div>
 
       {isLuxurySample && (
-        <div
-          className="geo-agent-sample-metrics"
-          aria-label="豪华版服务能力概览"
-        >
+        <div className="geo-agent-sample-metrics" aria-label="全域服务能力演示">
           <article>
             <small>品牌知识底座</small>
             <strong>持续更新</strong>
@@ -1436,7 +1434,7 @@ export function IntentPanel({
             </article>
           </div>
           <p className="geo-agent-response-readonly-note">
-            官网基础版展示已同步的流程骨架；正式交流、资料上传与口径确认在 Agent
+            官网只读页展示已同步的流程骨架；正式交流、资料上传与口径确认在 Agent
             工作台完成。
           </p>
         </section>
@@ -1745,9 +1743,9 @@ export function ProgressPanel({
           tone="green"
         />
         <DashboardMetric
-          label="本月服务"
-          value={active ? "执行中" : "待启动"}
-          detail="联系管理员确认合同后付款开通"
+          label="服务状态"
+          value={active ? "历史执行记录" : "演示中"}
+          detail="本页仅展示服务流程与样例数据"
           tone="gold"
         />
       </div>
@@ -2229,7 +2227,7 @@ export function GeoAgentUserDashboard({
       className="geo-agent-dashboard"
       aria-label={
         sampleMode === "luxury"
-          ? "豪华版企业服务工作台样例"
+          ? "全域企业服务工作台演示"
           : "FrontMind Agent 用户角色看板"
       }
     >
@@ -2273,7 +2271,7 @@ export function GeoAgentUserDashboard({
         <div className="geo-agent-nav-card">
           <span>
             MindPromise 智诺
-            {sampleMode === "luxury" ? " · 豪华版样例" : ""}
+            {sampleMode === "luxury" ? " · 服务演示" : ""}
           </span>
           <nav aria-label="用户看板功能">
             {DASHBOARD_SECTIONS.map((item) => {
@@ -2342,7 +2340,7 @@ export function GeoAgentUserDashboard({
           <div>
             <span>
               {sampleMode === "luxury"
-                ? "FrontMind 豪华版企业服务工作台 · 样例"
+                ? "FrontMind 全域企业服务工作台 · 演示"
                 : "FrontMind 智能品牌优化看板"}
             </span>
             <h3>{companyName}</h3>

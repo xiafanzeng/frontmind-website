@@ -13,6 +13,10 @@ export type WebsiteRuntimeReadinessOptions<
   getDependencies: () => Promise<TDependencies>;
   getVisitorStats: () => Promise<{ ready: true }>;
   assertConfiguration?: () => Promise<void> | void;
+  validationStore: {
+    assertReady(): Promise<void>;
+    persistenceIdentity(): Promise<string>;
+  };
   monitorFreeReservationStore: {
     assertReady(): Promise<void>;
     persistenceIdentity(): Promise<string>;
@@ -40,11 +44,15 @@ export async function collectWebsiteRuntimeReadiness<
     skills,
     dependencies,
     visitorStats,
+    persistenceIdentity,
     monitorFreePersistenceIdentity,
   ] = await Promise.all([
     options.getSkills(),
     options.getDependencies(),
     options.getVisitorStats(),
+    options.validationStore
+      .assertReady()
+      .then(() => options.validationStore.persistenceIdentity()),
     options.monitorFreeReservationStore
       .assertReady()
       .then(() => options.monitorFreeReservationStore.persistenceIdentity()),
@@ -61,6 +69,12 @@ export async function collectWebsiteRuntimeReadiness<
     dependencies: {
       ...dependencies,
       visitorStats,
+      customQuestionValidationStore: {
+        ready: true as const,
+        persistenceIdentitySha256: createHash("sha256")
+          .update(persistenceIdentity, "utf8")
+          .digest("hex"),
+      },
       monitorFreeReservationStore: {
         ready: true as const,
         persistenceIdentitySha256: createHash("sha256")

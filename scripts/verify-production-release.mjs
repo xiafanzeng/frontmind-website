@@ -20,6 +20,7 @@ if (expectedBuildSha && !/^[a-f0-9]{40}$/u.test(expectedBuildSha)) {
 const expectedRuntimeSkills = [
   { name: "website-one-shot-kb-builder", version: 6 },
   { name: "geo-question-recommender", version: 1 },
+  { name: "geo-custom-question-classifier", version: 2 },
   { name: "geo-current-state-evaluator", version: 3 },
   { name: "geo-optimization-outcome-forecaster", version: 1 },
 ];
@@ -52,6 +53,7 @@ if (
   throw new Error("Production build SHA differs from the deployed image");
 }
 if (
+  readiness?.dependencies?.customQuestionValidationStore?.ready !== true ||
   readiness?.dependencies?.monitorFreeReservationStore?.ready !== true ||
   !Array.isArray(readiness?.skills)
 ) {
@@ -62,7 +64,7 @@ const runtimeSkills = readiness.skills.map(({ name, version }) => ({
   version,
 }));
 if (JSON.stringify(runtimeSkills) !== JSON.stringify(expectedRuntimeSkills)) {
-  throw new Error("Production must expose the exact four runtime Skills");
+  throw new Error("Production must expose the exact five runtime Skills");
 }
 console.log(
   JSON.stringify({

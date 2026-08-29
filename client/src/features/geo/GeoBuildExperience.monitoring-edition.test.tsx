@@ -34,8 +34,8 @@ const baseProject: GeoProject = {
 function renderSetup(
   project: GeoProject,
   onChangeEdition = vi.fn(),
-  onCheckout = vi.fn(),
-  paymentPending = false,
+  onStartMonitoring = vi.fn(),
+  recoveryPending = false,
 ) {
   render(
     <MonitoringSetup
@@ -43,12 +43,12 @@ function renderSetup(
       onChangeEdition={onChangeEdition}
       onTogglePlatform={vi.fn()}
       onBack={vi.fn()}
-      onCheckout={onCheckout}
-      paymentPending={paymentPending}
+      onStartMonitoring={onStartMonitoring}
+      recoveryPending={recoveryPending}
       locked={false}
     />,
   );
-  return { onChangeEdition, onCheckout };
+  return { onChangeEdition, onStartMonitoring };
 }
 
 afterEach(cleanup);
@@ -102,8 +102,8 @@ describe("GEO monitoring edition setup", () => {
     ).toBe(false);
   });
 
-  it("allows overseas checkout when the stored English translation is missing", () => {
-    const { onCheckout } = renderSetup({
+  it("allows overseas monitoring when the stored English translation is missing", () => {
+    const { onStartMonitoring } = renderSetup({
       ...baseProject,
       monitoringEdition: "overseas",
       questions: [{ ...baseProject.questions[0], questionEnglish: undefined }],
@@ -119,7 +119,7 @@ describe("GEO monitoring edition setup", () => {
       ).disabled,
     ).toBe(false);
     fireEvent.click(screen.getByRole("button", { name: "获取监控答案" }));
-    expect(onCheckout).toHaveBeenCalledOnce();
+    expect(onStartMonitoring).toHaveBeenCalledOnce();
   });
 
   it("requests the edition change from the switch", () => {
@@ -139,8 +139,8 @@ describe("GEO monitoring edition setup", () => {
         onToggleScreenshot={onToggleScreenshot}
         onTogglePlatform={vi.fn()}
         onBack={vi.fn()}
-        onCheckout={vi.fn()}
-        paymentPending={false}
+        onStartMonitoring={vi.fn()}
+        recoveryPending={false}
         locked={false}
       />,
     );
@@ -190,7 +190,7 @@ describe("GEO monitoring edition setup", () => {
 
   it("keeps shared settings locked while allowing an incomplete dual start to resume", () => {
     const fixture = createGeoStylePreviewProject("monitoring-setup");
-    const onCheckout = vi.fn();
+    const onStartMonitoring = vi.fn();
     render(
       <MonitoringSetup
         project={{
@@ -222,8 +222,8 @@ describe("GEO monitoring edition setup", () => {
         onToggleScreenshot={vi.fn()}
         onTogglePlatform={vi.fn()}
         onBack={vi.fn()}
-        onCheckout={onCheckout}
-        paymentPending={false}
+        onStartMonitoring={onStartMonitoring}
+        recoveryPending={false}
         locked
       />,
     );
@@ -237,7 +237,7 @@ describe("GEO monitoring edition setup", () => {
         .disabled,
     ).toBe(true);
     fireEvent.click(resume);
-    expect(onCheckout).toHaveBeenCalledOnce();
+    expect(onStartMonitoring).toHaveBeenCalledOnce();
   });
 
   it("confirms the monitoring scope without exposing any payment action", () => {

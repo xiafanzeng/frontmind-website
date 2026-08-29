@@ -26,6 +26,7 @@ const apiMocks = vi.hoisted(() => ({
   getGeoServicePaymentStatus: vi.fn(),
   startGeoLegacyPaidMonitoring: vi.fn(),
   startGeoMonitoring: vi.fn(),
+  startGeoService: vi.fn(),
   switchGeoPaymentCheckout: vi.fn(),
   switchGeoServicePaymentCheckout: vi.fn(),
   confirmGeoServiceBankTransfer: vi.fn(),
@@ -43,6 +44,7 @@ vi.mock("./api", async (importOriginal) => ({
   getGeoServicePaymentStatus: apiMocks.getGeoServicePaymentStatus,
   startGeoLegacyPaidMonitoring: apiMocks.startGeoLegacyPaidMonitoring,
   startGeoMonitoring: apiMocks.startGeoMonitoring,
+  startGeoService: apiMocks.startGeoService,
   switchGeoPaymentCheckout: apiMocks.switchGeoPaymentCheckout,
   switchGeoServicePaymentCheckout: apiMocks.switchGeoServicePaymentCheckout,
   confirmGeoServiceBankTransfer: apiMocks.confirmGeoServiceBankTransfer,
@@ -276,6 +278,7 @@ beforeEach(() => {
   });
   apiMocks.startGeoLegacyPaidMonitoring.mockReset();
   apiMocks.startGeoMonitoring.mockReset();
+  apiMocks.startGeoService.mockReset();
   apiMocks.switchGeoPaymentCheckout.mockReset();
   apiMocks.switchGeoServicePaymentCheckout.mockReset();
   apiMocks.confirmGeoServiceBankTransfer.mockReset();
@@ -396,140 +399,16 @@ describe("service payment dialog", () => {
     expect(onSwitch).toHaveBeenLastCalledWith("bank_transfer");
   });
 
-  it("restores online-to-bank selection, closes every owned cashier, and pauses polling", async () => {
-    const initial = servicePendingPayment();
+  it("retires stale service-payment recovery without UI or commercial writes", async () => {
     storageMocks.listGeoProjects.mockResolvedValue([serviceProject]);
     localStorage.setItem(
       "frontmind.geo.pending-payment.v2",
-      JSON.stringify(initial),
+      JSON.stringify(servicePendingPayment()),
     );
-    const makePopup = () =>
-      ({
-        opener: window,
-        document:
-          document.implementation.createHTMLDocument("FrontMind 安全支付"),
-        closed: false,
-        close: vi.fn(),
-      }) as unknown as Window;
-    const firstPopup = makePopup();
-    const secondPopup = makePopup();
-    vi.spyOn(window, "open")
-      .mockReturnValueOnce(firstPopup)
-      .mockReturnValueOnce(secondPopup);
-    vi.spyOn(HTMLFormElement.prototype, "submit").mockImplementation(
-      () => undefined,
-    );
-
-    render(
-      <LanguageProvider initialLang="zh">
-        <GeoBuildExperience />
-      </LanguageProvider>,
-    );
-    fireEvent.click(
-      await screen.findByRole("button", { name: /继续项目：硅基流动/ }),
-    );
-    fireEvent.click(await screen.findByRole("button", { name: "前往付款" }));
-    fireEvent.click(screen.getByRole("button", { name: /重新打开收银台/ }));
-    fireEvent.click(screen.getByRole("button", { name: /重新打开收银台/ }));
-    fireEvent.click(screen.getByRole("button", { name: "更换支付渠道" }));
-    fireEvent.click(screen.getByRole("button", { name: /对公账户支付/ }));
-
-    await waitFor(() => {
-      expect(firstPopup.close).toHaveBeenCalledTimes(1);
-      expect(secondPopup.close).toHaveBeenCalledTimes(1);
-      expect(
-        JSON.parse(
-          localStorage.getItem("frontmind.geo.pending-payment.v2") || "{}",
-        ).selectedChannel,
-      ).toBe("bank_transfer");
-      expect(screen.getByText(/输入管理员提供的确认码/)).toBeTruthy();
-    });
-    await new Promise((resolve) => window.setTimeout(resolve, 1_350));
-    expect(apiMocks.getGeoServicePaymentStatus).not.toHaveBeenCalled();
-  });
-
-  it("switches a restored service order online without changing its order facts", async () => {
-    const initial = servicePendingPayment();
-    const switchedCheckout = {
-      ...initial.checkout,
-      fields: {
-        ...initial.checkout.fields,
-        type: "wxpay",
-        sign: "switched-service-signature",
-      },
-    };
-    storageMocks.listGeoProjects.mockResolvedValue([serviceProject]);
-    apiMocks.switchGeoServicePaymentCheckout.mockResolvedValue(
-      switchedCheckout,
-    );
-    localStorage.setItem(
-      "frontmind.geo.pending-payment.v2",
-      JSON.stringify(initial),
-    );
-    const popup = {
-      opener: window,
-      document:
-        document.implementation.createHTMLDocument("FrontMind 安全支付"),
-      closed: false,
-      close: vi.fn(),
-    } as unknown as Window;
-    vi.spyOn(window, "open").mockReturnValue(popup);
-    const submit = vi
-      .spyOn(HTMLFormElement.prototype, "submit")
-      .mockImplementation(() => undefined);
-
-    render(
-      <LanguageProvider initialLang="zh">
-        <GeoBuildExperience />
-      </LanguageProvider>,
-    );
-    fireEvent.click(
-      await screen.findByRole("button", { name: /继续项目：硅基流动/ }),
-    );
-    fireEvent.click(await screen.findByRole("button", { name: "前往付款" }));
-    fireEvent.click(screen.getByRole("button", { name: "更换支付渠道" }));
-    fireEvent.click(screen.getByRole("button", { name: /微信支付/ }));
-
-    await waitFor(() => {
-      expect(apiMocks.switchGeoServicePaymentCheckout).toHaveBeenCalledWith(
-        serviceProject,
-        {
-          authorization: initial.checkout.authorization,
-          method: "wxpay",
-        },
-      );
-      expect(submit).toHaveBeenCalledTimes(1);
-      const persisted = JSON.parse(
-        localStorage.getItem("frontmind.geo.pending-payment.v2") || "{}",
-      );
-      expect(persisted.selectedChannel).toBe("wxpay");
-      expect(persisted.checkout.authorization).toBe(
-        initial.checkout.authorization,
-      );
-      expect(persisted.checkout.orderId).toBe(initial.checkout.orderId);
-      expect(persisted.checkout.amountFen).toBe(initial.checkout.amountFen);
-      expect(persisted.checkout.expiresAt).toBe(initial.checkout.expiresAt);
-      expect(persisted.checkout.fields.type).toBe("wxpay");
-    });
-  });
-
-  it("confirms a direct bank payment with purchase intent and clears it after success", async () => {
-    const updatedProject: GeoProject = {
-      ...serviceProject,
-      remoteToken: "bank-confirmed-project-token",
-      serviceActivation: {
-        ...serviceProject.serviceActivation!,
-        status: "account_setup_required",
-        orderId: "20260806123456789012345678901234",
-        paidAt: "2026-08-06T10:05:00.000Z",
-      },
-    };
-    storageMocks.listGeoProjects.mockResolvedValue([serviceProject]);
-    apiMocks.confirmGeoServiceBankTransfer.mockResolvedValue(updatedProject);
     window.history.replaceState(
       {},
       "",
-      "/?purchaseIntent=one-time-purchase-intent-001#geo-builder",
+      "/?purchaseIntent=retired-service-purchase#geo-builder",
     );
 
     render(
@@ -537,155 +416,33 @@ describe("service payment dialog", () => {
         <GeoBuildExperience />
       </LanguageProvider>,
     );
+
+    await waitFor(() => {
+      expect(
+        localStorage.getItem("frontmind.geo.pending-payment.v2"),
+      ).toBeNull();
+      expect(window.location.search).toBe("");
+    });
     fireEvent.click(
       await screen.findByRole("button", { name: /继续项目：硅基流动/ }),
     );
-    fireEvent.click(await screen.findByRole("button", { name: "前往付款" }));
-    fireEvent.click(screen.getByRole("button", { name: /对公账户支付/ }));
-    fireEvent.click(screen.getByRole("button", { name: /确认对公到账/ }));
-    fireEvent.change(screen.getByPlaceholderText("请输入对公到账确认码"), {
-      target: { value: "administrator-direct-bank-code" },
-    });
-    fireEvent.click(screen.getByRole("button", { name: "确认到账并继续" }));
-
-    await waitFor(() => {
-      expect(apiMocks.confirmGeoServiceBankTransfer).toHaveBeenCalledWith(
-        serviceProject,
-        {
-          confirmationCode: "administrator-direct-bank-code",
-          purchaseIntent: "one-time-purchase-intent-001",
-        },
-      );
-      expect(window.location.search).toBe("");
-      expect(window.location.hash).toBe("#geo-builder");
-      expect(
-        localStorage.getItem("frontmind.geo.pending-payment.v2"),
-      ).toBeNull();
-    });
-  });
-
-  it("opens a restored bank order without a local project and recovers it after confirmation", async () => {
-    const initial = servicePendingPayment({
-      selectedChannel: "bank_transfer",
-      statusMessage: "已选择对公账户支付，等待管理员确认到账。",
-    });
-    const updatedProject: GeoProject = {
-      ...serviceProject,
-      remoteToken: "recovered-bank-project-token",
-      serviceActivation: {
-        ...serviceProject.serviceActivation!,
-        status: "account_setup_required",
-        orderId: initial.checkout.orderId,
-        paidAt: "2026-08-06T10:05:00.000Z",
-      },
-    };
-    storageMocks.listGeoProjects.mockResolvedValue([]);
-    apiMocks.confirmGeoServiceBankTransfer.mockResolvedValue(updatedProject);
-    localStorage.setItem(
-      "frontmind.geo.pending-payment.v2",
-      JSON.stringify(initial),
-    );
-
-    render(
-      <LanguageProvider initialLang="zh">
-        <GeoBuildExperience />
-      </LanguageProvider>,
-    );
-
     expect(
-      await screen.findByRole("heading", { name: "等待对公到账确认" }),
+      await screen.findByRole("heading", {
+        name: "查看 GEO 服务如何持续推进",
+      }),
     ).toBeTruthy();
-    fireEvent.click(screen.getAllByRole("button", { name: /确认对公到账/ })[0]);
-    fireEvent.change(screen.getByPlaceholderText("请输入对公到账确认码"), {
-      target: { value: "administrator-recovery-bank-code" },
-    });
-    fireEvent.click(screen.getByRole("button", { name: "确认到账并继续" }));
-
-    await waitFor(() => {
-      expect(apiMocks.confirmGeoServiceBankTransfer).toHaveBeenCalledWith(
-        expect.objectContaining({
-          id: initial.projectId,
-          remoteToken: initial.projectToken,
-          stage: "service_activation",
-        }),
-        {
-          confirmationCode: "administrator-recovery-bank-code",
-          authorization: initial.checkout.authorization,
-        },
-      );
-      expect(
-        localStorage.getItem("frontmind.geo.pending-payment.v2"),
-      ).toBeNull();
-      expect(
-        screen.getByRole("button", { name: /继续项目：硅基流动/ }),
-      ).toBeTruthy();
-    });
-  });
-
-  it("reopens and switches online channels for a recovered bank order without an active project", async () => {
-    const initial = servicePendingPayment({
-      selectedChannel: "bank_transfer",
-      statusMessage: "已选择对公账户支付，等待管理员确认到账。",
-    });
-    const switchedCheckout = {
-      ...initial.checkout,
-      fields: {
-        ...initial.checkout.fields,
-        type: "wxpay",
-        sign: "recovered-switch-signature",
-      },
-    };
-    storageMocks.listGeoProjects.mockResolvedValue([]);
-    apiMocks.switchGeoServicePaymentCheckout.mockResolvedValue(
-      switchedCheckout,
+    expect(document.body.textContent).not.toMatch(
+      /¥|￥|元\s*\/\s*月|报价|价格|合同|签约|付款|支付|开户|设置账号/,
     );
-    localStorage.setItem(
-      "frontmind.geo.pending-payment.v2",
-      JSON.stringify(initial),
-    );
-    const popup = {
-      opener: window,
-      document:
-        document.implementation.createHTMLDocument("FrontMind 安全支付"),
-      closed: false,
-      close: vi.fn(),
-    } as unknown as Window;
-    vi.spyOn(window, "open").mockReturnValue(popup);
-    const submit = vi
-      .spyOn(HTMLFormElement.prototype, "submit")
-      .mockImplementation(() => undefined);
-
-    render(
-      <LanguageProvider initialLang="zh">
-        <GeoBuildExperience />
-      </LanguageProvider>,
-    );
-    await screen.findByRole("heading", { name: "等待对公到账确认" });
-
-    fireEvent.click(screen.getByRole("button", { name: "更换支付渠道" }));
-    fireEvent.click(screen.getByRole("button", { name: /支付宝支付/ }));
-    await waitFor(() => expect(submit).toHaveBeenCalledTimes(1));
-
-    fireEvent.click(screen.getByRole("button", { name: "更换支付渠道" }));
-    fireEvent.click(screen.getByRole("button", { name: /微信支付/ }));
-    await waitFor(() => {
-      expect(apiMocks.switchGeoServicePaymentCheckout).toHaveBeenCalledWith(
-        expect.objectContaining({
-          id: initial.projectId,
-          remoteToken: initial.projectToken,
-        }),
-        {
-          authorization: initial.checkout.authorization,
-          method: "wxpay",
-        },
-      );
-      expect(submit).toHaveBeenCalledTimes(2);
-      const persisted = JSON.parse(
-        localStorage.getItem("frontmind.geo.pending-payment.v2") || "{}",
-      );
-      expect(persisted.selectedChannel).toBe("wxpay");
-      expect(persisted.checkout.fields.type).toBe("wxpay");
-    });
+    expect(
+      screen.queryByRole("button", {
+        name: /前往付款|确认对公到账|创建账号|提交签约/,
+      }),
+    ).toBeNull();
+    expect(apiMocks.getGeoServicePaymentStatus).not.toHaveBeenCalled();
+    expect(apiMocks.startGeoService).not.toHaveBeenCalled();
+    expect(apiMocks.confirmGeoServiceBankTransfer).not.toHaveBeenCalled();
+    expect(apiMocks.switchGeoServicePaymentCheckout).not.toHaveBeenCalled();
   });
 });
 

@@ -18,6 +18,11 @@ export type NormalizedTaskStatus =
   | "cancelled"
   | "unknown";
 
+/** Provider tasks may legitimately spend most of their one-hour execution
+ * window in an internal waiting state. Keep support guidance behind that
+ * window instead of presenting normal background work as an incident. */
+export const GEO_KNOWLEDGE_BASE_SUPPORT_DELAY_MS = 65 * 60 * 1_000;
+
 export type ArchiveDescriptor = {
   artifactId: string;
   filename: string;

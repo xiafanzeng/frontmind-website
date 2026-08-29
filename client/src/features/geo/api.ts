@@ -54,6 +54,7 @@ const UPLOAD_INIT_RETRY_DELAY_MS = 1_000;
 const UPLOAD_TRANSFER_RETRY_DELAYS_MS = [1_000, 3_000] as const;
 const UPLOAD_STATUS_POLL_INTERVAL_MS = 1_000;
 const UPLOAD_STATUS_RETRY_DELAYS_MS = [1_000, 3_000, 5_000] as const;
+const GEO_CUSTOM_QUESTION_POLL_RECOVERY_MAX_MS = 2 * 60_000;
 
 type JsonRecord = Record<string, unknown>;
 type TimedRequestInit = RequestInit & { timeoutMs?: number };
@@ -162,6 +163,244 @@ export class GeoApiError extends Error {
     this.code = code;
     this.details = details;
   }
+}
+
+const GEO_CUSTOM_QUESTION_PENDING_PREFIX =
+  "frontmind-geo-custom-question-validation:";
+const GEO_CUSTOM_QUESTION_CLIENT_REQUEST_ID_PATTERN =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[45][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+
+function isGeoCustomQuestionClientRequestId(value: unknown): value is string {
+  return (
+    typeof value === "string" &&
+    GEO_CUSTOM_QUESTION_CLIENT_REQUEST_ID_PATTERN.test(value)
+  );
+}
+
+export type GeoPendingCustomQuestionValidation = {
+  projectId: string;
+  clientRequestId: string;
+  question: string;
+  updatedAt: string;
+};
+
+function pendingCustomQuestionStorageKey(projectId: string) {
+  return `${GEO_CUSTOM_QUESTION_PENDING_PREFIX}${projectId}`;
+}
+
+export function readPendingGeoCustomQuestionValidation(
+  projectId: string,
+): GeoPendingCustomQuestionValidation | undefined {
+  try {
+    const raw = globalThis.localStorage?.getItem(
+      pendingCustomQuestionStorageKey(projectId),
+    );
+    if (!raw) return undefined;
+    const value = JSON.parse(
+      raw,
+    ) as Partial<GeoPendingCustomQuestionValidation>;
+    if (
+      value.projectId !== projectId ||
+      !isGeoCustomQuestionClientRequestId(value.clientRequestId) ||
+      typeof value.question !== "string" ||
+      !value.question.trim()
+    ) {
+      return undefined;
+    }
+    return {
+      projectId,
+      clientRequestId: value.clientRequestId,
+      question: value.question,
+      updatedAt:
+        typeof value.updatedAt === "string"
+          ? value.updatedAt
+          : new Date(0).toISOString(),
+    };
+  } catch {
+    return undefined;
+  }
+}
+
+function rememberPendingGeoCustomQuestionValidation(
+  pending: GeoPendingCustomQuestionValidation,
+) {
+  try {
+    globalThis.localStorage?.setItem(
+      pendingCustomQuestionStorageKey(pending.projectId),
+      JSON.stringify(pending),
+    );
+  } catch {
+    // Server-side reservation remains authoritative when storage is unavailable.
+  }
+}
+
+export function clearPendingGeoCustomQuestionValidation(
+  projectId: string,
+  clientRequestId?: string,
+) {
+  try {
+    const existing = readPendingGeoCustomQuestionValidation(projectId);
+    if (
+      clientRequestId &&
+      existing &&
+      existing.clientRequestId !== clientRequestId
+    ) {
+      return;
+    }
+    globalThis.localStorage?.removeItem(
+      pendingCustomQuestionStorageKey(projectId),
+    );
+  } catch {
+    // Best effort only; the server still enforces idempotency.
+  }
+}
+
+export function acknowledgeGeoCustomQuestionCommitted(
+  projectId: string,
+  clientRequestId: string,
+) {
+  clearPendingGeoCustomQuestionValidation(projectId, clientRequestId);
+}
+
+export function expiredGeoCustomQuestionValidation(error: unknown) {
+  return (
+    error instanceof GeoApiError &&
+    error.status === 410 &&
+    error.code === "CUSTOM_QUESTION_VALIDATION_EXPIRED"
+  );
+}
+
+function releaseExpiredGeoCustomQuestionValidation(
+  projectId: string,
+  clientRequestId: string | undefined,
+  error: unknown,
+) {
+  if (!clientRequestId || !expiredGeoCustomQuestionValidation(error)) {
+    return false;
+  }
+  clearPendingGeoCustomQuestionValidation(projectId, clientRequestId);
+  return true;
+}
+
+function releaseSupersededGeoCustomQuestionValidation(
+  projectId: string,
+  clientRequestId: string | undefined,
+  error: unknown,
+) {
+  if (
+    !clientRequestId ||
+    !(error instanceof GeoApiError) ||
+    error.status !== 409 ||
+    error.code !== "CUSTOM_QUESTION_RESERVATION_SUPERSEDED"
+  ) {
+    return false;
+  }
+  const validation = asRecord(error.details?.validation);
+  const authoritativeClientRequestId = textValue(validation.clientRequestId);
+  if (
+    authoritativeClientRequestId &&
+    authoritativeClientRequestId !== clientRequestId
+  ) {
+    return false;
+  }
+  clearPendingGeoCustomQuestionValidation(projectId, clientRequestId);
+  return true;
+}
+
+function releaseFinishedGeoCustomQuestionRecovery(
+  projectId: string,
+  clientRequestId: string | undefined,
+  error: unknown,
+) {
+  return (
+    releaseExpiredGeoCustomQuestionValidation(
+      projectId,
+      clientRequestId,
+      error,
+    ) ||
+    releaseSupersededGeoCustomQuestionValidation(
+      projectId,
+      clientRequestId,
+      error,
+    )
+  );
+}
+
+async function acknowledgeNonRetryableGeoCustomQuestionTerminal(
+  project: Pick<GeoProject, "id" | "remoteToken">,
+  error: unknown,
+  options: { signal?: AbortSignal } = {},
+) {
+  const terminal = authoritativeGeoCustomQuestionValidationTerminal(error);
+  if (
+    !terminal ||
+    terminal.retryable ||
+    (error instanceof GeoApiError &&
+      error.code === "CUSTOM_QUESTION_RESERVATION_SUPERSEDED")
+  )
+    return false;
+
+  try {
+    await acknowledgeGeoCustomQuestionValidation(
+      project,
+      terminal.clientRequestId,
+      options,
+    );
+    acknowledgeGeoCustomQuestionCommitted(project.id, terminal.clientRequestId);
+  } catch {
+    // Keep the exact UUID so a later refresh can retry the idempotent ACK.
+  }
+  return true;
+}
+
+export async function acknowledgeGeoCustomQuestionValidation(
+  project: Pick<GeoProject, "remoteToken">,
+  clientRequestId: string,
+  options: { signal?: AbortSignal } = {},
+) {
+  const payload = asRecord(
+    await requestJson(
+      `/projects/${encodeURIComponent(project.remoteToken)}/questions/custom/${encodeURIComponent(clientRequestId)}/ack`,
+      { method: "POST", signal: options.signal },
+    ),
+  );
+  const validation = asRecord(payload.validation);
+  if (
+    payload.ok !== true ||
+    validation.acknowledged !== true ||
+    textValue(validation.clientRequestId) !== clientRequestId
+  ) {
+    throw new GeoApiError(
+      "问题验证确认响应无效，请刷新后重试。",
+      502,
+      "INVALID_CUSTOM_QUESTION_ACKNOWLEDGEMENT",
+    );
+  }
+}
+
+export type GeoCustomQuestionAcknowledgement = "required" | "not_required";
+
+export async function persistGeoCustomQuestionResultAndAcknowledge(
+  result: {
+    project: GeoProject;
+    clientRequestId: string;
+    acknowledgement: GeoCustomQuestionAcknowledgement;
+  },
+  persist: (project: GeoProject) => Promise<unknown>,
+  options: { signal?: AbortSignal } = {},
+) {
+  await persist(result.project);
+  if (result.acknowledgement === "required") {
+    await acknowledgeGeoCustomQuestionValidation(
+      result.project,
+      result.clientRequestId,
+      options,
+    );
+  }
+  acknowledgeGeoCustomQuestionCommitted(
+    result.project.id,
+    result.clientRequestId,
+  );
 }
 
 function asRecord(value: unknown): JsonRecord {
@@ -5042,6 +5281,473 @@ export async function startGeoQuestionRecommendation(
     { method: "POST" },
   );
   return normalizeRequiredProjectResponse(payload, project);
+}
+
+export async function createGeoCustomQuestion(
+  project: GeoProject,
+  questionText: string,
+  options: {
+    clientRequestId?: string;
+    signal?: AbortSignal;
+    pollIntervalMs?: number;
+  } = {},
+): Promise<{
+  project: GeoProject;
+  question: GeoQuestion;
+  clientRequestId: string;
+  acknowledgement: GeoCustomQuestionAcknowledgement;
+}> {
+  const question = questionText.trim();
+  const remembered = readPendingGeoCustomQuestionValidation(project.id);
+  const clientRequestId =
+    options.clientRequestId ??
+    (remembered?.question === question
+      ? remembered.clientRequestId
+      : crypto.randomUUID());
+  rememberPendingGeoCustomQuestionValidation({
+    projectId: project.id,
+    clientRequestId,
+    question,
+    updatedAt: new Date().toISOString(),
+  });
+
+  const basePath = `/projects/${encodeURIComponent(project.remoteToken)}/questions/custom`;
+  let payload: unknown;
+  try {
+    payload = await requestJson(basePath, {
+      method: "POST",
+      signal: options.signal,
+      body: JSON.stringify({ question, clientRequestId }),
+    });
+    payload = await pollGeoCustomQuestionValidation(
+      basePath,
+      clientRequestId,
+      payload,
+      options,
+    );
+  } catch (error) {
+    if (
+      await acknowledgeNonRetryableGeoCustomQuestionTerminal(project, error, {
+        signal: options.signal,
+      })
+    ) {
+      throw error;
+    }
+    if (
+      !releaseFinishedGeoCustomQuestionRecovery(
+        project.id,
+        clientRequestId,
+        error,
+      )
+    ) {
+      rememberAuthoritativeCustomQuestionConflict(project.id, error);
+    }
+    throw error;
+  }
+  return normalizeCompletedGeoCustomQuestion(
+    project,
+    question,
+    clientRequestId,
+    payload,
+  );
+}
+
+export async function resumeGeoCustomQuestionValidation(
+  project: GeoProject,
+  options: {
+    signal?: AbortSignal;
+    pollIntervalMs?: number;
+  } = {},
+): Promise<
+  | {
+      project: GeoProject;
+      question: GeoQuestion;
+      clientRequestId: string;
+      acknowledgement: GeoCustomQuestionAcknowledgement;
+    }
+  | undefined
+> {
+  const basePath = `/projects/${encodeURIComponent(project.remoteToken)}/questions/custom`;
+  let pending = readPendingGeoCustomQuestionValidation(project.id);
+  let payload: unknown;
+  try {
+    if (pending) {
+      const retiredOperation = pending;
+      try {
+        payload = await requestJson(
+          `${basePath}/${encodeURIComponent(retiredOperation.clientRequestId)}`,
+          { signal: options.signal },
+        );
+      } catch (error) {
+        if (
+          !(error instanceof GeoApiError) ||
+          error.code !== "CUSTOM_QUESTION_VALIDATION_NOT_FOUND"
+        ) {
+          throw error;
+        }
+        try {
+          payload = await requestJson(`${basePath}/active`, {
+            signal: options.signal,
+          });
+        } catch (activeError) {
+          if (
+            !(activeError instanceof GeoApiError) ||
+            activeError.code !== "CUSTOM_QUESTION_VALIDATION_NOT_FOUND"
+          ) {
+            throw activeError;
+          }
+          clearPendingGeoCustomQuestionValidation(
+            project.id,
+            retiredOperation.clientRequestId,
+          );
+          throw new GeoApiError(
+            "之前的问题验证记录已过期，请重新提交。",
+            410,
+            "CUSTOM_QUESTION_VALIDATION_EXPIRED",
+          );
+        }
+        const recoveredValidation = asRecord(asRecord(payload).validation);
+        const recoveredClientRequestId = textValue(
+          recoveredValidation.clientRequestId,
+        );
+        const recoveredQuestion = textValue(recoveredValidation.question);
+        if (
+          !isGeoCustomQuestionClientRequestId(recoveredClientRequestId) ||
+          !recoveredQuestion
+        ) {
+          throw new GeoApiError(
+            "待恢复的问题验证状态无效，请刷新后重试。",
+            502,
+            "INVALID_CUSTOM_QUESTION_RECOVERY",
+          );
+        }
+        pending = {
+          projectId: project.id,
+          clientRequestId: recoveredClientRequestId,
+          question: recoveredQuestion,
+          updatedAt: new Date().toISOString(),
+        };
+        rememberPendingGeoCustomQuestionValidation(pending);
+      }
+    } else {
+      try {
+        payload = await requestJson(`${basePath}/active`, {
+          signal: options.signal,
+        });
+      } catch (error) {
+        if (
+          error instanceof GeoApiError &&
+          error.code === "CUSTOM_QUESTION_VALIDATION_NOT_FOUND"
+        ) {
+          return undefined;
+        }
+        throw error;
+      }
+      const validation = asRecord(asRecord(payload).validation);
+      const clientRequestId = textValue(validation.clientRequestId);
+      const question = textValue(validation.question);
+      if (!isGeoCustomQuestionClientRequestId(clientRequestId) || !question) {
+        throw new GeoApiError(
+          "待恢复的问题验证状态无效，请刷新后重试。",
+          502,
+          "INVALID_CUSTOM_QUESTION_RECOVERY",
+        );
+      }
+      pending = {
+        projectId: project.id,
+        clientRequestId,
+        question,
+        updatedAt: new Date().toISOString(),
+      };
+      rememberPendingGeoCustomQuestionValidation(pending);
+    }
+
+    payload = await pollGeoCustomQuestionValidation(
+      basePath,
+      pending.clientRequestId,
+      payload,
+      options,
+    );
+    return normalizeCompletedGeoCustomQuestion(
+      project,
+      pending.question,
+      pending.clientRequestId,
+      payload,
+    );
+  } catch (error) {
+    if (
+      await acknowledgeNonRetryableGeoCustomQuestionTerminal(project, error, {
+        signal: options.signal,
+      })
+    ) {
+      throw error;
+    }
+    if (
+      !releaseFinishedGeoCustomQuestionRecovery(
+        project.id,
+        pending?.clientRequestId,
+        error,
+      )
+    ) {
+      rememberAuthoritativeCustomQuestionConflict(project.id, error);
+    }
+    throw error;
+  }
+}
+
+export type GeoRetryableCustomQuestionValidation = {
+  clientRequestId: string;
+  question: string;
+};
+
+export type GeoCustomQuestionValidationTerminal =
+  GeoRetryableCustomQuestionValidation & { retryable: boolean };
+
+export function authoritativeGeoCustomQuestionValidationTerminal(
+  error: unknown,
+): GeoCustomQuestionValidationTerminal | undefined {
+  if (!(error instanceof GeoApiError)) return undefined;
+  const validation = asRecord(error.details?.validation);
+  const validationError = asRecord(validation.error);
+  const state = textValue(validation.state);
+  const clientRequestId = textValue(validation.clientRequestId);
+  const question = textValue(validation.question);
+  if (
+    !["completed", "rejected", "failed"].includes(state || "") ||
+    !isGeoCustomQuestionClientRequestId(clientRequestId) ||
+    !question ||
+    typeof validationError.retryable !== "boolean"
+  ) {
+    return undefined;
+  }
+  return {
+    clientRequestId,
+    question,
+    retryable: validationError.retryable,
+  };
+}
+
+export function retryableGeoCustomQuestionValidation(
+  error: unknown,
+): GeoRetryableCustomQuestionValidation | undefined {
+  const terminal = authoritativeGeoCustomQuestionValidationTerminal(error);
+  return terminal?.retryable
+    ? {
+        clientRequestId: terminal.clientRequestId,
+        question: terminal.question,
+      }
+    : undefined;
+}
+
+export async function retryGeoCustomQuestionValidation(
+  project: GeoProject,
+  terminalError: unknown,
+  options: { signal?: AbortSignal; pollIntervalMs?: number } = {},
+) {
+  const terminal = retryableGeoCustomQuestionValidation(terminalError);
+  if (!terminal) {
+    throw new GeoApiError(
+      "只有已明确标记为可重试的终态验证才能重新发起。",
+      409,
+      "CUSTOM_QUESTION_VALIDATION_NOT_RETRYABLE",
+    );
+  }
+  await acknowledgeGeoCustomQuestionValidation(
+    project,
+    terminal.clientRequestId,
+    options,
+  );
+  clearPendingGeoCustomQuestionValidation(project.id, terminal.clientRequestId);
+  return createGeoCustomQuestion(project, terminal.question, {
+    ...options,
+    clientRequestId: crypto.randomUUID(),
+  });
+}
+
+async function pollGeoCustomQuestionValidation(
+  basePath: string,
+  clientRequestId: string,
+  initialPayload: unknown,
+  options: { signal?: AbortSignal; pollIntervalMs?: number },
+) {
+  let payload = initialPayload;
+  let transientFailureCount = 0;
+  let transientFailureStartedAt: number | undefined;
+  let retryDelayMs: number | undefined;
+  while (isPendingCustomQuestionValidation(payload)) {
+    const validation = asRecord(asRecord(payload).validation);
+    const requestedDelay = numberValue(validation.nextPollMs);
+    await waitForGeoCustomQuestionPoll(
+      retryDelayMs ??
+        options.pollIntervalMs ??
+        (requestedDelay && requestedDelay >= 200 && requestedDelay <= 10_000
+          ? requestedDelay
+          : 1_500),
+      options.signal,
+    );
+    try {
+      payload = await requestJson(
+        `${basePath}/${encodeURIComponent(clientRequestId)}`,
+        { signal: options.signal },
+      );
+      transientFailureCount = 0;
+      transientFailureStartedAt = undefined;
+      retryDelayMs = undefined;
+    } catch (error) {
+      if (!recoverableGeoCustomQuestionPollError(error)) throw error;
+      const now = Date.now();
+      transientFailureStartedAt ??= now;
+      if (
+        now - transientFailureStartedAt >=
+        GEO_CUSTOM_QUESTION_POLL_RECOVERY_MAX_MS
+      ) {
+        throw error;
+      }
+      transientFailureCount += 1;
+      retryDelayMs = geoCustomQuestionPollRecoveryDelay(
+        transientFailureCount,
+        options.pollIntervalMs,
+      );
+    }
+  }
+  return payload;
+}
+
+function recoverableGeoCustomQuestionPollError(error: unknown) {
+  if (authoritativeGeoCustomQuestionValidationTerminal(error)) return false;
+  if (error instanceof TypeError) return true;
+  return (
+    error instanceof GeoApiError &&
+    ([408, 425, 429].includes(error.status) || error.status >= 500)
+  );
+}
+
+function geoCustomQuestionPollRecoveryDelay(
+  failureCount: number,
+  pollIntervalMs?: number,
+) {
+  if (pollIntervalMs !== undefined) {
+    return Math.min(
+      10_000,
+      Math.max(1, pollIntervalMs * 2 ** Math.min(failureCount, 10)),
+    );
+  }
+  return [3_000, 5_000, 10_000][Math.min(failureCount - 1, 2)]!;
+}
+
+function normalizeCompletedGeoCustomQuestion(
+  project: GeoProject,
+  question: string,
+  clientRequestId: string,
+  payload: unknown,
+): {
+  project: GeoProject;
+  question: GeoQuestion;
+  clientRequestId: string;
+  acknowledgement: GeoCustomQuestionAcknowledgement;
+} {
+  const root = asRecord(payload);
+  const validation = asRecord(root.validation);
+  const directQuestion = normalizeQuestions([root.question])[0];
+  const updatedProject = normalizeRequiredProjectResponse(payload, project);
+  const validatedQuestion =
+    directQuestion ??
+    updatedProject.questions.find(
+      (candidate) =>
+        normalizeGeoQuestionIdentity(candidate.question) ===
+        normalizeGeoQuestionIdentity(question),
+    );
+  if (!validatedQuestion || !validatedQuestion.selectable) {
+    throw new GeoApiError(
+      "自定义问题未通过校验，请调整后重试。",
+      502,
+      "INVALID_CUSTOM_QUESTION",
+    );
+  }
+  return {
+    project: updatedProject,
+    question: validatedQuestion,
+    clientRequestId,
+    acknowledgement:
+      textValue(validation.state) === "completed" &&
+      textValue(validation.clientRequestId) === clientRequestId &&
+      textValue(validation.acknowledgement) === "not_required" &&
+      textValue(validation.completionMode) === "existing_recommended_question"
+        ? "not_required"
+        : "required",
+  };
+}
+
+function normalizeGeoQuestionIdentity(question: string) {
+  return question
+    .normalize("NFKC")
+    .toLocaleLowerCase("zh-CN")
+    .replace(/[\u200b-\u200f\u202a-\u202e\u2060-\u206f\ufeff]/g, "")
+    .replace(/[\s?？]+/g, "");
+}
+
+function rememberAuthoritativeCustomQuestionConflict(
+  projectId: string,
+  error: unknown,
+) {
+  if (!(error instanceof GeoApiError)) return;
+  const validation = asRecord(error.details?.validation);
+  const terminalClientRequestId = textValue(validation.clientRequestId);
+  const terminalQuestion = textValue(validation.question);
+  if (
+    ["completed", "rejected", "failed"].includes(
+      textValue(validation.state) || "",
+    ) &&
+    isGeoCustomQuestionClientRequestId(terminalClientRequestId) &&
+    terminalQuestion
+  ) {
+    rememberPendingGeoCustomQuestionValidation({
+      projectId,
+      clientRequestId: terminalClientRequestId,
+      question: terminalQuestion,
+      updatedAt: new Date().toISOString(),
+    });
+    return;
+  }
+  const active = asRecord(error.details?.activeOperation);
+  const clientRequestId = textValue(active.clientRequestId);
+  const question = textValue(active.question);
+  if (
+    error.code !== "CUSTOM_QUESTION_ACTIVE_RESERVATION_CONFLICT" ||
+    !isGeoCustomQuestionClientRequestId(clientRequestId) ||
+    !question
+  ) {
+    return;
+  }
+  rememberPendingGeoCustomQuestionValidation({
+    projectId,
+    clientRequestId,
+    question,
+    updatedAt: new Date().toISOString(),
+  });
+}
+
+function isPendingCustomQuestionValidation(payload: unknown) {
+  const state = textValue(asRecord(asRecord(payload).validation).state);
+  return ["reserved", "prepared", "submitted"].includes(state || "");
+}
+
+function waitForGeoCustomQuestionPoll(delayMs: number, signal?: AbortSignal) {
+  return new Promise<void>((resolve, reject) => {
+    if (signal?.aborted) {
+      reject(signal.reason ?? new DOMException("请求已取消。", "AbortError"));
+      return;
+    }
+    const handleAbort = () => {
+      globalThis.clearTimeout(timer);
+      reject(signal?.reason ?? new DOMException("请求已取消。", "AbortError"));
+    };
+    const timer = globalThis.setTimeout(() => {
+      signal?.removeEventListener("abort", handleAbort);
+      resolve();
+    }, delayMs);
+    signal?.addEventListener("abort", handleAbort, { once: true });
+  });
 }
 
 function waitForGeoPollingDelay(delayMs: number, signal?: AbortSignal) {

@@ -5,6 +5,7 @@ import {
   fireEvent,
   render,
   screen,
+  waitFor,
   within,
 } from "@testing-library/react";
 import { useState } from "react";
@@ -17,9 +18,18 @@ import {
 import { createGeoStylePreviewProject } from "./preview";
 import type { GeoQuestion } from "./types";
 
-afterEach(cleanup);
+afterEach(() => {
+  cleanup();
+  localStorage.clear();
+});
 
-function QuestionSelectionHarness({ onContinue }: { onContinue: () => void }) {
+function QuestionSelectionHarness({
+  onContinue,
+  onCreateCustom,
+}: {
+  onContinue: () => void;
+  onCreateCustom?: (question: string) => Promise<GeoQuestion>;
+}) {
   const fixture = createGeoStylePreviewProject("assessment");
   const project = {
     ...fixture,
@@ -48,6 +58,7 @@ function QuestionSelectionHarness({ onContinue }: { onContinue: () => void }) {
       selectedProductQuestionId={productQuestionId}
       selectedIndustryRankingQuestionId={industryQuestionId}
       onSelect={select}
+      onCreateCustom={onCreateCustom}
       onContinue={onContinue}
     />
   );
@@ -95,6 +106,78 @@ describe("dual question and assessment perspectives", () => {
     expect(onContinue).toHaveBeenCalledOnce();
   });
 
+  it("validates a custom product question while preserving the required industry choice", async () => {
+    const onContinue = vi.fn();
+    const onCreateCustom = vi.fn(async (question: string) => ({
+      id: "custom-product-question",
+      category: "product_scenario" as const,
+      question,
+      rationale: "自定义问题已通过企业相关性校验。",
+      selectable: true,
+    }));
+    render(
+      <QuestionSelectionHarness
+        onContinue={onContinue}
+        onCreateCustom={onCreateCustom}
+      />,
+    );
+
+    fireEvent.change(
+      screen.getByRole("textbox", { name: "自定义产品侧优化问题" }),
+      {
+        target: {
+          value: "验收企业的核心产品适合哪些业务场景？",
+        },
+      },
+    );
+    fireEvent.click(screen.getByRole("button", { name: /验证问题/ }));
+
+    const useCustomQuestion = await screen.findByRole("button", {
+      name: /设为产品侧问题/,
+    });
+    expect(onCreateCustom).toHaveBeenCalledOnce();
+    fireEvent.click(useCustomQuestion);
+
+    const continueButton = screen.getByRole("button", {
+      name: /确认两个问题并继续/,
+    }) as HTMLButtonElement;
+    expect(continueButton.disabled).toBe(true);
+    fireEvent.click(
+      screen.getByRole("button", {
+        name: /该行业有哪些值得关注的服务方案？/,
+      }),
+    );
+    await waitFor(() => expect(continueButton.disabled).toBe(false));
+  });
+
+  it("mounts the imported video only while the accessible demo dialog is open", () => {
+    const view = render(<QuestionSelectionHarness onContinue={vi.fn()} />);
+
+    expect(
+      screen.queryByLabelText("行业排名为什么需要全域营销视频演示"),
+    ).toBeNull();
+    fireEvent.click(
+      screen.getByRole("button", {
+        name: "观看行业排名全域营销视频演示，时长 66 秒",
+      }),
+    );
+
+    expect(
+      screen.getByRole("dialog", {
+        name: "行业排名为什么需要全域营销？",
+      }),
+    ).toBeTruthy();
+    const video = screen.getByLabelText("行业排名为什么需要全域营销视频演示");
+    expect(video).toBeTruthy();
+    expect(video.querySelector('track[kind="captions"]')).toBeTruthy();
+
+    fireEvent.click(screen.getByRole("button", { name: "Close" }));
+    expect(
+      screen.queryByLabelText("行业排名为什么需要全域营销视频演示"),
+    ).toBeNull();
+    expect(view.container.querySelector("video")).toBeNull();
+  });
+
   it("keeps independent section tabs under the two assessment perspectives", () => {
     const view = render(
       <CurrentAssessment
@@ -128,9 +211,7 @@ describe("dual question and assessment perspectives", () => {
       screen.queryByRole("heading", { name: "舆情与知识库对照" }),
     ).toBeNull();
     expect(screen.queryByRole("heading", { name: "当前表现" })).toBeNull();
-    expect(
-      screen.queryByRole("button", { name: /进入下一步：启动服务/ }),
-    ).toBeNull();
+    expect(screen.queryByRole("button", { name: /进入服务演示/ })).toBeNull();
     expect(view.container.querySelectorAll('[role="tabpanel"]')).toHaveLength(
       2,
     );
@@ -152,9 +233,7 @@ describe("dual question and assessment perspectives", () => {
       within(productSections).getByRole("tab", { name: /优化后评估/ }),
     );
     expect(screen.getByRole("heading", { name: "优化后评估" })).toBeTruthy();
-    expect(
-      screen.getByRole("button", { name: /进入下一步：启动服务/ }),
-    ).toBeTruthy();
+    expect(screen.getByRole("button", { name: /进入服务演示/ })).toBeTruthy();
     expect(
       screen.queryByRole("heading", { name: "舆情与知识库对照" }),
     ).toBeNull();
@@ -211,9 +290,10 @@ describe("dual question and assessment perspectives", () => {
       }),
     );
     expect(screen.getByLabelText("预期提及率90%")).toBeTruthy();
+    expect(screen.getByText("查看全域协同服务演示")).toBeTruthy();
     expect(
-      screen.getByRole("button", { name: /联系技术人员对接/ }),
-    ).toBeTruthy();
+      screen.queryByRole("button", { name: /联系技术人员对接/ }),
+    ).toBeNull();
     expect(view.container.querySelectorAll('[role="tabpanel"]')).toHaveLength(
       2,
     );

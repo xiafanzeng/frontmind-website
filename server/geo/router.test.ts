@@ -10616,7 +10616,9 @@ describe("GEO API", () => {
       "project",
       {
         ...stored,
-        knowledgeBaseSubmittedAt: "2026-07-28T00:00:00.000Z",
+        knowledgeBaseSubmittedAt: new Date(
+          Date.now() - 64 * 60_000,
+        ).toISOString(),
       },
       60 * 60 * 1000,
     );
@@ -10631,6 +10633,141 @@ describe("GEO API", () => {
       kbTask: { status: "running" },
     });
     expect(broker.prompts).toHaveLength(1);
+  });
+
+  it("offers status-sync support only after the 65-minute knowledge-base window", async () => {
+    const { cookie } = await verifyInvite();
+    const created = await jsonRequest("/projects", cookie, {
+      method: "POST",
+      body: { input: "Acme", attachments: [] },
+    });
+    const initial = created.body as Record<string, any>;
+    broker.tasks.set("kb-1", {
+      id: "kb-1",
+      status: "waiting",
+      output: [],
+    });
+    const codec = new GeoTokenCodec(
+      "test-session-secret-at-least-16-characters",
+    );
+    const stored = codec.open<Record<string, unknown>>(
+      initial.projectToken,
+      "project",
+    ).value;
+    const readAtAge = async (ageMinutes: number) => {
+      const token = codec.seal(
+        "project",
+        {
+          ...stored,
+          knowledgeBaseSubmittedAt: new Date(
+            Date.now() - ageMinutes * 60_000,
+          ).toISOString(),
+        },
+        60 * 60 * 1_000,
+      );
+      return jsonRequest(`/projects/${encodeURIComponent(token)}`, cookie);
+    };
+
+    expect((await readAtAge(64)).body).toMatchObject({
+      project: {
+        status: "running",
+        knowledgeBaseSupportRequired: false,
+        kbTask: { status: "running" },
+      },
+    });
+    expect((await readAtAge(66)).body).toMatchObject({
+      project: {
+        status: "running",
+        knowledgeBaseSupportRequired: true,
+        kbTask: { status: "running" },
+      },
+    });
+    expect(broker.prompts).toHaveLength(1);
+  });
+
+  it("restores the custom-question POST, precise GET, active and ACK protocol", async () => {
+    const ready = await createReadyProject();
+    const pathname = `/projects/${encodeURIComponent(
+      ready.projectToken,
+    )}/questions/custom`;
+    const duplicate = await jsonRequest(pathname, ready.cookie, {
+      method: "POST",
+      body: {
+        question: "Acme 的服务模块 1 主要解决哪些业务问题？",
+        clientRequestId: CUSTOM_QUESTION_CLIENT_REQUEST_ID,
+      },
+    });
+
+    expect(duplicate.response.status).toBe(200);
+    expect(duplicate.body).toMatchObject({
+      question: { id: "product-scenario-01" },
+      validation: {
+        clientRequestId: CUSTOM_QUESTION_CLIENT_REQUEST_ID,
+        state: "completed",
+        acknowledgement: "not_required",
+        completionMode: "existing_recommended_question",
+      },
+    });
+    expect(broker.customQuestionClassifierTaskCount).toBe(0);
+
+    const precisePath = `${pathname}/${CUSTOM_QUESTION_CLIENT_REQUEST_ID}`;
+    const precise = await jsonRequest(precisePath, ready.cookie);
+    expect(precise.response.status).toBe(200);
+    expect(precise.body).toMatchObject({
+      validation: { clientRequestId: CUSTOM_QUESTION_CLIENT_REQUEST_ID },
+    });
+
+    const acknowledged = await jsonRequest(`${precisePath}/ack`, ready.cookie, {
+      method: "POST",
+      body: {},
+    });
+    expect(acknowledged.response.status).toBe(200);
+    expect(acknowledged.body).toMatchObject({
+      ok: true,
+      validation: { acknowledged: true },
+    });
+    const active = await jsonRequest(`${pathname}/active`, ready.cookie);
+    expect(active.response.status).toBe(404);
+    expect(active.body).toMatchObject({
+      error: { code: "CUSTOM_QUESTION_VALIDATION_NOT_FOUND" },
+    });
+  });
+
+  it("keeps a waiting custom-question Provider task pending without duplicate submission", async () => {
+    const ready = await createReadyProject();
+    broker.customQuestionClassifierPendingPolls = 99;
+    const pathname = `/projects/${encodeURIComponent(
+      ready.projectToken,
+    )}/questions/custom`;
+    const created = await jsonRequest(pathname, ready.cookie, {
+      method: "POST",
+      body: {
+        question: "Acme 在高校科研场景中能解决什么问题？",
+        clientRequestId: CUSTOM_QUESTION_CLIENT_REQUEST_ID,
+      },
+    });
+    expect(created.response.status).toBe(202);
+    expect(created.body).toMatchObject({
+      validation: { state: "submitted", nextPollMs: 1_500 },
+    });
+    expect(broker.customQuestionClassifierTaskCount).toBe(1);
+
+    const taskId = "custom-question-classifier-1";
+    broker.tasks.set(taskId, {
+      localTaskId: taskId,
+      operationId: `operation:${taskId}`,
+      status: "waiting",
+      safeEvents: [],
+    });
+    const precise = await jsonRequest(
+      `${pathname}/${CUSTOM_QUESTION_CLIENT_REQUEST_ID}`,
+      ready.cookie,
+    );
+    expect(precise.response.status).toBe(202);
+    expect(precise.body).toMatchObject({
+      validation: { state: "submitted" },
+    });
+    expect(broker.customQuestionClassifierTaskCount).toBe(1);
   });
 
   it("retires monitoring checkout creation and switching before any payment side effect", async () => {

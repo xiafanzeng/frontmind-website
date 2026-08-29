@@ -449,6 +449,18 @@ describe("GEO project refresh policy", () => {
     ).toBe(false);
   });
 
+  it("keeps a running knowledge-base task on the calm 30-second GET loop", () => {
+    const runningKnowledgeBase = project({
+      status: "running",
+      knowledgeBase: undefined,
+      questions: [],
+      selectedQuestionId: undefined,
+      selectedPlatformIds: [],
+    });
+    expect(shouldAutoRefreshGeoProject(runningKnowledgeBase)).toBe(true);
+    expect(geoAutoRefreshDelayMs(runningKnowledgeBase)).toBe(30_000);
+  });
+
   it("does not auto-refresh previews, drafts, or hidden pages", () => {
     expect(shouldAutoRefreshGeoProject(project({ preview: true }))).toBe(false);
     expect(

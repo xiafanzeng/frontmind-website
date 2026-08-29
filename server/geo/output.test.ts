@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 
 import {
   findArchiveDescriptor,
+  GEO_KNOWLEDGE_BASE_SUPPORT_DELAY_MS,
   knowledgeBaseTaskFailurePresentation,
   normalizeTask,
   normalizeTaskStatus,
@@ -22,6 +23,10 @@ function typedTask(structuredResult: unknown) {
 }
 
 describe("Website v2 task output normalization", () => {
+  it("delays running knowledge-base support guidance until 65 minutes", () => {
+    expect(GEO_KNOWLEDGE_BASE_SUPPORT_DELAY_MS).toBe(65 * 60 * 1_000);
+  });
+
   it.each([
     [
       "FILE_UPLOAD_CONFIRMATION_UNKNOWN",

@@ -18,6 +18,12 @@ const PROJECT_ROOT = import.meta.dirname;
 const LOG_DIR = path.join(PROJECT_ROOT, ".frontmind-logs");
 const MAX_LOG_SIZE_BYTES = 1 * 1024 * 1024; // 1MB per log file
 const TRIM_TARGET_BYTES = Math.floor(MAX_LOG_SIZE_BYTES * 0.6); // Trim to 60% to avoid constant re-trimming
+const OBSOLETE_GEO_DEMO_PUBLIC_ASSETS = [
+  "videos/frontmind-industry-ranking-permission-explainer-66s.mp4",
+  "videos/frontmind-industry-ranking-permission-explainer-66s-poster.jpg",
+  "videos/frontmind-industry-ranking-permission-explainer-poster.jpg",
+  "videos/frontmind-industry-ranking-permission-explainer-zh-CN.vtt",
+] as const;
 
 function vitePluginReleaseProfile(): Plugin {
   const replacements = [
@@ -32,6 +38,32 @@ function vitePluginReleaseProfile(): Plugin {
         (result, [placeholder, value]) => result.replaceAll(placeholder, value),
         html,
       );
+    },
+  };
+}
+
+function vitePluginPruneObsoleteGeoDemoPublicAssets(): Plugin {
+  const buildRoot = path.resolve(PROJECT_ROOT, "dist/public");
+
+  return {
+    name: "frontmind-prune-obsolete-geo-demo-public-assets",
+    apply: "build",
+    closeBundle() {
+      for (const relativePath of OBSOLETE_GEO_DEMO_PUBLIC_ASSETS) {
+        const outputPath = path.resolve(buildRoot, relativePath);
+        if (fs.existsSync(outputPath)) {
+          fs.unlinkSync(outputPath);
+        }
+      }
+
+      const leftovers = OBSOLETE_GEO_DEMO_PUBLIC_ASSETS.filter((relativePath) =>
+        fs.existsSync(path.resolve(buildRoot, relativePath)),
+      );
+      if (leftovers.length > 0) {
+        throw new Error(
+          `Obsolete GEO demo assets remained in the production bundle: ${leftovers.join(", ")}`,
+        );
+      }
     },
   };
 }
@@ -268,6 +300,9 @@ export default defineConfig(({ command, mode }) => {
     react(),
     tailwindcss(),
     ...(isProductionBuild
+      ? [vitePluginPruneObsoleteGeoDemoPublicAssets()]
+      : []),
+    ...(isProductionBuild
       ? []
       : [
           jsxLocPlugin(),
@@ -311,6 +346,9 @@ export default defineConfig(({ command, mode }) => {
     build: {
       outDir: path.resolve(import.meta.dirname, "dist/public"),
       emptyOutDir: true,
+      assetsInlineLimit(filePath, content) {
+        return filePath.endsWith(".vtt") ? false : content.length < 4_096;
+      },
       rollupOptions: {
         output: {
           manualChunks(id) {
@@ -333,11 +371,7 @@ export default defineConfig(({ command, mode }) => {
       port: 3000,
       strictPort: false, // Will find next available port if 3000 is busy
       host: true,
-      allowedHosts: [
-        ".frontmind.net",
-        "localhost",
-        "127.0.0.1",
-      ],
+      allowedHosts: [".frontmind.net", "localhost", "127.0.0.1"],
       fs: {
         strict: true,
         deny: ["**/.*"],

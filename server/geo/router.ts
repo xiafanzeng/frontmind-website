@@ -109,6 +109,7 @@ import {
 } from "./payment";
 import {
   findArchiveDescriptor,
+  GEO_KNOWLEDGE_BASE_SUPPORT_DELAY_MS,
   knowledgeBaseTaskFailurePresentation,
   normalizeTask,
   normalizeTaskStatus,
@@ -120,6 +121,7 @@ import {
   validateAcceptedCustomQuestionGrounding,
 } from "./custom-question-classifier";
 import {
+  createGeoCustomQuestionValidationStore,
   geoCustomQuestionHash,
   geoCustomQuestionOperationKey,
   geoCustomQuestionOwnerSessionHash,
@@ -538,7 +540,6 @@ type GeoRouterOptions = {
   adminNotifier?: GeoAdminNotifier;
   knowledgeImporter?: GeoKnowledgeImporter;
   projectOrderRegistry?: GeoProjectOrderRegistry;
-  /** Retained only so older embedders can upgrade without a constructor break. */
   customQuestionValidationStore?: GeoCustomQuestionValidationStore;
   monitorFreeReservationStore?: GeoMonitorFreeReservationStore;
   knowledgeBaseFinalizer?: typeof finalizeKnowledgeBaseCandidate;
@@ -703,6 +704,9 @@ export function createGeoRouter(options: GeoRouterOptions = {}): Router {
     options.knowledgeImporter ?? createGeoKnowledgeImporter({ env });
   const projectOrderRegistry =
     options.projectOrderRegistry ?? createGeoProjectOrderRegistry({ env });
+  const customQuestionValidationStore =
+    options.customQuestionValidationStore ??
+    createGeoCustomQuestionValidationStore({ env });
   const monitorFreeReservationStore =
     options.monitorFreeReservationStore ??
     createGeoMonitorFreeReservationStore({ env });
@@ -4038,6 +4042,17 @@ export function createGeoRouter(options: GeoRouterOptions = {}): Router {
       }
       const value = openOwnedProject(req, res);
       if (
+        await customQuestionValidationStore.isProjectDeletionFenced(
+          value.projectId,
+        )
+      ) {
+        throw new GeoHttpError(
+          "该项目已删除，不能继续访问或创建新任务",
+          410,
+          "PROJECT_DELETED",
+        );
+      }
+      if (
         (
           await Promise.all([
             monitorFreeReservationStore.isProjectDeletionFenced(
@@ -4846,9 +4861,375 @@ export function createGeoRouter(options: GeoRouterOptions = {}): Router {
     };
   };
 
-  // Self-service custom-question endpoints are retired. Historical project
-  // tokens remain readable, but no mutation, polling, retry, or ACK route is
-  // registered and the legacy reservation directory is never consulted.
+  router.post(
+    "/projects/:projectToken/questions/custom",
+    requireConfiguration,
+    requireSession,
+    requireCostRate("custom-question-create", 12),
+    asyncHandler(async (req, res) => {
+      const value = openOwnedProject(req, res);
+      const input = CreateCustomQuestionRequestSchema.parse(req.body);
+      const {
+        knowledgeBaseTask,
+        questionTask,
+        trackedValue,
+        generatedQuestions,
+      } = await loadCustomQuestionContext(value);
+      if (isIndustryRankingQuestion(input.question)) {
+        throw new GeoHttpError(
+          "该问题属于行业排名或品牌推荐类问题，请改为选择行业排名问题",
+          422,
+          "INDUSTRY_RANKING_QUESTION",
+        );
+      }
+
+      const duplicate = generatedQuestions.find(
+        (candidate) =>
+          normalizeQuestionIdentity(candidate.question) ===
+          normalizeQuestionIdentity(input.question),
+      );
+      const ownerSessionHash = geoCustomQuestionOwnerSessionHash(
+        String(res.locals.geoSessionId || ""),
+      );
+      const questionHash = geoCustomQuestionHash(input.question);
+      const legacyClient = !input.clientRequestId;
+      const clientRequestId =
+        input.clientRequestId ??
+        legacyGeoCustomQuestionClientRequestId({
+          projectId: trackedValue.projectId,
+          ownerSessionHash,
+          questionHash,
+        });
+      if (duplicate && legacyClient) {
+        const project = await buildProjectView(
+          broker,
+          trackedValue,
+          req.params.projectToken,
+          knowledgeBaseTask,
+          questionTask,
+        );
+        res.json({
+          validation: {
+            schemaVersion: 1,
+            clientRequestId: input.clientRequestId,
+            question: input.question,
+            state: "completed",
+            acknowledgement: "not_required",
+            completionMode: "existing_recommended_question",
+          },
+          projectToken: req.params.projectToken,
+          question: duplicate,
+          project,
+        });
+        return;
+      }
+
+      const archive = resolveKnowledgeBaseArtifact(
+        trackedValue,
+        knowledgeBaseTask,
+      );
+      if (!archive?.artifactId) {
+        throw new GeoHttpError(
+          "企业知识库准备完成后才能验证自定义问题",
+          409,
+          "ARCHIVE_NOT_READY",
+        );
+      }
+      const reservationInput = (expiresAt: string) => ({
+        projectId: trackedValue.projectId,
+        ownerSessionHash,
+        clientRequestId,
+        requestHash: geoCustomQuestionRequestHash({
+          projectId: trackedValue.projectId,
+          knowledgeBaseTaskId: trackedValue.knowledgeBaseTaskId,
+          question: input.question,
+        }),
+        question: input.question,
+        questionHash,
+        companyName: trackedValue.companyName,
+        knowledgeBaseTaskId: trackedValue.knowledgeBaseTaskId,
+        knowledgeBaseValidationProfile:
+          trackedValue.knowledgeBaseValidationProfile,
+        knowledgeBaseArtifact: {
+          artifactId: archive.artifactId,
+          filename: archive.filename,
+          sha256: archive.sha256,
+          packageManifestSha256: archive.packageManifestSha256,
+        },
+        expiresAt,
+      });
+      if (duplicate) {
+        const receipt =
+          await customQuestionValidationStore.reserveCompletedReceipt(
+            reservationInput(
+              new Date(
+                Date.now() + CUSTOM_QUESTION_TERMINAL_RETENTION_MS,
+              ).toISOString(),
+            ),
+            duplicate,
+          );
+        await sendCustomQuestionValidationObservation({
+          res,
+          projectToken: req.params.projectToken,
+          value: trackedValue,
+          context: { trackedValue, knowledgeBaseTask, questionTask },
+          record: receipt.record,
+        });
+        return;
+      }
+
+      const reservation = await customQuestionValidationStore.reserve(
+        reservationInput(
+          new Date(
+            Date.now() + CUSTOM_QUESTION_VALIDATION_TTL_MS,
+          ).toISOString(),
+        ),
+      );
+      let record = await advanceCustomQuestionValidation({
+        broker,
+        store: customQuestionValidationStore,
+        record: reservation.record,
+        knowledgeBaseTask,
+        now: customQuestionValidationNow,
+      });
+      if (legacyClient && !isTerminalCustomQuestionValidation(record)) {
+        const deadline = Date.now() + legacyCustomQuestionCompatibilityWaitMs;
+        while (
+          !isTerminalCustomQuestionValidation(record) &&
+          Date.now() < deadline
+        ) {
+          await waitForCustomQuestionRecovery(
+            legacyCustomQuestionCompatibilityPollMs,
+          );
+          const current = await customQuestionValidationStore.get(
+            trackedValue.projectId,
+            clientRequestId,
+          );
+          if (!current) break;
+          record = await advanceCustomQuestionValidation({
+            broker,
+            store: customQuestionValidationStore,
+            record: current,
+            knowledgeBaseTask,
+            now: customQuestionValidationNow,
+          });
+        }
+        if (!isTerminalCustomQuestionValidation(record)) {
+          throw new GeoHttpError(
+            "问题验证仍在后台继续；请刷新页面，系统会恢复同一请求",
+            504,
+            "CUSTOM_QUESTION_LEGACY_CLIENT_REFRESH_REQUIRED",
+          );
+        }
+      }
+      await sendCustomQuestionValidationObservation({
+        res,
+        projectToken: req.params.projectToken,
+        value: trackedValue,
+        context: { trackedValue, knowledgeBaseTask, questionTask },
+        record,
+        completedStatus: 201,
+      });
+    }),
+  );
+
+  router.get(
+    "/projects/:projectToken/questions/custom/:clientRequestId([0-9a-fA-F-]{36})",
+    requireConfiguration,
+    requireSession,
+    requireSessionRate("custom-question-status", 120, 60 * 1000),
+    asyncHandler(async (req, res) => {
+      const value = openOwnedProject(req, res);
+      const clientRequestId = z
+        .string()
+        .uuid()
+        .parse(req.params.clientRequestId);
+      const stored = await customQuestionValidationStore.get(
+        value.projectId,
+        clientRequestId,
+      );
+      if (!stored) {
+        throw new GeoHttpError(
+          "自定义问题验证请求不存在",
+          404,
+          "CUSTOM_QUESTION_VALIDATION_NOT_FOUND",
+        );
+      }
+      const ownerSessionHash = geoCustomQuestionOwnerSessionHash(
+        String(res.locals.geoSessionId || ""),
+      );
+      if (
+        stored.projectId !== value.projectId ||
+        stored.ownerSessionHash !== ownerSessionHash
+      ) {
+        throw new GeoHttpError(
+          "自定义问题验证请求不属于当前项目",
+          403,
+          "CUSTOM_QUESTION_VALIDATION_FORBIDDEN",
+        );
+      }
+      const expectedRequestHash = geoCustomQuestionRequestHash({
+        projectId: value.projectId,
+        knowledgeBaseTaskId: value.knowledgeBaseTaskId,
+        question: stored.question,
+      });
+      if (
+        stored.knowledgeBaseTaskId !== value.knowledgeBaseTaskId ||
+        stored.requestHash !== expectedRequestHash
+      ) {
+        throw new GeoHttpError(
+          "项目状态已变化，不能继续旧的问题验证请求",
+          409,
+          "CUSTOM_QUESTION_VALIDATION_PROJECT_CHANGED",
+        );
+      }
+      const authoritative = await customQuestionValidationStore.ensureActive(
+        value.projectId,
+        clientRequestId,
+      );
+      const record = await advanceCustomQuestionValidation({
+        broker,
+        store: customQuestionValidationStore,
+        record: authoritative,
+        knowledgeBaseTask: {
+          localTaskId: authoritative.knowledgeBaseTaskId,
+          operationId: `stored:${authoritative.knowledgeBaseTaskId}`,
+          status: "succeeded",
+          safeEvents: [],
+        },
+        now: customQuestionValidationNow,
+      });
+      await sendCustomQuestionValidationObservation({
+        res,
+        projectToken: req.params.projectToken,
+        value,
+        record,
+      });
+    }),
+  );
+
+  router.post(
+    "/projects/:projectToken/questions/custom/:clientRequestId([0-9a-fA-F-]{36})/ack",
+    requireConfiguration,
+    requireSession,
+    requireSessionRate("custom-question-ack", 120, 60 * 1000),
+    asyncHandler(async (req, res) => {
+      const value = openOwnedProject(req, res);
+      const clientRequestId = z
+        .string()
+        .uuid()
+        .parse(req.params.clientRequestId);
+      const ownerSessionHash = geoCustomQuestionOwnerSessionHash(
+        String(res.locals.geoSessionId || ""),
+      );
+      const stored = await customQuestionValidationStore.get(
+        value.projectId,
+        clientRequestId,
+      );
+      if (!stored) {
+        throw new GeoHttpError(
+          "自定义问题验证请求不存在",
+          404,
+          "CUSTOM_QUESTION_VALIDATION_NOT_FOUND",
+        );
+      }
+      if (
+        stored.projectId !== value.projectId ||
+        stored.ownerSessionHash !== ownerSessionHash
+      ) {
+        throw new GeoHttpError(
+          "自定义问题验证请求不属于当前项目",
+          403,
+          "CUSTOM_QUESTION_VALIDATION_FORBIDDEN",
+        );
+      }
+      if (!isTerminalCustomQuestionValidation(stored)) {
+        throw new GeoHttpError(
+          "问题验证尚未完成，不能确认持久化",
+          409,
+          "CUSTOM_QUESTION_VALIDATION_NOT_TERMINAL",
+        );
+      }
+      const acknowledged =
+        await customQuestionValidationStore.acknowledgeTerminal(
+          value.projectId,
+          clientRequestId,
+          ownerSessionHash,
+        );
+      res.json({
+        ok: true,
+        validation: {
+          schemaVersion: 1,
+          clientRequestId,
+          state: acknowledged.state,
+          acknowledged: true,
+        },
+      });
+    }),
+  );
+
+  router.get(
+    "/projects/:projectToken/questions/custom/active",
+    requireConfiguration,
+    requireSession,
+    requireSessionRate("custom-question-active", 120, 60 * 1000),
+    asyncHandler(async (req, res) => {
+      const value = openOwnedProject(req, res);
+      const stored = await customQuestionValidationStore.getActive(
+        value.projectId,
+      );
+      if (!stored) {
+        throw new GeoHttpError(
+          "当前项目没有待恢复的问题验证",
+          404,
+          "CUSTOM_QUESTION_VALIDATION_NOT_FOUND",
+        );
+      }
+      const ownerSessionHash = geoCustomQuestionOwnerSessionHash(
+        String(res.locals.geoSessionId || ""),
+      );
+      if (stored.ownerSessionHash !== ownerSessionHash) {
+        throw new GeoHttpError(
+          "自定义问题验证请求不属于当前项目",
+          403,
+          "CUSTOM_QUESTION_VALIDATION_FORBIDDEN",
+        );
+      }
+      const expectedRequestHash = geoCustomQuestionRequestHash({
+        projectId: value.projectId,
+        knowledgeBaseTaskId: value.knowledgeBaseTaskId,
+        question: stored.question,
+      });
+      if (
+        stored.knowledgeBaseTaskId !== value.knowledgeBaseTaskId ||
+        stored.requestHash !== expectedRequestHash
+      ) {
+        throw new GeoHttpError(
+          "项目状态已变化，不能继续旧的问题验证请求",
+          409,
+          "CUSTOM_QUESTION_VALIDATION_PROJECT_CHANGED",
+        );
+      }
+      const record = await advanceCustomQuestionValidation({
+        broker,
+        store: customQuestionValidationStore,
+        record: stored,
+        knowledgeBaseTask: {
+          localTaskId: stored.knowledgeBaseTaskId,
+          operationId: `stored:${stored.knowledgeBaseTaskId}`,
+          status: "succeeded",
+          safeEvents: [],
+        },
+        now: customQuestionValidationNow,
+      });
+      await sendCustomQuestionValidationObservation({
+        res,
+        projectToken: req.params.projectToken,
+        value,
+        record,
+      });
+    }),
+  );
   router.post(
     "/projects/:projectToken/payments",
     requireConfiguration,
@@ -9287,6 +9668,11 @@ async function buildProjectView(
       : undefined;
   const statusSyncPending = (status: string | undefined) =>
     status === "unknown" || status === "waiting";
+  const statusSyncActive = (status: string | undefined) =>
+    status === "queued" ||
+    status === "running" ||
+    status === "waiting" ||
+    status === "unknown";
   const publicQuestionsTaskView = statusSyncPending(questionsTaskView?.status)
     ? {
         ...questionsTaskView,
@@ -10001,8 +10387,11 @@ async function buildProjectView(
       Boolean(knowledgeBaseValidationFailure) ||
       knowledgeBaseTaskFailure?.supportRequired === true ||
       (!knowledgeBaseFinalizationFailure &&
-        statusSyncPending(knowledgeBase.status) &&
-        hasElapsed(value.knowledgeBaseSubmittedAt, 15 * 60 * 1_000)),
+        statusSyncActive(knowledgeBase.status) &&
+        hasElapsed(
+          value.knowledgeBaseSubmittedAt,
+          GEO_KNOWLEDGE_BASE_SUPPORT_DELAY_MS,
+        )),
     error: knowledgeBaseFinalizationFailure
       ? KNOWLEDGE_BASE_FINALIZATION_PUBLIC_ERROR
       : knowledgeBaseValidationFailure
@@ -12066,6 +12455,112 @@ async function cleanupCustomQuestionValidation(
 
 function isAlreadyDeletedGeoResource(error: unknown) {
   return error instanceof GeoBrokerError && error.status === 404;
+}
+
+export function createGeoCustomQuestionRecoveryWorker(input: {
+  broker: GeoPresalesBroker;
+  store: GeoCustomQuestionValidationStore;
+  intervalMs?: number;
+  batchSize?: number;
+  now?: () => number;
+}) {
+  const intervalMs = Math.max(1_000, input.intervalMs ?? 5_000);
+  const batchSize = Math.max(1, Math.min(100, input.batchSize ?? 20));
+  let timer: NodeJS.Timeout | undefined;
+  let inFlight: Promise<void> | undefined;
+
+  const runOnce = () => {
+    if (inFlight) return inFlight;
+    inFlight = (async () => {
+      const records = await input.store.listActive(Number.MAX_SAFE_INTEGER);
+      let nextRecordIndex = 0;
+      const recoverNext = async () => {
+        while (nextRecordIndex < records.length) {
+          const record = records[nextRecordIndex++];
+          if (!record) continue;
+          try {
+            await advanceCustomQuestionValidation({
+              broker: input.broker,
+              store: input.store,
+              record,
+              knowledgeBaseTask: {
+                localTaskId: record.knowledgeBaseTaskId,
+                operationId: `stored:${record.knowledgeBaseTaskId}`,
+                status: "succeeded",
+                safeEvents: [],
+              },
+              now: input.now,
+            });
+          } catch (error) {
+            console.warn("[GEO custom question recovery]", {
+              event: "reservation_recovery_deferred",
+              projectId: record.projectId,
+              clientRequestId: record.clientRequestId,
+              diagnosticCode:
+                error instanceof GeoCustomQuestionValidationStoreError
+                  ? error.code
+                  : error instanceof GeoBrokerError
+                    ? error.code
+                    : "RECOVERY_DEFERRED",
+            });
+          }
+        }
+      };
+      await Promise.all(
+        Array.from(
+          { length: Math.min(batchSize, records.length) },
+          recoverNext,
+        ),
+      );
+
+      await input.store.collectGarbage({
+        now: new Date(input.now?.() ?? Date.now()),
+        cleanup: async (target) => {
+          const results = await Promise.allSettled(
+            target.temporaryLocalAssetIds.map((localAssetId) =>
+              input.broker.deleteAsset(localAssetId),
+            ),
+          );
+          const failed = results.filter(
+            (result) =>
+              result.status === "rejected" &&
+              !isAlreadyDeletedGeoResource(result.reason),
+          );
+          if (failed.length > 0) {
+            throw new Error(
+              `custom-question cleanup incomplete (${failed.length}/${results.length})`,
+            );
+          }
+        },
+      });
+    })().finally(() => {
+      inFlight = undefined;
+    });
+    void inFlight.catch((error) => {
+      console.warn("[GEO custom question recovery]", {
+        event: "worker_cycle_deferred",
+        diagnosticCode:
+          error instanceof GeoCustomQuestionValidationStoreError
+            ? error.code
+            : "RECOVERY_CYCLE_DEFERRED",
+      });
+    });
+    return inFlight;
+  };
+
+  return {
+    runOnce,
+    start() {
+      if (timer) return;
+      void runOnce();
+      timer = setInterval(() => void runOnce(), intervalMs);
+      timer.unref?.();
+    },
+    stop() {
+      if (timer) clearInterval(timer);
+      timer = undefined;
+    },
+  };
 }
 
 function rejectedCustomQuestionError(category: string, companyName: string) {
