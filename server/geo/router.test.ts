@@ -31,11 +31,16 @@ import {
   GeoAdminNotificationConfigurationError,
   type GeoAdminNotification,
 } from "./admin-notifications";
-import { createGeoRouter, KnowledgeBaseArchiveValidationError } from "./router";
+import {
+  createGeoCustomQuestionRecoveryWorker,
+  createGeoRouter,
+  KnowledgeBaseArchiveValidationError,
+} from "./router";
 
 import {
   geoCustomQuestionHash,
   geoCustomQuestionRequestHash,
+  GeoCustomQuestionValidationStoreError,
   MemoryGeoCustomQuestionValidationStore,
 } from "./custom-question-validation-store";
 import {
@@ -91,6 +96,51 @@ describe("knowledge-base archive validation error arguments", () => {
       expect(error.message).not.toContain("private");
     },
   );
+});
+
+describe("custom-question recovery diagnostics", () => {
+  it("rate-limits an unchanged STORE_CORRUPT cycle fingerprint", async () => {
+    const store = new MemoryGeoCustomQuestionValidationStore();
+    store.listActive = async () => {
+      throw new GeoCustomQuestionValidationStoreError(
+        "STORE_CORRUPT",
+        "private corrupt record detail",
+      );
+    };
+    let now = 1_000_000;
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    const worker = createGeoCustomQuestionRecoveryWorker({
+      broker: {} as GeoPresalesBroker,
+      store,
+      intervalMs: 1_000,
+      logCooldownMs: 60_000,
+      now: () => now,
+    });
+
+    await worker.runOnce().catch(() => undefined);
+    await Promise.resolve();
+    await worker.runOnce().catch(() => undefined);
+    await Promise.resolve();
+    expect(
+      warn.mock.calls.filter(
+        (call) =>
+          (call[1] as { event?: string } | undefined)?.event ===
+          "worker_cycle_deferred",
+      ),
+    ).toHaveLength(1);
+
+    now += 60_001;
+    await worker.runOnce().catch(() => undefined);
+    await Promise.resolve();
+    expect(
+      warn.mock.calls.filter(
+        (call) =>
+          (call[1] as { event?: string } | undefined)?.event ===
+          "worker_cycle_deferred",
+      ),
+    ).toHaveLength(2);
+    warn.mockRestore();
+  });
 });
 
 function monitorTranslationTaskOutput(
@@ -7170,7 +7220,7 @@ describe("GEO API", () => {
     ).toHaveLength(2);
   });
 
-  it("shows a scope-safe failed assessment and creates a fresh task on explicit retry", async () => {
+  it("automatically creates exactly one fresh assessment attempt and stops after attempt 2", async () => {
     const ready = await createReadyProject();
     const monitored = await startOnePlatformMonitor(ready);
     const run = broker.monitorRuns.get("monitor-1")!;
@@ -7208,31 +7258,49 @@ describe("GEO API", () => {
     );
     expect(viewed.response.status).toBe(200);
     expect((viewed.body as any).project.assessment).toMatchObject({
-      status: "failed",
+      status: "running",
     });
     expect((viewed.body as any).project.assessment.totalScore).toBeUndefined();
-    expect((viewed.body as any).project.optimizationForecast).toBeUndefined();
+    expect((viewed.body as any).project.optimizationForecast).toMatchObject({
+      status: "not_started",
+    });
     expect((viewed.body as any).project.serviceActivation).toBeUndefined();
-    expect(broker.assessmentTaskCount).toBe(1);
+    expect(broker.assessmentTaskCount).toBe(2);
     expect(broker.repairCalls).toHaveLength(0);
+    const retryValue = new GeoTokenCodec(
+      "test-session-secret-at-least-16-characters",
+    ).open<Record<string, unknown>>(
+      (viewed.body as any).projectToken,
+      "project",
+    ).value;
+    expect(retryValue).toMatchObject({
+      assessmentTaskId: "assessment-2",
+      assessmentAttempt: 2,
+      previousAssessmentTaskIds: ["assessment-1"],
+    });
+
+    broker.tasks.set("assessment-2", {
+      id: "assessment-2",
+      status: "completed",
+      output: [
+        {
+          role: "assistant",
+          content: [{ text: JSON.stringify(invalidAssessmentOutput) }],
+        },
+      ],
+    });
     const repeated = await jsonRequest(
       `/projects/${encodeURIComponent((viewed.body as any).projectToken)}`,
       ready.cookie,
     );
     expect(repeated.response.status).toBe(200);
-    expect(broker.assessmentTaskCount).toBe(1);
-    expect(broker.repairCalls).toHaveLength(0);
-
-    const manuallyRetried = await jsonRequest(
-      `/projects/${encodeURIComponent((viewed.body as any).projectToken)}/assessment`,
-      ready.cookie,
-      { method: "POST", body: {} },
-    );
-    expect(manuallyRetried.response.status).toBe(201);
-    expect((manuallyRetried.body as any).project.assessment).toMatchObject({
-      status: "running",
+    expect((repeated.body as any).project.assessment).toMatchObject({
+      status: "failed",
     });
+    expect((repeated.body as any).project.assessmentRetryAvailable).toBe(true);
     expect(broker.assessmentTaskCount).toBe(2);
+    expect(broker.forecastTaskCount).toBe(0);
+    expect(broker.repairCalls).toHaveLength(0);
   });
 
   it("uses the Dashboard-localized assessment result without downloading a Provider output file", async () => {
@@ -7303,9 +7371,18 @@ describe("GEO API", () => {
     ).toHaveLength(0);
     expect(broker.assessmentTaskCount).toBe(1);
     expect(broker.forecastTaskCount).toBe(1);
+    const repeated = await jsonRequest(
+      `/projects/${encodeURIComponent((viewed.body as any).projectToken)}`,
+      ready.cookie,
+    );
+    expect(repeated.response.status).toBe(200);
+    expect((repeated.body as any).project.optimizationForecast).toMatchObject({
+      status: "running",
+    });
+    expect(broker.forecastTaskCount).toBe(1);
   });
 
-  it("reports an unavailable trusted assessment file with a safe retry code", async () => {
+  it("retries an unavailable trusted assessment output once with a fresh task", async () => {
     const ready = await createReadyProject();
     const monitored = await startOnePlatformMonitor(ready);
     const run = broker.monitorRuns.get("monitor-1")!;
@@ -7349,13 +7426,11 @@ describe("GEO API", () => {
     expect(viewed.response.status).toBe(200);
     expect((viewed.body as any).project).toMatchObject({
       assessment: {
-        status: "failed",
-        failureCode: "INVALID_JSON",
-        error: "现状评估结果不是可识别的 JSON，请重新评估",
+        status: "running",
       },
-      assessmentRetryAvailable: true,
+      optimizationForecast: { status: "not_started" },
     });
-    expect(broker.assessmentTaskCount).toBe(1);
+    expect(broker.assessmentTaskCount).toBe(2);
     expect(broker.forecastTaskCount).toBe(0);
   });
 
@@ -7458,7 +7533,9 @@ describe("GEO API", () => {
       assessmentUpdatingToVersion2: true,
       assessment: { status: "running" },
     });
-    expect((upgraded.body as any).project.optimizationForecast).toBeUndefined();
+    expect((upgraded.body as any).project.optimizationForecast).toMatchObject({
+      status: "not_started",
+    });
     expect(broker.assessmentTaskCount).toBe(2);
     const upgradedValue = codec.open<Record<string, any>>(
       (upgraded.body as any).projectToken,
@@ -7502,99 +7579,66 @@ describe("GEO API", () => {
     expect(broker.forecastTaskCount).toBe(2);
   });
 
-  it("never reruns a cancelled assessment on GET and allows repeated explicit manual reruns", async () => {
-    const ready = await createReadyProject();
-    const monitored = await startOnePlatformMonitor(ready);
-    const run = broker.monitorRuns.get("monitor-1")!;
-    broker.monitorRuns.set("monitor-1", {
-      ...run,
-      status: "completed",
-      completedItems: 5,
-      records: Array.from({ length: 5 }, (_, index) =>
-        monitorRecord(index + 1, `Acme 回答 ${index + 1}`),
-      ),
-    });
+  it.each(["failed", "cancelled"] as const)(
+    "keeps a %s attempt terminal until an explicit retry",
+    async (terminalStatus) => {
+      const ready = await createReadyProject();
+      const monitored = await startOnePlatformMonitor(ready);
+      const run = broker.monitorRuns.get("monitor-1")!;
+      broker.monitorRuns.set("monitor-1", {
+        ...run,
+        status: "completed",
+        completedItems: 5,
+        records: Array.from({ length: 5 }, (_, index) =>
+          monitorRecord(index + 1, `Acme 回答 ${index + 1}`),
+        ),
+      });
 
-    const first = await jsonRequest(
-      `/projects/${encodeURIComponent(monitored.projectToken)}/assessment`,
-      ready.cookie,
-      { method: "POST", body: {} },
-    );
-    expect(first.response.status).toBe(201);
-    expect(broker.assessmentTaskCount).toBe(1);
-    broker.tasks.set("assessment-1", {
-      id: "assessment-1",
-      status: "cancelled",
-      output: [],
-    });
+      const first = await jsonRequest(
+        `/projects/${encodeURIComponent(monitored.projectToken)}/assessment`,
+        ready.cookie,
+        { method: "POST", body: {} },
+      );
+      expect(first.response.status).toBe(201);
+      expect(broker.assessmentTaskCount).toBe(1);
+      broker.tasks.set("assessment-1", {
+        id: "assessment-1",
+        status: terminalStatus,
+        output: [],
+      });
 
-    const cancelledView = await jsonRequest(
-      `/projects/${encodeURIComponent((first.body as any).projectToken)}`,
-      ready.cookie,
-    );
+      const cancelledView = await jsonRequest(
+        `/projects/${encodeURIComponent((first.body as any).projectToken)}`,
+        ready.cookie,
+      );
 
-    expect(cancelledView.response.status).toBe(200);
-    expect((cancelledView.body as any).project).toMatchObject({
-      assessment: { status: "cancelled" },
-      assessmentRetryAvailable: true,
-    });
-    expect(broker.assessmentTaskCount).toBe(1);
+      expect(cancelledView.response.status).toBe(200);
+      expect((cancelledView.body as any).project).toMatchObject({
+        assessment: { status: terminalStatus },
+        assessmentRetryAvailable: true,
+      });
+      expect(broker.assessmentTaskCount).toBe(1);
 
-    const retried = await jsonRequest(
-      `/projects/${encodeURIComponent((cancelledView.body as any).projectToken)}/assessment`,
-      ready.cookie,
-      { method: "POST", body: {} },
-    );
-    expect(retried.response.status).toBe(201);
-    expect(broker.assessmentTaskCount).toBe(2);
-    const retriedPayload = retried.body as Record<string, any>;
-    const retriedValue = new GeoTokenCodec(
-      "test-session-secret-at-least-16-characters",
-    ).open<Record<string, unknown>>(
-      retriedPayload.projectToken,
-      "project",
-    ).value;
-    expect(retriedValue).toMatchObject({
-      assessmentTaskId: "assessment-2",
-      assessmentAttempt: 2,
-      previousAssessmentTaskIds: ["assessment-1"],
-    });
-
-    broker.tasks.set("assessment-2", {
-      id: "assessment-2",
-      status: "cancelled",
-      output: [],
-    });
-    const secondCancelledView = await jsonRequest(
-      `/projects/${encodeURIComponent(retriedPayload.projectToken)}`,
-      ready.cookie,
-    );
-    expect(secondCancelledView.response.status).toBe(200);
-    expect((secondCancelledView.body as any).project).toMatchObject({
-      assessment: { status: "cancelled" },
-      assessmentRetryAvailable: true,
-    });
-    expect(broker.assessmentTaskCount).toBe(2);
-
-    const retriedAgain = await jsonRequest(
-      `/projects/${encodeURIComponent(retriedPayload.projectToken)}/assessment`,
-      ready.cookie,
-      { method: "POST", body: {} },
-    );
-    expect(retriedAgain.response.status).toBe(201);
-    expect(broker.assessmentTaskCount).toBe(3);
-    const retriedAgainValue = new GeoTokenCodec(
-      "test-session-secret-at-least-16-characters",
-    ).open<Record<string, unknown>>(
-      (retriedAgain.body as any).projectToken,
-      "project",
-    ).value;
-    expect(retriedAgainValue).toMatchObject({
-      assessmentTaskId: "assessment-3",
-      assessmentAttempt: 3,
-      previousAssessmentTaskIds: ["assessment-1", "assessment-2"],
-    });
-  });
+      const retriedAgain = await jsonRequest(
+        `/projects/${encodeURIComponent((cancelledView.body as any).projectToken)}/assessment`,
+        ready.cookie,
+        { method: "POST", body: {} },
+      );
+      expect(retriedAgain.response.status).toBe(201);
+      expect(broker.assessmentTaskCount).toBe(2);
+      const retriedAgainValue = new GeoTokenCodec(
+        "test-session-secret-at-least-16-characters",
+      ).open<Record<string, unknown>>(
+        (retriedAgain.body as any).projectToken,
+        "project",
+      ).value;
+      expect(retriedAgainValue).toMatchObject({
+        assessmentTaskId: "assessment-2",
+        assessmentAttempt: 2,
+        previousAssessmentTaskIds: ["assessment-1"],
+      });
+    },
+  );
 
   it("renders noncanonical knowledge refs and replaces model source counts with canonical monitoring counts", async () => {
     const ready = await createReadyProject();

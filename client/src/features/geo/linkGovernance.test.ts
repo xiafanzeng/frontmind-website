@@ -400,7 +400,7 @@ describe("Website link governance", () => {
     expect(offenders).toEqual([]);
   });
 
-  it("allowlists only the ZPAY pre-opened checkout window", () => {
+  it("keeps the public GEO flow free of pre-opened checkout windows", () => {
     const openCalls = files.flatMap(({ file, source }) =>
       Array.from(source.matchAll(/\bwindow\s*\.\s*open\s*\(/g), (match) => ({
         file,
@@ -421,20 +421,7 @@ describe("Website link governance", () => {
       ),
     );
 
-    expect(openCalls).toHaveLength(1);
-    expect(openCalls[0]?.file).toBe(
-      "client/src/features/geo/GeoBuildExperience.tsx",
-    );
-    expect(openCalls[0]?.context).toContain("frontmind-zpay-");
-    expect(openCalls[0]?.context).toMatch(
-      /window\s*\.\s*open\s*\(\s*""\s*,\s*target\s*,/,
-    );
-    expect(targetAssignments).toEqual([
-      {
-        file: "client/src/features/geo/GeoBuildExperience.tsx",
-        receiver: "form",
-        value: "target",
-      },
-    ]);
+    expect(openCalls).toEqual([]);
+    expect(targetAssignments).toEqual([]);
   });
 });

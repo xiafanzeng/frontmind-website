@@ -14,12 +14,10 @@ import {
   EnterpriseAnalysis,
   expandLegacyTruncatedOverview,
   formatExecutionElapsed,
-  GeoWorkspaceHandoff,
   KnowledgeComparison,
   MonitoringResults,
   OptimizationForecastView,
   QuestionRecommendation,
-  resolvePaymentCheckoutAction,
   ServiceActivation,
   startFreshKnowledgeBaseUpload,
   StageNavigation,
@@ -104,36 +102,6 @@ describe("GEO style preview rendering", () => {
     expect(expanded).not.toContain("、Mind。");
   });
 
-  it("redirects only signed local-acceptance checkouts to the loopback payment page", () => {
-    const checkout = {
-      authorization: "local-payment-889100000001",
-      orderId: "889100000001",
-      amountFen: 200,
-      unitPriceFen: 200,
-      answersPerPlatform: 5,
-      expiresAt: "2026-07-31T13:00:00.000Z",
-      action: "https://zpayz.cn/submit.php" as const,
-      method: "POST" as const,
-      fields: {
-        pid: "frontmind-local-acceptance",
-        param: "frontmind-local-acceptance",
-      },
-    };
-
-    expect(
-      resolvePaymentCheckoutAction(checkout, {
-        hostname: "127.0.0.1",
-        origin: "http://127.0.0.1:8891",
-      }),
-    ).toBe("http://127.0.0.1:8891/__acceptance__/paid");
-    expect(
-      resolvePaymentCheckoutAction(checkout, {
-        hostname: "frontmind.net",
-        origin: "https://frontmind.net",
-      }),
-    ).toBe("https://zpayz.cn/submit.php");
-  });
-
   it("starts execution timing at zero when no remote start time exists", () => {
     expect(formatExecutionElapsed(undefined, undefined, 1_000)).toBe(
       "00:00:00",
@@ -210,7 +178,11 @@ describe("GEO style preview rendering", () => {
     );
 
     expect(html).toContain("完整度评估 87%");
-    expect(html).toContain("知识库完整度");
+    expect(html).toContain("证据完整度");
+    expect(html).toContain("自适应7分支企业知识树");
+    expect(html).toContain("ZIP 内结构化 Markdown");
+    expect(html).toContain("从来源索引与覆盖报告提取");
+    expect(html).toContain("充分取证 40 / 46");
     expect(html).not.toContain("首要优先级");
     expect(html).not.toContain("P0");
     expect(html).not.toContain("急需修复");
@@ -1209,6 +1181,49 @@ describe("GEO style preview rendering", () => {
     expect(current).not.toContain("进入服务演示");
   });
 
+  it("uses generating labels only for queued or running assessment work", () => {
+    const fixture = createGeoStylePreviewProject();
+    const renderStatus = (project: typeof fixture) =>
+      renderToStaticMarkup(
+        <CurrentAssessment project={project} onContact={vi.fn()} />,
+      );
+    const absent = renderStatus({
+      ...fixture,
+      preview: undefined,
+      assessment: undefined,
+      optimizationForecast: undefined,
+    });
+    expect(absent.match(/>待生成</g)).toHaveLength(2);
+    expect(absent).toContain(">等待现状评估通过<");
+    expect(absent).not.toContain(">生成中<");
+
+    const queued = renderStatus({
+      ...fixture,
+      preview: undefined,
+      assessment: { ...fixture.assessment!, status: "queued" },
+      optimizationForecast: {
+        ...fixture.optimizationForecast!,
+        status: "running",
+      },
+    });
+    expect(queued.match(/>生成中</g)).toHaveLength(3);
+
+    const partial = renderStatus({
+      ...fixture,
+      preview: undefined,
+      assessment: {
+        ...fixture.assessment!,
+        quality: { completeness: "partial", downstreamEligible: false },
+      },
+      optimizationForecast: {
+        ...fixture.optimizationForecast!,
+        quality: { completeness: "partial", downstreamEligible: false },
+      },
+    });
+    expect(partial.match(/>部分结果可用</g)).toHaveLength(3);
+    expect(partial).not.toContain(">生成中<");
+  });
+
   it("replaces internal assessment tokens and run identifiers in customer copy", () => {
     const fixture = createGeoStylePreviewProject();
     const comparison = fixture.assessment!.comparisons[0]!;
@@ -1334,7 +1349,7 @@ describe("GEO style preview rendering", () => {
     expect(html).not.toContain("另有 23 个来源");
   });
 
-  it("shows a passive five-minute forecast wait state without a refresh control", () => {
+  it("shows a passive running forecast state without a refresh control", () => {
     const fixture = createGeoStylePreviewProject();
     const project = {
       ...fixture,
@@ -1352,11 +1367,40 @@ describe("GEO style preview rendering", () => {
     );
 
     expect(html).toContain("正在生成优化效果评估");
-    expect(html).toContain("通常需要约 5 分钟");
     expect(html).toContain("完成后会自动显示，无需手动刷新");
     expect(html).not.toContain("<button");
     expect(html).not.toContain("重新生成");
     expect(html).not.toContain("刷新评估");
+  });
+
+  it("does not label an absent forecast as generating", () => {
+    const fixture = createGeoStylePreviewProject();
+    const awaitingAssessment = renderToStaticMarkup(
+      <OptimizationForecastView
+        project={{
+          ...fixture,
+          preview: undefined,
+          assessment: undefined,
+          optimizationForecast: undefined,
+        }}
+        onContact={vi.fn()}
+      />,
+    );
+    const preparingForecast = renderToStaticMarkup(
+      <OptimizationForecastView
+        project={{
+          ...fixture,
+          preview: undefined,
+          optimizationForecast: undefined,
+        }}
+        onContact={vi.fn()}
+      />,
+    );
+
+    expect(awaitingAssessment).toContain("等待现状评估通过");
+    expect(awaitingAssessment).not.toContain("正在生成优化效果评估");
+    expect(preparingForecast).toContain("准备优化效果评估");
+    expect(preparingForecast).not.toContain("正在生成优化效果评估");
   });
 
   it("renders partial forecast narratives and roadmap without target ranges", () => {
@@ -1451,7 +1495,8 @@ describe("GEO style preview rendering", () => {
     expect(labelIndex).toBeGreaterThan(-1);
     expect(dashboardButton).not.toContain("disabled");
     expect(html).toContain("服务范围");
-    expect(html).toContain("本页仅演示工作台结构、服务范围与交付路径");
+    expect(html).not.toContain("本页仅演示");
+    expect(html).not.toContain("不会发起任何外部流程");
     expect(html).not.toMatch(
       /¥|￥|元\s*\/\s*月|报价|价格|合同|签约|付款|支付|开户|设置账号/,
     );
@@ -1474,8 +1519,9 @@ describe("GEO style preview rendering", () => {
       />,
     );
 
-    expect(html).toContain("已开通项目只读查看");
-    expect(html).toContain("本页仅供查看，不提供状态变更操作");
+    expect(html).toContain("工作台演示");
+    expect(html).toContain("查看历史只读数据");
+    expect(html).toContain("服务范围");
     expect(html).not.toMatch(
       /¥|￥|元\s*\/\s*月|报价|价格|合同|签约|付款|支付|开户|创建账号|确认并支付/,
     );
@@ -1516,78 +1562,11 @@ describe("GEO style preview rendering", () => {
 
     expect(activation).toContain("服务演示");
     expect(activation).toContain("全域企业服务工作台演示");
-    expect(activation).toContain("本页仅演示工作台结构、服务范围与交付路径");
+    expect(activation).not.toContain("本页仅演示");
+    expect(activation).not.toContain("不会发起任何外部流程");
     expect(activation).not.toMatch(
       /¥|￥|元\s*\/\s*月|报价|价格|合同|签约|付款|支付|开户|设置账号/,
     );
-  });
-
-  it("hands an active customer off only to the URL returned for that service", () => {
-    const fixture = createGeoStylePreviewProject();
-    const project = {
-      ...fixture,
-      preview: undefined,
-      serviceActivation: {
-        ...fixture.serviceActivation!,
-        status: "active" as const,
-        accountDisplayName: "真实企业名称",
-        accountUsername: "real.customer",
-        accountSetupUrl: undefined,
-        workspaceUrl: "https://workspace.example.com/company/real",
-      },
-    };
-    const html = renderToStaticMarkup(
-      <GeoWorkspaceHandoff project={project} onRefresh={vi.fn()} />,
-    );
-
-    expect(html).toContain("真实企业名称");
-    expect(html).toContain("real.customer");
-    expect(html).toContain('href="https://workspace.example.com/company/real"');
-    expect(html).toContain("进入企业服务工作台");
-    expect(html).not.toContain("语义资产库");
-    expect(html).not.toContain("https://dashboard.frontmind.net/");
-  });
-
-  it("shows a recoverable configuration warning instead of a generic workspace fallback", () => {
-    const fixture = createGeoStylePreviewProject();
-    const project = {
-      ...fixture,
-      preview: undefined,
-      serviceActivation: {
-        ...fixture.serviceActivation!,
-        status: "active" as const,
-        accountSetupUrl: undefined,
-        workspaceUrl: undefined,
-      },
-    };
-    const html = renderToStaticMarkup(
-      <GeoWorkspaceHandoff project={project} onRefresh={vi.fn()} />,
-    );
-
-    expect(html).toContain("后台尚未返回工作台地址");
-    expect(html).toContain("重新获取开通信息");
-    expect(html).not.toContain('href="https://dashboard.frontmind.net/');
-  });
-
-  it("does not hand off to a credential-bearing or private workspace URL", () => {
-    const fixture = createGeoStylePreviewProject();
-    const project = {
-      ...fixture,
-      preview: undefined,
-      serviceActivation: {
-        ...fixture.serviceActivation!,
-        status: "active" as const,
-        accountSetupUrl: "https://user:secret@workspace.example.com/setup",
-        workspaceUrl: "https://127.0.0.1/admin",
-      },
-    };
-    const html = renderToStaticMarkup(
-      <GeoWorkspaceHandoff project={project} onRefresh={vi.fn()} />,
-    );
-
-    expect(html).toContain("后台尚未返回工作台地址");
-    expect(html).not.toContain("user:secret");
-    expect(html).not.toContain("127.0.0.1");
   });
 
   it("offers manual assessment and forecast retries beside technical support", () => {
@@ -1698,7 +1677,10 @@ describe("GEO style preview rendering", () => {
     expect(assessmentHtml).toContain("重新评估");
     expect(assessmentHtml).not.toContain("评估待重试");
     expect(forecastHtml).toContain("联系技术支持");
-    expect(forecastHtml).not.toContain("重新评估");
+    expect(forecastHtml).toContain("优化后效果评估需重新评估");
+    expect(forecastHtml).not.toContain(
+      'class="geo-assessment-refresh is-retry"',
+    );
     expect(forecastHtml).not.toContain("重新生成优化评估");
   });
 

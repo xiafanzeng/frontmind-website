@@ -62,7 +62,9 @@ function strictAssistantCandidates(value: unknown): unknown[] {
     const record = candidate as Record<string, unknown>;
     const nextTrusted =
       record.role === undefined || record.role === "assistant";
-    Object.values(record).forEach((entry) => visit(entry, trusted && nextTrusted));
+    Object.values(record).forEach((entry) =>
+      visit(entry, trusted && nextTrusted),
+    );
   };
   visit(value);
   return candidates;
@@ -524,6 +526,59 @@ describe("GEO current-state assessment task output", () => {
       success: false,
       error: { code: "SCHEMA_MISMATCH" },
     });
+  });
+
+  it("fills transport-null source counts from frozen monitoring authority before strict validation", async () => {
+    const raw = structuredClone(validV2RawOutput()) as unknown as Record<
+      string,
+      unknown
+    >;
+    for (const platform of raw.platformBreakdown as Array<
+      Record<string, unknown>
+    >) {
+      platform.sourceCount = null;
+      platform.citationCount = null;
+      platform.referenceCount = null;
+    }
+
+    await expect(
+      resolveAssessmentTaskOutput(
+        {
+          async downloadArtifact() {
+            throw new Error("structured output must remain authoritative");
+          },
+        },
+        typedAssessmentTask(raw),
+        {
+          authoritativeSourceCountByPlatform: new Map([
+            ["deepseek", 7],
+            ["doubao", 3],
+          ]),
+        },
+      ),
+    ).resolves.toMatchObject({
+      platformBreakdown: [
+        expect.objectContaining({ platform: "deepseek", sourceCount: 7 }),
+        expect.objectContaining({ platform: "doubao", sourceCount: 3 }),
+      ],
+    });
+  });
+
+  it("allows customer-facing Schema wording but still rejects contract vocabulary", () => {
+    const customerFacing = structuredClone(validV2RawOutput());
+    customerFacing.dimensionNarratives!.semanticAuthority.currentFinding =
+      "官网 Schema 标记已覆盖主要产品事实，并可被搜索系统识别。";
+    expect(
+      parseAssessmentTaskOutputV2(typedAssessmentTask(customerFacing))
+        .dimensionNarratives?.semanticAuthority.currentFinding,
+    ).toContain("Schema 标记");
+
+    const internal = structuredClone(customerFacing);
+    internal.dimensionNarratives!.semanticAuthority.currentFinding =
+      "请按照 output-schema.json 的内部字段检查该维度。";
+    expect(() =>
+      parseAssessmentTaskOutputV2(typedAssessmentTask(internal)),
+    ).toThrowError(expect.objectContaining({ code: "SCHEMA_MISMATCH" }));
   });
 
   it("keeps scope-safe narrative and actions as a display-only partial", () => {
@@ -1468,5 +1523,8 @@ describe("assessment prompt", () => {
     expect(evaluatorZip.file("references/bsas-baseline-methodology.md")).toBe(
       null,
     );
+    const skillText = await evaluatorZip.file("SKILL.md")!.async("string");
+    expect(skillText).toContain("fixed v2 top-level shape");
+    expect(skillText).toContain("complete fixed v2 top-level key set");
   });
 });

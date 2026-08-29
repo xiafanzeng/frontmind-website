@@ -182,6 +182,14 @@ const OrphanFileMarkerSchema = z
   })
   .strict();
 
+const PersistenceSentinelSchema = z
+  .object({
+    schemaVersion: z.literal(STORE_SCHEMA_VERSION),
+    id: z.string().uuid(),
+    createdAt: z.string().datetime({ offset: true }),
+  })
+  .strict();
+
 export type GeoCustomQuestionValidationRecord = z.infer<
   typeof CustomQuestionValidationRecordSchema
 >;
@@ -468,8 +476,7 @@ function projectDeletionTargetsFromRecords(
     temporaryLocalAssetIds: Array.from(
       new Set(
         records.flatMap(
-          (record) =>
-            cleanupTargetFromRecord(record).temporaryLocalAssetIds,
+          (record) => cleanupTargetFromRecord(record).temporaryLocalAssetIds,
         ),
       ),
     ),
@@ -1086,10 +1093,7 @@ export class MemoryGeoCustomQuestionValidationStore
       ...current,
       storeVersion: current.storeVersion + 1,
       commitId: crypto.randomUUID(),
-      temporaryLocalAssetIds: [
-        ...current.temporaryLocalAssetIds,
-        localAssetId,
-      ],
+      temporaryLocalAssetIds: [...current.temporaryLocalAssetIds, localAssetId],
       updatedAt: new Date(this.now()).toISOString(),
     });
     await this.hooks.beforeRecordCommit?.({
@@ -1482,6 +1486,7 @@ export class FileGeoCustomQuestionValidationStore
     await this.assertDirectory();
     await this.cleanupStaleTemporaryFiles(this.now());
     await this.assertManagedFilePermissions();
+    await this.assertManagedFileContents();
     await this.persistenceIdentity();
     const probe = path.join(
       this.directory,
@@ -1497,12 +1502,9 @@ export class FileGeoCustomQuestionValidationStore
     await this.assertDirectory();
     const target = path.join(this.directory, ".persistence-sentinel.json");
     try {
-      const value = JSON.parse(await fs.readFile(target, "utf8")) as {
-        id?: unknown;
-      };
-      if (typeof value.id === "string" && /^[0-9a-f-]{36}$/i.test(value.id))
-        return value.id;
-      throw new Error("invalid persistence sentinel");
+      return PersistenceSentinelSchema.parse(
+        JSON.parse(await fs.readFile(target, "utf8")),
+      ).id;
     } catch (error) {
       if (!isFileNotFoundError(error)) {
         throw new GeoCustomQuestionValidationStoreError(
@@ -1516,7 +1518,11 @@ export class FileGeoCustomQuestionValidationStore
     try {
       await this.writeDurableFile(
         temporary,
-        `${JSON.stringify({ id, createdAt: new Date(this.now()).toISOString() })}\n`,
+        `${JSON.stringify({
+          schemaVersion: STORE_SCHEMA_VERSION,
+          id,
+          createdAt: new Date(this.now()).toISOString(),
+        })}\n`,
         "wx",
       );
       try {
@@ -2699,9 +2705,7 @@ export class FileGeoCustomQuestionValidationStore
     marker: z.infer<typeof OrphanFileMarkerSchema>,
   ) {
     await fs
-      .unlink(
-        this.orphanFileMarkerPath(marker.recordKey, marker.localAssetId),
-      )
+      .unlink(this.orphanFileMarkerPath(marker.recordKey, marker.localAssetId))
       .catch((error) => {
         if (!isFileNotFoundError(error)) throw error;
       });
@@ -2929,6 +2933,94 @@ export class FileGeoCustomQuestionValidationStore
     }
   }
 
+  private async assertManagedFileContents() {
+    const recordPattern = new RegExp(
+      `^([a-f0-9]{64})\\.record\\.v(\\d{${VERSION_WIDTH}})\\.json$`,
+    );
+    const projectPattern = new RegExp(
+      `^([a-f0-9]{64})\\.project\\.v(\\d{${VERSION_WIDTH}})\\.json$`,
+    );
+    const tombstonePattern = /^([a-f0-9]{64})\.tombstone\.json$/;
+    const cleanupPattern = /^([a-f0-9]{64})\.cleanup-complete\.json$/;
+    const orphanPattern = /^([a-f0-9]{64})\.([a-f0-9]{64})\.orphan-file\.json$/;
+    for (const name of await fs.readdir(this.directory)) {
+      const target = path.join(this.directory, name);
+      try {
+        if (name === ".persistence-sentinel.json") {
+          PersistenceSentinelSchema.parse(
+            JSON.parse(await fs.readFile(target, "utf8")),
+          );
+          continue;
+        }
+        const recordIdentity = recordPattern.exec(name);
+        if (recordIdentity?.[1] && recordIdentity[2]) {
+          const record = parseRecord(
+            JSON.parse(await fs.readFile(target, "utf8")),
+          );
+          if (
+            record.key !== recordIdentity[1] ||
+            record.storeVersion !== Number(recordIdentity[2])
+          ) {
+            throw new Error("record identity mismatch");
+          }
+          continue;
+        }
+        const projectIdentity = projectPattern.exec(name);
+        if (projectIdentity?.[1] && projectIdentity[2]) {
+          const slot = ProjectSlotSchema.parse(
+            JSON.parse(await fs.readFile(target, "utf8")),
+          );
+          if (
+            slot.projectHash !== projectIdentity[1] ||
+            slot.storeVersion !== Number(projectIdentity[2])
+          ) {
+            throw new Error("project identity mismatch");
+          }
+          continue;
+        }
+        const tombstoneIdentity = tombstonePattern.exec(name);
+        if (tombstoneIdentity?.[1]) {
+          const tombstone = TombstoneSchema.parse(
+            JSON.parse(await fs.readFile(target, "utf8")),
+          );
+          if (tombstone.key !== tombstoneIdentity[1]) {
+            throw new Error("tombstone identity mismatch");
+          }
+          continue;
+        }
+        const cleanupIdentity = cleanupPattern.exec(name);
+        if (cleanupIdentity?.[1]) {
+          const marker = CleanupCompleteMarkerSchema.parse(
+            JSON.parse(await fs.readFile(target, "utf8")),
+          );
+          if (marker.key !== cleanupIdentity[1]) {
+            throw new Error("cleanup identity mismatch");
+          }
+          continue;
+        }
+        const orphanIdentity = orphanPattern.exec(name);
+        if (orphanIdentity?.[1] && orphanIdentity[2]) {
+          const marker = OrphanFileMarkerSchema.parse(
+            JSON.parse(await fs.readFile(target, "utf8")),
+          );
+          const fileHash = crypto
+            .createHash("sha256")
+            .update(marker.localAssetId, "utf8")
+            .digest("hex");
+          if (
+            marker.recordKey !== orphanIdentity[1] ||
+            fileHash !== orphanIdentity[2]
+          ) {
+            throw new Error("orphan identity mismatch");
+          }
+        }
+      } catch (error) {
+        if (error instanceof GeoCustomQuestionValidationStoreError) throw error;
+        throw this.storeCorrupt("自定义问题验证 v2 持久文件未通过深度校验");
+      }
+    }
+  }
+
   private async cleanupStaleTemporaryFiles(nowMs: number) {
     const ownedTemporaryPattern = new RegExp(
       "^\\.(?:persistence-sentinel|[a-f0-9]{64}\\.(?:record\\.v\\d{12}|project\\.v\\d{12}|tombstone|cleanup-complete)\\.json|[a-f0-9]{64}\\.[a-f0-9]{64}\\.orphan-file\\.json)\\.\\d+\\.[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\\.tmp$",
@@ -2980,10 +3072,7 @@ export class FileGeoCustomQuestionValidationStore
     return path.join(this.directory, `${key}.cleanup-complete.json`);
   }
 
-  private orphanFileMarkerPath(
-    recordKeyValue: string,
-    localAssetId: string,
-  ) {
+  private orphanFileMarkerPath(recordKeyValue: string, localAssetId: string) {
     const fileHash = crypto
       .createHash("sha256")
       .update(localAssetId, "utf8")
@@ -3035,6 +3124,118 @@ export class FileGeoCustomQuestionValidationStore
   private storeCorrupt(message: string) {
     return new GeoCustomQuestionValidationStoreError("STORE_CORRUPT", message);
   }
+}
+
+export type GeoCustomQuestionStoreInitializationCode =
+  | "DIRECTORY_UNSAFE"
+  | "STORE_NOT_EMPTY"
+  | "STORE_CORRUPT";
+
+export class GeoCustomQuestionStoreInitializationError extends Error {
+  readonly name = "GeoCustomQuestionStoreInitializationError";
+
+  constructor(
+    readonly code: GeoCustomQuestionStoreInitializationCode,
+    message: string,
+  ) {
+    super(message);
+  }
+}
+
+/**
+ * Initializes only a new or already-empty v2 store. It never deletes,
+ * migrates, archives, or overwrites state; release automation must move any
+ * previous directory out of the way before invoking this entry point.
+ */
+export async function initializeEmptyGeoCustomQuestionValidationStoreV2(
+  directory: string,
+) {
+  const resolved = path.resolve(directory);
+  if (
+    !path.isAbsolute(directory) ||
+    resolved === path.parse(resolved).root ||
+    resolved.split(path.sep).filter(Boolean).length < 2
+  ) {
+    throw new GeoCustomQuestionStoreInitializationError(
+      "DIRECTORY_UNSAFE",
+      "custom-question store directory must be a narrow absolute path",
+    );
+  }
+  try {
+    const metadata = await fs.lstat(resolved);
+    if (!metadata.isDirectory() || metadata.isSymbolicLink()) {
+      throw new GeoCustomQuestionStoreInitializationError(
+        "DIRECTORY_UNSAFE",
+        "custom-question store target must be a real directory",
+      );
+    }
+  } catch (error) {
+    if (!isFileNotFoundError(error)) throw error;
+    await fs.mkdir(resolved, { mode: 0o700 });
+  }
+  await fs.chmod(resolved, 0o700);
+  const sentinelPath = path.join(resolved, ".persistence-sentinel.json");
+  const entries = await fs.readdir(resolved);
+  if (
+    entries.some((name) => name !== ".persistence-sentinel.json") ||
+    entries.filter((name) => name === ".persistence-sentinel.json").length > 1
+  ) {
+    throw new GeoCustomQuestionStoreInitializationError(
+      "STORE_NOT_EMPTY",
+      "custom-question store target is not empty",
+    );
+  }
+  if (entries.includes(".persistence-sentinel.json")) {
+    try {
+      const sentinel = PersistenceSentinelSchema.parse(
+        JSON.parse(await fs.readFile(sentinelPath, "utf8")),
+      );
+      const metadata = await fs.lstat(sentinelPath);
+      if (!metadata.isFile() || metadata.isSymbolicLink()) {
+        throw new Error("sentinel is not a regular file");
+      }
+      await fs.chmod(sentinelPath, 0o600);
+      return { directory: resolved, id: sentinel.id, created: false } as const;
+    } catch {
+      throw new GeoCustomQuestionStoreInitializationError(
+        "STORE_CORRUPT",
+        "custom-question store v2 sentinel is invalid",
+      );
+    }
+  }
+
+  const sentinel = PersistenceSentinelSchema.parse({
+    schemaVersion: STORE_SCHEMA_VERSION,
+    id: crypto.randomUUID(),
+    createdAt: new Date().toISOString(),
+  });
+  const temporary = path.join(
+    resolved,
+    `.persistence-sentinel.${process.pid}.${crypto.randomUUID()}.tmp`,
+  );
+  const handle = await fs.open(temporary, "wx", 0o600);
+  try {
+    await handle.writeFile(`${JSON.stringify(sentinel)}\n`, "utf8");
+    await handle.sync();
+  } finally {
+    await handle.close();
+  }
+  try {
+    await fs.link(temporary, sentinelPath);
+  } finally {
+    await fs.unlink(temporary).catch(() => undefined);
+  }
+  const directoryHandle = await fs.open(resolved, "r");
+  try {
+    await directoryHandle.sync();
+  } finally {
+    await directoryHandle.close();
+  }
+  return {
+    directory: resolved,
+    id: sentinel.id,
+    created: true,
+  } as const;
 }
 
 export function createGeoCustomQuestionValidationStore(

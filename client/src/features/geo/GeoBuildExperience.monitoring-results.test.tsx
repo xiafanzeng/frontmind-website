@@ -217,6 +217,67 @@ describe("monitoring result interaction", () => {
     expect(screen.getByText("第 2 / 5 次")).toBeTruthy();
   });
 
+  it("keeps platform selection and answer round independent by perspective", () => {
+    const project = createGeoStylePreviewProject("monitoring");
+    const withDoubao = (
+      answers: NonNullable<typeof project.monitoring>["answers"],
+    ) => [
+      ...answers,
+      ...answers.map((answer) => ({
+        ...answer,
+        id: `${answer.id}-doubao`,
+        platformId: "doubao" as const,
+      })),
+    ];
+    project.selectedPlatformIds = ["deepseek", "doubao"];
+    project.monitoring = {
+      ...project.monitoring!,
+      platforms: ["deepseek", "doubao"],
+      expectedRecords: 10,
+      completedRecords: 8,
+      failedRecords: 2,
+      answers: withDoubao(project.monitoring!.answers),
+    };
+    project.industryRankingMonitoring = {
+      ...project.industryRankingMonitoring!,
+      platforms: ["deepseek", "doubao"],
+      expectedRecords: 10,
+      completedRecords: 8,
+      failedRecords: 2,
+      answers: withDoubao(project.industryRankingMonitoring!.answers),
+    };
+
+    render(
+      <MonitoringResults
+        project={project}
+        onRefresh={vi.fn(async () => undefined)}
+        refreshing={false}
+        onContact={vi.fn()}
+      />,
+    );
+
+    const platform = () =>
+      screen.getByRole("combobox", {
+        name: "选择回答平台",
+      }) as HTMLSelectElement;
+    expect(platform().value).toBe("deepseek");
+    fireEvent.change(platform(), { target: { value: "doubao" } });
+    expect(platform().value).toBe("doubao");
+    fireEvent.click(screen.getByRole("button", { name: "查看豆包下一次回答" }));
+    expect(screen.getByText("第 2 / 5 次")).toBeTruthy();
+
+    fireEvent.click(screen.getByRole("tab", { name: /行业排名与品牌优胜/ }));
+    expect(platform().value).toBe("deepseek");
+    fireEvent.change(platform(), { target: { value: "doubao" } });
+    fireEvent.click(screen.getByRole("button", { name: "查看豆包下一次回答" }));
+    fireEvent.click(screen.getByRole("button", { name: "查看豆包下一次回答" }));
+    expect(screen.getByText("第 3 / 5 次")).toBeTruthy();
+
+    fireEvent.click(screen.getByRole("tab", { name: /产品与舆情/ }));
+    expect(platform().value).toBe("doubao");
+    expect(screen.getByText("第 2 / 5 次")).toBeTruthy();
+  });
+
   it("keeps product answers free of brand metrics and shows them only in ranking", () => {
     const view = renderResults();
 
@@ -247,7 +308,13 @@ describe("monitoring result interaction", () => {
     expect(screen.queryByText("本品表现")).toBeNull();
     expect(screen.queryByText(/最佳第 \d+ 名/)).toBeNull();
     expect(screen.queryByText(/次观测/)).toBeNull();
-    expect(screen.getAllByText("4/5 条有效回答")).toHaveLength(2);
+    expect(
+      (
+        screen.getByRole("combobox", {
+          name: "选择回答平台",
+        }) as HTMLSelectElement
+      ).selectedOptions[0]?.textContent,
+    ).toContain("DeepSeek · 4/5 条有效回答");
     expect(screen.getByText("北京市")).toBeTruthy();
     expect(screen.getByText("页面截图已开启")).toBeTruthy();
     const screenshotEntry = view.container.querySelector(

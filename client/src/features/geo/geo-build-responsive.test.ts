@@ -7,7 +7,7 @@ const stylesheet = readFileSync(
   "utf8",
 );
 
-describe("GEO assessment and onboarding responsive contracts", () => {
+describe("GEO assessment and monitoring responsive contracts", () => {
   it("uses two columns for execution steps after removing progress text", () => {
     expect(stylesheet).toMatch(
       /\.geo-execution-steps button\s*\{[^}]*grid-template-columns:\s*12px minmax\(0,\s*1fr\);/s,
@@ -17,13 +17,7 @@ describe("GEO assessment and onboarding responsive contracts", () => {
     );
   });
 
-  it("keeps three onboarding steps and the compact 839px navigation", () => {
-    expect(stylesheet).toMatch(
-      /\.geo-onboarding-steps\s*\{[^}]*grid-template-columns:\s*repeat\(3,/s,
-    );
-    expect(stylesheet).toMatch(
-      /@media \(max-width: 839px\)[\s\S]*?\.geo-onboarding-steps\s*\{[^}]*overflow-x:\s*auto/s,
-    );
+  it("keeps the compact 839px assessment navigation", () => {
     expect(stylesheet).toMatch(
       /@media \(max-width: 839px\)[\s\S]*?\.geo-assessment-tabs\s*\{[^}]*overflow-x:\s*auto/s,
     );
@@ -65,29 +59,24 @@ describe("GEO assessment and onboarding responsive contracts", () => {
     );
   });
 
-  it("keeps the contract-code dialog usable on a 520px or short viewport", () => {
+  it("keeps the compact knowledge metrics readable at desktop and mobile widths", () => {
     expect(stylesheet).toMatch(
-      /\.geo-contract-code-dialog\s*\{[^}]*max-height:\s*calc\(100dvh - 2rem\)[^}]*overflow-y:\s*auto/s,
+      /\.geo-metric-grid\s*\{[^}]*grid-template-columns:\s*repeat\(4,\s*minmax\(0,\s*1fr\)\)/s,
     );
     expect(stylesheet).toMatch(
-      /@media \(max-width: 520px\)[\s\S]*?\.geo-contract-code-actions\s*\{[^}]*flex-direction:\s*column-reverse/s,
+      /@media \(max-width: 839px\)[\s\S]*?\.geo-metric-grid\s*\{[^}]*grid-template-columns:\s*repeat\(2,\s*minmax\(0,\s*1fr\)\)/s,
     );
     expect(stylesheet).toMatch(
-      /\.geo-contract-code-qr\s*\{[^}]*width:\s*min\(220px,\s*64vw\)/s,
-    );
-    expect(stylesheet).toMatch(
-      /@media \(max-width: 520px\)[\s\S]*?\.geo-assessment-section-tabs\s*\{[^}]*grid-template-columns:\s*repeat\(3,\s*minmax\(0,\s*1fr\)\)/s,
+      /\.geo-knowledge-browser\s*\{[^}]*height:\s*clamp\(390px,\s*calc\(100dvh - 330px\),\s*680px\)/s,
     );
   });
 
-  it("stacks the contract-code dialog above the movable workbench", () => {
+  it("stacks reachable dialogs above the movable workbench", () => {
     expect(stylesheet).toMatch(/\.geo-workbench\s*\{[^}]*z-index:\s*80/s);
     expect(stylesheet).toMatch(
       /\.geo-dialog-overlay\s*\{[^}]*z-index:\s*99\s*!important/s,
     );
-    expect(stylesheet).toMatch(
-      /\.geo-contract-code-dialog\s*\{[^}]*z-index:\s*100\s*!important/s,
-    );
+    expect(stylesheet).not.toMatch(/\.geo-contract-code-dialog\b/);
   });
 
   it("keeps priority actions full-width with a compact scope note below", () => {
@@ -129,6 +118,9 @@ describe("GEO assessment and onboarding responsive contracts", () => {
     );
     expect(stylesheet).toMatch(
       /@media \(max-width: 839px\)[\s\S]*?\.geo-insight-analysis-grid,[\s\S]*?grid-template-columns:\s*1fr/s,
+    );
+    expect(stylesheet).toMatch(
+      /@media \(max-width: 520px\)[\s\S]*?\.geo-answer-platform-selector\s*\{[^}]*width:\s*100%/s,
     );
   });
 

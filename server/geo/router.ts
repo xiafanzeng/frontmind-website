@@ -255,6 +255,7 @@ const MONITOR_SCREENSHOT_CONTENT_TYPES = new Set([
 ]);
 const MAX_ASSESSMENT_INPUT_BYTES = 12 * 1024 * 1024;
 const MAX_FORECAST_INPUT_BYTES = 12 * 1024 * 1024;
+const MAX_AUTOMATIC_ASSESSMENT_ATTEMPTS = 2;
 const MAX_OPTIMIZATION_FORECAST_ATTEMPTS = 5;
 // Keep two tabs below the shared 120/minute session status limit.
 const CUSTOM_QUESTION_CLASSIFIER_CLIENT_POLL_MS = 1_500;
@@ -355,6 +356,18 @@ type InviteContextTokenValue = {
   sessionNonce: string;
   businessOwnerName: string;
   contextId: string;
+};
+
+type AssessmentAuthoritySnapshot = {
+  schemaVersion: 1;
+  monitorRunId: string;
+  questionId: string;
+  selectedPlatforms: GeoMonitorPlatformId[];
+  repeatPerPlatform: 5;
+  expectedResponses: number;
+  successfulResponses: number;
+  failedResponses: number;
+  sourceCountByPlatform: Partial<Record<GeoMonitorPlatformId, number>>;
 };
 
 type ProjectTokenValue = {
@@ -460,6 +473,7 @@ type ProjectTokenValue = {
   assessmentAttempt?: number;
   assessmentVersion?: 2;
   assessmentUpgradeFromV1?: boolean;
+  assessmentAuthoritySnapshot?: AssessmentAuthoritySnapshot;
   previousAssessmentTaskIds?: string[];
   optimizationForecastTaskId?: string;
   optimizationForecastSubmittedAt?: string;
@@ -470,6 +484,7 @@ type ProjectTokenValue = {
   industryRankingAssessmentSubmittedAt?: string;
   industryRankingAssessmentAttempt?: number;
   industryRankingAssessmentVersion?: 2;
+  industryRankingAssessmentAuthoritySnapshot?: AssessmentAuthoritySnapshot;
   previousIndustryRankingAssessmentTaskIds?: string[];
   industryRankingOptimizationForecastTaskId?: string;
   industryRankingOptimizationForecastSubmittedAt?: string;
@@ -524,6 +539,68 @@ type ProjectTokenValue = {
   serviceProfileSubmittedAt?: string;
   serviceAdminNotificationDeliveredAt?: string;
 };
+
+function retireAssessmentForAutomaticRetry(
+  value: ProjectTokenValue,
+  perspective: "product_opinion" | "industry_ranking",
+): ProjectTokenValue {
+  if (perspective === "industry_ranking") {
+    const assessmentTaskId = value.industryRankingAssessmentTaskId;
+    if (!assessmentTaskId) return value;
+    const forecastTaskId = value.industryRankingOptimizationForecastTaskId;
+    return {
+      ...value,
+      industryRankingAssessmentTaskId: undefined,
+      industryRankingAssessmentSubmittedAt: undefined,
+      industryRankingAssessmentAttempt: MAX_AUTOMATIC_ASSESSMENT_ATTEMPTS,
+      industryRankingAssessmentVersion: 2,
+      industryRankingOptimizationForecastTaskId: undefined,
+      industryRankingOptimizationForecastSubmittedAt: undefined,
+      industryRankingOptimizationForecastAttempt: 1,
+      industryRankingOptimizationForecastVersion: 2,
+      previousIndustryRankingAssessmentTaskIds: Array.from(
+        new Set([
+          ...(value.previousIndustryRankingAssessmentTaskIds || []),
+          assessmentTaskId,
+        ]),
+      ),
+      previousIndustryRankingOptimizationForecastTaskIds: forecastTaskId
+        ? Array.from(
+            new Set([
+              ...(value.previousIndustryRankingOptimizationForecastTaskIds ||
+                []),
+              forecastTaskId,
+            ]),
+          )
+        : value.previousIndustryRankingOptimizationForecastTaskIds,
+    };
+  }
+  const assessmentTaskId = value.assessmentTaskId;
+  if (!assessmentTaskId) return value;
+  const forecastTaskId = value.optimizationForecastTaskId;
+  return {
+    ...value,
+    assessmentTaskId: undefined,
+    assessmentSubmittedAt: undefined,
+    assessmentAttempt: MAX_AUTOMATIC_ASSESSMENT_ATTEMPTS,
+    assessmentVersion: 2,
+    optimizationForecastTaskId: undefined,
+    optimizationForecastSubmittedAt: undefined,
+    optimizationForecastAttempt: 1,
+    optimizationForecastVersion: 2,
+    previousAssessmentTaskIds: Array.from(
+      new Set([...(value.previousAssessmentTaskIds || []), assessmentTaskId]),
+    ),
+    previousOptimizationForecastTaskIds: forecastTaskId
+      ? Array.from(
+          new Set([
+            ...(value.previousOptimizationForecastTaskIds || []),
+            forecastTaskId,
+          ]),
+        )
+      : value.previousOptimizationForecastTaskIds,
+  };
+}
 
 type GeoRouterOptions = {
   broker?: GeoPresalesBroker;
@@ -2217,6 +2294,7 @@ export function createGeoRouter(options: GeoRouterOptions = {}): Router {
         forecastTask,
         monitorRun.platforms,
         monitorRun,
+        value.assessmentAuthoritySnapshot,
       );
       preResolvedOutputs = {
         assessment: Promise.resolve(validatedOutputs.assessmentOutput),
@@ -3664,6 +3742,21 @@ export function createGeoRouter(options: GeoRouterOptions = {}): Router {
         "MONITOR_NOT_COMPLETE",
       );
     }
+    const authoritySnapshot = resolveAssessmentAuthoritySnapshot(
+      perspective === "industry_ranking"
+        ? value.industryRankingAssessmentAuthoritySnapshot
+        : value.assessmentAuthoritySnapshot,
+      question,
+      monitorRun.platforms,
+      monitorRun,
+    );
+    if (!authoritySnapshot) {
+      throw new GeoHttpError(
+        "现状评估监测快照无法冻结",
+        409,
+        "ASSESSMENT_SCOPE_MISMATCH",
+      );
+    }
     const archive = resolveKnowledgeBaseArtifact(value, knowledgeBaseTask);
     if (!archive) {
       throw new GeoHttpError(
@@ -3798,12 +3891,14 @@ export function createGeoRouter(options: GeoRouterOptions = {}): Router {
                 industryRankingAssessmentAttempt:
                   value.industryRankingAssessmentAttempt || 1,
                 industryRankingAssessmentVersion: 2 as const,
+                industryRankingAssessmentAuthoritySnapshot: authoritySnapshot,
               }
             : {
                 assessmentTaskId,
                 assessmentSubmittedAt: submittedAt,
                 assessmentAttempt: value.assessmentAttempt || 1,
                 assessmentVersion: 2 as const,
+                assessmentAuthoritySnapshot: authoritySnapshot,
               }),
           temporaryFileIds: Array.from(
             new Set([...(value.temporaryFileIds || []), ...temporaryFiles]),
@@ -4235,23 +4330,78 @@ export function createGeoRouter(options: GeoRouterOptions = {}): Router {
         let scoredAssessment:
           | ReturnType<typeof calculateQuestionBaselineAssessment>
           | undefined;
+        let assessmentRequiresFreshRetry = false;
+        const resolveCurrentAssessment = async () => {
+          if (!currentAssessmentTask) return undefined;
+          currentAssessmentOutputPromise ??= parseScopedAssessmentTaskOutput(
+            broker,
+            currentAssessmentTask,
+            question,
+            rawMonitorRun.platforms,
+            rawMonitorRun,
+            currentValue.assessmentAuthoritySnapshot,
+          );
+          return calculateCompleteAssessment(
+            await currentAssessmentOutputPromise,
+          );
+        };
+        if (currentAssessmentTask) {
+          const assessmentStatus = normalizeTaskStatus(
+            currentAssessmentTask.status,
+          );
+          if (assessmentStatus === "completed") {
+            try {
+              scoredAssessment = await resolveCurrentAssessment();
+            } catch (error) {
+              logAssessmentOutputValidation(error, currentAssessmentTask);
+              assessmentRequiresFreshRetry = true;
+            }
+          }
+        }
         if (
+          assessmentRequiresFreshRetry &&
           currentAssessmentTask &&
-          normalizeTaskStatus(currentAssessmentTask.status) === "completed"
+          currentValue.assessmentAuthoritySnapshot &&
+          (currentValue.assessmentAttempt || 1) <
+            MAX_AUTOMATIC_ASSESSMENT_ATTEMPTS
         ) {
+          currentValue = retireAssessmentForAutomaticRetry(
+            currentValue,
+            "product_opinion",
+          );
+          currentAssessmentTask = undefined;
+          currentAssessmentOutputPromise = undefined;
+          currentOptimizationForecastTask = undefined;
+          currentForecastOutputPromise = undefined;
           try {
-            currentAssessmentOutputPromise ??= parseScopedAssessmentTaskOutput(
-              broker,
-              currentAssessmentTask,
-              question,
-              rawMonitorRun.platforms,
+            const created = await createAutomaticAssessmentTask(
+              currentValue,
+              currentKnowledgeBaseTask,
+              initialQuestionTask,
               rawMonitorRun,
             );
-            scoredAssessment = calculateCompleteAssessment(
-              await currentAssessmentOutputPromise,
-            );
-          } catch {
-            scoredAssessment = undefined;
+            currentValue = created.value;
+            currentAssessmentTask = created.task;
+            if (
+              normalizeTaskStatus(currentAssessmentTask.status) === "completed"
+            ) {
+              try {
+                scoredAssessment = await resolveCurrentAssessment();
+              } catch (error) {
+                logAssessmentOutputValidation(error, currentAssessmentTask);
+              }
+            }
+          } catch (error) {
+            console.warn("[GEO assessment automation] Fresh retry deferred", {
+              projectHash: sha256(currentValue.projectId).slice(0, 16),
+              attempt: MAX_AUTOMATIC_ASSESSMENT_ATTEMPTS,
+              error:
+                error instanceof GeoHttpError
+                  ? error.code
+                  : error instanceof GeoBrokerError
+                    ? error.code
+                    : "ASSESSMENT_AUTOMATION_FAILED",
+            });
           }
         }
 
@@ -4417,25 +4567,93 @@ export function createGeoRouter(options: GeoRouterOptions = {}): Router {
         let industryScoredAssessment:
           | ReturnType<typeof calculateQuestionBaselineAssessment>
           | undefined;
-        if (
-          currentIndustryRankingAssessmentTask &&
-          normalizeTaskStatus(currentIndustryRankingAssessmentTask.status) ===
-            "completed"
-        ) {
-          try {
-            currentIndustryRankingAssessmentOutputPromise ??=
-              parseScopedAssessmentTaskOutput(
-                broker,
-                currentIndustryRankingAssessmentTask,
-                industryRankingQuestion,
-                rawIndustryRankingMonitorRun.platforms,
-                rawIndustryRankingMonitorRun,
-              );
-            industryScoredAssessment = calculateCompleteAssessment(
-              await currentIndustryRankingAssessmentOutputPromise,
+        let industryAssessmentRequiresFreshRetry = false;
+        const resolveCurrentIndustryAssessment = async () => {
+          if (!currentIndustryRankingAssessmentTask) return undefined;
+          currentIndustryRankingAssessmentOutputPromise ??=
+            parseScopedAssessmentTaskOutput(
+              broker,
+              currentIndustryRankingAssessmentTask,
+              industryRankingQuestion,
+              rawIndustryRankingMonitorRun.platforms,
+              rawIndustryRankingMonitorRun,
+              currentValue.industryRankingAssessmentAuthoritySnapshot,
             );
-          } catch {
-            industryScoredAssessment = undefined;
+          return calculateCompleteAssessment(
+            await currentIndustryRankingAssessmentOutputPromise,
+          );
+        };
+        if (currentIndustryRankingAssessmentTask) {
+          const assessmentStatus = normalizeTaskStatus(
+            currentIndustryRankingAssessmentTask.status,
+          );
+          if (assessmentStatus === "completed") {
+            try {
+              industryScoredAssessment =
+                await resolveCurrentIndustryAssessment();
+            } catch (error) {
+              logAssessmentOutputValidation(
+                error,
+                currentIndustryRankingAssessmentTask,
+              );
+              industryAssessmentRequiresFreshRetry = true;
+            }
+          }
+        }
+        if (
+          industryAssessmentRequiresFreshRetry &&
+          currentIndustryRankingAssessmentTask &&
+          currentValue.industryRankingAssessmentAuthoritySnapshot &&
+          (currentValue.industryRankingAssessmentAttempt || 1) <
+            MAX_AUTOMATIC_ASSESSMENT_ATTEMPTS
+        ) {
+          currentValue = retireAssessmentForAutomaticRetry(
+            currentValue,
+            "industry_ranking",
+          );
+          currentIndustryRankingAssessmentTask = undefined;
+          currentIndustryRankingAssessmentOutputPromise = undefined;
+          currentIndustryRankingOptimizationForecastTask = undefined;
+          currentIndustryRankingForecastOutputPromise = undefined;
+          try {
+            const created = await createAutomaticAssessmentTask(
+              currentValue,
+              currentKnowledgeBaseTask,
+              initialQuestionTask,
+              rawIndustryRankingMonitorRun,
+              "industry_ranking",
+            );
+            currentValue = created.value;
+            currentIndustryRankingAssessmentTask = created.task;
+            if (
+              normalizeTaskStatus(
+                currentIndustryRankingAssessmentTask.status,
+              ) === "completed"
+            ) {
+              try {
+                industryScoredAssessment =
+                  await resolveCurrentIndustryAssessment();
+              } catch (error) {
+                logAssessmentOutputValidation(
+                  error,
+                  currentIndustryRankingAssessmentTask,
+                );
+              }
+            }
+          } catch (error) {
+            console.warn(
+              "[GEO industry ranking assessment automation] Fresh retry deferred",
+              {
+                projectHash: sha256(currentValue.projectId).slice(0, 16),
+                attempt: MAX_AUTOMATIC_ASSESSMENT_ATTEMPTS,
+                error:
+                  error instanceof GeoHttpError
+                    ? error.code
+                    : error instanceof GeoBrokerError
+                      ? error.code
+                      : "ASSESSMENT_AUTOMATION_FAILED",
+              },
+            );
           }
         }
 
@@ -6658,6 +6876,7 @@ export function createGeoRouter(options: GeoRouterOptions = {}): Router {
               question,
               monitorRun.platforms,
               monitorRun,
+              value.assessmentAuthoritySnapshot,
             );
             calculateCompleteAssessment(await assessmentOutputPromise);
           } catch (error) {
@@ -6720,6 +6939,19 @@ export function createGeoRouter(options: GeoRouterOptions = {}): Router {
             : "监控仍在采集中，完成后将自动生成现状评估",
           409,
           "MONITOR_NOT_COMPLETE",
+        );
+      }
+      const assessmentAuthoritySnapshot = resolveAssessmentAuthoritySnapshot(
+        value.assessmentAuthoritySnapshot,
+        question,
+        monitorRun.platforms,
+        monitorRun,
+      );
+      if (!assessmentAuthoritySnapshot) {
+        throw new GeoHttpError(
+          "现状评估监测快照无法冻结",
+          409,
+          "ASSESSMENT_SCOPE_MISMATCH",
         );
       }
 
@@ -6876,6 +7108,7 @@ export function createGeoRouter(options: GeoRouterOptions = {}): Router {
         assessmentSubmittedAt: new Date().toISOString(),
         assessmentAttempt: value.assessmentAttempt || 1,
         assessmentVersion: 2,
+        assessmentAuthoritySnapshot,
         temporaryFileIds: Array.from(
           new Set([
             ...(value.temporaryFileIds || []),
@@ -6964,6 +7197,7 @@ export function createGeoRouter(options: GeoRouterOptions = {}): Router {
         question,
         monitorRun?.platforms || value.monitorPlatformIds || [],
         monitorRun,
+        value.assessmentAuthoritySnapshot,
       );
       try {
         scoredAssessment = calculateCompleteAssessment(
@@ -7353,6 +7587,7 @@ export function createGeoRouter(options: GeoRouterOptions = {}): Router {
               question,
               monitorRun.platforms,
               monitorRun,
+              value.industryRankingAssessmentAuthoritySnapshot,
             );
             calculateCompleteAssessment(await assessmentOutputPromise);
           } catch (error) {
@@ -7501,6 +7736,7 @@ export function createGeoRouter(options: GeoRouterOptions = {}): Router {
         question,
         monitorRun.platforms,
         monitorRun,
+        value.industryRankingAssessmentAuthoritySnapshot,
       );
       let scoredAssessment: ReturnType<
         typeof calculateQuestionBaselineAssessment
@@ -9428,6 +9664,7 @@ async function validateServiceAssessmentOutputs(
   forecastTask: BrokerTask,
   platforms: GeoMonitorPlatformId[],
   monitorRun?: BrokerMonitorRun,
+  frozenAuthority?: AssessmentAuthoritySnapshot,
 ) {
   const assessmentOutput = await parseScopedAssessmentTaskOutput(
     broker,
@@ -9435,6 +9672,7 @@ async function validateServiceAssessmentOutputs(
     question,
     platforms,
     monitorRun,
+    frozenAuthority,
   );
   const assessment = calculateCompleteAssessment(assessmentOutput);
   const forecastOutput = await resolveOptimizationOutcomeForecastTaskOutput(
@@ -9454,9 +9692,26 @@ async function parseScopedAssessmentTaskOutput(
   question: GeoQuestion,
   platforms: GeoMonitorPlatformId[],
   monitorRun?: BrokerMonitorRun,
+  frozenAuthority?: AssessmentAuthoritySnapshot,
 ) {
+  const authority = resolveAssessmentAuthoritySnapshot(
+    frozenAuthority,
+    question,
+    platforms,
+    monitorRun,
+  );
   const raw = await resolveAssessmentTaskOutput(broker, task, {
     taskId: taskIdFrom(task),
+    ...(authority
+      ? {
+          authoritativeSourceCountByPlatform: new Map(
+            authority.selectedPlatforms.map((platform) => [
+              platform,
+              authority.sourceCountByPlatform[platform] ?? 0,
+            ]),
+          ),
+        }
+      : {}),
   });
   // The selected Website question is authoritative for ranking eligibility.
   // A provider may echo a broader flag or ranking values for another question
@@ -9496,27 +9751,83 @@ async function parseScopedAssessmentTaskOutput(
       category: question.category,
       rankingMetricEligible: question.category === "industry_ranking",
     },
-    platforms,
-    ...(monitorRun
-      ? (() => {
-          const sample = monitorAssessmentEligibility(monitorRun);
-          return {
-            successfulResponses: sample.successfulResponses,
-            failedResponses: sample.failedResponses,
-          };
-        })()
+    platforms: authority?.selectedPlatforms ?? platforms,
+    ...(authority
+      ? {
+          successfulResponses: authority.successfulResponses,
+          failedResponses: authority.failedResponses,
+        }
       : {}),
   });
-  if (!monitorRun) return scoped;
+  return scoped;
+}
 
+function buildAssessmentAuthoritySnapshot(
+  monitorRunId: string,
+  question: GeoQuestion,
+  monitorRun: BrokerMonitorRun,
+): AssessmentAuthoritySnapshot {
+  const sample = monitorAssessmentEligibility(monitorRun);
   const sourceCounts = monitorSourceCountsByPlatform(monitorRun);
   return {
-    ...scoped,
-    platformBreakdown: scoped.platformBreakdown.map((platform) => ({
-      ...platform,
-      sourceCount: sourceCounts.get(platform.platform) ?? 0,
-    })),
+    schemaVersion: 1,
+    monitorRunId,
+    questionId: question.id,
+    selectedPlatforms: [...monitorRun.platforms],
+    repeatPerPlatform: 5,
+    expectedResponses: monitorRun.expectedItems,
+    successfulResponses: sample.successfulResponses,
+    failedResponses: sample.failedResponses,
+    sourceCountByPlatform: Object.fromEntries(
+      monitorRun.platforms.map((platform) => [
+        platform,
+        sourceCounts.get(platform) ?? 0,
+      ]),
+    ),
   };
+}
+
+function resolveAssessmentAuthoritySnapshot(
+  candidate: AssessmentAuthoritySnapshot | undefined,
+  question: GeoQuestion,
+  platforms: GeoMonitorPlatformId[],
+  monitorRun?: BrokerMonitorRun,
+) {
+  if (!candidate) {
+    return monitorRun
+      ? buildAssessmentAuthoritySnapshot(monitorRun.runId, question, monitorRun)
+      : undefined;
+  }
+  const expectedPlatforms = Array.from(new Set(platforms)).sort();
+  const actualPlatforms = Array.from(
+    new Set(candidate.selectedPlatforms),
+  ).sort();
+  const validCounts = candidate.selectedPlatforms.every((platform) => {
+    const count = candidate.sourceCountByPlatform[platform];
+    return (
+      Number.isSafeInteger(count) &&
+      (count ?? -1) >= 0 &&
+      (count ?? 0) <= 10_000
+    );
+  });
+  if (
+    candidate.schemaVersion !== 1 ||
+    candidate.questionId !== question.id ||
+    candidate.repeatPerPlatform !== 5 ||
+    candidate.expectedResponses !== candidate.selectedPlatforms.length * 5 ||
+    candidate.successfulResponses + candidate.failedResponses !==
+      candidate.expectedResponses ||
+    actualPlatforms.length !== candidate.selectedPlatforms.length ||
+    actualPlatforms.length !== expectedPlatforms.length ||
+    actualPlatforms.some(
+      (platform, index) => platform !== expectedPlatforms[index],
+    ) ||
+    (monitorRun && candidate.monitorRunId !== monitorRun.runId) ||
+    !validCounts
+  ) {
+    throw new AssessmentTaskOutputValidationError("SCOPE_MISMATCH");
+  }
+  return candidate;
 }
 
 function monitorSourceCountsByPlatform(monitorRun: BrokerMonitorRun) {
@@ -9837,6 +10148,7 @@ async function buildProjectView(
                   serviceQuestion,
                   monitorRun.platforms,
                   monitorRun,
+                  value.assessmentAuthoritySnapshot,
                 )
               : resolveAssessmentTaskOutput(broker, assessmentTask, {
                   taskId: taskIdFrom(assessmentTask),
@@ -9872,6 +10184,7 @@ async function buildProjectView(
                   industryRankingQuestion,
                   industryRankingMonitorRun.platforms,
                   industryRankingMonitorRun,
+                  value.industryRankingAssessmentAuthoritySnapshot,
                 )
               : resolveAssessmentTaskOutput(
                   broker,
@@ -10146,6 +10459,7 @@ async function buildProjectView(
         serviceQuestion,
         monitorRun,
         resolveAssessmentOutputForView,
+        value.assessmentAuthoritySnapshot,
       )
     : undefined;
   const publicOptimizationForecast =
@@ -10158,8 +10472,17 @@ async function buildProjectView(
           monitorRun,
           resolveAssessmentOutputForView,
           resolveForecastOutputForView,
+          value.assessmentAuthoritySnapshot,
         )
-      : undefined;
+      : value.monitorQuestionId || monitorRun || assessmentTask
+        ? ({
+            status: "not_started" as const,
+            dimensions: [],
+            assumptions: [],
+            roadmap: [],
+            quality: undefined,
+          } as const)
+        : undefined;
   const publicIndustryRankingAssessment = industryRankingAssessmentTask
     ? await toPublicAssessmentView(
         broker,
@@ -10167,6 +10490,7 @@ async function buildProjectView(
         industryRankingQuestion,
         industryRankingMonitorRun,
         resolveIndustryRankingAssessmentOutputForView,
+        value.industryRankingAssessmentAuthoritySnapshot,
       )
     : undefined;
   const publicIndustryRankingOptimizationForecast =
@@ -10179,8 +10503,19 @@ async function buildProjectView(
           industryRankingMonitorRun,
           resolveIndustryRankingAssessmentOutputForView,
           resolveIndustryRankingForecastOutputForView,
+          value.industryRankingAssessmentAuthoritySnapshot,
         )
-      : undefined;
+      : value.industryRankingQuestionId ||
+          industryRankingMonitorRun ||
+          industryRankingAssessmentTask
+        ? ({
+            status: "not_started" as const,
+            dimensions: [],
+            assumptions: [],
+            roadmap: [],
+            quality: undefined,
+          } as const)
+        : undefined;
   const isCompleteAssessmentView =
     publicAssessment?.status === "ready" &&
     publicAssessment.quality?.completeness === "complete";
@@ -10559,6 +10894,7 @@ async function toPublicAssessmentView(
   question?: GeoQuestion,
   monitorRun?: BrokerMonitorRun,
   resolveRaw?: () => ReturnType<typeof resolveAssessmentTaskOutput>,
+  frozenAuthority?: AssessmentAuthoritySnapshot,
 ) {
   const taskView = normalizeTask(task, "assessment");
   if (taskView.status !== "completed") {
@@ -10583,6 +10919,7 @@ async function toPublicAssessmentView(
             question,
             monitorRun.platforms,
             monitorRun,
+            frozenAuthority,
           )
         : await resolveAssessmentTaskOutput(broker, task, {
             taskId: taskIdFrom(task),
@@ -10758,11 +11095,22 @@ async function toPublicAssessmentView(
     };
   } catch (error) {
     logAssessmentOutputValidation(error, task);
-    const monitorSample = monitorRun
-      ? monitorAssessmentEligibility(monitorRun)
-      : undefined;
+    let displayAuthority: AssessmentAuthoritySnapshot | undefined;
+    try {
+      displayAuthority =
+        question && monitorRun
+          ? resolveAssessmentAuthoritySnapshot(
+              frozenAuthority,
+              question,
+              monitorRun.platforms,
+              monitorRun,
+            )
+          : undefined;
+    } catch {
+      displayAuthority = undefined;
+    }
     const partial =
-      question && monitorRun && monitorSample
+      question && displayAuthority
         ? buildAssessmentDisplayOnlyProjection(task, {
             question: {
               id: question.id,
@@ -10770,10 +11118,15 @@ async function toPublicAssessmentView(
               category: question.category,
               rankingMetricEligible: question.category === "industry_ranking",
             },
-            platforms: monitorRun.platforms,
-            successfulResponses: monitorSample.successfulResponses,
-            failedResponses: monitorSample.failedResponses,
-            sourceCountByPlatform: monitorSourceCountsByPlatform(monitorRun),
+            platforms: displayAuthority.selectedPlatforms,
+            successfulResponses: displayAuthority.successfulResponses,
+            failedResponses: displayAuthority.failedResponses,
+            sourceCountByPlatform: new Map(
+              displayAuthority.selectedPlatforms.map((platform) => [
+                platform,
+                displayAuthority.sourceCountByPlatform[platform] ?? 0,
+              ]),
+            ),
           })
         : undefined;
     if (partial) {
@@ -10919,6 +11272,7 @@ async function toPublicOptimizationForecastView(
   resolveForecastRaw?: () => ReturnType<
     typeof resolveOptimizationOutcomeForecastTaskOutput
   >,
+  frozenAuthority?: AssessmentAuthoritySnapshot,
 ) {
   const taskView = normalizeTask(task, "optimization-forecast");
   if (taskView.status !== "completed") {
@@ -10946,6 +11300,7 @@ async function toPublicOptimizationForecastView(
             question,
             monitorRun.platforms,
             monitorRun,
+            frozenAuthority,
           )
         : await resolveAssessmentTaskOutput(broker, assessmentTask, {
             taskId: taskIdFrom(assessmentTask),
@@ -12463,11 +12818,17 @@ export function createGeoCustomQuestionRecoveryWorker(input: {
   intervalMs?: number;
   batchSize?: number;
   now?: () => number;
+  logCooldownMs?: number;
 }) {
   const intervalMs = Math.max(1_000, input.intervalMs ?? 5_000);
   const batchSize = Math.max(1, Math.min(100, input.batchSize ?? 20));
+  const logCooldownMs = Math.max(
+    intervalMs,
+    input.logCooldownMs ?? 5 * 60 * 1000,
+  );
   let timer: NodeJS.Timeout | undefined;
   let inFlight: Promise<void> | undefined;
+  let lastCycleFailure: { fingerprint: string; loggedAt: number } | undefined;
 
   const runOnce = () => {
     if (inFlight) return inFlight;
@@ -12533,16 +12894,37 @@ export function createGeoCustomQuestionRecoveryWorker(input: {
           }
         },
       });
+      lastCycleFailure = undefined;
     })().finally(() => {
       inFlight = undefined;
     });
     void inFlight.catch((error) => {
+      const diagnosticCode =
+        error instanceof GeoCustomQuestionValidationStoreError
+          ? error.code
+          : "RECOVERY_CYCLE_DEFERRED";
+      const fingerprint = crypto
+        .createHash("sha256")
+        .update(
+          `${diagnosticCode}\u0000${
+            error instanceof Error ? error.name : typeof error
+          }`,
+          "utf8",
+        )
+        .digest("hex")
+        .slice(0, 16);
+      const now = input.now?.() ?? Date.now();
+      if (
+        lastCycleFailure?.fingerprint === fingerprint &&
+        now - lastCycleFailure.loggedAt < logCooldownMs
+      ) {
+        return;
+      }
+      lastCycleFailure = { fingerprint, loggedAt: now };
       console.warn("[GEO custom question recovery]", {
         event: "worker_cycle_deferred",
-        diagnosticCode:
-          error instanceof GeoCustomQuestionValidationStoreError
-            ? error.code
-            : "RECOVERY_CYCLE_DEFERRED",
+        diagnosticCode,
+        fingerprint,
       });
     });
     return inFlight;

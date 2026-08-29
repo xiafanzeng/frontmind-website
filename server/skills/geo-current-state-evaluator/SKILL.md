@@ -18,6 +18,8 @@ Complete the comparison and assessment in this one Skill. Read `references/raw-o
 7. Return one short platform summary per selected platform, one short finding and action per dimension, and no more than four priority actions.
 8. Validate the object against `references/raw-output-schema.json`, then return it as the task's single Structured Output business object.
 
+Before filling evidence, materialize the fixed v2 top-level shape with exactly these keys: `schemaVersion`, `assessmentType`, `question`, `sample`, `dimensions`, `rankingDiagnostics`, `platformBreakdown`, `knowledgeVsAnswers`, `summary`, `executiveSummary`, `dimensionNarratives`, `priorityActions`, and `limitations`. Do not start from a v1 response, prose draft, or a partial object and do not add keys outside the schema.
+
 ## Lightweight rules
 
 - Target completion within 20 minutes and always stay within a single task run.
@@ -42,4 +44,4 @@ Return exactly one `schemaVersion: 2`, `assessmentType: "question_baseline"` obj
 - Do not create, upload, attach, or link a result file. Never move the final object into a `.json` file or ordinary assistant text.
 - If the response risks exceeding the output limit, shorten customer-facing wording, limitations, and optional evidence-reference arrays while preserving every required field, exact monitoring scope, and the 10 selected comparisons. Keep the result inline.
 - Treat local schema validation as a preflight check only. The server is the final validation authority and decides whether the result is accepted and displayed.
-- Before returning, serialize and parse the single object once. Confirm every indicator, platform, comparison, and priority action includes its required evidence array; confirm every platform has a real `sourceCount` and explicit null citation/reference counts.
+- Before returning, serialize and parse the single object once. Confirm `schemaVersion` is the number `2`, the complete fixed v2 top-level key set is present with no extra keys, every indicator/platform/comparison/action subtree matches the schema, every required evidence array exists, and every platform has a real `sourceCount` plus explicit null citation/reference counts. A partial v1/v2 hybrid must be stopped rather than returned.

@@ -169,7 +169,7 @@ describe("dual question and assessment perspectives", () => {
     ).toBeTruthy();
     const video = screen.getByLabelText("行业排名为什么需要全域营销视频演示");
     expect(video).toBeTruthy();
-    expect(video.querySelector('track[kind="captions"]')).toBeTruthy();
+    expect(video.querySelector("track")).toBeNull();
 
     fireEvent.click(screen.getByRole("button", { name: "Close" }));
     expect(

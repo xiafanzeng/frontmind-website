@@ -7,6 +7,7 @@ import {
   FileGeoCustomQuestionValidationStore,
   geoCustomQuestionHash,
   geoCustomQuestionRequestHash,
+  initializeEmptyGeoCustomQuestionValidationStoreV2,
   MemoryGeoCustomQuestionValidationStore,
 } from "./custom-question-validation-store";
 
@@ -1326,6 +1327,53 @@ describe("custom-question validation persistence", () => {
     await expect(store.assertReady()).resolves.toBeUndefined();
   });
 
+  it("initializes and idempotently verifies only a blank v2 store", async () => {
+    const parent = await makeStoreDirectory();
+    const directory = path.join(parent, "custom-question-v2");
+
+    await expect(
+      initializeEmptyGeoCustomQuestionValidationStoreV2(directory),
+    ).resolves.toMatchObject({ directory, created: true });
+    await expect(
+      productionStore(directory).assertReady(),
+    ).resolves.toBeUndefined();
+    await expect(
+      initializeEmptyGeoCustomQuestionValidationStoreV2(directory),
+    ).resolves.toMatchObject({ directory, created: false });
+
+    await fs.writeFile(path.join(directory, "unexpected.json"), "{}\n", {
+      mode: 0o600,
+    });
+    await expect(
+      initializeEmptyGeoCustomQuestionValidationStoreV2(directory),
+    ).rejects.toMatchObject({ code: "STORE_NOT_EMPTY" });
+    await expect(
+      initializeEmptyGeoCustomQuestionValidationStoreV2("/"),
+    ).rejects.toMatchObject({ code: "DIRECTORY_UNSAFE" });
+  });
+
+  it("deep readiness rejects a corrupt managed record before recovery scans it", async () => {
+    const directory = await makeStoreDirectory();
+    const store = productionStore(directory);
+    await store.assertReady();
+    await store.reserve(reservation());
+    const recordName = (await fs.readdir(directory)).find((name) =>
+      name.includes(".record.v"),
+    );
+    expect(recordName).toBeDefined();
+    const target = path.join(directory, recordName!);
+    const record = JSON.parse(await fs.readFile(target, "utf8"));
+    record.storeVersion += 1;
+    await fs.writeFile(target, `${JSON.stringify(record)}\n`, { mode: 0o600 });
+
+    await expect(
+      productionStore(directory).assertReady(),
+    ).rejects.toMatchObject({
+      code: "STORE_CORRUPT",
+      message: expect.stringContaining("深度校验"),
+    });
+  });
+
   it("removes only stale, regular 0600 store-owned temp files during readiness and GC", async () => {
     const directory = await makeStoreDirectory();
     const now = Date.parse("2026-08-01T12:00:00.000Z");
@@ -1425,8 +1473,7 @@ describe("custom-question validation persistence", () => {
     now += 4 * 60 * 1000;
     await store.collectGarbage({
       now: new Date(now),
-      cleanup: async (target) =>
-        cleaned.push(...target.temporaryLocalAssetIds),
+      cleanup: async (target) => cleaned.push(...target.temporaryLocalAssetIds),
     });
     expect(cleaned).toEqual([]);
     await expect(
@@ -1447,8 +1494,7 @@ describe("custom-question validation persistence", () => {
 
     await store.collectGarbage({
       now: new Date(now),
-      cleanup: async (target) =>
-        cleaned.push(...target.temporaryLocalAssetIds),
+      cleanup: async (target) => cleaned.push(...target.temporaryLocalAssetIds),
     });
     expect(cleaned).toEqual([justCreatedFileId]);
     await expect(

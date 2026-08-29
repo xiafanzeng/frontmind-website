@@ -16,6 +16,7 @@
     "verify:development": "node scripts/verify-development-release.mjs",
     "verify:payment": "node dist/verify-live-payment.js",
     "generate:community-summary": "tsx scripts/generate-geo-community-summary.ts",
+    "init:geo:custom-question-store-v2": "tsx scripts/init-geo-custom-question-store-v2.ts",
     "test": "pnpm test:server && pnpm test:client",
     "test:server": "vitest run --config vitest.server.config.ts",
     "test:client": "vitest run --config vitest.client.config.ts",

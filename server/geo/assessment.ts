@@ -173,8 +173,11 @@ const RawDimensionsSchema = z
   })
   .strict();
 
+// Reject contract vocabulary, not ordinary customer language such as
+// "官网 Schema 标记".  A bare `schema` match was overly broad and caused an
+// otherwise authoritative assessment to be downgraded to display-only.
 const CUSTOMER_INTERNAL_TOKEN_PATTERN =
-  /\b(?:unavailable|unknown|question_baseline|citationlist|referencelist|direct_asset|observed_outcome|not_applicable)\b|schema/;
+  /\b(?:unavailable|unknown|question_baseline(?:_v2)?|citationlist|referencelist|direct_asset|observed_outcome|not_applicable|schemaversion|(?:raw-)?output-schema(?:\.json)?)\b/;
 
 const CustomerChineseTextSchema = z
   .string()
@@ -861,13 +864,18 @@ export type AssessmentTaskOutputValidator = (
 function inspectParsedAssessmentTaskOutput(
   candidate: unknown,
   validate?: AssessmentTaskOutputValidator,
+  authoritativeSourceCountByPlatform?: ReadonlyMap<string, number>,
 ): AssessmentTaskOutputInspection {
+  const normalized = canonicalizeAssessmentTaskOutput(
+    normalizePresalesStructuredResult(
+      "website.current-state-assessment",
+      candidate,
+    ),
+  );
   const parsed = AssessmentRawTaskOutputSchema.safeParse(
-    canonicalizeAssessmentTaskOutput(
-      normalizePresalesStructuredResult(
-        "website.current-state-assessment",
-        candidate,
-      ),
+    canonicalizeAssessmentAuthority(
+      normalized,
+      authoritativeSourceCountByPlatform,
     ),
   );
   if (!parsed.success) {
@@ -944,6 +952,49 @@ function canonicalizeAssessmentTaskOutput(candidate: unknown): unknown {
   };
 }
 
+/**
+ * Applies only server-owned monitoring facts before strict business-schema
+ * validation. Manus transports optional fields as null and the transport
+ * normalizer removes those nulls first; the frozen monitoring snapshot then
+ * supplies the authoritative per-platform source count. Provider-authored
+ * counts are deliberately overwritten rather than trusted.
+ */
+function canonicalizeAssessmentAuthority(
+  candidate: unknown,
+  sourceCountByPlatform?: ReadonlyMap<string, number>,
+): unknown {
+  if (
+    !sourceCountByPlatform ||
+    !candidate ||
+    typeof candidate !== "object" ||
+    Array.isArray(candidate)
+  ) {
+    return candidate;
+  }
+  const record = candidate as Record<string, unknown>;
+  if (!Array.isArray(record.platformBreakdown)) return candidate;
+  return {
+    ...record,
+    platformBreakdown: record.platformBreakdown.map((item) => {
+      if (!item || typeof item !== "object" || Array.isArray(item)) {
+        return item;
+      }
+      const platform = (item as Record<string, unknown>).platform;
+      if (typeof platform !== "string") return item;
+      const sourceCount = sourceCountByPlatform.get(platform);
+      if (
+        sourceCount === undefined ||
+        !Number.isSafeInteger(sourceCount) ||
+        sourceCount < 0 ||
+        sourceCount > 10_000
+      ) {
+        return item;
+      }
+      return { ...(item as Record<string, unknown>), sourceCount };
+    }),
+  };
+}
+
 const AssessmentDisplayOnlyPlatformScopeSchema = z
   .object({
     platform: z.string().min(1).max(80),
@@ -1006,14 +1057,12 @@ function structuredResultCandidate(value: unknown): unknown {
     return undefined;
   }
   if (!("structuredResult" in result)) return undefined;
-  const candidate = (result as { structuredResult?: unknown })
-    .structuredResult;
+  const candidate = (result as { structuredResult?: unknown }).structuredResult;
   try {
     const serialized = JSON.stringify(candidate);
     if (
       typeof serialized !== "string" ||
-      Buffer.byteLength(serialized, "utf8") >
-        TRUSTED_TASK_JSON_MAX_TOTAL_BYTES
+      Buffer.byteLength(serialized, "utf8") > TRUSTED_TASK_JSON_MAX_TOTAL_BYTES
     ) {
       return undefined;
     }
@@ -1101,9 +1150,9 @@ export function buildAssessmentDisplayOnlyProjection(
       : {};
   const dimensionNarratives: AssessmentDisplayOnlyProjection["dimensionNarratives"] =
     {};
-  for (const dimension of Object.keys(
-    ASSESSMENT_DIMENSION_WEIGHTS,
-  ) as Array<keyof typeof ASSESSMENT_DIMENSION_WEIGHTS>) {
+  for (const dimension of Object.keys(ASSESSMENT_DIMENSION_WEIGHTS) as Array<
+    keyof typeof ASSESSMENT_DIMENSION_WEIGHTS
+  >) {
     const narrative = AssessmentDimensionNarrativeSchema.safeParse(
       rawNarratives[dimension],
     );
@@ -1118,9 +1167,12 @@ export function buildAssessmentDisplayOnlyProjection(
       const raw = rawPlatforms[index];
       if (!raw || typeof raw !== "object" || Array.isArray(raw)) return [];
       const platform = raw as Record<string, unknown>;
-      const verdict = z.string().trim().min(8).max(1000).safeParse(
-        platform.verdict,
-      );
+      const verdict = z
+        .string()
+        .trim()
+        .min(8)
+        .max(1000)
+        .safeParse(platform.verdict);
       if (!verdict.success) return [];
       const sentiment = z
         .enum(["positive", "neutral", "negative", "mixed", "unknown"])
@@ -1154,9 +1206,8 @@ export function buildAssessmentDisplayOnlyProjection(
   );
 
   const selectedPlatforms = new Set(expected.platforms);
-  const knowledgeVsAnswers = (Array.isArray(record.knowledgeVsAnswers)
-    ? record.knowledgeVsAnswers
-    : []
+  const knowledgeVsAnswers = (
+    Array.isArray(record.knowledgeVsAnswers) ? record.knowledgeVsAnswers : []
   ).flatMap((item) => {
     const comparison = AssessmentKnowledgeComparisonSchema.safeParse(item);
     if (
@@ -1168,16 +1219,14 @@ export function buildAssessmentDisplayOnlyProjection(
     }
     return [comparison.data];
   });
-  const priorityActions = (Array.isArray(record.priorityActions)
-    ? record.priorityActions
-    : []
+  const priorityActions = (
+    Array.isArray(record.priorityActions) ? record.priorityActions : []
   ).flatMap((item) => {
     const action = AssessmentPriorityActionSchema.safeParse(item);
     return action.success ? [action.data] : [];
   });
-  const limitations = (Array.isArray(record.limitations)
-    ? record.limitations
-    : []
+  const limitations = (
+    Array.isArray(record.limitations) ? record.limitations : []
   ).flatMap((item) => {
     const limitation = z.string().trim().min(1).max(500).safeParse(item);
     return limitation.success ? [limitation.data] : [];
@@ -1229,6 +1278,7 @@ export function parseAssessmentTaskOutput(
 export type ResolveAssessmentTaskOutputOptions = Readonly<{
   taskId?: string;
   validate?: AssessmentTaskOutputValidator;
+  authoritativeSourceCountByPlatform?: ReadonlyMap<string, number>;
 }>;
 
 /** Resolves the typed business result returned by the v2 Broker contract. */
@@ -1244,6 +1294,7 @@ export async function resolveAssessmentTaskOutput(
         const inspection = inspectParsedAssessmentTaskOutput(
           candidate,
           options.validate,
+          options.authoritativeSourceCountByPlatform,
         );
         if (inspection.success) return inspection;
         return {
@@ -1542,8 +1593,7 @@ function calculateRankingDiagnostics(
       rankQualityScore: null,
       rankQualityMaxScore: 10 as const,
       additive: false as const,
-      calculationBasis:
-        "非行业排名问题不计算品牌排名指标。",
+      calculationBasis: "非行业排名问题不计算品牌排名指标。",
     };
   }
 

@@ -1336,6 +1336,10 @@ describe("forecast Base prompt and audited skill loader", () => {
     const skillText = await zip.file("SKILL.md")!.async("string");
     expect(skillText).toContain("Structured Output contract");
     expect(skillText).toContain("Do not create or attach a result file");
+    expect(skillText).toContain("compare the completed object recursively");
+    expect(skillText).toContain(
+      "key paths and fixed thirteen-indicator structure",
+    );
     const archivedTemplate = JSON.parse(
       await zip.file("assets/output-template.json")!.async("string"),
     );

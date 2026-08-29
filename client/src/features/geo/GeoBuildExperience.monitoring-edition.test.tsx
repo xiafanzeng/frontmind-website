@@ -35,7 +35,6 @@ function renderSetup(
   project: GeoProject,
   onChangeEdition = vi.fn(),
   onStartMonitoring = vi.fn(),
-  recoveryPending = false,
 ) {
   render(
     <MonitoringSetup
@@ -44,7 +43,6 @@ function renderSetup(
       onTogglePlatform={vi.fn()}
       onBack={vi.fn()}
       onStartMonitoring={onStartMonitoring}
-      recoveryPending={recoveryPending}
       locked={false}
     />,
   );
@@ -140,7 +138,6 @@ describe("GEO monitoring edition setup", () => {
         onTogglePlatform={vi.fn()}
         onBack={vi.fn()}
         onStartMonitoring={vi.fn()}
-        recoveryPending={false}
         locked={false}
       />,
     );
@@ -223,7 +220,6 @@ describe("GEO monitoring edition setup", () => {
         onTogglePlatform={vi.fn()}
         onBack={vi.fn()}
         onStartMonitoring={onStartMonitoring}
-        recoveryPending={false}
         locked
       />,
     );
@@ -272,53 +268,4 @@ describe("GEO monitoring edition setup", () => {
     expect(onConfirm).toHaveBeenCalledOnce();
   });
 
-  it("describes legacy monitoring continuation without order internals", () => {
-    render(
-      <MonitoringConfirmDialog
-        open
-        project={baseProject}
-        legacyPending={{
-          kind: "monitoring",
-          projectId: baseProject.id,
-          projectToken: baseProject.remoteToken,
-          questionId: "question-01",
-          monitoringEdition: "domestic",
-          platformIds: ["doubao"],
-          checkout: {
-            authorization: "legacy-monitoring-authorization",
-            orderId: "legacy-monitoring-order",
-            amountFen: 0,
-            unitPriceFen: 0,
-            answersPerPlatform: 5,
-            expiresAt: "2026-08-07T01:00:00.000Z",
-            action: "https://zpayz.cn/submit.php",
-            method: "POST",
-            fields: {},
-          },
-          status: "pending",
-        }}
-        starting={false}
-        error=""
-        onOpenChange={vi.fn()}
-        onConfirm={vi.fn()}
-      />,
-    );
-
-    expect(
-      screen.getByText(
-        "检测到此前未完成的监控确认，系统会先核对当前状态后继续。",
-      ),
-    ).toBeTruthy();
-    expect(screen.queryByText(/免费|付款订单|权威核对|旧状态/)).toBeNull();
-  });
-
-  it("uses a customer-facing continuation hint for an existing monitoring record", () => {
-    renderSetup(baseProject, vi.fn(), vi.fn(), true);
-
-    expect(
-      screen
-        .getByRole("button", { name: "获取监控答案" })
-        .getAttribute("title"),
-    ).toBe("核对此前监控状态并继续");
-  });
 });
