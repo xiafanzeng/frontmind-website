@@ -306,6 +306,9 @@ class MockBroker implements GeoPresalesBroker {
   invalidFirstQuestionTask = false;
   questionTaskOutput?: unknown;
   idempotentTasks = new Map<string, BrokerTask>();
+  idempotentTaskRequestHashes = new Map<string, string>();
+  enforceIdempotentTaskRequestIdentity = false;
+  loseNextIndustryForecastCreateResponseAfterCommit = false;
   idempotentFiles = new Map<string, BrokerLocalAsset>();
   fileCredentialVersions = new Map<string, number>();
   fileProjectIds = new Map<string, string>();
@@ -758,6 +761,19 @@ class MockBroker implements GeoPresalesBroker {
       file_id: asset.localAssetId,
       filename: asset.filename,
     }));
+    const requestHash = createHash("sha256")
+      .update(
+        JSON.stringify({
+          prompt: input.prompt,
+          localAssets: input.localAssets,
+          contract: {
+            name: input.contract.name,
+            revision: input.contract.revision,
+            schemaHash: input.contract.schemaHash,
+          },
+        }),
+      )
+      .digest("hex");
     const configuredError = this.createTaskErrors.shift();
     if (configuredError) throw configuredError;
     if (
@@ -775,7 +791,20 @@ class MockBroker implements GeoPresalesBroker {
       );
     }
     const existing = this.idempotentTasks.get(input.idempotencyKey);
-    if (existing) return existing;
+    if (existing) {
+      if (
+        this.enforceIdempotentTaskRequestIdentity &&
+        this.idempotentTaskRequestHashes.get(input.idempotencyKey) !==
+          requestHash
+      ) {
+        throw new GeoBrokerError(
+          "idempotent task replay changed its request identity",
+          409,
+          "AGENT_REQUEST_FAILED",
+        );
+      }
+      return existing;
+    }
     this.prompts.push(input.prompt);
     this.taskContracts.push(input.contract);
     this.taskBusinessOwnerNames.push(input.businessOwnerName);
@@ -906,6 +935,21 @@ class MockBroker implements GeoPresalesBroker {
       this.fileProjectIds.set(attachment.file_id, input.projectId);
     }
     this.idempotentTasks.set(input.idempotencyKey, task);
+    this.idempotentTaskRequestHashes.set(input.idempotencyKey, requestHash);
+    if (
+      isForecastTask &&
+      isIndustryPerspectiveTask &&
+      this.loseNextIndustryForecastCreateResponseAfterCommit
+    ) {
+      this.loseNextIndustryForecastCreateResponseAfterCommit = false;
+      throw new GeoBrokerError(
+        "Dashboard committed the industry forecast task but the response was lost",
+        502,
+        "AGENT_UNAVAILABLE",
+        undefined,
+        true,
+      );
+    }
     return task;
   }
 
@@ -6070,6 +6114,102 @@ describe("GEO API", () => {
         industryRankingOptimizationForecast: { status: "ready" },
       },
     });
+  });
+
+  it("recovers a committed industry forecast after an old project token replay without changing task identity", async () => {
+    const ready = await createReadyProject();
+    const started = await jsonRequest(
+      `/projects/${encodeURIComponent(ready.projectToken)}/monitoring`,
+      ready.cookie,
+      {
+        method: "POST",
+        body: {
+          schemaVersion: 2,
+          clientRequestId: "73737373-7373-4737-8737-737373737399",
+          questionId: "product-scenario-01",
+          industryRankingQuestionId: "industry-ranking-01",
+          monitoringEdition: "domestic",
+          platformIds: ["doubao"],
+        },
+      },
+    );
+    expect(started.response.status).toBe(201);
+    for (const runId of ["monitor-1", "monitor-2"]) {
+      const run = broker.monitorRuns.get(runId)!;
+      broker.monitorRuns.set(runId, {
+        ...run,
+        status: "completed",
+        completedItems: 5,
+        records: Array.from({ length: 5 }, (_, index) =>
+          monitorRecord(index + 1, `${runId} 回答 ${index + 1}`),
+        ),
+      });
+    }
+    broker.completeAssessmentImmediately = true;
+    broker.completeForecastImmediately = true;
+    broker.enforceIdempotentTaskRequestIdentity = true;
+    broker.loseNextIndustryForecastCreateResponseAfterCommit = true;
+    const warning = vi.spyOn(console, "warn");
+
+    const responseLost = await jsonRequest(
+      `/projects/${encodeURIComponent(started.body.projectToken)}`,
+      ready.cookie,
+    );
+    expect(responseLost.response.status).toBe(200);
+    expect(responseLost.body).toMatchObject({
+      project: {
+        assessment: { status: "ready" },
+        optimizationForecast: { status: "ready" },
+        industryRankingAssessment: { status: "ready" },
+        industryRankingOptimizationForecast: { status: "not_started" },
+      },
+    });
+    expect(broker.forecastTaskCount).toBe(2);
+    const deferredWarning = warning.mock.calls.find(
+      ([message]) =>
+        message ===
+        "[GEO industry ranking forecast automation] Task start deferred",
+    );
+    expect(deferredWarning?.[1]).toMatchObject({
+      projectHash: expect.stringMatching(/^[a-f0-9]{16}$/),
+      perspective: "industry_ranking",
+      stage: "create",
+      diagnosticCode: "AGENT_UNAVAILABLE",
+      status: 502,
+      retryable: true,
+    });
+    expect(deferredWarning?.[1]).not.toHaveProperty("projectId");
+    warning.mockRestore();
+
+    await new Promise((resolve) => setTimeout(resolve, 5));
+    const replayedOldToken = await jsonRequest(
+      `/projects/${encodeURIComponent(started.body.projectToken)}`,
+      ready.cookie,
+    );
+    expect(replayedOldToken.response.status).toBe(200);
+    expect(replayedOldToken.body).toMatchObject({
+      project: {
+        assessment: { status: "ready" },
+        optimizationForecast: { status: "ready" },
+        industryRankingAssessment: { status: "ready" },
+        industryRankingOptimizationForecast: { status: "ready" },
+      },
+    });
+    expect(broker.assessmentTaskCount).toBe(2);
+    expect(broker.forecastTaskCount).toBe(2);
+    const assessmentInputs = Array.from(broker.uploads.values())
+      .map((bytes) => {
+        try {
+          return JSON.parse(bytes.toString("utf8"));
+        } catch {
+          return undefined;
+        }
+      })
+      .filter((input) => input?.assessment && input?.sourceAssessmentTaskId);
+    expect(assessmentInputs).toHaveLength(2);
+    expect(
+      new Set(assessmentInputs.map((input) => input.generatedAt)),
+    ).toEqual(new Set(["1970-01-01T00:00:00.000Z"]));
   });
 
   it("keeps scoped screenshot ownership and fences both reservations on deletion", async () => {

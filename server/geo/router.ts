@@ -3927,10 +3927,6 @@ export function createGeoRouter(options: GeoRouterOptions = {}): Router {
       perspective === "industry_ranking"
         ? value.industryRankingAssessmentTaskId
         : value.assessmentTaskId;
-    const assessmentSubmittedAt =
-      perspective === "industry_ranking"
-        ? value.industryRankingAssessmentSubmittedAt
-        : value.assessmentSubmittedAt;
     const forecastAttempt =
       perspective === "industry_ranking"
         ? value.industryRankingOptimizationForecastAttempt
@@ -3958,7 +3954,13 @@ export function createGeoRouter(options: GeoRouterOptions = {}): Router {
     const assessmentBytes = Buffer.from(
       JSON.stringify({
         schemaVersion: 2,
-        generatedAt: assessmentSubmittedAt || new Date(0).toISOString(),
+        // This file is part of the task idempotency identity. A caller can
+        // legitimately replay an older sealed project token after losing the
+        // first create response; rebuilding the same assessment reservation
+        // then assigns a new submittedAt even though the authoritative result
+        // is unchanged. Keep transport metadata deterministic so that replay
+        // reuses the exact files and recovers the already-created task.
+        generatedAt: new Date(0).toISOString(),
         sourceAssessmentTaskId: assessmentTaskId,
         assessment: scoredAssessment,
       }),
@@ -4316,13 +4318,13 @@ export function createGeoRouter(options: GeoRouterOptions = {}): Router {
             currentAssessmentTask = created.task;
           } catch (error) {
             console.warn("[GEO assessment automation] Task start deferred", {
-              projectId: currentValue.projectId,
-              error:
-                error instanceof GeoHttpError
-                  ? error.code
-                  : error instanceof GeoBrokerError
-                    ? error.code
-                    : "ASSESSMENT_AUTOMATION_FAILED",
+              projectHash: sha256(currentValue.projectId).slice(0, 16),
+              perspective: "product_opinion",
+              stage: "create",
+              ...safeAutomationDiagnostic(
+                error,
+                "ASSESSMENT_AUTOMATION_FAILED",
+              ),
             });
           }
         }
@@ -4503,13 +4505,13 @@ export function createGeoRouter(options: GeoRouterOptions = {}): Router {
               currentForecastOutputPromise = undefined;
             } catch (error) {
               console.warn("[GEO forecast automation] Task start deferred", {
-                projectId: currentValue.projectId,
-                error:
-                  error instanceof GeoHttpError
-                    ? error.code
-                    : error instanceof GeoBrokerError
-                      ? error.code
-                      : "FORECAST_AUTOMATION_FAILED",
+                projectHash: sha256(currentValue.projectId).slice(0, 16),
+                perspective: "product_opinion",
+                stage: "create",
+                ...safeAutomationDiagnostic(
+                  error,
+                  "FORECAST_AUTOMATION_FAILED",
+                ),
               });
             }
           }
@@ -4552,13 +4554,13 @@ export function createGeoRouter(options: GeoRouterOptions = {}): Router {
             console.warn(
               "[GEO industry ranking assessment automation] Task start deferred",
               {
-                projectId: currentValue.projectId,
-                error:
-                  error instanceof GeoHttpError
-                    ? error.code
-                    : error instanceof GeoBrokerError
-                      ? error.code
-                      : "ASSESSMENT_AUTOMATION_FAILED",
+                projectHash: sha256(currentValue.projectId).slice(0, 16),
+                perspective: "industry_ranking",
+                stage: "create",
+                ...safeAutomationDiagnostic(
+                  error,
+                  "ASSESSMENT_AUTOMATION_FAILED",
+                ),
               },
             );
           }
@@ -4739,13 +4741,13 @@ export function createGeoRouter(options: GeoRouterOptions = {}): Router {
               console.warn(
                 "[GEO industry ranking forecast automation] Task start deferred",
                 {
-                  projectId: currentValue.projectId,
-                  error:
-                    error instanceof GeoHttpError
-                      ? error.code
-                      : error instanceof GeoBrokerError
-                        ? error.code
-                        : "FORECAST_AUTOMATION_FAILED",
+                  projectHash: sha256(currentValue.projectId).slice(0, 16),
+                  perspective: "industry_ranking",
+                  stage: "create",
+                  ...safeAutomationDiagnostic(
+                    error,
+                    "FORECAST_AUTOMATION_FAILED",
+                  ),
                 },
               );
             }
@@ -13407,6 +13409,28 @@ function sameStringSet(left: readonly string[], right: readonly string[]) {
 
 function sha256(value: string) {
   return crypto.createHash("sha256").update(value, "utf8").digest("hex");
+}
+
+function safeAutomationDiagnostic(error: unknown, fallback: string) {
+  if (error instanceof GeoBrokerError) {
+    return {
+      diagnosticCode: error.code,
+      status: error.status,
+      retryable: error.retryable === true,
+    };
+  }
+  if (error instanceof GeoHttpError) {
+    return {
+      diagnosticCode: error.code,
+      status: error.status,
+      retryable: false,
+    };
+  }
+  return {
+    diagnosticCode: fallback,
+    status: null,
+    retryable: false,
+  };
 }
 
 function serviceBankTransferOrderId(input: {
