@@ -5,12 +5,13 @@ import {
   fireEvent,
   render,
   screen,
+  waitFor,
   within,
 } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { LanguageProvider } from "@/contexts/LanguageContext";
-import GeoBuildExperience from "./GeoBuildExperience";
+import GeoBuildExperience, { ServiceActivation } from "./GeoBuildExperience";
 import type { GeoProject, GeoServiceActivationStatus } from "./types";
 
 const commercialApiMocks = vi.hoisted(() => ({
@@ -144,6 +145,60 @@ afterEach(() => {
 });
 
 describe("public GEO service demo", () => {
+  it("renders every service stage, branch, and gate with deterministic delays", async () => {
+    const project = serviceProject("active");
+
+    const view = render(
+      <LanguageProvider initialLang="zh">
+        <ServiceActivation project={project} onBack={vi.fn()} />
+      </LanguageProvider>,
+    );
+    fireEvent.click(screen.getByRole("tab", { name: /^服务范围/ }));
+
+    await waitFor(() => {
+      expect(
+        view.container.querySelectorAll(".geo-service-stage"),
+      ).toHaveLength(3);
+    });
+
+    const stages = Array.from(
+      view.container.querySelectorAll<HTMLElement>(".geo-service-stage"),
+    );
+    const branches = Array.from(
+      view.container.querySelectorAll<HTMLElement>(".geo-service-branch"),
+    );
+    const gates = Array.from(
+      view.container.querySelectorAll<HTMLElement>(".geo-service-stage-gate"),
+    );
+
+    expect(stages).toHaveLength(3);
+    expect(branches).toHaveLength(9);
+    expect(gates).toHaveLength(2);
+    expect(
+      stages.map((stage) =>
+        stage.style.getPropertyValue("--service-stage-delay"),
+      ),
+    ).toEqual(["140ms", "360ms", "580ms"]);
+    expect(
+      branches.map((branch) =>
+        branch.style.getPropertyValue("--service-node-delay"),
+      ),
+    ).toEqual([
+      "360ms",
+      "450ms",
+      "540ms",
+      "630ms",
+      "720ms",
+      "810ms",
+      "900ms",
+      "990ms",
+      "1080ms",
+    ]);
+    expect(
+      gates.map((gate) => gate.style.getPropertyValue("--service-gate-delay")),
+    ).toEqual(["470ms", "690ms"]);
+  });
+
   it("leaves automatic forecast progression to GET reconciliation", async () => {
     const base = serviceProject("not_started");
     const project = {

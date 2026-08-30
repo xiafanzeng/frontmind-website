@@ -71,6 +71,18 @@ describe("GEO assessment and monitoring responsive contracts", () => {
     );
   });
 
+  it("keeps the service map visible when animation variables are absent", () => {
+    expect(stylesheet).toMatch(
+      /\.geo-service-stage\s*\{[^}]*opacity:\s*1;[^}]*var\(--service-stage-delay,\s*0ms\)\s+both;/s,
+    );
+    expect(stylesheet).toMatch(
+      /\.geo-service-branch\s*\{[^}]*opacity:\s*1;[^}]*var\(--service-node-delay,\s*0ms\)\s+both;/s,
+    );
+    expect(stylesheet).toMatch(
+      /\.geo-service-stage-gate\s*\{[^}]*opacity:\s*1;[^}]*var\(--service-gate-delay,\s*0ms\)\s+both;/s,
+    );
+  });
+
   it("stacks reachable dialogs above the movable workbench", () => {
     expect(stylesheet).toMatch(/\.geo-workbench\s*\{[^}]*z-index:\s*80/s);
     expect(stylesheet).toMatch(

@@ -1,6 +1,7 @@
 /* Style Reminder — App shell must preserve multi-page bilingual routing, restrained transitions, and the premium advisory brand tone. */
 import { Toaster } from "@/components/ui/sonner";
 import { TooltipProvider } from "@/components/ui/tooltip";
+import ReleaseSyncNotice from "@/components/ReleaseSyncNotice";
 import { Route, Switch } from "wouter";
 import ErrorBoundary from "./components/ErrorBoundary";
 import PageTransition from "./components/PageTransition";
@@ -84,6 +85,7 @@ function App() {
       <ThemeProvider defaultTheme="light">
         <LanguageProvider>
           <TooltipProvider>
+            <ReleaseSyncNotice />
             <Toaster />
             <Router />
           </TooltipProvider>

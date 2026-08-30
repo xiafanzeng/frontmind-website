@@ -42,6 +42,7 @@ import { normalizeBusinessOwnerName } from "@shared/business-owner-name";
 import { resolveGeoMonitoringEdition } from "./types";
 import { localizedUserFacingError } from "./error-localization";
 import { visibleKnowledgeSectionSummary } from "./knowledge-section-markdown";
+import { beginReleaseSyncWrite } from "@/lib/release-sync";
 
 const GEO_API_ROOT = "/api/geo";
 const DEFAULT_REQUEST_TIMEOUT_MS = 30_000;
@@ -800,19 +801,27 @@ async function requestJson(
     headers.set("content-type", "application/json");
   }
 
-  return withRequestControl(
-    { signal: requestInit.signal, timeoutMs },
-    async (signal) => {
-      const response = await fetch(`${GEO_API_ROOT}${path}`, {
-        credentials: "same-origin",
-        cache: "no-store",
-        ...requestInit,
-        headers,
-        signal,
-      });
-      return parseResponse(response);
-    },
-  );
+  const method = String(requestInit.method ?? "GET").toUpperCase();
+  const releaseWrite = !["GET", "HEAD", "OPTIONS"].includes(method)
+    ? beginReleaseSyncWrite(`geo-${method.toLowerCase()}`)
+    : undefined;
+  try {
+    return await withRequestControl(
+      { signal: requestInit.signal, timeoutMs },
+      async (signal) => {
+        const response = await fetch(`${GEO_API_ROOT}${path}`, {
+          credentials: "same-origin",
+          cache: "no-store",
+          ...requestInit,
+          headers,
+          signal,
+        });
+        return parseResponse(response);
+      },
+    );
+  } finally {
+    releaseWrite?.();
+  }
 }
 
 function retryableProjectStartConfirmation(error: unknown): boolean {
@@ -4755,59 +4764,64 @@ async function transferGeoUploadOnce(
     ) => void;
   },
 ): Promise<void> {
-  if (typeof XMLHttpRequest === "function") {
-    return transferGeoUploadWithXhr(
-      file,
-      uploadToken,
-      transferAttempt,
-      options,
-    );
-  }
-  // Node-side contract tests and non-browser renderers have no XHR. The
-  // interactive Website always takes the XHR branch so byte progress and the
-  // two idle watchdogs are active for customers.
-  options.onProgress?.({
-    phase: "uploading",
-    fileLoadedBytes: 0,
-    fileTotalBytes: file.size,
-  });
-  const startedAt = Date.now();
+  const releaseWrite = beginReleaseSyncWrite("geo-upload");
   try {
-    await requestJson("/uploads/proxy", {
-      method: "PUT",
-      body: file,
-      credentials: "same-origin",
-      signal: options.signal,
-      timeoutMs: UPLOAD_REQUEST_TIMEOUT_MS,
-      headers: {
-        "content-type": file.type || "application/octet-stream",
-        "x-geo-upload-token": uploadToken,
-        "x-geo-upload-attempt": String(transferAttempt),
-      },
-    });
-    emitGeoUploadTelemetry("transfer_response_received", {
-      attachmentIndex: options.attachmentIndex,
-      declaredBytes: file.size,
-      transferAttempt,
-      phase: "confirmed",
-      loadedBytes: file.size,
-      totalBytes: file.size,
-      durationMs: Date.now() - startedAt,
-    });
-  } catch (error) {
-    emitGeoUploadTelemetry("transfer_failed", {
-      attachmentIndex: options.attachmentIndex,
-      declaredBytes: file.size,
-      transferAttempt,
+    if (typeof XMLHttpRequest === "function") {
+      return await transferGeoUploadWithXhr(
+        file,
+        uploadToken,
+        transferAttempt,
+        options,
+      );
+    }
+    // Node-side contract tests and non-browser renderers have no XHR. The
+    // interactive Website always takes the XHR branch so byte progress and the
+    // two idle watchdogs are active for customers.
+    options.onProgress?.({
       phase: "uploading",
-      loadedBytes: 0,
-      totalBytes: file.size,
-      durationMs: Date.now() - startedAt,
-      abortSource: "fetch_error",
-      status: error instanceof GeoApiError ? error.status : undefined,
-      code: error instanceof GeoApiError ? error.code : "NETWORK_ERROR",
+      fileLoadedBytes: 0,
+      fileTotalBytes: file.size,
     });
-    throw error;
+    const startedAt = Date.now();
+    try {
+      await requestJson("/uploads/proxy", {
+        method: "PUT",
+        body: file,
+        credentials: "same-origin",
+        signal: options.signal,
+        timeoutMs: UPLOAD_REQUEST_TIMEOUT_MS,
+        headers: {
+          "content-type": file.type || "application/octet-stream",
+          "x-geo-upload-token": uploadToken,
+          "x-geo-upload-attempt": String(transferAttempt),
+        },
+      });
+      emitGeoUploadTelemetry("transfer_response_received", {
+        attachmentIndex: options.attachmentIndex,
+        declaredBytes: file.size,
+        transferAttempt,
+        phase: "confirmed",
+        loadedBytes: file.size,
+        totalBytes: file.size,
+        durationMs: Date.now() - startedAt,
+      });
+    } catch (error) {
+      emitGeoUploadTelemetry("transfer_failed", {
+        attachmentIndex: options.attachmentIndex,
+        declaredBytes: file.size,
+        transferAttempt,
+        phase: "uploading",
+        loadedBytes: 0,
+        totalBytes: file.size,
+        durationMs: Date.now() - startedAt,
+        abortSource: "fetch_error",
+        status: error instanceof GeoApiError ? error.status : undefined,
+        code: error instanceof GeoApiError ? error.code : "NETWORK_ERROR",
+      });
+      throw error;
+    }
+  } finally {
+    releaseWrite();
   }
 }
 

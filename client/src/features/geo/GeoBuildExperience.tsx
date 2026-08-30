@@ -60,6 +60,10 @@ import {
 import { createPortal } from "react-dom";
 import { useLang } from "@/contexts/LanguageContext";
 import { FRONTMIND_WECHAT_QR_PATH } from "@/lib/frontmind-contact";
+import {
+  beginReleaseSyncWrite,
+  setReleaseSyncBlocker,
+} from "@/lib/release-sync";
 import permissionVideoUrl from "@/assets/geo/industry-ranking-permission-demo-66s.mp4";
 import permissionVideoPosterUrl from "@/assets/geo/industry-ranking-permission-demo-poster.jpg";
 import {
@@ -1133,9 +1137,21 @@ function GeoBuildExperienceZh() {
     () => projects.find((project) => project.id === activeProjectId),
     [activeProjectId, projects],
   );
+  const hasReleaseSensitiveDraft = Boolean(
+    draftInput.trim() ||
+      draftFiles.length > 0 ||
+      creating ||
+      projects.some((project) => isGeoDraftProject(project)),
+  );
   const activeQuestionSelectionLocked = activeProject
     ? isGeoQuestionSelectionLocked(activeProject)
     : false;
+
+  useEffect(() => {
+    setReleaseSyncBlocker("geo-local-draft", hasReleaseSensitiveDraft);
+  }, [hasReleaseSensitiveDraft]);
+
+  useEffect(() => () => setReleaseSyncBlocker("geo-local-draft", false), []);
 
   useEffect(() => {
     const dualProject = activeProject as
@@ -1964,9 +1980,16 @@ function GeoBuildExperienceZh() {
           (left, right) => right.updatedAt.localeCompare(left.updatedAt),
         ),
       );
-      void saveGeoProject(readyProject).catch(() =>
-        setStorageNotice("当前浏览器无法持久保存项目，请及时下载知识库备份。"),
+      const releaseProjectPersistence = beginReleaseSyncWrite(
+        "geo-project-persistence",
       );
+      void saveGeoProject(readyProject)
+        .catch(() =>
+          setStorageNotice(
+            "当前浏览器无法持久保存项目，请及时下载知识库备份。",
+          ),
+        )
+        .finally(releaseProjectPersistence);
       setActiveProjectId(readyProject.id);
       setActiveStage("enterprise_analysis");
     } catch (error) {
@@ -8166,7 +8189,14 @@ export function ServiceActivation({ project, onBack }: ServiceActivationProps) {
               </span>
               {GEO_SERVICE_STAGES.map((stage, stageIndex) => (
                 <div className="geo-service-stage-unit" key={stage.id}>
-                  <article className={`geo-service-stage tone-${stage.tone}`}>
+                  <article
+                    className={`geo-service-stage tone-${stage.tone}`}
+                    style={
+                      {
+                        "--service-stage-delay": `${stageIndex * 220 + 140}ms`,
+                      } as CSSProperties
+                    }
+                  >
                     <header className="geo-service-stage-header">
                       <div>
                         <span>
@@ -8181,12 +8211,19 @@ export function ServiceActivation({ project, onBack }: ServiceActivationProps) {
                       <p>{stage.summary}</p>
                     </header>
                     <div className="geo-service-branches">
-                      {stage.services.map((service) => {
+                      {stage.services.map((service, serviceIndex) => {
                         const Icon = service.icon;
                         return (
                           <section
                             className="geo-service-branch"
                             key={service.id}
+                            style={
+                              {
+                                "--service-node-delay": `${
+                                  360 + (stageIndex * 3 + serviceIndex) * 90
+                                }ms`,
+                              } as CSSProperties
+                            }
                           >
                             <span
                               className="geo-service-branch-icon"
@@ -8235,7 +8272,15 @@ export function ServiceActivation({ project, onBack }: ServiceActivationProps) {
                     </footer>
                   </article>
                   {stageIndex < GEO_SERVICE_STAGES.length - 1 && (
-                    <span className="geo-service-stage-gate" aria-hidden="true">
+                    <span
+                      className="geo-service-stage-gate"
+                      aria-hidden="true"
+                      style={
+                        {
+                          "--service-gate-delay": `${stageIndex * 220 + 470}ms`,
+                        } as CSSProperties
+                      }
+                    >
                       <small>阶段验收</small>
                       <ArrowRight size={15} />
                     </span>

@@ -44,6 +44,11 @@ import {
   frontmindReleaseChannel,
 } from "./release-channel";
 import { configureWebsiteHttpServer } from "./http-server-timeouts";
+import {
+  setWebsiteHealthCacheHeaders,
+  setWebsiteHtmlCacheHeaders,
+  setWebsiteStaticCacheHeaders,
+} from "./http-cache-policy";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -164,6 +169,7 @@ async function startServer() {
   app.use(compression());
 
   app.get("/healthz", (_req, res) => {
+    setWebsiteHealthCacheHeaders(res);
     res.json({
       status: "ok",
       service: "frontmind-website",
@@ -262,39 +268,7 @@ async function startServer() {
     express.static(staticPath, {
       redirect: false,
       setHeaders(res, filePath) {
-        const relativePath = path
-          .relative(staticPath, filePath)
-          .split(path.sep)
-          .join("/");
-
-        if (
-          relativePath === "index.html" ||
-          relativePath.endsWith("/index.html")
-        ) {
-          res.setHeader("Cache-Control", "public, max-age=0, must-revalidate");
-          return;
-        }
-
-        if (["robots.txt", "sitemap.xml", "llms.txt"].includes(relativePath)) {
-          res.setHeader(
-            "Cache-Control",
-            "public, max-age=300, must-revalidate",
-          );
-          return;
-        }
-
-        if (relativePath.startsWith("assets/")) {
-          res.setHeader("Cache-Control", "public, max-age=31536000, immutable");
-          return;
-        }
-
-        if (
-          /\.(?:avif|webp|png|jpe?g|svg|gif|ico|css|js|woff2?)$/i.test(
-            relativePath,
-          )
-        ) {
-          res.setHeader("Cache-Control", "public, max-age=604800");
-        }
+        setWebsiteStaticCacheHeaders(res, filePath, staticPath);
       },
     }),
   );
@@ -315,10 +289,12 @@ async function startServer() {
     const staticRoot = `${staticPath}${path.sep}`;
 
     if (routeIndexPath.startsWith(staticRoot) && existsSync(routeIndexPath)) {
+      setWebsiteHtmlCacheHeaders(res);
       res.sendFile(routeIndexPath);
       return;
     }
 
+    setWebsiteHtmlCacheHeaders(res);
     res.sendFile(path.join(staticPath, "index.html"));
   });
 

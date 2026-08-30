@@ -295,6 +295,12 @@ export default defineConfig(({ command, mode }) => {
     ...loadEnv(mode, PROJECT_ROOT, ""),
     ...process.env,
   };
+  const configuredBuildSha = String(geoServerEnv.FRONTMIND_BUILD_SHA ?? "")
+    .trim()
+    .toLowerCase();
+  const clientBuildSha = /^[a-f0-9]{40}$/.test(configuredBuildSha)
+    ? configuredBuildSha
+    : null;
   const plugins = [
     vitePluginReleaseProfile(),
     react(),
@@ -323,6 +329,8 @@ export default defineConfig(({ command, mode }) => {
       __FRONTMIND_ROBOTS_DIRECTIVE__: JSON.stringify(
         releaseProfile.robotsDirective,
       ),
+      __FRONTMIND_BUILD_SHA__: JSON.stringify(clientBuildSha),
+      __FRONTMIND_RELEASE_CHANNEL__: JSON.stringify(releaseProfile.channel),
     },
     resolve: {
       alias: {
