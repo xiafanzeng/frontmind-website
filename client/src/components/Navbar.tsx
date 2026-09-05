@@ -11,7 +11,7 @@ import {
 const FRONTMIND_LOGO_IMG = "/brand/frontmind-logo.svg";
 const CLIENT_PORTAL_URL =
   import.meta.env.VITE_CLIENT_PORTAL_URL ||
-  "https://dashboard.frontmind.net/login";
+  "https://dashboard.frontmind.cn/login";
 
 export default function Navbar() {
   const [scrolled, setScrolled] = useState(false);

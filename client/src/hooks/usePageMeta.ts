@@ -15,7 +15,7 @@ type MetaInput = {
 };
 
 const SITE_NAME = "FrontMind";
-const DEFAULT_SITE_URL = "https://www.frontmind.net";
+const DEFAULT_SITE_URL = "https://www.frontmind.cn";
 const DEFAULT_IMAGE = "/home/agent-methodology-wide.webp";
 const LOGO_IMAGE = "/brand/frontmind-logo.svg";
 const AUTHOR = "FrontMind 超前智能";
