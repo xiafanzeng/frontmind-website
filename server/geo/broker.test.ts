@@ -33,6 +33,45 @@ function statusFixture(overrides: Record<string, unknown> = {}) {
 }
 
 describe("HttpGeoPresalesBroker", () => {
+  it("forwards only valid public event fields and keeps legacy events without text", async () => {
+    const broker = new HttpGeoPresalesBroker({
+      baseUrl: "https://agent.example/api/internal/presales/v2",
+      serviceToken: "private-token",
+      fetchImpl: vi.fn(
+        async () =>
+          new Response(
+            JSON.stringify({
+              ...taskFixture("task-public-logs"),
+              safeEvents: [
+                { id: "old", type: "status", timestamp: 1_788_609_600 },
+                {
+                  id: "public",
+                  type: "agent.message",
+                  timestamp: 1_788_609_601,
+                  message: "公开日志。",
+                  rawToolOutput: "private-command",
+                },
+                null,
+                { id: "bad", type: "status", message: { secret: "private" } },
+              ],
+            }),
+            { status: 200, headers: { "content-type": "application/json" } },
+          ),
+      ) as typeof fetch,
+    });
+    const result = await broker.getTask("task-public-logs");
+    expect(result.safeEvents).toEqual([
+      { id: "old", type: "status", timestamp: 1_788_609_600 },
+      {
+        id: "public",
+        type: "agent.message",
+        timestamp: 1_788_609_601,
+        message: "公开日志。",
+      },
+      { id: "bad", type: "status" },
+    ]);
+    expect(JSON.stringify(result.safeEvents)).not.toContain("private");
+  });
   it("rejects an over-budget task prompt before any outbound request", async () => {
     const fetchMock = vi.fn();
     const broker = new HttpGeoPresalesBroker({

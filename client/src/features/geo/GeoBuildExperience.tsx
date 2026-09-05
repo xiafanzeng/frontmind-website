@@ -3580,11 +3580,18 @@ export function ExecutionLogDialog({
   )?.id;
   const [selectedEntryId, setSelectedEntryId] = useState<string>();
   const [clock, setClock] = useState(() => Date.now());
+  const dialogSession = useRef({ open: false, projectId: project.id });
+  const [expandedLogEntryId, setExpandedLogEntryId] = useState<string>();
 
   useEffect(() => {
-    if (!open) return;
-    const currentEntryId = effectiveCurrentEntryId || log?.entries.at(-1)?.id;
-    setSelectedEntryId(currentEntryId);
+    const isNewSession =
+      open &&
+      (!dialogSession.current.open ||
+        dialogSession.current.projectId !== project.id);
+    dialogSession.current = { open, projectId: project.id };
+    if (!isNewSession) return;
+    setSelectedEntryId(effectiveCurrentEntryId || log?.entries.at(-1)?.id);
+    setExpandedLogEntryId(undefined);
     setClock(Date.now());
   }, [effectiveCurrentEntryId, log?.entries, open, project.id]);
 
@@ -3597,6 +3604,11 @@ export function ExecutionLogDialog({
     selectedEntry &&
     selectedEntry.id === effectiveCurrentEntryId &&
     isExecutionEntryPending(selectedEntry);
+  const publicEvents = selectedEntry?.events ?? [];
+  const showAllEvents = expandedLogEntryId === selectedEntry?.id;
+  const displayedEvents = showAllEvents
+    ? publicEvents
+    : publicEvents.slice(-30);
 
   useEffect(() => {
     if (!shouldTick) return;
@@ -3623,7 +3635,7 @@ export function ExecutionLogDialog({
           <div>
             <DialogTitle className="geo-dialog-title">执行日志</DialogTitle>
             <DialogDescription className="geo-dialog-description">
-              查看当前环节的真实任务状态与执行计时。
+              查看各环节的真实任务状态、执行计时与公开日志。
             </DialogDescription>
           </div>
           <div className="geo-execution-dialog-actions">
@@ -3715,6 +3727,45 @@ export function ExecutionLogDialog({
                       </b>
                     </span>
                   </div>
+                </div>
+
+                <div
+                  className="geo-execution-event-log"
+                  role="log"
+                  aria-label="公开执行日志"
+                  aria-live="off"
+                >
+                  {publicEvents.length > 30 && !showAllEvents && (
+                    <button
+                      type="button"
+                      className="geo-execution-show-history"
+                      onClick={() => setExpandedLogEntryId(selectedEntry.id)}
+                    >
+                      查看较早的 {publicEvents.length - 30} 条日志
+                    </button>
+                  )}
+                  {displayedEvents.length === 0 ? (
+                    <p className="geo-execution-log-empty">
+                      暂无公开执行日志。
+                    </p>
+                  ) : (
+                    <ol>
+                      {displayedEvents.map((event) => (
+                        <li key={event.id} className={`kind-${event.kind}`}>
+                          {event.createdAt && (
+                            <time dateTime={event.createdAt}>
+                              {formatExecutionElapsed(
+                                selectedEntry.startedAt || project.createdAt,
+                                event.createdAt,
+                                clock,
+                              )}
+                            </time>
+                          )}
+                          <p>{event.message}</p>
+                        </li>
+                      ))}
+                    </ol>
+                  )}
                 </div>
               </section>
             )}

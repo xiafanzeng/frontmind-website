@@ -228,7 +228,36 @@ function assertBrokerTask(value: BrokerTask): BrokerTask {
       "AGENT_INVALID_RESPONSE",
     );
   }
-  return value;
+  // Explicitly project the optional public log extension. Raw provider fields
+  // must not leak through this boundary or break recovery of legacy tasks.
+  const safeEvents = value.safeEvents.flatMap((event) => {
+    if (
+      !event ||
+      typeof event !== "object" ||
+      typeof event.id !== "string" ||
+      !event.id.trim() ||
+      typeof event.type !== "string" ||
+      !event.type.trim()
+    )
+      return [];
+    return [
+      {
+        id: event.id,
+        type: event.type,
+        ...(typeof event.timestamp === "number" &&
+        Number.isFinite(event.timestamp)
+          ? { timestamp: event.timestamp }
+          : {}),
+        ...(isIsoTimestamp(event.createdAt)
+          ? { createdAt: event.createdAt }
+          : {}),
+        ...(typeof event.message === "string" && event.message.trim()
+          ? { message: event.message.trim().slice(0, 2_000) }
+          : {}),
+      },
+    ];
+  });
+  return { ...value, safeEvents };
 }
 
 export const GEO_DOMESTIC_MONITOR_PLATFORM_IDS = [

@@ -1026,6 +1026,12 @@ describe("normalizeGeoProject", () => {
                   kind: "reasoning",
                   message: "不允许的事件类型",
                 },
+                {
+                  id: "monitoring-counts",
+                  kind: "result_summary",
+                  message: "已完成 6/10 次平台回答采集。",
+                  createdAt: "2026-07-23T03:04:00.000Z",
+                },
               ],
             },
             {

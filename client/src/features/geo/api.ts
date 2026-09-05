@@ -3027,17 +3027,21 @@ function normalizeExecutionLog(value: unknown): GeoExecutionLog | undefined {
             failed: Math.max(0, Math.round(failed)),
           }
         : undefined;
+    const seenEventIds = new Set<string>();
     const events = asArray(entry.events).flatMap((item, eventIndex) => {
       const event = asRecord(item);
       const message = textValue(event.message, event.text);
       if (!message) return [];
       const rawKind = textValue(event.kind)?.toLowerCase() ?? "status";
       if (!validKinds.has(rawKind)) return [];
+      const eventId =
+        textValue(event.id) ??
+        `${id}-event-${entryIndex + 1}-${eventIndex + 1}`;
+      if (seenEventIds.has(eventId)) return [];
+      seenEventIds.add(eventId);
       return [
         {
-          id:
-            textValue(event.id) ??
-            `${id}-event-${entryIndex + 1}-${eventIndex + 1}`,
+          id: eventId,
           kind: rawKind as GeoExecutionLog["entries"][number]["events"][number]["kind"],
           message:
             rawKind === "error" ? localizedUserFacingError(message) : message,

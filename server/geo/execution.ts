@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import type { BrokerMonitorRun, BrokerTask } from "./broker";
 import {
   GEO_CRAWL_PROGRESS_MARKER,
@@ -95,7 +96,7 @@ type BuildGeoExecutionLogInput = {
   now?: Date;
 };
 
-const MAX_MODEL_EVENTS = 5;
+const MAX_MODEL_EVENTS = 200;
 const MAX_EVENT_LENGTH = 2_000;
 
 export function buildGeoExecutionLog(
@@ -246,10 +247,12 @@ function taskEntry(input: TaskEntryInput): GeoExecutionLogEntry {
     validationFailureCode || resultInvalid ? "failed" : upstreamStatus;
   const safeEventTimes = input.task.safeEvents
     .map((event) => timestampValue(event.createdAt, event.timestamp))
-    .filter((value): value is string => Boolean(value));
+    .filter((value): value is string => Boolean(value))
+    .sort();
   const startedAt =
     timestampValue(input.task.providerStartedAt) ??
-    (safeEventTimes.length > 0 ? safeEventTimes[0] : input.fallbackStartedAt);
+    timestampValue(input.fallbackStartedAt) ??
+    safeEventTimes[0];
   const crawlProgress = input.includeCrawlProgress
     ? parseTrustedGeoCrawlProgress(input.task)
     : undefined;
@@ -287,9 +290,9 @@ function taskEntry(input: TaskEntryInput): GeoExecutionLogEntry {
     },
   ];
 
-  safeAssistantOutputTexts(input.task).forEach((modelOutput, index) => {
+  safeAssistantOutputTexts(input.task).forEach((modelOutput) => {
     events.push({
-      id: `${input.id}-model-${index + 1}`,
+      id: `${input.id}-model-${modelOutput.id}`,
       kind: "model_output",
       message: modelOutput.text,
       ...(modelOutput.createdAt ? { createdAt: modelOutput.createdAt } : {}),
@@ -429,18 +432,26 @@ function monitorEntry(run: BrokerMonitorRun): GeoExecutionLogEntry {
 }
 
 function safeAssistantOutputTexts(task: BrokerTask): Array<{
+  id: string;
   text: string;
   createdAt?: string;
 }> {
   const seen = new Set<string>();
-  return task.safeEvents.flatMap((event) => {
-    if (seen.size >= MAX_MODEL_EVENTS) return [];
-    const text = safeModelText(event.message);
-    if (!text || seen.has(text)) return [];
-    seen.add(text);
-    const createdAt = timestampValue(event.createdAt, event.timestamp);
-    return [{ text, ...(createdAt ? { createdAt } : {}) }];
-  });
+  return task.safeEvents
+    .flatMap((event) => {
+      // Reasoning bodies are never public execution output, even on old tasks.
+      if (/thinking|reasoning/i.test(event.type)) return [];
+      const text = safeModelText(event.message);
+      if (!text || seen.has(event.id)) return [];
+      seen.add(event.id);
+      const id = createHash("sha256")
+        .update(JSON.stringify([task.localTaskId, event.id]))
+        .digest("hex")
+        .slice(0, 24);
+      const createdAt = timestampValue(event.createdAt, event.timestamp);
+      return [{ id, text, ...(createdAt ? { createdAt } : {}) }];
+    })
+    .slice(-MAX_MODEL_EVENTS);
 }
 
 function safeModelText(value: unknown): string | undefined {
@@ -531,7 +542,7 @@ function assessmentResultSummary(
 function deduplicateEvents(events: GeoExecutionEvent[]) {
   const seen = new Set<string>();
   return events.filter((event) => {
-    const key = `${event.kind}:${event.message}`;
+    const key = event.id;
     if (seen.has(key)) return false;
     seen.add(key);
     return true;

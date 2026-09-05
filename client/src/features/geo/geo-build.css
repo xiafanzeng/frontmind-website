@@ -974,6 +974,46 @@
   color: #8a818d;
   text-align: center;
 }
+.geo-execution-event-log {
+  margin-top: 18px;
+  min-width: 0;
+}
+.geo-execution-event-log ol {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.geo-execution-event-log li {
+  border-bottom: 1px solid #eee8f0;
+  padding: 12px 0;
+}
+.geo-execution-event-log time {
+  color: #8b838f;
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+}
+.geo-execution-event-log p {
+  margin: 4px 0 0;
+  color: #4a404f;
+  font-size: 13px;
+  line-height: 1.75;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+.geo-execution-event-log .kind-error p {
+  color: #9e293c;
+}
+.geo-execution-log-empty,
+.geo-execution-show-history {
+  color: #7b548a;
+  font-size: 12px;
+}
+.geo-execution-show-history {
+  border: 1px solid #e6e0e8;
+  background: #faf9fb;
+  padding: 8px 12px;
+  cursor: pointer;
+}
 .geo-execution-empty strong {
   color: #4a404f;
   font-size: 16px;

@@ -24,6 +24,62 @@ function task(
 }
 
 describe("GEO v2 safe execution log", () => {
+  it("keeps the persisted submission time for legacy tasks as public logs advance", () => {
+    const submittedAt = { knowledgeBase: "2026-09-05T12:00:00.000Z" };
+    for (const createdAt of [
+      "2026-09-05T12:01:00.000Z",
+      "2026-09-05T12:04:00.000Z",
+    ]) {
+      const log = buildGeoExecutionLog({
+        knowledgeBaseTask: task("running", [
+          { id: "event", type: "status", createdAt, message: "真实状态。" },
+        ]),
+        submittedAt,
+      });
+      expect(log.entries[0].startedAt).toBe(submittedAt.knowledgeBase);
+    }
+  });
+  it("keeps public event identities stable through polling and repeated text, excluding reasoning", () => {
+    const events = Array.from({ length: 8 }, (_, index) => ({
+      id: `event-${index}`,
+      type: "agent.message",
+      message: index === 7 ? "公开回复。" : `真实输出 ${index}`,
+      timestamp: 1_788_609_600 + index,
+    }));
+    const first = buildGeoExecutionLog({
+      knowledgeBaseTask: {
+        ...task("running", events),
+        providerStartedAt: "2026-09-05T12:00:00.000Z",
+      },
+    }).entries[0];
+    const next = buildGeoExecutionLog({
+      knowledgeBaseTask: {
+        ...task("running", [
+          ...events,
+          events[7],
+          { id: "new-same-text", type: "agent.message", message: "公开回复。" },
+          {
+            id: "thinking",
+            type: "agent.thinking",
+            message: "private-reasoning-body",
+          },
+        ]),
+        providerStartedAt: "2026-09-05T12:00:00.000Z",
+      },
+    }).entries[0];
+    const firstModel = first.events.filter(
+      (event) => event.kind === "model_output",
+    );
+    const nextModel = next.events.filter(
+      (event) => event.kind === "model_output",
+    );
+    expect(firstModel).toHaveLength(8);
+    expect(nextModel).toHaveLength(9);
+    expect(nextModel.slice(0, 8)).toEqual(firstModel);
+    expect(next.startedAt).toBe(first.startedAt);
+    expect(JSON.stringify(next)).not.toContain("private-reasoning-body");
+    expect(JSON.stringify(next)).not.toContain("private-task-id");
+  });
   it("renders only bounded safe events and never raw task identities/results", () => {
     const log = buildGeoExecutionLog({
       knowledgeBaseTask: task("running", [
