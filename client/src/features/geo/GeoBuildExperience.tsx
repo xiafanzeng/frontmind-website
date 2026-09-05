@@ -3604,7 +3604,13 @@ export function ExecutionLogDialog({
     selectedEntry &&
     selectedEntry.id === effectiveCurrentEntryId &&
     isExecutionEntryPending(selectedEntry);
-  const publicEvents = selectedEntry?.events ?? [];
+  const publicEvents = (selectedEntry?.events ?? []).filter(
+    (event) =>
+      event.kind !== "model_output" ||
+      !/^(?:开始调用工具|工具执行完成|正在执行)[。.!！]?$/.test(
+        event.message.trim(),
+      ),
+  );
   const showAllEvents = expandedLogEntryId === selectedEntry?.id;
   const displayedEvents = showAllEvents
     ? publicEvents
