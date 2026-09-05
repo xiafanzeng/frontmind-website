@@ -17,6 +17,8 @@ RUN --mount=type=cache,id=frontmind-website-pnpm,target=/pnpm/store \
 
 COPY . .
 ARG FRONTMIND_BUILD_SHA
+ARG FRONTMIND_DEPLOYMENT_TARGET=net
+ENV FRONTMIND_DEPLOYMENT_TARGET=$FRONTMIND_DEPLOYMENT_TARGET
 ENV FRONTMIND_BUILD_SHA=$FRONTMIND_BUILD_SHA
 RUN test "${#FRONTMIND_BUILD_SHA}" -eq 40 \
     && ! printf '%s' "$FRONTMIND_BUILD_SHA" | grep -q '[^0-9a-f]' \
@@ -26,13 +28,16 @@ RUN test "${#FRONTMIND_BUILD_SHA}" -eq 40 \
 FROM ${NODE_IMAGE} AS runtime
 
 ARG FRONTMIND_BUILD_SHA
+ARG FRONTMIND_DEPLOYMENT_TARGET=net
+ENV FRONTMIND_DEPLOYMENT_TARGET=$FRONTMIND_DEPLOYMENT_TARGET
 ENV NODE_ENV=production
 ENV PORT=8888
 ENV HOME=/home/frontmind
 WORKDIR /app
 
 LABEL org.opencontainers.image.source="https://github.com/xiafanzeng/frontmind-website" \
-      org.opencontainers.image.revision="$FRONTMIND_BUILD_SHA"
+      org.opencontainers.image.revision="$FRONTMIND_BUILD_SHA" \
+      net.frontmind.deployment-target="$FRONTMIND_DEPLOYMENT_TARGET"
 
 RUN groupadd --gid 10002 frontmind \
     && useradd --uid 10002 --gid 10002 --create-home --home-dir /home/frontmind \

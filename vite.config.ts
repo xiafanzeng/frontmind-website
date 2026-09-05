@@ -379,7 +379,13 @@ export default defineConfig(({ command, mode }) => {
       port: 3000,
       strictPort: false, // Will find next available port if 3000 is busy
       host: true,
-      allowedHosts: [".frontmind.net", "localhost", "127.0.0.1"],
+      allowedHosts: [
+        releaseProfile.deploymentTarget === "cn"
+          ? ".frontmind.cn"
+          : ".frontmind.net",
+        "localhost",
+        "127.0.0.1",
+      ],
       fs: {
         strict: true,
         deny: ["**/.*"],

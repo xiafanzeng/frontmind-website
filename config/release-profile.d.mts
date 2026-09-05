@@ -1,6 +1,9 @@
 export type FrontMindReleaseChannel = "production" | "development";
 
+export type FrontMindDeploymentTarget = "net" | "cn";
+
 export type FrontMindReleaseProfile = Readonly<{
+  deploymentTarget: FrontMindDeploymentTarget;
   channel: FrontMindReleaseChannel;
   siteUrl: string;
   clientPortalUrl: string;
@@ -17,5 +20,9 @@ export type FrontMindReleaseProfile = Readonly<{
     >
   >;
 }>;
+
+export function createReleaseProfile(
+  deploymentTarget?: string,
+): FrontMindReleaseProfile;
 
 export const releaseProfile: FrontMindReleaseProfile;

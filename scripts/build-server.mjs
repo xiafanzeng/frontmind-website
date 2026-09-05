@@ -1,3 +1,4 @@
+import { releaseProfile } from "../config/release-profile.mjs";
 import { resolve } from "node:path";
 import { build } from "esbuild";
 import { resolveProductionBuildSource } from "./assert-clean-build-source.mjs";
@@ -25,6 +26,9 @@ await build({
   format: "esm",
   define: {
     __FRONTMIND_BUILD_SHA__: JSON.stringify(buildSha),
+    __FRONTMIND_DEPLOYMENT_TARGET__: JSON.stringify(
+      releaseProfile.deploymentTarget,
+    ),
   },
 });
 await writeBuildArtifactIdentity(resolve(projectRoot, "dist"), buildSha);

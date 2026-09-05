@@ -41,6 +41,11 @@ export function assertFrontMindReleaseRuntime(
     throw new Error("FRONTMIND_RELEASE_CHANNEL_RUNTIME_OVERRIDE_REJECTED");
   }
 
+  const deploymentOverride = env.FRONTMIND_DEPLOYMENT_TARGET?.trim();
+  if (deploymentOverride && deploymentOverride !== profile.deploymentTarget) {
+    throw new Error("FRONTMIND_DEPLOYMENT_TARGET_RUNTIME_OVERRIDE_REJECTED");
+  }
+
   const paymentMode = resolveFrontMindPaymentMode(env, channel);
   for (const [name, expected] of Object.entries(
     profile.expectedRuntimeEnvironment,

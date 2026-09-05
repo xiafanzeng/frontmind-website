@@ -21,6 +21,7 @@ const expectedRuntimeEnvironment = {
 
 function profile(channel: FrontMindReleaseChannel): FrontMindReleaseProfile {
   return {
+    deploymentTarget: "net",
     channel,
     siteUrl: "https://site.example.invalid",
     clientPortalUrl: "https://portal.example.invalid/login",

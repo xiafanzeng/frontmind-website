@@ -173,6 +173,7 @@ async function startServer() {
     res.json({
       status: "ok",
       service: "frontmind-website",
+      deploymentTarget: releaseProfile.deploymentTarget,
       channel: releaseChannel,
       releaseChannel,
       paymentMode,
