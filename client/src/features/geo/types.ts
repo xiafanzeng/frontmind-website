@@ -116,6 +116,7 @@ export type GeoCrawlProgress = {
 
 export type GeoExecutionLogEntry = {
   id: string;
+  perspective?: "product_opinion" | "industry_ranking";
   stage: GeoStage;
   title: string;
   status: GeoExecutionStatus;

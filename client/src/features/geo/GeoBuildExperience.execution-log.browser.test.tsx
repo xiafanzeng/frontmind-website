@@ -96,6 +96,8 @@ describe("execution log dialog", () => {
       '<img src=x onerror="window.__unsafe=1">',
     );
     expect(log.querySelector("img")).toBeNull();
+    expect(log.querySelector("time")).toBeNull();
+    expect(log.textContent).not.toMatch(/\d{2}:\d{2}:\d{2}/);
     expect(
       runtime.compareDocumentPosition(log) & Node.DOCUMENT_POSITION_FOLLOWING,
     ).not.toBe(0);
@@ -240,6 +242,90 @@ describe("execution log dialog", () => {
     view.rerender(<ExecutionLogDialog {...props} project={next} />);
     expect(screen.getByText("公开日志 0", { exact: true })).not.toBeNull();
     expect(detail.scrollTop).toBe(50);
+  });
+
+  it("groups both questions, retains manual selection and ticks either running task until its own completion", () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-09-07T02:05:00.000Z"));
+    const project = createGeoStylePreviewProject();
+    project.executionLog = {
+      fetchedAt: "2026-09-07T02:05:00.000Z",
+      updatedAt: "2026-09-07T02:05:00.000Z",
+      currentEntryId: "industry-ranking-optimization-forecast",
+      entries: [
+        {
+          id: "optimization-forecast",
+          stage: "current_assessment",
+          perspective: "product_opinion",
+          title: "优化效果评估",
+          status: "running",
+          startedAt: "2026-09-07T02:00:00.000Z",
+          events: [
+            {
+              id: "product",
+              kind: "model_output",
+              message: "产品问题正在评估。",
+            },
+          ],
+        },
+        {
+          id: "industry-ranking-optimization-forecast",
+          stage: "current_assessment",
+          perspective: "industry_ranking",
+          title: "优化效果评估",
+          status: "running",
+          startedAt: "2026-09-07T02:03:00.000Z",
+          events: [
+            {
+              id: "industry",
+              kind: "model_output",
+              message: "行业问题正在评估。",
+            },
+          ],
+        },
+      ],
+    };
+    const props = {
+      open: true,
+      project,
+      refreshing: false,
+      onOpenChange: vi.fn(),
+      onRefresh: vi.fn(),
+    };
+    const view = render(<ExecutionLogDialog {...props} />);
+    const runtime = () =>
+      within(screen.getByLabelText("FrontMind Agent 执行计时"));
+    expect(runtime().getByText("00:02:00")).not.toBeNull();
+    expect(screen.getByRole("log").textContent).toContain("行业问题正在评估。");
+    const productGroup = screen.getByRole("region", { name: "产品与舆情" });
+    const industryGroup = screen.getByRole("region", {
+      name: "行业排名与品牌优胜",
+    });
+    fireEvent.click(
+      within(productGroup).getByRole("button", { name: /优化效果评估/ }),
+    );
+    act(() => vi.advanceTimersByTime(2_000));
+    expect(runtime().getByText("00:05:02")).not.toBeNull();
+    expect(screen.getByText("当前环节")).not.toBeNull();
+    const next = structuredClone(project);
+    next.executionLog!.entries[0].status = "completed";
+    next.executionLog!.entries[0].completedAt = "2026-09-07T02:05:01.000Z";
+    view.rerender(<ExecutionLogDialog {...props} project={next} />);
+    act(() => vi.advanceTimersByTime(3_000));
+    expect(runtime().getByText("00:05:01")).not.toBeNull();
+    expect(screen.getByRole("log").textContent).toContain("产品问题正在评估。");
+    fireEvent.click(
+      within(industryGroup).getByRole("button", { name: /优化效果评估/ }),
+    );
+    expect(runtime().getByText("00:02:05")).not.toBeNull();
+    const completed = structuredClone(next);
+    completed.executionLog!.currentEntryId = undefined;
+    completed.executionLog!.entries[1].status = "completed";
+    completed.executionLog!.entries[1].completedAt = "2026-09-07T02:05:04.000Z";
+    view.rerender(<ExecutionLogDialog {...props} project={completed} />);
+    act(() => vi.advanceTimersByTime(3_000));
+    expect(runtime().getByText("00:02:04")).not.toBeNull();
+    expect(screen.getByText("历史环节")).not.toBeNull();
   });
 
   it("never grows a terminal runtime when the server terminal time is missing", () => {

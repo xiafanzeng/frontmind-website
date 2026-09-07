@@ -5,6 +5,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { MonitoringResults } from "./GeoBuildExperience";
 import { createGeoStylePreviewProject } from "./preview";
+import type { GeoMonitoringAnswer } from "./types";
 
 afterEach(cleanup);
 
@@ -58,35 +59,37 @@ describe("monitoring result interaction", () => {
     );
 
     expect(screen.getByText("2 / 5 条有效回答")).toBeTruthy();
-    expect(screen.getByText("平台回答正在自动补齐采样")).toBeTruthy();
-    expect(screen.getByText("2 条有效回答 · 3 条正在自动补齐")).toBeTruthy();
+    expect(screen.getByText("正在等待剩余平台回答")).toBeTruthy();
+    expect(screen.getByText("2 条有效回答 · 3 条等待返回")).toBeTruthy();
     expect(screen.getByRole("button", { name: "查看页面截图" })).toBeTruthy();
     expect(screen.queryByText(/补采结束/)).toBeNull();
     expect(screen.queryByText(/已停止自动评估/)).toBeNull();
   });
 
-  it("shows failed polling slots as automatic recovery and counts only valid answers", () => {
+  it("keeps slow ChatGPT slots waiting until their answers arrive on refresh", () => {
     const project = createGeoStylePreviewProject("monitoring");
     const monitoring = project.monitoring!;
     project.monitoring = {
       ...monitoring,
       status: "capturing",
+      platforms: ["chatgpt"],
       completedRecords: 3,
       failedRecords: 2,
       quality: undefined,
-      answers: monitoring.answers.map((answer, index) =>
-        index < 3
-          ? answer
+      answers: monitoring.answers.map((answer, index) => ({
+        ...answer,
+        platformId: "chatgpt",
+        ...(index < 3
+          ? {}
           : {
-              ...answer,
-              status: "failed",
+              status: "failed" as const,
               answer: "",
               error: "本轮采样暂未返回",
-            },
-      ),
+            }),
+      })),
     };
 
-    render(
+    const view = render(
       <MonitoringResults
         project={project}
         onRefresh={vi.fn(async () => undefined)}
@@ -95,11 +98,175 @@ describe("monitoring result interaction", () => {
       />,
     );
 
-    expect(screen.getByText("平台回答正在自动补齐采样")).toBeTruthy();
-    expect(screen.getByText("自动补采中")).toBeTruthy();
+    expect(screen.getByText("正在等待剩余平台回答")).toBeTruthy();
+    expect(screen.getByText("等待剩余回答")).toBeTruthy();
     expect(screen.getByText("3 / 5 条有效回答")).toBeTruthy();
-    expect(screen.getByText("3 条有效回答 · 2 条正在自动补齐")).toBeTruthy();
+    expect(screen.getByText("3 条有效回答 · 2 条等待返回")).toBeTruthy();
     expect(screen.queryByText(/已停止自动评估/)).toBeNull();
+    const next = screen.getByRole("button", { name: "查看ChatGPT下一次回答" });
+    fireEvent.click(next);
+    fireEvent.click(next);
+    for (const runIndex of [4, 5]) {
+      fireEvent.click(next);
+      expect(screen.getByText(`第 ${runIndex} / 5 次`)).toBeTruthy();
+      expect(screen.getByText("本轮回答正在等待返回")).toBeTruthy();
+      expect(screen.queryByText("本轮采样暂未返回")).toBeNull();
+      expect(screen.queryByRole("alert")).toBeNull();
+      expect(
+        view.container.querySelector(".geo-answer-slot-state.state-waiting"),
+      ).toBeTruthy();
+    }
+
+    const completeSlot = (runIndex: number) => {
+      project.monitoring = {
+        ...project.monitoring!,
+        status: runIndex === 5 ? "completed" : "capturing",
+        completedRecords: runIndex,
+        failedRecords: 5 - runIndex,
+        answers: project.monitoring!.answers.map((answer) =>
+          answer.runIndex === runIndex
+            ? {
+                ...answer,
+                status: "completed",
+                answer: `第 ${runIndex} 轮迟到的有效回答`,
+                error: undefined,
+              }
+            : answer,
+        ),
+      };
+      view.rerender(
+        <MonitoringResults
+          project={project}
+          onRefresh={vi.fn(async () => undefined)}
+          refreshing={false}
+          onContact={vi.fn()}
+        />,
+      );
+    };
+    completeSlot(4);
+    expect(screen.getByText("4 / 5 条有效回答")).toBeTruthy();
+    expect(screen.getByText("本轮回答正在等待返回")).toBeTruthy();
+    fireEvent.click(
+      screen.getByRole("button", { name: "查看ChatGPT上一次回答" }),
+    );
+    expect(screen.getByText("第 4 轮迟到的有效回答")).toBeTruthy();
+    fireEvent.click(next);
+    completeSlot(5);
+    expect(screen.getByText("5 / 5 条有效回答")).toBeTruthy();
+    expect(screen.getByText("第 5 轮迟到的有效回答")).toBeTruthy();
+    expect(screen.queryByText("本轮回答正在等待返回")).toBeNull();
+  });
+
+  it.each(["submitted", "capturing"] as const)(
+    "treats every unsuccessful slot as waiting while the run is %s",
+    (status) => {
+      const project = createGeoStylePreviewProject("monitoring");
+      const monitoring = project.monitoring!;
+      const view = render(
+        <MonitoringResults
+          project={project}
+          onRefresh={vi.fn(async () => undefined)}
+          refreshing={false}
+          onContact={vi.fn()}
+        />,
+      );
+      const pendingSlots: Array<Partial<GeoMonitoringAnswer> | undefined> = [
+        { status: "failed", answer: "", error: "临时错误" },
+        { status: "error", answer: "", error: "临时错误" },
+        { status: "stopped", answer: "", error: "临时错误" },
+        { status: "processing", answer: "", error: "临时错误" },
+        { status: "completed", answer: "   ", error: undefined },
+        { status: "completed", answer: "不应显示的正文", error: "临时错误" },
+        undefined,
+      ];
+      for (const pending of pendingSlots) {
+        project.monitoring = {
+          ...monitoring,
+          status,
+          answers: monitoring.answers.flatMap((answer, index) =>
+            index === 0
+              ? pending
+                ? [{ ...answer, ...pending }]
+                : []
+              : [answer],
+          ),
+        };
+        view.rerender(
+          <MonitoringResults
+            project={project}
+            onRefresh={vi.fn(async () => undefined)}
+            refreshing={false}
+            onContact={vi.fn()}
+          />,
+        );
+        expect(screen.getByText("本轮回答正在等待返回")).toBeTruthy();
+        expect(screen.queryByText("临时错误")).toBeNull();
+        expect(screen.queryByText("不应显示的正文")).toBeNull();
+        expect(screen.queryByRole("alert")).toBeNull();
+        expect(
+          view.container.querySelector(
+            ".geo-answer-current .geo-answer-markdown",
+          ),
+        ).toBeNull();
+      }
+    },
+  );
+
+  it.each([
+    ["partial_review", "failed", "本轮采样未完成"],
+    ["failed", "error", "本轮采样未完成"],
+    ["partial_review", "stopped", "本轮采样已停止"],
+    ["completed", "processing", "本轮采样未完成"],
+    ["completed", undefined, "本轮采样未完成"],
+  ] as const)(
+    "shows terminal %s slot %s without promising more answers",
+    (status, answerStatus, label) => {
+      const project = createGeoStylePreviewProject("monitoring");
+      const monitoring = project.monitoring!;
+      project.monitoring = {
+        ...monitoring,
+        status,
+        answers: monitoring.answers.flatMap((answer, index) =>
+          index === 0
+            ? answerStatus
+              ? [{ ...answer, status: answerStatus, answer: "", error: "" }]
+              : []
+            : [answer],
+        ),
+      };
+      const view = render(
+        <MonitoringResults
+          project={project}
+          onRefresh={vi.fn(async () => undefined)}
+          refreshing={false}
+          onContact={vi.fn()}
+        />,
+      );
+      const slot = view.container.querySelector(".geo-answer-current");
+      expect(slot?.textContent).toContain(label);
+      expect(slot?.textContent).toContain("本次采集已结束，本轮未返回有效回答");
+      expect(slot?.querySelector('[role="alert"]')).toBeTruthy();
+      expect(slot?.textContent).not.toContain("返回后");
+    },
+  );
+
+  it("does not show an active waiting panel for a terminal run without records", () => {
+    const project = createGeoStylePreviewProject("monitoring");
+    project.monitoring = {
+      ...project.monitoring!,
+      status: "partial_review",
+      answers: [],
+    };
+    render(
+      <MonitoringResults
+        project={project}
+        onRefresh={vi.fn(async () => undefined)}
+        refreshing={false}
+        onContact={vi.fn()}
+      />,
+    );
+    expect(screen.getByText("本轮采样未完成")).toBeTruthy();
+    expect(screen.queryByText("首批平台回答即将返回")).toBeNull();
   });
 
   it("continues assessment for terminal 3/5 but fails closed below the threshold", () => {

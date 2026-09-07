@@ -3574,10 +3574,37 @@ export function ExecutionLogDialog({
   onRefresh: () => void;
 }) {
   const log = project.executionLog;
-  const effectiveCurrentEntryId = log?.entries.find(
-    (entry) =>
-      entry.id === log.currentEntryId && isExecutionEntryPending(entry),
+  const effectiveCurrentEntryId = (
+    log?.entries.find(
+      (entry) =>
+        entry.id === log.currentEntryId && isExecutionEntryPending(entry),
+    ) ?? [...(log?.entries ?? [])].reverse().find(isExecutionEntryPending)
   )?.id;
+  const entryPerspective = (entry: GeoExecutionLogEntry) => {
+    if (entry.perspective) return entry.perspective;
+    if (entry.stage !== "monitoring" && entry.stage !== "current_assessment")
+      return undefined;
+    return isHistoricalRankingOnlyProject(project)
+      ? "industry_ranking"
+      : "product_opinion";
+  };
+  const groups = [
+    { id: "shared", title: "公共环节" },
+    { id: "product_opinion", title: "产品与舆情" },
+    { id: "industry_ranking", title: "行业排名与品牌优胜" },
+    { id: "service", title: "服务订单" },
+  ]
+    .map((group) => ({
+      ...group,
+      entries: (log?.entries ?? []).filter((entry) => {
+        const groupId =
+          entry.stage === "service_activation"
+            ? "service"
+            : (entryPerspective(entry) ?? "shared");
+        return groupId === group.id;
+      }),
+    }))
+    .filter((group) => group.entries.length > 0);
   const [selectedEntryId, setSelectedEntryId] = useState<string>();
   const [clock, setClock] = useState(() => Date.now());
   const dialogSession = useRef({ open: false, projectId: project.id });
@@ -3600,10 +3627,24 @@ export function ExecutionLogDialog({
     log?.entries.find((entry) => entry.id === effectiveCurrentEntryId) ||
     log?.entries.at(-1);
   const shouldTick =
-    open &&
-    selectedEntry &&
-    selectedEntry.id === effectiveCurrentEntryId &&
-    isExecutionEntryPending(selectedEntry);
+    open && selectedEntry && isExecutionEntryPending(selectedEntry);
+  const selectedPerspective = selectedEntry && entryPerspective(selectedEntry);
+  const selectedQuestion = selectedPerspective
+    ? project.questions.find(
+        (question) =>
+          question.id ===
+          (selectedPerspective === "industry_ranking" &&
+          !isHistoricalRankingOnlyProject(project)
+            ? project.selectedIndustryRankingQuestionId
+            : project.selectedQuestionId),
+      )
+    : undefined;
+  const selectedPerspectiveLabel =
+    selectedPerspective === "industry_ranking"
+      ? "行业排名与品牌优胜"
+      : selectedPerspective === "product_opinion"
+        ? "产品与舆情"
+        : undefined;
   const publicEvents = (selectedEntry?.events ?? []).filter(
     (event) =>
       !/^(?:开始调用工具|工具执行完成|工具执行失败|正在执行)[。.!！]?$/.test(
@@ -3617,9 +3658,10 @@ export function ExecutionLogDialog({
 
   useEffect(() => {
     if (!shouldTick) return;
+    setClock(Date.now());
     const timer = window.setInterval(() => setClock(Date.now()), 1_000);
     return () => window.clearInterval(timer);
-  }, [shouldTick]);
+  }, [shouldTick, selectedEntry?.id]);
 
   const canRefresh =
     Boolean(project.remoteToken) &&
@@ -3674,19 +3716,29 @@ export function ExecutionLogDialog({
         ) : (
           <div className="geo-execution-layout">
             <aside className="geo-execution-steps" aria-label="执行环节">
-              {log.entries.map((entry) => (
-                <button
-                  key={entry.id}
-                  type="button"
-                  className={`${selectedEntry?.id === entry.id ? "active" : ""} status-${entry.status}`}
-                  onClick={() => setSelectedEntryId(entry.id)}
+              {groups.map((group) => (
+                <section
+                  key={group.id}
+                  className="geo-execution-step-group"
+                  aria-label={group.title}
                 >
-                  <span className="geo-execution-step-dot" />
-                  <span>
-                    <strong>{entry.title}</strong>
-                    <small>{executionStatusLabel(entry.status)}</small>
-                  </span>
-                </button>
+                  <h4>{group.title}</h4>
+                  {group.entries.map((entry) => (
+                    <button
+                      key={entry.id}
+                      type="button"
+                      className={`${selectedEntry?.id === entry.id ? "active" : ""} status-${entry.status}`}
+                      aria-pressed={selectedEntry?.id === entry.id}
+                      onClick={() => setSelectedEntryId(entry.id)}
+                    >
+                      <span className="geo-execution-step-dot" />
+                      <span>
+                        <strong>{entry.title}</strong>
+                        <small>{executionStatusLabel(entry.status)}</small>
+                      </span>
+                    </button>
+                  ))}
+                </section>
               ))}
             </aside>
 
@@ -3695,11 +3747,19 @@ export function ExecutionLogDialog({
                 <header>
                   <div>
                     <span className="geo-execution-current-label">
-                      {selectedEntry.id === effectiveCurrentEntryId
+                      {isExecutionEntryPending(selectedEntry)
                         ? "当前环节"
                         : "历史环节"}
                     </span>
                     <h3>{selectedEntry.title}</h3>
+                    {selectedPerspectiveLabel && (
+                      <p className="geo-execution-perspective-label">
+                        {selectedPerspectiveLabel}
+                        {selectedQuestion
+                          ? ` · ${selectedQuestion.question}`
+                          : ""}
+                      </p>
+                    )}
                   </div>
                   <span
                     className={`geo-execution-status status-${selectedEntry.status}`}
@@ -3757,15 +3817,6 @@ export function ExecutionLogDialog({
                     <ol>
                       {displayedEvents.map((event) => (
                         <li key={event.id} className={`kind-${event.kind}`}>
-                          {event.createdAt && (
-                            <time dateTime={event.createdAt}>
-                              {formatExecutionElapsed(
-                                selectedEntry.startedAt || project.createdAt,
-                                event.createdAt,
-                                clock,
-                              )}
-                            </time>
-                          )}
                           <p>{event.message}</p>
                         </li>
                       ))}
@@ -6871,11 +6922,10 @@ function MonitoringPerspectiveResults({
   const partialAssessmentEligible =
     partialReview && monitoringCoverage.assessmentEligible;
   const monitoringCompleted = monitoring.status === "completed";
-  const recoveringSamples =
-    !monitoringCompleted &&
-    !partialReview &&
-    !monitoringFailed &&
-    monitoring.failedRecords > 0;
+  const monitoringActive =
+    monitoring.status === "submitted" || monitoring.status === "capturing";
+  const waitingForRemainingAnswers =
+    monitoringActive && completedAnswerCount > 0 && remainingAnswerCount > 0;
   const autoRefreshActive = !preview && shouldAutoRefreshGeoProject(project);
   const autoRefreshDelay = geoAutoRefreshDelayLabel(project);
   const selectedQuestionCategory = selectedQuestion
@@ -6904,8 +6954,8 @@ function MonitoringPerspectiveResults({
                   : "平台回答有效样本不足"
                 : monitoringFailed
                   ? "平台回答采集异常"
-                  : recoveringSamples
-                    ? "平台回答正在自动补齐采样"
+                  : waitingForRemainingAnswers
+                    ? "正在等待剩余平台回答"
                     : "平台回答正在采集"}
           </h2>
           <p>
@@ -6923,8 +6973,8 @@ function MonitoringPerspectiveResults({
                   ? partialAssessmentEligible
                     ? "部分样本可评估"
                     : "有效样本不足"
-                  : recoveringSamples
-                    ? "自动补采中"
+                  : waitingForRemainingAnswers
+                    ? "等待剩余回答"
                     : "采集中"}
           </span>
           <button
@@ -7072,8 +7122,8 @@ function MonitoringPerspectiveResults({
           </div>
           <small>
             {completedAnswerCount} 条有效回答
-            {recoveringSamples
-              ? ` · ${remainingAnswerCount} 条正在自动补齐`
+            {monitoringActive && remainingAnswerCount > 0
+              ? ` · ${remainingAnswerCount} 条等待返回`
               : monitoring.failedRecords > 0
                 ? ` · ${monitoring.failedRecords} 次未返回`
                 : ""}
@@ -7081,12 +7131,16 @@ function MonitoringPerspectiveResults({
         </section>
       )}
 
-      {!answersAvailable && !monitoringFailed ? (
+      {!answersAvailable &&
+      !monitoringFailed &&
+      !partialReview &&
+      !monitoringCompleted ? (
         <AssessmentWaitingState />
       ) : (
         <MonitoringAnswerList
           platformIds={platformIds}
           answers={monitoring.answers}
+          monitoringStatus={monitoring.status}
           screenshotEnabled={monitoringScreenshotEnabled}
           perspective={perspective}
         />
@@ -8354,11 +8408,13 @@ export function ServiceActivation({ project, onBack }: ServiceActivationProps) {
 function MonitoringAnswerList({
   platformIds,
   answers,
+  monitoringStatus,
   screenshotEnabled,
   perspective,
 }: {
   platformIds: GeoPlatformId[];
   answers: GeoMonitoringAnswer[];
+  monitoringStatus: NonNullable<GeoProject["monitoring"]>["status"];
   screenshotEnabled: boolean;
   perspective: MonitoringPerspective;
 }) {
@@ -8371,6 +8427,12 @@ function MonitoringAnswerList({
   )
     ? (activePlatforms[perspective] as GeoPlatformId)
     : platformIds[0];
+  const monitoringActive =
+    monitoringStatus === "submitted" || monitoringStatus === "capturing";
+  const monitoringTerminal =
+    monitoringStatus === "completed" ||
+    monitoringStatus === "partial_review" ||
+    monitoringStatus === "failed";
 
   if (!activePlatformId) return null;
 
@@ -8386,6 +8448,13 @@ function MonitoringAnswerList({
         const activeAnswer = platformAnswers.find(
           (answer) => answer.runIndex === activeRun,
         );
+        const slotState = monitoringActive
+          ? "waiting"
+          : monitoringTerminal
+            ? activeAnswer?.status === "stopped"
+              ? "stopped"
+              : "failed"
+            : "waiting";
         const platformName = platform?.name ?? platformId;
         return (
           <section key={platformId}>
@@ -8475,7 +8544,9 @@ function MonitoringAnswerList({
               <RankingBrandPerformance answers={platformAnswers} />
             )}
             <div className="geo-answer-current" data-active-run={activeRun}>
-              {activeAnswer?.status === "completed" && activeAnswer.answer ? (
+              {activeAnswer?.status === "completed" &&
+              activeAnswer.answer.trim() &&
+              !activeAnswer.error ? (
                 <>
                   <header className="geo-answer-round-meta">
                     <span className="state-completed">回答已采集</span>
@@ -8509,24 +8580,31 @@ function MonitoringAnswerList({
                 </>
               ) : (
                 <div
-                  className={`geo-answer-slot-state state-${activeAnswer?.status ?? "waiting"}`}
-                  role={activeAnswer?.error ? "alert" : "status"}
+                  className={`geo-answer-slot-state state-${slotState}`}
+                  role={monitoringTerminal ? "alert" : "status"}
                 >
-                  <CircleAlert size={19} />
+                  {monitoringTerminal ? (
+                    <CircleAlert size={19} />
+                  ) : (
+                    <Clock3 size={19} />
+                  )}
                   <div>
                     <strong>
-                      {activeAnswer?.status === "failed" ||
-                      activeAnswer?.status === "error"
-                        ? "本轮采样未完成"
-                        : activeAnswer?.status === "stopped"
-                          ? "本轮采样已停止"
-                          : activeAnswer?.status === "processing"
-                            ? "本轮回答正在采集"
-                            : "本轮回答尚未返回"}
+                      {monitoringActive
+                        ? "本轮回答正在等待返回"
+                        : monitoringTerminal
+                          ? slotState === "stopped"
+                            ? "本轮采样已停止"
+                            : "本轮采样未完成"
+                          : "本轮回答尚未返回"}
                     </strong>
                     <p>
-                      {activeAnswer?.error ||
-                        "可继续查看其他轮次；本槽位返回后会在此显示正文和来源。"}
+                      {monitoringActive
+                        ? "平台仍在处理，返回后会自动显示，可先查看其他轮次。"
+                        : monitoringTerminal
+                          ? activeAnswer?.error ||
+                            "本次采集已结束，本轮未返回有效回答，可查看其他轮次。"
+                          : "可继续查看其他轮次；本槽位返回后会在此显示正文和来源。"}
                     </p>
                   </div>
                 </div>

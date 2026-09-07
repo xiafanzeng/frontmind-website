@@ -36,3 +36,13 @@ must share the credentials for their existing authenticated internal APIs.
 The website's customer entrance is compiled as
 `https://dashboard.frontmind.cn/login`. `/healthz` reports `deploymentTarget` so
 operators can confirm that the deployed artifact is the .cn build.
+
+For local cross-repository contract tests, select the Dashboard implementation
+that serves `.cn` (the `frontmind-system` checkout), rather than the separate
+legacy `frontmind-dashboard` checkout:
+
+```sh
+pnpm check
+FRONTMIND_DASHBOARD_REPOSITORY_ROOT=../frontmind-system/apps/dashboard pnpm test:server
+pnpm test:client
+```

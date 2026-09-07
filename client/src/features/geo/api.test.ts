@@ -1073,6 +1073,50 @@ describe("normalizeGeoProject", () => {
     });
   });
 
+  it("preserves separate forecast perspectives and selects the unfinished side", () => {
+    const project = normalizeGeoProject({
+      projectToken: "signed-token",
+      project: {
+        id: "dual-forecast-project",
+        executionLog: {
+          currentEntryId: "optimization-forecast",
+          entries: [
+            {
+              id: "enterprise-analysis",
+              stage: "enterprise_analysis",
+              title: "企业分析",
+              status: "completed",
+              perspective: "untrusted-value",
+              events: [],
+            },
+            {
+              id: "optimization-forecast",
+              stage: "current_assessment",
+              title: "优化效果评估",
+              status: "completed",
+              perspective: "product_opinion",
+              events: [],
+            },
+            {
+              id: "industry-ranking-optimization-forecast",
+              stage: "current_assessment",
+              title: "优化效果评估",
+              status: "running",
+              perspective: "industry_ranking",
+              events: [],
+            },
+          ],
+        },
+      },
+    });
+    expect(project.executionLog?.currentEntryId).toBe(
+      "industry-ranking-optimization-forecast",
+    );
+    expect(
+      project.executionLog?.entries.map((entry) => entry.perspective),
+    ).toEqual([undefined, "product_opinion", "industry_ranking"]);
+  });
+
   it("surfaces a result with no renderable questions as a failure", () => {
     const project = normalizeGeoProject({
       projectToken: "signed-token",

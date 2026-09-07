@@ -41,6 +41,7 @@ export type GeoExecutionCounters = {
 
 export type GeoExecutionLogEntry = {
   id: string;
+  perspective?: "product_opinion" | "industry_ranking";
   stage:
     | "enterprise_analysis"
     | "question_recommendation"
@@ -66,17 +67,25 @@ export type GeoExecutionLog = {
   entries: GeoExecutionLogEntry[];
 };
 
-type ValidatedExecutionResults = {
+type ValidatedPerspectiveExecutionResults = {
+  assessmentSummary?: string;
+  assessmentReady?: boolean;
+  assessmentFailureCode?: string;
+  assessmentResultInvalid?: boolean;
+  assessmentResultPartial?: boolean;
+  comparisonCount?: number;
+  forecastSummary?: string;
+  forecastReady?: boolean;
+  forecastFailureCode?: string;
+  forecastResultInvalid?: boolean;
+  forecastResultPartial?: boolean;
+};
+
+type ValidatedExecutionResults = ValidatedPerspectiveExecutionResults & {
   knowledgeBaseSummary?: string;
   knowledgeBaseArchiveName?: string;
   questionCount?: number;
   questionResultInvalid?: boolean;
-  assessmentSummary?: string;
-  assessmentReady?: boolean;
-  assessmentFailureCode?: string;
-  comparisonCount?: number;
-  forecastSummary?: string;
-  forecastReady?: boolean;
   serviceActivatedAt?: string;
 };
 
@@ -86,6 +95,14 @@ type BuildGeoExecutionLogInput = {
   monitorRun?: BrokerMonitorRun;
   assessmentTask?: BrokerTask;
   optimizationForecastTask?: BrokerTask;
+  primaryPerspective?: GeoExecutionLogEntry["perspective"];
+  industryRanking?: {
+    monitorRun?: BrokerMonitorRun;
+    assessmentTask?: BrokerTask;
+    optimizationForecastTask?: BrokerTask;
+    validated?: ValidatedPerspectiveExecutionResults;
+    submittedAt?: { assessment?: string; optimizationForecast?: string };
+  };
   validated?: ValidatedExecutionResults;
   submittedAt?: {
     knowledgeBase?: string;
@@ -135,42 +152,73 @@ export function buildGeoExecutionLog(
     );
   }
 
-  if (input.monitorRun) entries.push(monitorEntry(input.monitorRun));
-
-  if (input.assessmentTask) {
-    entries.push(
-      taskEntry({
-        id: "current-assessment",
-        stage: "current_assessment",
-        title: "现状评估与知识核查",
-        task: input.assessmentTask,
-        publicTaskId: "assessment",
-        resultSummary: input.validated?.assessmentReady
-          ? assessmentResultSummary(
-              input.validated.assessmentSummary,
-              input.validated.comparisonCount,
-            )
-          : undefined,
-        validationFailureCode: input.validated?.assessmentFailureCode,
-        fallbackStartedAt: input.submittedAt?.assessment,
-      }),
-    );
-  }
-
-  if (input.optimizationForecastTask) {
-    entries.push(
-      taskEntry({
-        id: "optimization-forecast",
-        stage: "current_assessment",
-        title: "优化效果评估",
-        task: input.optimizationForecastTask,
-        publicTaskId: "optimization-forecast",
-        resultSummary: input.validated?.forecastReady
-          ? input.validated.forecastSummary
-          : undefined,
-        fallbackStartedAt: input.submittedAt?.optimizationForecast,
-      }),
-    );
+  const perspectives = [
+    {
+      ...input,
+      perspective: input.primaryPerspective ?? ("product_opinion" as const),
+      prefix: "",
+    },
+    ...(input.industryRanking
+      ? [
+          {
+            ...input.industryRanking,
+            perspective: "industry_ranking" as const,
+            prefix: "industry-ranking-",
+          },
+        ]
+      : []),
+  ];
+  for (const side of perspectives) {
+    if (side.monitorRun) {
+      entries.push(
+        monitorEntry(side.monitorRun, {
+          id: `${side.prefix}monitoring`,
+          title: "问题监控",
+          perspective: side.perspective,
+        }),
+      );
+    }
+    if (side.assessmentTask) {
+      entries.push(
+        taskEntry({
+          id: `${side.prefix}current-assessment`,
+          perspective: side.perspective,
+          stage: "current_assessment",
+          title: "现状评估与知识核查",
+          task: side.assessmentTask,
+          publicTaskId: "assessment",
+          resultSummary: side.validated?.assessmentReady
+            ? assessmentResultSummary(
+                side.validated.assessmentSummary,
+                side.validated.comparisonCount,
+              )
+            : undefined,
+          validationFailureCode: side.validated?.assessmentFailureCode,
+          resultInvalid: side.validated?.assessmentResultInvalid,
+          resultPartial: side.validated?.assessmentResultPartial,
+          fallbackStartedAt: side.submittedAt?.assessment,
+        }),
+      );
+    }
+    if (side.optimizationForecastTask) {
+      entries.push(
+        taskEntry({
+          id: `${side.prefix}optimization-forecast`,
+          perspective: side.perspective,
+          stage: "current_assessment",
+          title: "优化效果评估",
+          task: side.optimizationForecastTask,
+          publicTaskId: "optimization-forecast",
+          resultSummary: side.validated?.forecastReady
+            ? side.validated.forecastSummary
+            : undefined,
+          validationFailureCode: side.validated?.forecastFailureCode,
+          resultInvalid: side.validated?.forecastResultInvalid,
+          resultPartial: side.validated?.forecastResultPartial,
+          fallbackStartedAt: side.submittedAt?.optimizationForecast,
+        }),
+      );
+    }
   }
 
   if (input.validated?.serviceActivatedAt) {
@@ -218,6 +266,7 @@ export function buildGeoExecutionLog(
 
 type TaskEntryInput = {
   id: string;
+  perspective?: GeoExecutionLogEntry["perspective"];
   stage: GeoExecutionLogEntry["stage"];
   title: string;
   task: BrokerTask;
@@ -229,6 +278,7 @@ type TaskEntryInput = {
   resultSummary?: string;
   validationFailureCode?: string;
   resultInvalid?: boolean;
+  resultPartial?: boolean;
   artifactName?: string;
   fallbackStartedAt?: string;
   includeCrawlProgress?: boolean;
@@ -243,8 +293,13 @@ function taskEntry(input: TaskEntryInput): GeoExecutionLogEntry {
       : undefined;
   const resultInvalid =
     upstreamStatus === "completed" && input.resultInvalid === true;
-  const status =
-    validationFailureCode || resultInvalid ? "failed" : upstreamStatus;
+  const resultPartial =
+    upstreamStatus === "completed" && input.resultPartial === true;
+  const status = resultPartial
+    ? "partial_review"
+    : validationFailureCode || resultInvalid
+      ? "failed"
+      : upstreamStatus;
   const safeEventTimes = input.task.safeEvents
     .map((event) => timestampValue(event.createdAt, event.timestamp))
     .filter((value): value is string => Boolean(value))
@@ -265,7 +320,7 @@ function taskEntry(input: TaskEntryInput): GeoExecutionLogEntry {
       ? (timestampValue(input.task.terminalAt) ?? updatedAt)
       : undefined;
   const terminalAt =
-    status === "completed" || status === "failed"
+    status === "completed" || status === "failed" || status === "partial_review"
       ? (completedAt ?? updatedAt)
       : completedAt;
   const eventTime =
@@ -281,11 +336,13 @@ function taskEntry(input: TaskEntryInput): GeoExecutionLogEntry {
       message:
         upstreamStatus === "failed" && taskView.error
           ? limitText(taskView.error)
-          : validationFailureCode
-            ? `${input.title}上游任务已完成。`
-            : resultInvalid
+          : resultPartial
+            ? `${input.title}部分结果可用，完整性校验未通过。`
+            : validationFailureCode
               ? `${input.title}上游任务已完成。`
-              : taskStatusMessage(input.title, upstreamStatus),
+              : resultInvalid
+                ? `${input.title}上游任务已完成。`
+                : taskStatusMessage(input.title, upstreamStatus),
       ...(eventTime ? { createdAt: eventTime } : {}),
     },
   ];
@@ -345,6 +402,7 @@ function taskEntry(input: TaskEntryInput): GeoExecutionLogEntry {
 
   return {
     id: input.id,
+    ...(input.perspective ? { perspective: input.perspective } : {}),
     stage: input.stage,
     title: input.title,
     status,
@@ -371,7 +429,10 @@ function safeValidationFailureCode(value: unknown): string | undefined {
     : undefined;
 }
 
-function monitorEntry(run: BrokerMonitorRun): GeoExecutionLogEntry {
+function monitorEntry(
+  run: BrokerMonitorRun,
+  identity: Pick<GeoExecutionLogEntry, "id" | "title" | "perspective">,
+): GeoExecutionLogEntry {
   const status = monitorStatus(run.status);
   const startedAt = timestampValue(run.submittedAt);
   const nextPollAt = timestampValue(run.nextPollAt);
@@ -394,7 +455,7 @@ function monitorEntry(run: BrokerMonitorRun): GeoExecutionLogEntry {
     status === "completed" ? (completedAt ?? startedAt) : startedAt;
   const events: GeoExecutionEvent[] = [
     {
-      id: `monitoring-status-${status}`,
+      id: `${identity.id}-status-${status}`,
       kind: status === "failed" ? "error" : "status",
       message:
         status === "failed" && run.error
@@ -403,7 +464,7 @@ function monitorEntry(run: BrokerMonitorRun): GeoExecutionLogEntry {
       ...(eventTime ? { createdAt: eventTime } : {}),
     },
     {
-      id: "monitoring-counts",
+      id: `${identity.id}-counts`,
       kind: "result_summary",
       message: `已完成 ${completed}/${total} 次平台回答采集${failed > 0 ? `，${failed} 次未成功` : ""}。`,
       ...(completedAt ? { createdAt: completedAt } : {}),
@@ -411,16 +472,15 @@ function monitorEntry(run: BrokerMonitorRun): GeoExecutionLogEntry {
   ];
   if (nextPollAt && ["running", "waiting"].includes(status)) {
     events.push({
-      id: `monitoring-poll-${nextPollAt}`,
+      id: `${identity.id}-poll-${nextPollAt}`,
       kind: "poll",
       message: "监控服务已安排下一次远端状态核查。",
     });
   }
 
   return {
-    id: "monitoring",
+    ...identity,
     stage: "monitoring",
-    title: "问题监控",
     status,
     progress,
     ...(startedAt ? { startedAt } : {}),

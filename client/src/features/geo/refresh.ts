@@ -3,6 +3,41 @@ import type { GeoProject } from "./types";
 export const GEO_AUTO_REFRESH_INTERVAL_MS = 30_000;
 const GEO_AUTO_REFRESH_MAX_INTERVAL_MS = 15 * 60_000;
 
+function hasForecastAwaitingAutomaticStart(project: GeoProject): boolean {
+  return [
+    {
+      baseline: project.assessment,
+      forecast: project.optimizationForecast,
+      executionEntryId: "optimization-forecast",
+    },
+    {
+      baseline: project.industryRankingAssessment,
+      forecast: project.industryRankingOptimizationForecast,
+      executionEntryId: "industry-ranking-optimization-forecast",
+    },
+  ].some(({ baseline, forecast, executionEntryId }) => {
+    // Legacy completed forecasts can intentionally project as not_started.
+    // Only an absent task needs creation reconciliation; a terminal task does not.
+    const hasTerminalTask = project.executionLog?.entries.some(
+      (entry) =>
+        entry.id === executionEntryId &&
+        ["completed", "failed", "partial_review"].includes(entry.status),
+    );
+    return Boolean(
+      baseline?.status === "ready" &&
+        baseline.quality?.completeness !== "partial" &&
+        baseline.totalScore !== undefined &&
+        baseline.dimensions.length === 5 &&
+        baseline.dimensions.every(
+          (dimension) =>
+            dimension.score !== undefined && dimension.maxScore !== undefined,
+        ) &&
+        (!forecast || forecast.status === "not_started") &&
+        !hasTerminalTask,
+    );
+  });
+}
+
 export function geoAutoRefreshDelayMs(
   project: GeoProject,
   nowMs = Date.now(),
@@ -13,7 +48,7 @@ export function geoAutoRefreshDelayMs(
     project.optimizationForecast?.status,
     project.industryRankingOptimizationForecast?.status,
   ].some((status) => status === "queued" || status === "running");
-  if (backgroundTaskActive) {
+  if (backgroundTaskActive || hasForecastAwaitingAutomaticStart(project)) {
     return GEO_AUTO_REFRESH_INTERVAL_MS;
   }
 
@@ -83,6 +118,10 @@ export function shouldAutoRefreshGeoProject(project: GeoProject): boolean {
     )
   )
     return true;
+
+  // A committed forecast creation can lose its response. A subsequent GET
+  // reconciles the same deterministic task instead of issuing another POST.
+  if (hasForecastAwaitingAutomaticStart(project)) return true;
 
   if (project.status === "failed") return false;
 

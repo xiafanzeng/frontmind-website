@@ -10569,6 +10569,64 @@ async function buildProjectView(
     monitorRun,
     assessmentTask,
     optimizationForecastTask,
+    primaryPerspective:
+      serviceQuestion?.category === "industry_ranking"
+        ? "industry_ranking"
+        : "product_opinion",
+    ...(industryRankingMonitorRun ||
+    industryRankingAssessmentTask ||
+    industryRankingOptimizationForecastTask
+      ? {
+          industryRanking: {
+            monitorRun: industryRankingMonitorRun,
+            assessmentTask: industryRankingAssessmentTask,
+            optimizationForecastTask: industryRankingOptimizationForecastTask,
+            submittedAt: {
+              assessment: value.industryRankingAssessmentSubmittedAt,
+              optimizationForecast:
+                value.industryRankingOptimizationForecastSubmittedAt,
+            },
+            validated: {
+              assessmentReady:
+                publicIndustryRankingAssessment?.status === "ready" &&
+                publicIndustryRankingAssessment.quality?.completeness ===
+                  "complete",
+              assessmentSummary: publicIndustryRankingAssessment?.summary,
+              comparisonCount:
+                publicIndustryRankingAssessment?.comparisons.length,
+              assessmentFailureCode:
+                publicIndustryRankingAssessment?.status === "failed"
+                  ? publicIndustryRankingAssessment.failureCode
+                  : undefined,
+              assessmentResultInvalid:
+                publicIndustryRankingAssessment?.status === "failed",
+              assessmentResultPartial:
+                publicIndustryRankingAssessment?.quality?.completeness ===
+                "partial",
+              forecastReady:
+                publicIndustryRankingOptimizationForecast?.status === "ready" &&
+                publicIndustryRankingOptimizationForecast.quality
+                  ?.completeness === "complete",
+              forecastSummary:
+                publicIndustryRankingOptimizationForecast?.status === "ready"
+                  ? publicIndustryRankingOptimizationForecast.summary
+                  : undefined,
+              forecastFailureCode:
+                publicIndustryRankingOptimizationForecast?.status === "failed"
+                  ? publicIndustryRankingOptimizationForecast.failureCode
+                  : undefined,
+              forecastResultInvalid:
+                publicIndustryRankingOptimizationForecast?.status ===
+                  "failed" ||
+                publicIndustryRankingOptimizationForecast?.status ===
+                  "not_started",
+              forecastResultPartial:
+                publicIndustryRankingOptimizationForecast?.quality
+                  ?.completeness === "partial",
+            },
+          },
+        }
+      : {}),
     submittedAt: {
       knowledgeBase: value.knowledgeBaseSubmittedAt,
       question: value.questionSubmittedAt,
@@ -10587,6 +10645,9 @@ async function buildProjectView(
         publicAssessment?.status === "failed"
           ? publicAssessment.failureCode
           : undefined,
+      assessmentResultInvalid: publicAssessment?.status === "failed",
+      assessmentResultPartial:
+        publicAssessment?.quality?.completeness === "partial",
       assessmentSummary: isCompleteAssessmentView
         ? publicAssessment.summary
         : undefined,
@@ -10594,6 +10655,15 @@ async function buildProjectView(
         ? publicAssessment.comparisons.length
         : undefined,
       forecastReady: isCompleteForecastView,
+      forecastFailureCode:
+        publicOptimizationForecast?.status === "failed"
+          ? publicOptimizationForecast.failureCode
+          : undefined,
+      forecastResultInvalid:
+        publicOptimizationForecast?.status === "failed" ||
+        publicOptimizationForecast?.status === "not_started",
+      forecastResultPartial:
+        publicOptimizationForecast?.quality?.completeness === "partial",
       forecastSummary: isCompleteForecastView
         ? publicOptimizationForecast.summary
         : undefined,

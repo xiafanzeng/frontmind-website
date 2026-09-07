@@ -6037,6 +6037,55 @@ describe("GEO API", () => {
       completeValue.optimizationForecastTaskId;
     const originalIndustryForecastTaskId =
       completeValue.industryRankingOptimizationForecastTaskId;
+    expect(completed.body.project.executionLog.entries).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          id: "monitoring",
+          perspective: "product_opinion",
+          status: "completed",
+        }),
+        expect.objectContaining({
+          id: "industry-ranking-monitoring",
+          perspective: "industry_ranking",
+          status: "completed",
+        }),
+        expect.objectContaining({
+          id: "optimization-forecast",
+          perspective: "product_opinion",
+          status: "completed",
+        }),
+        expect.objectContaining({
+          id: "industry-ranking-current-assessment",
+          perspective: "industry_ranking",
+          status: "completed",
+        }),
+        expect.objectContaining({
+          id: "industry-ranking-optimization-forecast",
+          perspective: "industry_ranking",
+          status: "completed",
+        }),
+      ]),
+    );
+    const completedIndustryForecast = broker.tasks.get(
+      originalIndustryForecastTaskId,
+    )!;
+    broker.tasks.set(originalIndustryForecastTaskId, {
+      ...completedIndustryForecast,
+      status: "running",
+    });
+    const industryStillRunning = await jsonRequest(
+      `/projects/${encodeURIComponent(completed.body.projectToken)}`,
+      ready.cookie,
+    );
+    expect(industryStillRunning.body.project).toMatchObject({
+      optimizationForecast: { status: "ready" },
+      industryRankingOptimizationForecast: { status: "running" },
+      executionLog: {
+        currentEntryId: "industry-ranking-optimization-forecast",
+      },
+    });
+    expect(broker.forecastTaskCount).toBe(2);
+    broker.tasks.set(originalIndustryForecastTaskId, completedIndustryForecast);
     const emptySkeleton = productionRestrictedForecastSkeleton();
     broker.tasks.set(originalProductForecastTaskId, {
       id: originalProductForecastTaskId,
@@ -6207,9 +6256,9 @@ describe("GEO API", () => {
       })
       .filter((input) => input?.assessment && input?.sourceAssessmentTaskId);
     expect(assessmentInputs).toHaveLength(2);
-    expect(
-      new Set(assessmentInputs.map((input) => input.generatedAt)),
-    ).toEqual(new Set(["1970-01-01T00:00:00.000Z"]));
+    expect(new Set(assessmentInputs.map((input) => input.generatedAt))).toEqual(
+      new Set(["1970-01-01T00:00:00.000Z"]),
+    );
   });
 
   it("keeps scoped screenshot ownership and fences both reservations on deletion", async () => {

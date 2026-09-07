@@ -24,6 +24,105 @@ function task(
 }
 
 describe("GEO v2 safe execution log", () => {
+  it.each(["product_opinion", "industry_ranking"] as const)(
+    "keeps the %s forecast independently current while the other side is completed",
+    (runningPerspective) => {
+      const log = buildGeoExecutionLog({
+        knowledgeBaseTask: task("succeeded"),
+        assessmentTask: task("succeeded"),
+        optimizationForecastTask: task(
+          runningPerspective === "product_opinion" ? "running" : "succeeded",
+        ),
+        submittedAt: { optimizationForecast: "2026-09-07T01:00:00.000Z" },
+        industryRanking: {
+          assessmentTask: task("succeeded"),
+          optimizationForecastTask: task(
+            runningPerspective === "industry_ranking" ? "running" : "succeeded",
+          ),
+          submittedAt: { optimizationForecast: "2026-09-07T01:05:00.000Z" },
+        },
+      });
+      const activeId =
+        runningPerspective === "product_opinion"
+          ? "optimization-forecast"
+          : "industry-ranking-optimization-forecast";
+      expect(log.currentEntryId).toBe(activeId);
+      expect(log.entries[0]).not.toHaveProperty("perspective");
+      expect(
+        log.entries.find((entry) => entry.id === "optimization-forecast"),
+      ).toMatchObject({
+        perspective: "product_opinion",
+        startedAt: "2026-09-07T01:00:00.000Z",
+        status:
+          runningPerspective === "product_opinion" ? "running" : "completed",
+      });
+      expect(
+        log.entries.find(
+          (entry) => entry.id === "industry-ranking-optimization-forecast",
+        ),
+      ).toMatchObject({
+        perspective: "industry_ranking",
+        startedAt: "2026-09-07T01:05:00.000Z",
+        status:
+          runningPerspective === "industry_ranking" ? "running" : "completed",
+      });
+    },
+  );
+
+  it("preserves legacy entry identities for a historical industry-only chain", () => {
+    const log = buildGeoExecutionLog({
+      knowledgeBaseTask: task("succeeded"),
+      primaryPerspective: "industry_ranking",
+      assessmentTask: task("succeeded"),
+      optimizationForecastTask: task("running"),
+    });
+    expect(
+      log.entries.slice(1).map(({ id, perspective }) => ({ id, perspective })),
+    ).toEqual([
+      { id: "current-assessment", perspective: "industry_ranking" },
+      { id: "optimization-forecast", perspective: "industry_ranking" },
+    ]);
+  });
+
+  it("does not call invalid or partial forecast output completed on either side", () => {
+    const log = buildGeoExecutionLog({
+      knowledgeBaseTask: task("succeeded"),
+      optimizationForecastTask: task("succeeded"),
+      validated: {
+        forecastFailureCode: "SCHEMA_MISMATCH",
+        forecastResultInvalid: true,
+      },
+      industryRanking: {
+        optimizationForecastTask: {
+          ...task("succeeded"),
+          terminalAt: "2026-09-07T02:15:00.000Z",
+        },
+        validated: { forecastResultPartial: true },
+      },
+    });
+    const product = log.entries.find(
+      (entry) => entry.id === "optimization-forecast",
+    )!;
+    const industry = log.entries.find(
+      (entry) => entry.id === "industry-ranking-optimization-forecast",
+    )!;
+    expect(product.status).toBe("failed");
+    expect(
+      product.events.some((event) => event.message.includes("SCHEMA_MISMATCH")),
+    ).toBe(true);
+    expect(industry).toMatchObject({
+      status: "partial_review",
+      completedAt: "2026-09-07T02:15:00.000Z",
+    });
+    expect(industry.events[0].message).toContain("部分结果可用");
+    expect(
+      [...product.events, ...industry.events].some(
+        (event) => event.message === "优化效果评估已完成。",
+      ),
+    ).toBe(false);
+    expect(log.currentEntryId).toBeUndefined();
+  });
+
   it("keeps the persisted submission time for legacy tasks as public logs advance", () => {
     const submittedAt = { knowledgeBase: "2026-09-05T12:00:00.000Z" };
     for (const createdAt of [

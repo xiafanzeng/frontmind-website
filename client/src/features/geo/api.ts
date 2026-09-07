@@ -3057,11 +3057,17 @@ function normalizeExecutionLog(value: unknown): GeoExecutionLog | undefined {
     const crawlProgress = normalizeCrawlProgress(
       entry.crawlProgress ?? entry.crawl_progress,
     );
+    const perspective: GeoExecutionLog["entries"][number]["perspective"] =
+      entry.perspective === "product_opinion" ||
+      entry.perspective === "industry_ranking"
+        ? entry.perspective
+        : undefined;
 
     return [
       {
         id,
         stage: rawStage as GeoStage,
+        ...(perspective ? { perspective } : {}),
         title,
         status: status as GeoExecutionLog["entries"][number]["status"],
         progress: progress === undefined ? undefined : clampProgress(progress),

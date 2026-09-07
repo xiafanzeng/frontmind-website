@@ -42,6 +42,164 @@ function project(overrides: Partial<GeoProject> = {}): GeoProject {
 }
 
 describe("GEO project refresh policy", () => {
+  const completeAssessment: NonNullable<GeoProject["assessment"]> = {
+    status: "ready",
+    totalScore: 60,
+    quality: { completeness: "complete", downstreamEligible: true },
+    dimensions: [
+      "semantic_visibility",
+      "semantic_coherence",
+      "semantic_richness",
+      "semantic_authority",
+      "competitive_advantage",
+    ].map((id) => ({
+      id: id as NonNullable<
+        GeoProject["assessment"]
+      >["dimensions"][number]["id"],
+      label: id,
+      score: 12,
+      maxScore: 20,
+    })),
+    comparisons: [],
+  };
+
+  it.each(["product_opinion", "industry_ranking"] as const)(
+    "continues GET reconciliation for a complete %s baseline whose forecast has not started",
+    (perspective) => {
+      for (const forecast of [
+        undefined,
+        {
+          status: "not_started" as const,
+          dimensions: [],
+          assumptions: [],
+          roadmap: [],
+        },
+      ]) {
+        const waiting = project({
+          ...(perspective === "product_opinion"
+            ? { assessment: completeAssessment, optimizationForecast: forecast }
+            : {
+                industryRankingAssessment: completeAssessment,
+                industryRankingOptimizationForecast: forecast,
+              }),
+          monitoring: {
+            runId: "other-run",
+            status: "capturing",
+            platforms: ["doubao"],
+            expectedRecords: 5,
+            completedRecords: 1,
+            failedRecords: 0,
+            answers: [],
+            nextPollAt: "2026-09-07T01:10:00.000Z",
+          },
+        });
+        expect(
+          shouldAutoRefreshGeoProject({ ...waiting, monitoring: undefined }),
+        ).toBe(true);
+        expect(
+          geoAutoRefreshDelayMs(
+            waiting,
+            Date.parse("2026-09-07T01:00:00.000Z"),
+          ),
+        ).toBe(30_000);
+      }
+    },
+  );
+
+  it.each(["product_opinion", "industry_ranking"] as const)(
+    "does not poll a terminal legacy %s forecast projected as not started",
+    (perspective) => {
+      const ownEntryId =
+        perspective === "product_opinion"
+          ? "optimization-forecast"
+          : "industry-ranking-optimization-forecast";
+      const otherEntryId =
+        perspective === "product_opinion"
+          ? "industry-ranking-optimization-forecast"
+          : "optimization-forecast";
+      const forecast = {
+        status: "not_started" as const,
+        dimensions: [],
+        assumptions: [],
+        roadmap: [],
+      };
+      const waiting = project(
+        perspective === "product_opinion"
+          ? { assessment: completeAssessment, optimizationForecast: forecast }
+          : {
+              industryRankingAssessment: completeAssessment,
+              industryRankingOptimizationForecast: forecast,
+            },
+      );
+      for (const status of ["completed", "failed", "partial_review"] as const) {
+        const executionLog: NonNullable<GeoProject["executionLog"]> = {
+          fetchedAt: "2026-09-07T01:00:00.000Z",
+          updatedAt: "2026-09-07T01:00:00.000Z",
+          entries: [
+            {
+              id: ownEntryId,
+              stage: "current_assessment",
+              title: "优化效果评估",
+              status,
+              events: [],
+            },
+          ],
+        };
+        expect(shouldAutoRefreshGeoProject({ ...waiting, executionLog })).toBe(
+          false,
+        );
+        // A completed task belonging to the other question must not prevent recovery.
+        expect(
+          shouldAutoRefreshGeoProject({
+            ...waiting,
+            executionLog: {
+              ...executionLog,
+              entries: [{ ...executionLog.entries[0], id: otherEntryId }],
+            },
+          }),
+        ).toBe(true);
+      }
+    },
+  );
+
+  it("does not automatically restart failed or partial forecasts or incomplete baselines", () => {
+    for (const assessment of [
+      { ...completeAssessment, status: "failed" as const },
+      { ...completeAssessment, quality: { completeness: "partial" as const } },
+      { ...completeAssessment, totalScore: undefined },
+      {
+        ...completeAssessment,
+        dimensions: completeAssessment.dimensions.slice(0, 4),
+      },
+    ]) {
+      expect(shouldAutoRefreshGeoProject(project({ assessment }))).toBe(false);
+    }
+    for (const forecast of [
+      {
+        status: "failed" as const,
+        dimensions: [],
+        assumptions: [],
+        roadmap: [],
+      },
+      {
+        status: "ready" as const,
+        quality: { completeness: "partial" as const },
+        dimensions: [],
+        assumptions: [],
+        roadmap: [],
+      },
+    ]) {
+      expect(
+        shouldAutoRefreshGeoProject(
+          project({
+            assessment: completeAssessment,
+            optimizationForecast: forecast,
+          }),
+        ),
+      ).toBe(false);
+    }
+  });
+
   it("uses a calm 30 second automatic refresh interval", () => {
     expect(GEO_AUTO_REFRESH_INTERVAL_MS).toBe(30_000);
   });
